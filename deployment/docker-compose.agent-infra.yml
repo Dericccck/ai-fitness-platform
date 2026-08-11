@@ -1,0 +1,27 @@
+services:
+  agent-postgres:
+    image: pgvector/pgvector:pg16
+    container_name: fitness-agent-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: fitness_agent
+      POSTGRES_USER: fitness_agent
+      POSTGRES_PASSWORD: fitness_agent
+    ports:
+      - "5433:5432"
+    volumes:
+      - fitness-agent-postgres-data:/var/lib/postgresql/data
+
+  agent-redis:
+    image: redis:7.4-alpine
+    container_name: fitness-agent-redis
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6380:6379"
+    volumes:
+      - fitness-agent-redis-data:/data
+
+volumes:
+  fitness-agent-postgres-data:
+  fitness-agent-redis-data:

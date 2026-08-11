@@ -11,6 +11,14 @@
 /upload-dir/
 /user-avatar-dir/
 
+# Python Agent service
+/fitness-agent-service/.venv/
+/fitness-agent-service/.env
+/fitness-agent-service/**/__pycache__/
+/fitness-agent-service/.pytest_cache/
+/fitness-agent-service/.mypy_cache/
+/fitness-agent-service/.ruff_cache/
+
 # Environment-specific configuration may contain credentials.
 /src/main/resources/application-*.yml
 !/src/main/resources/application-*.example.yml
