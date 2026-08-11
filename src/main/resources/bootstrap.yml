@@ -1,0 +1,27 @@
+spring:
+  application:
+    name: fitness-backend
+  cloud:
+    config:
+      fail-fast: true
+      url: http://localhost:8599/config
+      profile: product
+      label: master
+      server:
+        prefix: /config
+        bootstrap: true
+        git:
+          uri: git@github.com:njdx/fitness-config.git
+          username:
+          password:
+          clone-on-start: true
+          timeout: 10
+---
+spring:
+  profiles: dev
+  cloud:
+    config:
+      server:
+        bootstrap: false
+        git:
+          clone-on-start: false

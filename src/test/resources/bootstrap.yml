@@ -1,0 +1,26 @@
+spring:
+  application:
+    name: fitness-backend
+  cloud:
+    config:
+      fail-fast: true
+      url: http://localhost:8599/config
+      profile: product
+      label: master
+      server:
+        prefix: /config
+        bootstrap: false
+        git:
+          uri: git@code.aliyun.com:frog/fitness-config.git
+          username:
+          password:
+          clone-on-start: false
+---
+spring:
+  profiles: dev
+  cloud:
+    config:
+      server:
+        bootstrap: false
+        git:
+          clone-on-start: false

@@ -1,0 +1,44 @@
+# Copy this file to application-dev.yml for local development.
+# Keep real credentials out of Git. Use environment variables or a local secret manager.
+server:
+  address: 0.0.0.0
+
+spring:
+  datasource:
+    url: jdbc:mysql://127.0.0.1:3307/fitness?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia%2FShanghai
+    username: ${FITNESS_DB_USERNAME:fitness}
+    password: ${FITNESS_DB_PASSWORD:}
+  redis:
+    host: ${FITNESS_REDIS_HOST:127.0.0.1}
+    port: ${FITNESS_REDIS_PORT:6379}
+    password: ${FITNESS_REDIS_PASSWORD:}
+    database: ${FITNESS_REDIS_DATABASE:2}
+
+com:
+  shuyiwa:
+    fitness:
+      backend:
+        weixin:
+          app:
+            id: ${FITNESS_WECHAT_APP_ID:}
+            secret: ${FITNESS_WECHAT_APP_SECRET:}
+        sms:
+          ali:
+            access-key-id: ${FITNESS_ALI_ACCESS_KEY_ID:}
+            access-key-secret: ${FITNESS_ALI_ACCESS_KEY_SECRET:}
+
+aliyun:
+  video:
+    access-key-id: ${FITNESS_ALI_VOD_ACCESS_KEY_ID:}
+    access-key-secret: ${FITNESS_ALI_VOD_ACCESS_KEY_SECRET:}
+    region-id: ${FITNESS_ALI_VOD_REGION_ID:cn-shanghai}
+  pic:
+    access-key-id: ${FITNESS_ALI_OSS_ACCESS_KEY_ID:}
+    access-key-secret: ${FITNESS_ALI_OSS_ACCESS_KEY_SECRET:}
+    endpoint: ${FITNESS_ALI_OSS_ENDPOINT:http://oss-cn-hangzhou.aliyuncs.com}
+    bucket-name: ${FITNESS_ALI_OSS_BUCKET_NAME:fitooss}
+    pic-domain: ${FITNESS_ALI_OSS_PIC_DOMAIN:https://img.fitooss.com}
+  cms:
+    endpoint: ${FITNESS_ALI_CMS_ENDPOINT:https://metrichub-cms-cn-hangzhou.aliyuncs.com}
+    access-key-id: ${FITNESS_ALI_CMS_ACCESS_KEY_ID:}
+    access-key-secret: ${FITNESS_ALI_CMS_ACCESS_KEY_SECRET:}

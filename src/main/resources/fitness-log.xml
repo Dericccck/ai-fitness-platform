@@ -1,0 +1,202 @@
+ <?xml version="1.0" encoding="UTF-8"?>
+
+<!--
+File appender logback configuration provided for import, equivalent to the programmatic
+initialization performed by Boot
+-->
+
+<included>
+    <property name="article.view" value="com.shuyiwa.fitness.backend.web.LogController.article.view"/>
+    <property name="organization.view" value="com.shuyiwa.fitness.backend.web.LogController.organization.view"/>
+    <property name="works.view" value="com.shuyiwa.fitness.backend.web.LogController.works.view"/>
+    <property name="activity.view" value="com.shuyiwa.fitness.backend.web.LogController.activity.view"/>
+    <property name="frogRank.view" value="com.shuyiwa.fitness.backend.web.LogController.frogRank.view"/>
+    <property name="item.view" value="com.shuyiwa.fitness.backend.web.LogController.item.view"/>
+    <property name="device.setup" value="com.shuyiwa.fitness.backend.web.LogController.device.setup"/>
+    <property name="device.login" value="com.shuyiwa.fitness.backend.web.LogController.device.login"/>
+    <property name="marketing.response" value="com.shuyiwa.fitness.backend.web.LogController.marketing.response"/>
+    <property name="marketing.view" value="com.shuyiwa.fitness.backend.web.LogController.marketing.view"/>
+    <property name="marketing.click" value="com.shuyiwa.fitness.backend.web.LogController.marketing.click"/>
+    <property name="channel.view" value="com.shuyiwa.fitness.backend.web.LogController.channel.view"/>
+    <property name="channel.click" value="com.shuyiwa.fitness.backend.web.LogController.channel.click"/>
+
+    <springProperty scope="context" name="fitness.backend.log.dir" source="com.shuyiwa.fitness.backend.log.dir"/>
+
+    <property name="FITNESS_LOG_PATH" value="${fitness.backend.log.dir:-${LOG_TEMP:-${java.io.tmpdir:-/tmp}}}/${HOSTNAME}"/>
+    <appender name="${article.view}-FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>
+                ${FITNESS_LOG_PATH}/article/view/fitness.%d{yyyy-MM-dd}.log
+            </fileNamePattern>
+            <maxHistory>0</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+    <appender name="${organization.view}-FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>
+                ${FITNESS_LOG_PATH}/organization/view/fitness.%d{yyyy-MM-dd}.log
+            </fileNamePattern>
+            <maxHistory>0</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+    <appender name="${works.view}-FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>
+                ${FITNESS_LOG_PATH}/works/view/fitness.%d{yyyy-MM-dd}.log
+            </fileNamePattern>
+            <maxHistory>0</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+    <appender name="${activity.view}-FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>
+                ${FITNESS_LOG_PATH}/activity/view/fitness.%d{yyyy-MM-dd}.log
+            </fileNamePattern>
+            <maxHistory>0</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+    <appender name="${frogRank.view}-FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>
+                ${FITNESS_LOG_PATH}/frogRank/view/fitness.%d{yyyy-MM-dd}.log
+            </fileNamePattern>
+            <maxHistory>0</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+    <appender name="${item.view}-FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>
+                ${FITNESS_LOG_PATH}/item/view/fitness.%d{yyyy-MM-dd}.log
+            </fileNamePattern>
+            <maxHistory>0</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+    <appender name="${device.setup}-FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>
+                ${FITNESS_LOG_PATH}/device/setup/fitness.%d{yyyy-MM-dd}.log
+            </fileNamePattern>
+            <maxHistory>0</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+    <appender name="${device.login}-FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>
+                ${FITNESS_LOG_PATH}/device/login/fitness.%d{yyyy-MM-dd}.log
+            </fileNamePattern>
+            <maxHistory>0</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+    <appender name="${marketing.response}-FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>
+                ${FITNESS_LOG_PATH}/marketing/response/fitness.%d{yyyy-MM-dd}.log
+            </fileNamePattern>
+            <maxHistory>0</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+    <appender name="${marketing.view}-FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>
+                ${FITNESS_LOG_PATH}/marketing/view/fitness.%d{yyyy-MM-dd}.log
+            </fileNamePattern>
+            <maxHistory>0</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+    <appender name="${marketing.click}-FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>
+                ${FITNESS_LOG_PATH}/marketing/click/fitness.%d{yyyy-MM-dd}.log
+            </fileNamePattern>
+            <maxHistory>0</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+    <appender name="${channel.view}-FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>
+                ${FITNESS_LOG_PATH}/channel/view/fitness.%d{yyyy-MM-dd}.log
+            </fileNamePattern>
+            <maxHistory>0</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+    <appender name="${channel.click}-FILE" class="ch.qos.logback.core.rolling.RollingFileAppender">
+        <rollingPolicy class="ch.qos.logback.core.rolling.TimeBasedRollingPolicy">
+            <fileNamePattern>
+                ${FITNESS_LOG_PATH}/channel/click/fitness.%d{yyyy-MM-dd}.log
+            </fileNamePattern>
+            <maxHistory>0</maxHistory>
+        </rollingPolicy>
+        <encoder>
+            <pattern>%msg%n</pattern>
+        </encoder>
+    </appender>
+    <logger name="${article.view}" level="INFO">
+        <appender-ref ref="${article.view}-FILE"/>
+    </logger>
+    <logger name="${organization.view}" level="INFO">
+        <appender-ref ref="${organization.view}-FILE"/>
+    </logger>
+    <logger name="${works.view}" level="INFO">
+        <appender-ref ref="${works.view}-FILE"/>
+    </logger>
+    <logger name="${activity.view}" level="INFO">
+        <appender-ref ref="${activity.view}-FILE"/>
+    </logger>
+    <logger name="${frogRank.view}" level="INFO">
+        <appender-ref ref="${frogRank.view}-FILE"/>
+    </logger>
+    <logger name="${item.view}" level="INFO">
+        <appender-ref ref="${item.view}-FILE"/>
+    </logger>
+    <logger name="${device.setup}" level="INFO">
+        <appender-ref ref="${device.setup}-FILE"/>
+    </logger>
+    <logger name="${device.login}" level="INFO">
+        <appender-ref ref="${device.login}-FILE"/>
+    </logger>
+    <logger name="${marketing.response}" level="INFO">
+        <appender-ref ref="${marketing.response}-FILE"/>
+    </logger>
+    <logger name="${marketing.view}" level="INFO">
+        <appender-ref ref="${marketing.view}-FILE"/>
+    </logger>
+    <logger name="${marketing.click}" level="INFO">
+        <appender-ref ref="${marketing.click}-FILE"/>
+    </logger>
+</included>

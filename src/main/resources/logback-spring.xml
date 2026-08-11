@@ -1,0 +1,47 @@
+<configuration>
+    <turboFilter class="ch.qos.logback.classic.turbo.DynamicThresholdFilter">
+        <Key>tracing</Key>
+        <DefaultThreshold>TRACE</DefaultThreshold>
+        <MDCValueLevelPair>
+            <value>off</value>
+            <level>ERROR</level>
+        </MDCValueLevelPair>
+    </turboFilter>
+    <springProfile name="dev">
+        <include resource="org/springframework/boot/logging/logback/base.xml"/>
+    </springProfile>
+
+    <springProfile name="!dev">
+        <appender name="fitness" class="com.shuyiwa.fitness.backend.web.FrogAppender"/>
+        <include resource="org/springframework/boot/logging/logback/defaults.xml"/>
+        <springProperty scope="context" name="fitness.backend.log.dir" source="com.shuyiwa.fitness.backend.log.dir"/>
+        <property name="FITNESS_LOG_PATH"
+                  value="${fitness.backend.log.dir:-${LOG_TEMP:-${java.io.tmpdir:-/tmp}}}/${HOSTNAME}/spring/"/>
+        <property name="LOG_FILE"
+                  value="${LOG_FILE:-${FITNESS_LOG_PATH:-${LOG_TEMP:-${java.io.tmpdir:-/tmp}}/}spring.log}"/>
+        <!--<include resource="org/springframework/boot/logging/logback/file-appender.xml"/>-->
+        <appender name="FILE"
+                  class="ch.qos.logback.core.rolling.RollingFileAppender">
+            <encoder>
+                <pattern>${FILE_LOG_PATTERN}</pattern>
+            </encoder>
+            <file>${LOG_FILE}</file>
+            <rollingPolicy class="ch.qos.logback.core.rolling.SizeAndTimeBasedRollingPolicy">
+                <fileNamePattern>${LOG_FILE}.%d{yyyy-MM-dd.HH}.%i.gz</fileNamePattern>
+                <maxFileSize>${LOG_FILE_MAX_SIZE:-10MB}</maxFileSize>
+                <maxHistory>${LOG_FILE_MAX_HISTORY:-0}</maxHistory>
+            </rollingPolicy>
+        </appender>
+        <appender name="ASYNC_FILE" class="ch.qos.logback.classic.AsyncAppender">
+            <queueSize>10240</queueSize>
+            <appender-ref ref="FILE"/>
+            <includeCallerData>false</includeCallerData>
+            <neverBlock>false</neverBlock>
+        </appender>
+        <root level="INFO">
+            <appender-ref ref="ASYNC_FILE"/>
+            <appender-ref ref="fitness"/>
+        </root>
+        <include resource="fitness-log.xml"/>
+    </springProfile>
+</configuration>

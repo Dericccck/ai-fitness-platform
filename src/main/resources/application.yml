@@ -1,0 +1,65 @@
+server:
+  port: 8599
+  connection-timeout: 120000
+spring:
+  application:
+    name: fitness-backend
+  servlet:
+    multipart:
+      max-file-size: 1024MB
+      max-request-size: 1024MB
+  session:
+    store-type: jdbc
+    jdbc:
+      initialize-schema: never
+  cache:
+    type: redis
+    redis:
+      time-to-live: 60000
+  datasource:
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    initialization-mode: never
+    hikari:
+      maximum-pool-size: 100
+      minimum-idle: 15
+  jpa:
+    hibernate.ddl-auto: none
+    properties:
+      hibernate:
+        format_sql: false
+      jdbc:
+        time_zone: Asia/Shanghai
+  mail:
+    port: 587
+    host: smtp.qq.com
+    username: ${FITNESS_MAIL_USERNAME:}
+    from: ${FITNESS_MAIL_FROM:}
+
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: http://localhost:8599/eureka
+    healtcheck:
+      enabled: true
+management:
+  endpoints:
+    web:
+      exposurØe:
+        include: '*'
+  endpoint:
+    shutdown:
+      enabled: true
+
+logging:
+  level:
+    org.springframework.cloud: 'INFO'
+    org.hibernate.SQL: 'DEBUG'
+    com.zaxxer.hikari: 'DEBUG'
+#    org.hibernate.resource.jdbc.internal.ResourceRegistryStandardImpl: TRACE
+
+spring.jackson.serialization.write-dates-as-timestamps: true
+com.shuyiwa.fitness.backend.disk.url.suffix: https://console.fitooss.com/pass
+management.health.mail.enabled: false
+spring.jpa.properties.hibernate.jdbc.batch_size: 1000
+spring.jpa.properties.hibernate.order_inserts: true
+com.shuyiwa.fitness.backend.task.schedule.enabled: true

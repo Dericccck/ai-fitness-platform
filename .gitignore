@@ -1,0 +1,18 @@
+/src/main/resources/application-dev.yml
+/fitness-backend.iml
+/.idea/
+/target/
+
+# Local and generated files
+.DS_Store
+*.iml
+/log/
+/log-dir/
+/upload-dir/
+/user-avatar-dir/
+
+# Environment-specific configuration may contain credentials.
+/src/main/resources/application-*.yml
+!/src/main/resources/application-*.example.yml
+/src/test/resources/application-*.yml
+!/src/test/resources/application-*.example.yml

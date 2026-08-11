@@ -1,0 +1,51 @@
+server:
+  port: 8888
+spring:
+  application:
+    name: fitness-backend
+  servlet:
+    multipart:
+      max-file-size: 1024MB
+      max-request-size: 1024MB
+  session:
+    store-type: jdbc
+    jdbc:
+      initialize-schema: always
+  cache:
+    type: redis
+    redis:
+      time-to-live: 60000
+  datasource:
+    url: jdbc:h2:mem:myDb;DB_CLOSE_DELAY=-1
+    driver-class-name: org.h2.Driver
+    initialization-mode: never
+  jpa:
+    hibernate:
+      dialect: org.hibernate.dialect.H2Dialect
+      ddl-auto: update
+    properties:
+      hibernate:
+        format_sql: true
+eureka:
+  client:
+    serviceUrl:
+      defaultZone: http://localhost:8888/eureka
+    healtcheck:
+      enabled: true
+management:
+  endpoints:
+    web:
+      exposure:
+        include: '*'
+
+logging:
+  level:
+    org.springframework.cloud: 'INFO'
+    org.hibernate.SQL: 'DEBUG'
+    org.springframework: 'DEBUG'
+
+spring.jackson.serialization.write-dates-as-timestamps: true
+com.shuyiwa.fitness.backend.disk.url.suffix: https://console.fitooss.com/pass
+com.shuyiwa.fitness.backend.weixin.app:
+  id: testId
+  secret: ${FITNESS_TEST_WECHAT_APP_SECRET:}
