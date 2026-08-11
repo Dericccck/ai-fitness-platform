@@ -1,4 +1,12 @@
-# 开发启动参数
+# AI 健身多 Agent 平台
+
+本仓库正在基于原有健身管理后端建设企业级多 Agent 平台。后续开发范围、架构边界、
+实施顺序和协作规则统一以
+[AI 健身多 Agent 平台开发路线与项目规则](docs/ai-fitness-agent-development-roadmap.md) 为准。
+
+赛事与活动运营属于遗留代码，默认不纳入当前健身项目开发范围。
+
+## Java 后端开发启动参数
 --spring.profiles.active=dev --spring.cloud.config.server.bootstrap=false --spring.cloud.config.server.git.cloneOnStart=false
 # 坑
 * 阿里云数据库使用create-drop时，会因为CONSTRAINT而drop失败，所以如果在阿里云测试环境配置create-drop时，需要更改配置  jpa: properties: hibernate: dialect: MySQL55DialectForAli

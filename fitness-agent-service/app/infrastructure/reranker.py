@@ -8,17 +8,20 @@ from app.infrastructure.model_gateway import ModelConfigurationError
 
 @dataclass(frozen=True)
 class RerankResult:
+    """单条重排结果；index 始终指向调用方传入的原始文档列表。"""
+
     index: int
     score: float
     document: str
 
 
 class RerankerClient:
-    """HTTP adapter for a production reranker provider.
+    """生产 Reranker 服务的 HTTP 适配器。
 
-    The endpoint is intentionally configurable because reranker APIs differ across
-    providers. The expected response is either {"results": [...]} or a bare list,
-    with each item containing index and relevance_score/score.
+    不同供应商的重排端点并不完全统一，因此 URL、模型、密钥和超时通过环境配置。
+    当前适配两种常见响应：``{"results": [...]}`` 和直接数组；每项必须包含原文档
+    ``index``，分数可使用 ``relevance_score`` 或 ``score``。新增供应商差异时应继续
+    收敛在此适配器中，不能污染 RAG 业务流程。
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -31,6 +34,12 @@ class RerankerClient:
         *,
         top_n: int | None = None,
     ) -> list[RerankResult]:
+        """根据查询语义重新排序候选文档。
+
+        Reranker 只改变候选顺序，不负责权限过滤。调用前必须根据组织、角色、版本
+        和生效时间过滤候选文档；否则仍可能把越权内容发送给模型。
+        """
+
         if not self.settings.reranker_configured:
             raise ModelConfigurationError("Reranker provider is not configured")
 
@@ -51,6 +60,8 @@ class RerankerClient:
         if isinstance(raw_results, dict):
             raw_results = raw_results.get("results", [])
 
+        # 使用供应商返回的 index 映射原始文档，避免依赖供应商回传全文。后续接入
+        # 具体供应商时还要增加响应 Schema 校验和越界 index 保护。
         return [
             RerankResult(
                 index=int(item["index"]),
