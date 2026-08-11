@@ -18,6 +18,10 @@
 /fitness-agent-service/.pytest_cache/
 /fitness-agent-service/.mypy_cache/
 /fitness-agent-service/.ruff_cache/
+/fitness-agent-service/.coverage
+/fitness-agent-service/htmlcov/
+/.cache/
+/.mvn/repository/
 
 # Environment-specific configuration may contain credentials.
 /src/main/resources/application-*.yml

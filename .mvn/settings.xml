@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+    <!--
+      项目级 Maven 配置用于覆盖开发机器上可能存在的旧镜像和无效本地仓库路径。
+      仓库缓存写入 .mvn/repository（已加入 .gitignore），不会污染源码提交。
+    -->
+    <mirrors>
+        <mirror>
+            <id>aliyun-public-https</id>
+            <name>Aliyun public Maven mirror over HTTPS</name>
+            <url>https://maven.aliyun.com/repository/public</url>
+            <mirrorOf>central</mirrorOf>
+        </mirror>
+    </mirrors>
+</settings>

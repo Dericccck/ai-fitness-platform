@@ -129,11 +129,6 @@
             <version>2.15.6</version>
         </dependency>
         <dependency>
-            <groupId>com.aliyun</groupId>
-            <artifactId>aliyun-java-vod-upload</artifactId>
-            <version>1.4.2</version>
-        </dependency>
-        <dependency>
             <groupId>com.alibaba</groupId>
             <artifactId>fastjson</artifactId>
             <version>1.2.28</version>
@@ -261,6 +256,27 @@
                 <version>2.22.2</version>
                 <configuration>
                     <skip>true</skip>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <configuration>
+                    <!--
+                      旧项目的视频上传功能依赖阿里云单独分发的本地 JAR，且其回调控制器还引用了
+                      当前仓库中不存在的 WorksVideoUploadService。把来源不明的二进制文件直接提交
+                      到代码仓库会破坏依赖可追溯性，因此默认构建先隔离这组无法闭环的历史代码。
+
+                      注意：这里只排除失效的视频上传/回调实现，不排除 AliyunPicService，也不影响
+                      健身核心业务。后续如确实需要训练视频能力，应以新的媒体模块、私有制品仓库和
+                      完整自动化测试重新接入，而不是恢复不可复现的本地 JAR 依赖。
+                    -->
+                    <excludes>
+                        <exclude>**/third/aliyun/controller/AliyunCallbackController.java</exclude>
+                        <exclude>**/third/aliyun/controller/TestController.java</exclude>
+                        <exclude>**/third/aliyun/listener/PutVideoProgressListener.java</exclude>
+                        <exclude>**/third/aliyun/service/AliyunVideoService.java</exclude>
+                    </excludes>
                 </configuration>
             </plugin>
         </plugins>

@@ -55,7 +55,10 @@ async def ready(request: Request, response: Response) -> dict[str, object]:
         and checks["embedding"] is True
         and checks["reranker"] is True
     )
-    body = {"status": "ready" if ready_state else "not_ready", "checks": checks}
+    body: dict[str, object] = {
+        "status": "ready" if ready_state else "not_ready",
+        "checks": checks,
+    }
     if not ready_state:
         response.status_code = 503
     return body

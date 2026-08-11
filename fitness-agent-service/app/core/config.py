@@ -1,6 +1,5 @@
 from functools import lru_cache
 
-from pydantic import computed_field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -23,8 +22,12 @@ class Settings(BaseSettings):
     environment: str = "local"
     host: str = "0.0.0.0"
     port: int = 8090
+    service_name: str = "fitness-agent-service"
+    log_level: str = "INFO"
 
-    database_url: str = "postgresql+asyncpg://fitness_agent:fitness_agent@127.0.0.1:5433/fitness_agent"
+    database_url: str = (
+        "postgresql+asyncpg://fitness_agent:fitness_agent@127.0.0.1:5433/fitness_agent"
+    )
     redis_url: str = "redis://127.0.0.1:6380/0"
     db_pool_size: int = 10
     db_max_overflow: int = 20
@@ -44,7 +47,6 @@ class Settings(BaseSettings):
 
     internal_service_token: str = ""
 
-    @computed_field
     @property
     def embedding_effective_api_key(self) -> str:
         """返回 Embedding 实际使用的密钥。
@@ -55,21 +57,18 @@ class Settings(BaseSettings):
 
         return self.embedding_api_key or self.llm_api_key
 
-    @computed_field
     @property
     def embedding_configured(self) -> bool:
         """判断 Embedding 是否具备发起真实请求所需的最小配置。"""
 
         return bool(self.embedding_effective_api_key and self.embedding_model)
 
-    @computed_field
     @property
     def llm_configured(self) -> bool:
         """判断 LLM 是否具备真实密钥和明确模型，禁止隐式使用默认模型。"""
 
         return bool(self.llm_api_key and self.llm_model)
 
-    @computed_field
     @property
     def reranker_configured(self) -> bool:
         """判断 Reranker 端点和模型是否已配置。部分内网端点可不需要 API Key。"""

@@ -21,12 +21,23 @@
 
 ```bash
 cp .env.example .env
-docker compose -f ../deployment/docker-compose.agent-infra.yml up -d
-python3 -m venv .venv
-source .venv/bin/activate
-pip install -e '.[dev]'
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8090
+cd ..
+make infra-up
+make agent-sync
+make agent-run
 ```
 
 `/health/live` 只检查进程，`/health/ready` 检查 PostgreSQL、Redis 和三个模型能力是否均已配置并可用。
 没有配置真实模型凭证时服务不会伪装成 ready。
+
+常用质量检查：
+
+```bash
+make agent-format
+make agent-check
+make java-check
+```
+
+Python 版本固定为 3.11，`uv.lock` 是依赖事实源；CI 和本地均使用 `uv sync --locked`，
+禁止在未更新锁文件的情况下隐式升级依赖。HTTP 请求会返回 `X-Request-ID` 和
+`X-Trace-ID`，结构化日志使用相同字段关联后续 Agent、模型和 Tool 调用。

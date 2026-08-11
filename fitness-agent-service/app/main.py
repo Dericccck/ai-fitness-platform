@@ -1,14 +1,19 @@
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
 
 from fastapi import FastAPI
 
+from app.api.middleware.request_context import RequestContextMiddleware
 from app.api.routes.health import router as health_router
 from app.core.config import get_settings
+from app.core.logging import configure_logging
 from app.infrastructure.cache import Cache
 from app.infrastructure.database import Database
 from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient
+
+runtime_settings = get_settings()
+configure_logging(runtime_settings.log_level)
 
 
 @asynccontextmanager
@@ -46,4 +51,5 @@ app = FastAPI(
     redoc_url="/redoc",
     lifespan=lifespan,
 )
+app.add_middleware(RequestContextMiddleware, service_name=runtime_settings.service_name)
 app.include_router(health_router)

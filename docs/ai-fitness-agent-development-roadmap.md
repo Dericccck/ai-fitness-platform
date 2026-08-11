@@ -380,7 +380,7 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 
 ### 阶段 1：Agent 工程与基础设施
 
-状态：基础骨架已完成，工程化补充项待完成。
+状态：基础骨架和首轮工程化基线已完成，环境治理、Metrics 和镜像构建待完成。
 
 已经完成：
 
@@ -389,14 +389,22 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 - 建立 PostgreSQL/pgvector、Redis 配置与连接适配器。
 - 建立真实 LLM、Embedding、Reranker 网关。
 - 建立 Alembic 迁移入口和本地 Docker Compose。
+- 使用 `.python-version` 与 `uv.lock` 固定 Python 3.11 和完整依赖图。
+- 建立统一 Makefile，覆盖基础设施、依赖同步、格式化、质量检查和服务启动。
+- 建立 Python 严格类型检查、Ruff 检查和自动化测试质量门禁。
+- 建立 Java 可复现的项目级 Maven 配置，并验证 240 个核心源文件可编译。
+- 建立 GitHub Actions，执行 Python 检查、Java 编译和 Git 历史密钥扫描。
+- 建立 Dependabot，对 Python、Maven 和 GitHub Actions 依赖执行定期检查。
+- 接入 JSON 结构化日志、Request ID、Trace ID、安全校验和跨服务响应头。
+- 隔离无法从公共制品仓库解析且引用缺失服务的旧阿里云视频上传代码；保留源码供审计。
 
 待完成：
 
-- 固定 Python 依赖锁文件和统一运行命令。
-- 增加 Maven Wrapper 和 Python 质量命令。
-- 建立 CI：编译、测试、静态检查、密钥扫描和镜像构建。
+- 增加 Maven Wrapper，进一步消除开发机 Maven 版本差异。
+- 为新增 Java 核心能力建立可隔离测试；历史测试依赖外部环境，当前 POM 默认跳过。
+- 为 Agent 服务建立多阶段容器镜像，并把镜像构建加入 CI。
 - 建立开发、测试、预发布、生产环境配置约定。
-- 接入结构化日志、Trace ID 和基础 Metrics。
+- 接入 Prometheus Metrics、OpenTelemetry Trace 导出和基础告警规则。
 
 完成标准：开发者可以按文档启动依赖和服务；CI 对每次提交自动执行；服务不依赖本地隐式配置。
 
@@ -623,10 +631,14 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 - `fitness-agent-service` 企业级基础骨架。
 - FastAPI、PostgreSQL/pgvector、Redis、LLM、Embedding、Reranker 和 Alembic 基础适配。
 - Agent 基础设施 Docker Compose 和健康检查。
+- Python 3.11 依赖锁、统一 Makefile 和本地质量门禁。
+- GitHub Actions 的 Python 检查、Java 编译和密钥扫描。
+- JSON 结构化日志以及 Request ID、Trace ID 请求链路。
+- Java 项目级 Maven 配置和核心后端可复现编译。
 
 下一步按顺序执行：
 
-1. 完成阶段 1 剩余工程化内容：依赖锁、统一命令、CI、日志和基础观测。
+1. 完成阶段 1 剩余工程化内容：环境约定、Metrics、Trace 导出和镜像构建。
 2. 审计并加固现有 Java 资源级权限。
 3. 设计并实现签名 AgentContext。
 4. 建立首批只读 Java Tool Gateway。
