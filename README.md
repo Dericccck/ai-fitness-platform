@@ -9,7 +9,7 @@
 ## 项目组成
 
 - 历史 Java 8 + Spring Boot 源码：作为用户、机构、教练、课程、合同和预约规则的业务参考。
-- 健身核心适配层（阶段 2 建设）：对 Agent 提供经过权限、幂等和审计治理的 Tool Gateway。
+- `fitness-core-gateway`：独立、可复现构建的健身核心 Tool Gateway，提供受权限保护的只读业务查询。
 - `fitness-agent-service`：承载 Agent 编排、模型网关、RAG、Memory 和 Tool 调用。
 - PostgreSQL/pgvector：承载 Agent 状态、长期记忆、知识索引和审计扩展数据。
 - Redis：承载缓存、短期状态、幂等与分布式协作数据。
@@ -20,6 +20,7 @@
 make infra-up
 make agent-sync
 make agent-check
+make gateway-check
 make agent-image
 ```
 
@@ -31,11 +32,14 @@ make help
 
 历史 Java 源码来自不完整的旧项目快照，缺失赛事、作品、活动等类型，并曾因本地
 `target/classes` 残留产物表现为“可以编译”。干净环境执行 `clean compile` 会真实暴露这些缺失，
-因此它不属于当前 CI 质量门禁，也不得在项目材料中描述为可完整构建。阶段 2 会建立不依赖遗留
-赛事代码的健身核心适配层，并为新增 Tool Gateway 能力提供可隔离、可在 CI 中稳定执行的测试。
+因此它不属于当前 CI 质量门禁，也不得在项目材料中描述为可完整构建。阶段 2 已建立不依赖遗留
+赛事代码的首版健身核心适配层，后续继续补充真实数据库集成测试和写工具的业务安全门禁。
 
 如需复现并审计旧项目的编译问题，可显式执行 `make legacy-java-diagnostic`；该命令当前预期失败，
 不属于日常开发检查。Maven Wrapper 3.8.8 仅用于固定诊断和后续 Java 适配层的构建工具版本。
+
+`fitness-core-gateway` 是当前阶段新增的 Java 构建边界，可使用 `make gateway-check` 验证。
+它只访问健身核心表，不恢复赛事、作品和活动代码。
 
 ## Java 本地启动
 

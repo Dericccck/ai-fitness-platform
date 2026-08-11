@@ -1,0 +1,83 @@
+package com.shuyiwa.fitness.gateway.security;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.shuyiwa.fitness.gateway.config.GatewayProperties;
+import org.junit.Test;
+
+import javax.crypto.Mac;
+import javax.crypto.spec.SecretKeySpec;
+import java.nio.charset.StandardCharsets;
+import java.time.Clock;
+import java.time.Instant;
+import java.time.ZoneOffset;
+import java.util.Base64;
+import java.util.HashMap;
+import java.util.Map;
+
+import static org.junit.Assert.assertEquals;
+
+public class AgentContextVerifierTest {
+
+    private static final Instant NOW = Instant.parse("2026-08-12T00:00:00Z");
+
+    @Test
+    public void acceptsSignedContextWithinConfiguredLifetime() throws Exception {
+        GatewayProperties properties = properties();
+        AgentContextVerifier verifier = new AgentContextVerifier(
+                new ObjectMapper(), properties, Clock.fixed(NOW, ZoneOffset.UTC)
+        );
+
+        AgentContext context = verifier.verify(token(NOW.minusSeconds(10), NOW.plusSeconds(120)));
+
+        assertEquals("user-1", context.getSubjectUserId());
+        assertEquals("org-1", context.getOrganizationIds().iterator().next());
+        assertEquals("STUDENT", context.getRoles().iterator().next());
+    }
+
+    @Test(expected = GatewaySecurityException.class)
+    public void rejectsExpiredContext() throws Exception {
+        AgentContextVerifier verifier = new AgentContextVerifier(
+                new ObjectMapper(), properties(), Clock.fixed(NOW, ZoneOffset.UTC)
+        );
+
+        verifier.verify(token(NOW.minusSeconds(120), NOW.minusSeconds(1)));
+    }
+
+    @Test
+    public void rejectsTamperedPayload() throws Exception {
+        AgentContextVerifier verifier = new AgentContextVerifier(
+                new ObjectMapper(), properties(), Clock.fixed(NOW, ZoneOffset.UTC)
+        );
+        String valid = token(NOW.minusSeconds(10), NOW.plusSeconds(120));
+        String tampered = valid.substring(0, valid.length() - 1) + (valid.endsWith("A") ? "B" : "A");
+
+        try {
+            verifier.verify(tampered);
+        } catch (GatewaySecurityException expected) {
+            return;
+        }
+        throw new AssertionError("tampered context must be rejected");
+    }
+
+    private static GatewayProperties properties() {
+        GatewayProperties properties = new GatewayProperties();
+        properties.setContextSigningSecret("test-context-secret");
+        properties.setMaxContextTtlSeconds(300);
+        return properties;
+    }
+
+    private static String token(Instant issuedAt, Instant expiresAt) throws Exception {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("sub", "user-1");
+        payload.put("orgs", new String[]{"org-1"});
+        payload.put("roles", new String[]{"STUDENT"});
+        payload.put("iat", issuedAt.getEpochSecond());
+        payload.put("exp", expiresAt.getEpochSecond());
+        payload.put("nonce", "nonce-1");
+        byte[] payloadBytes = new ObjectMapper().writeValueAsBytes(payload);
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec("test-context-secret".getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();
+        return encoder.encodeToString(payloadBytes) + "." + encoder.encodeToString(mac.doFinal(payloadBytes));
+    }
+}

@@ -1,0 +1,26 @@
+server:
+  address: 0.0.0.0
+  port: ${GATEWAY_SERVER_PORT:8081}
+
+spring:
+  application:
+    name: fitness-core-gateway
+  datasource:
+    url: ${GATEWAY_DB_URL:jdbc:mysql://127.0.0.1:3307/fitness?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia%2FShanghai}
+    username: ${GATEWAY_DB_USERNAME:}
+    password: ${GATEWAY_DB_PASSWORD:}
+    hikari:
+      read-only: true
+      maximum-pool-size: ${GATEWAY_DB_MAX_POOL_SIZE:10}
+      connection-timeout: ${GATEWAY_DB_CONNECTION_TIMEOUT_MS:3000}
+
+gateway:
+  security:
+    # 生产环境必须由 Secret Manager 注入，不能使用默认值。
+    internal-service-token: ${GATEWAY_INTERNAL_SERVICE_TOKEN:}
+    context-signing-secret: ${GATEWAY_CONTEXT_SIGNING_SECRET:}
+    max-context-ttl-seconds: ${GATEWAY_MAX_CONTEXT_TTL_SECONDS:300}
+
+logging:
+  level:
+    com.shuyiwa.fitness.gateway: INFO

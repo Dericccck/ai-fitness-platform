@@ -2,6 +2,7 @@
 /fitness-backend.iml
 /.idea/
 /target/
+/**/target/
 
 # Local and generated files
 .DS_Store
