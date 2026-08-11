@@ -22,6 +22,18 @@ services:
     volumes:
       - fitness-agent-redis-data:/data
 
+  agent-otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.157.0
+    container_name: fitness-agent-otel-collector
+    restart: unless-stopped
+    profiles: ["observability"]
+    command: ["--config=/etc/otelcol-contrib/config.yml"]
+    volumes:
+      - ./observability/otel-collector.yml:/etc/otelcol-contrib/config.yml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+
 volumes:
   fitness-agent-postgres-data:
   fitness-agent-redis-data:

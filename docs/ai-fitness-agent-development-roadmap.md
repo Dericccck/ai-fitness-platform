@@ -380,7 +380,7 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 
 ### 阶段 1：Agent 工程与基础设施
 
-状态：基础骨架和首轮工程化基线已完成，环境治理、Metrics 和镜像构建待完成。
+状态：阶段 1 核心工程化基线已完成；健身核心 Java 适配层、基础告警和业务测试随阶段 2 建设。
 
 已经完成：
 
@@ -392,19 +392,24 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 - 使用 `.python-version` 与 `uv.lock` 固定 Python 3.11 和完整依赖图。
 - 建立统一 Makefile，覆盖基础设施、依赖同步、格式化、质量检查和服务启动。
 - 建立 Python 严格类型检查、Ruff 检查和自动化测试质量门禁。
-- 建立 Java 可复现的项目级 Maven 配置，并验证 240 个核心源文件可编译。
-- 建立 GitHub Actions，执行 Python 检查、Java 编译和 Git 历史密钥扫描。
+- 识别历史 Java 源码依赖本地 `target/classes` 残留产物的假编译问题，并用 `clean compile` 在本地与 CI 复现。
+- 明确历史 Java 项目是不完整源码快照，不恢复赛事、作品、活动等缺失类型，也不把它纳入 Agent CI 门禁。
+- 建立 GitHub Actions，执行 Python 检查、Agent 生产镜像构建和 Git 历史密钥扫描。
 - 建立 Dependabot，对 Python、Maven 和 GitHub Actions 依赖执行定期检查。
 - 接入 JSON 结构化日志、Request ID、Trace ID、安全校验和跨服务响应头。
-- 隔离无法从公共制品仓库解析且引用缺失服务的旧阿里云视频上传代码；保留源码供审计。
+- 记录无法从公共制品仓库解析且引用缺失服务的旧阿里云视频上传代码；保留源码供审计，但不进入健身核心适配层。
+- 使用 Apache Maven Wrapper `only-script` 模式固定 Maven 3.8.8，供遗留问题诊断和后续适配层使用，避免提交 Wrapper 二进制 JAR。
+- 建立 local、test、staging、production 环境配置、Secret 分级和不可变镜像提升规则。
+- 接入低基数 Prometheus Metrics，覆盖请求量、耗时、并发数和构建信息。
+- 接入可配置 OpenTelemetry SDK、FastAPI/HTTPX 自动埋点和 OTLP/HTTP 批量导出。
+- 建立本地 OpenTelemetry Collector 配置，默认仅输出调试 Trace，不连接外部平台。
+- 建立锁定依赖、非 root、多阶段 Agent 生产镜像，并把镜像构建加入 CI。
+- 完成容器冒烟验证：以 UID/GID `10001:10001` 启动，存活与 Metrics 接口正常。
 
 待完成：
 
-- 增加 Maven Wrapper，进一步消除开发机 Maven 版本差异。
-- 为新增 Java 核心能力建立可隔离测试；历史测试依赖外部环境，当前 POM 默认跳过。
-- 为 Agent 服务建立多阶段容器镜像，并把镜像构建加入 CI。
-- 建立开发、测试、预发布、生产环境配置约定。
-- 接入 Prometheus Metrics、OpenTelemetry Trace 导出和基础告警规则。
+- 建立不依赖遗留赛事代码的健身核心 Java 适配层，并为新增能力建立可隔离测试。
+- 随阶段 2 的真实 Tool Gateway 指标建立 Prometheus 告警规则，避免对尚不存在的业务指标伪造告警。
 
 完成标准：开发者可以按文档启动依赖和服务；CI 对每次提交自动执行；服务不依赖本地隐式配置。
 
@@ -412,7 +417,9 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 
 工作内容：
 
-- 审计现有 Controller 和 Service 的资源级权限。
+- 先建立独立、可复现构建的健身核心适配层，仅纳入用户、机构、教练、学员、课程、合同、课时和预约能力。
+- 将历史 Java Controller、Service 和表结构作为业务规则参考，不恢复赛事、作品、活动代码，也不直接依赖缺失类型。
+- 审计健身相关 Controller 和 Service 的资源级权限。
 - 修复仅检查 `isAuthenticated()`、但接受任意用户/组织/教练 ID 的接口。
 - 建立签名 AgentContext 和服务间认证。
 - 建立 Tool 注册表、Schema、统一错误码、超时和审计。
@@ -632,14 +639,18 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 - FastAPI、PostgreSQL/pgvector、Redis、LLM、Embedding、Reranker 和 Alembic 基础适配。
 - Agent 基础设施 Docker Compose 和健康检查。
 - Python 3.11 依赖锁、统一 Makefile 和本地质量门禁。
-- GitHub Actions 的 Python 检查、Java 编译和密钥扫描。
+- GitHub Actions 的 Python 检查、Agent 生产镜像构建和密钥扫描。
 - JSON 结构化日志以及 Request ID、Trace ID 请求链路。
-- Java 项目级 Maven 配置和核心后端可复现编译。
+- 历史 Java 不完整源码与 `target/classes` 假编译问题的边界记录。
+- Maven Wrapper 3.8.8，为遗留诊断和阶段 2 健身核心适配层固定构建工具版本。
+- local、test、staging、production 配置约定与 Secret 分级规则。
+- Prometheus Metrics、OpenTelemetry OTLP Trace 导出和本地 Collector。
+- 非 root 多阶段 Agent 生产镜像及容器存活、Metrics 冒烟验证。
 
 下一步按顺序执行：
 
-1. 完成阶段 1 剩余工程化内容：环境约定、Metrics、Trace 导出和镜像构建。
-2. 审计并加固现有 Java 资源级权限。
+1. 建立不依赖赛事遗留代码、可独立构建的健身核心 Java 适配层。
+2. 审计并加固健身相关资源级权限。
 3. 设计并实现签名 AgentContext。
 4. 建立首批只读 Java Tool Gateway。
 5. 建立预约写工具、确认凭证、幂等和审计。

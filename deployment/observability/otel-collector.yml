@@ -1,0 +1,23 @@
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # 批处理减少 Collector 向后端发送请求的次数；生产环境还应增加内存限制处理器。
+  batch: {}
+
+exporters:
+  # 本地环境只输出到 Collector 日志，用于验证链路，不连接任何外部厂商平台。
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [debug]

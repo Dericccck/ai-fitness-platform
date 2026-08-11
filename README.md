@@ -8,7 +8,8 @@
 
 ## 项目组成
 
-- Java 8 + Spring Boot：承载现有用户、机构、教练、课程、合同、预约和权限等业务。
+- 历史 Java 8 + Spring Boot 源码：作为用户、机构、教练、课程、合同和预约规则的业务参考。
+- 健身核心适配层（阶段 2 建设）：对 Agent 提供经过权限、幂等和审计治理的 Tool Gateway。
 - `fitness-agent-service`：承载 Agent 编排、模型网关、RAG、Memory 和 Tool 调用。
 - PostgreSQL/pgvector：承载 Agent 状态、长期记忆、知识索引和审计扩展数据。
 - Redis：承载缓存、短期状态、幂等与分布式协作数据。
@@ -19,7 +20,7 @@
 make infra-up
 make agent-sync
 make agent-check
-make java-check
+make agent-image
 ```
 
 查看全部命令：
@@ -28,9 +29,13 @@ make java-check
 make help
 ```
 
-`make java-check` 当前验证历史 Java 后端能够完成默认编译。旧测试套件依赖外部数据库、
-Redis 和过时业务数据，原 POM 默认关闭了测试；在权限与 Tool Gateway 阶段会为新增核心
-能力建立可隔离、可在 CI 中稳定执行的测试。
+历史 Java 源码来自不完整的旧项目快照，缺失赛事、作品、活动等类型，并曾因本地
+`target/classes` 残留产物表现为“可以编译”。干净环境执行 `clean compile` 会真实暴露这些缺失，
+因此它不属于当前 CI 质量门禁，也不得在项目材料中描述为可完整构建。阶段 2 会建立不依赖遗留
+赛事代码的健身核心适配层，并为新增 Tool Gateway 能力提供可隔离、可在 CI 中稳定执行的测试。
+
+如需复现并审计旧项目的编译问题，可显式执行 `make legacy-java-diagnostic`；该命令当前预期失败，
+不属于日常开发检查。Maven Wrapper 3.8.8 仅用于固定诊断和后续 Java 适配层的构建工具版本。
 
 ## Java 本地启动
 
@@ -48,8 +53,8 @@ Redis 和过时业务数据，原 POM 默认关闭了测试；在权限与 Tool 
 ## 历史阿里云视频代码
 
 旧视频上传代码依赖阿里云单独分发的本地 JAR，同时引用了本仓库缺失的
-`WorksVideoUploadService`，无法形成可复现构建。默认 Maven 构建仅隔离这组失效的视频上传、
-回调和测试控制器，源码仍保留供业务审计；图片上传及其他可正常解析的依赖不受影响。
+`WorksVideoUploadService`，无法形成可复现构建。历史 POM 保留了这组失效视频代码的编译隔离
+配置供审计；它们不会进入新的健身核心适配层。
 
 如果后续需要训练视频能力，应建设独立媒体模块，并通过受控的私有制品仓库、权限校验、
 文件扫描、回调验签和自动化测试重新接入，不直接恢复来源不可追踪的本地 JAR。

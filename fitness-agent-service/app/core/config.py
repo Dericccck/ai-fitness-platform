@@ -1,5 +1,7 @@
 from functools import lru_cache
+from typing import Literal
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -19,11 +21,19 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    environment: str = "local"
+    environment: Literal["local", "test", "staging", "production"] = "local"
     host: str = "0.0.0.0"
     port: int = 8090
     service_name: str = "fitness-agent-service"
+    service_version: str = "0.1.0"
     log_level: str = "INFO"
+    api_docs_enabled: bool = True
+
+    metrics_enabled: bool = True
+    otel_enabled: bool = False
+    otel_exporter_otlp_traces_endpoint: str = ""
+    otel_export_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    otel_trace_sample_ratio: float = Field(default=0.1, ge=0, le=1)
 
     database_url: str = (
         "postgresql+asyncpg://fitness_agent:fitness_agent@127.0.0.1:5433/fitness_agent"
@@ -74,6 +84,12 @@ class Settings(BaseSettings):
         """判断 Reranker 端点和模型是否已配置。部分内网端点可不需要 API Key。"""
 
         return bool(self.reranker_url and self.reranker_model)
+
+    @property
+    def otel_configured(self) -> bool:
+        """只有显式启用并提供端点时才向外部可观测平台发送 Trace。"""
+
+        return bool(self.otel_enabled and self.otel_exporter_otlp_traces_endpoint)
 
 
 @lru_cache
