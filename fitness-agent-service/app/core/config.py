@@ -98,7 +98,14 @@ class Settings(BaseSettings):
     rag_chunk_overlap_chars: int = Field(default=120, ge=0, le=500)
     rag_max_source_bytes: int = Field(default=20 * 1024 * 1024, ge=1, le=100 * 1024 * 1024)
     rag_staging_dir: str = "./var/rag-staging"
+    rag_storage_backend: Literal["local", "s3"] = "local"
+    rag_s3_endpoint_url: str = ""
+    rag_s3_region: str = "us-east-1"
+    rag_s3_bucket: str = "fitness-agent-knowledge"
+    rag_s3_access_key: str = ""
+    rag_s3_secret_key: str = ""
     rag_ingestion_max_attempts: int = Field(default=3, ge=1, le=5)
+    rag_ingestion_worker_batch_size: int = Field(default=10, ge=1, le=100)
 
     gateway_base_url: str = "http://127.0.0.1:8081"
     gateway_internal_service_token: str = ""

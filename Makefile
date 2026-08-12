@@ -4,11 +4,12 @@ AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-run agent-image gateway-check gateway-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-run agent-image gateway-check gateway-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
 	@echo "  infra-up     Start PostgreSQL/pgvector and Redis"
+	@echo "  infra-up-storage Start PostgreSQL/Redis and optional MinIO object storage"
 	@echo "  infra-down   Stop local Agent infrastructure without deleting data"
 	@echo "  observability-up Start the local OpenTelemetry Collector"
 	@echo "  agent-lock   Resolve and update the Python dependency lock file"
@@ -25,6 +26,9 @@ help:
 
 infra-up:
 	docker compose -f $(COMPOSE_FILE) up -d
+
+infra-up-storage:
+	docker compose -f $(COMPOSE_FILE) --profile storage up -d
 
 infra-down:
 	docker compose -f $(COMPOSE_FILE) down

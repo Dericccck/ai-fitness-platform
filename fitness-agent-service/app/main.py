@@ -11,7 +11,7 @@ from app.api.middleware.request_context import RequestContextMiddleware
 from app.api.routes.admin_knowledge import router as admin_knowledge_router
 from app.api.routes.agent import router as agent_router
 from app.api.routes.health import router as health_router
-from app.core.config import get_settings
+from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import HttpMetrics, MetricsMiddleware
 from app.core.telemetry import configure_tracing
@@ -26,8 +26,10 @@ from app.rag.admin_service import KnowledgeAdminService
 from app.rag.formats import DocumentParserRegistry
 from app.rag.ingestion import DocumentIngestionService
 from app.rag.repository import KnowledgeRepository
+from app.rag.safety import StructuralDocumentScanner
 from app.rag.service import RagService
-from app.rag.storage import LocalDocumentStorage
+from app.rag.storage import DocumentStorage, LocalDocumentStorage, S3DocumentStorage
+from app.rag.worker import KnowledgeIngestionWorker
 
 runtime_settings = get_settings()
 configure_logging(runtime_settings.log_level)
@@ -80,14 +82,21 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         overlap_chars=settings.rag_chunk_overlap_chars,
         parser_registry=parser_registry,
     )
+    app.state.knowledge_jobs = KnowledgeIngestionRepository(app.state.database)
     app.state.knowledge_admin = KnowledgeAdminService(
-        KnowledgeIngestionRepository(app.state.database),
+        app.state.knowledge_jobs,
         app.state.knowledge_repository,
         app.state.document_ingestion,
-        LocalDocumentStorage(settings.rag_staging_dir),
+        _build_document_storage(settings),
         parser_registry,
+        StructuralDocumentScanner(),
         max_source_bytes=settings.rag_max_source_bytes,
         max_attempts=settings.rag_ingestion_max_attempts,
+    )
+    app.state.knowledge_worker = KnowledgeIngestionWorker(
+        app.state.knowledge_jobs,
+        app.state.knowledge_admin,
+        batch_size=settings.rag_ingestion_worker_batch_size,
     )
     app.state.gateway = GatewayClient(settings)
     # Tool Registry 是 Agent 调用业务能力的唯一入口。它在启动期完成固定工具注册，
@@ -136,6 +145,20 @@ app.add_middleware(RequestContextMiddleware, service_name=runtime_settings.servi
 app.include_router(agent_router)
 app.include_router(admin_knowledge_router)
 app.include_router(health_router)
+
+
+def _build_document_storage(settings: Settings) -> DocumentStorage:
+    """Select storage from configuration without leaking vendor details into the service."""
+
+    if settings.rag_storage_backend == "local":
+        return LocalDocumentStorage(settings.rag_staging_dir)
+    return S3DocumentStorage(
+        endpoint_url=settings.rag_s3_endpoint_url,
+        region=settings.rag_s3_region,
+        bucket=settings.rag_s3_bucket,
+        access_key=settings.rag_s3_access_key,
+        secret_key=settings.rag_s3_secret_key,
+    )
 
 
 @app.get("/metrics", include_in_schema=False)

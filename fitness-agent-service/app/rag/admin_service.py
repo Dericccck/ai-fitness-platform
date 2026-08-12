@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import re
 from secrets import token_hex
 
@@ -16,7 +17,8 @@ from .admin_repository import KnowledgeIngestionRepository
 from .formats import DocumentParserRegistry
 from .ingestion import DocumentIngestionService, IngestionRequest
 from .repository import KnowledgeRepository
-from .storage import LocalDocumentStorage
+from .safety import StructuralDocumentScanner
+from .storage import DocumentStorage
 
 ADMIN_ROLES = frozenset({"ADMIN", "ORG_ADMIN", "SUPER_ADMIN"})
 PLATFORM_ADMIN_ROLES = frozenset({"ADMIN", "SUPER_ADMIN"})
@@ -36,8 +38,9 @@ class KnowledgeAdminService:
         jobs: KnowledgeIngestionRepository,
         knowledge_repository: KnowledgeRepository,
         ingestion: DocumentIngestionService,
-        storage: LocalDocumentStorage,
+        storage: DocumentStorage,
         parser_registry: DocumentParserRegistry,
+        safety_scanner: StructuralDocumentScanner | None = None,
         *,
         max_source_bytes: int,
         max_attempts: int = 3,
@@ -47,6 +50,7 @@ class KnowledgeAdminService:
         self.ingestion = ingestion
         self.storage = storage
         self.parser_registry = parser_registry
+        self.safety_scanner = safety_scanner or StructuralDocumentScanner()
         self.max_source_bytes = max_source_bytes
         self.max_attempts = max_attempts
 
@@ -67,6 +71,7 @@ class KnowledgeAdminService:
             raise ValueError("uploaded document must not be empty")
         if len(content) > self.max_source_bytes:
             raise ValueError("uploaded document exceeds the configured size limit")
+        safety_result = self.safety_scanner.scan(file_name, content)
         # Parse once at the trust boundary. The later worker reparses the immutable bytes,
         # so a malformed file cannot sit indefinitely in the review queue unnoticed.
         self.parser_registry.parse(content, file_name=file_name)
@@ -77,7 +82,13 @@ class KnowledgeAdminService:
         if metadata.visibility == "ORGANIZATION" and organization_id is None:
             organization_id = next(iter(identity.organization_ids))
         job_id = token_hex(16)
-        storage_key = self.storage.store(job_id, file_name, content)
+        storage_key = await asyncio.to_thread(
+            self.storage.store,
+            job_id,
+            file_name,
+            content,
+            content_type=content_type or "application/octet-stream",
+        )
         job = KnowledgeIngestionJob(
             id=job_id,
             source_uri=metadata.source_uri,
@@ -98,6 +109,9 @@ class KnowledgeAdminService:
             status="PENDING_REVIEW",
             attempt_count=0,
             max_attempts=self.max_attempts,
+            content_sha256=safety_result.sha256,
+            safety_status=safety_result.status,
+            scanner_name=safety_result.scanner_name,
         )
         return await self.jobs.create_job(job=job)
 
@@ -153,7 +167,7 @@ class KnowledgeAdminService:
         if job is None:
             return
         try:
-            content = self.storage.read(job.storage_key)
+            content = await asyncio.to_thread(self.storage.read, job.storage_key)
             result = await self.ingestion.ingest_file(
                 IngestionRequest(
                     source_uri=job.source_uri,

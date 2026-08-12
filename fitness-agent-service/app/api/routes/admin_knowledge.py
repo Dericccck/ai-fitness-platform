@@ -54,6 +54,9 @@ class KnowledgeJobResponse(BaseModel):
     error_code: str | None
     error_message: str | None
     document_id: str | None
+    content_sha256: str
+    safety_status: str
+    scanner_name: str
     created_at: datetime | None
     updated_at: datetime | None
     reviewed_at: datetime | None
@@ -287,6 +290,9 @@ def _to_response(job: KnowledgeIngestionJob) -> KnowledgeJobResponse:
         error_code=job.error_code,
         error_message=job.error_message,
         document_id=job.document_id,
+        content_sha256=job.content_sha256,
+        safety_status=job.safety_status,
+        scanner_name=job.scanner_name,
         created_at=job.created_at,
         updated_at=job.updated_at,
         reviewed_at=job.reviewed_at,

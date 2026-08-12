@@ -52,16 +52,28 @@ class DocumentParser(Protocol):
         """Parse bytes without writing untrusted uploads to a local path."""
 
 
+class PdfOcrProvider(Protocol):
+    """OCR boundary for scanned PDFs; implementation belongs to a dedicated service."""
+
+    def parse(self, content: bytes, *, file_name: str) -> ParsedDocument:
+        """Return structure-preserving OCR blocks for one PDF."""
+
+
 class DocumentParserRegistry:
     """Select a parser by a normalized extension and enforce upload size limits."""
 
-    def __init__(self, *, max_source_bytes: int = 20 * 1024 * 1024) -> None:
+    def __init__(
+        self,
+        *,
+        max_source_bytes: int = 20 * 1024 * 1024,
+        pdf_ocr_provider: PdfOcrProvider | None = None,
+    ) -> None:
         self.max_source_bytes = max_source_bytes
         self._parsers: dict[str, DocumentParser] = {
             ".md": MarkdownParser(),
             ".markdown": MarkdownParser(),
             ".txt": MarkdownParser(),
-            ".pdf": PdfParser(),
+            ".pdf": PdfParser(ocr_provider=pdf_ocr_provider),
             ".docx": DocxParser(),
             ".xlsx": XlsxParser(),
         }
@@ -111,6 +123,9 @@ class MarkdownParser:
 class PdfParser:
     """Extract PDF page text and layout-aware tables with source page metadata."""
 
+    def __init__(self, *, ocr_provider: PdfOcrProvider | None = None) -> None:
+        self.ocr_provider = ocr_provider
+
     def parse(self, content: bytes, *, file_name: str) -> ParsedDocument:
         import pdfplumber
 
@@ -144,6 +159,8 @@ class PdfParser:
                 if not text and not tables:
                     warnings.append(f"page {page_number} has no extractable text or table")
         if not blocks:
+            if self.ocr_provider is not None:
+                return self.ocr_provider.parse(content, file_name=file_name)
             raise DocumentParseError(
                 "PDF contains no extractable text; scanned PDFs require an approved OCR pipeline"
             )

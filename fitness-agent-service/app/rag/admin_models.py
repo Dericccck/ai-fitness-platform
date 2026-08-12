@@ -50,6 +50,9 @@ class KnowledgeIngestionJob:
     reviewed_at: datetime | None = None
     started_at: datetime | None = None
     finished_at: datetime | None = None
+    content_sha256: str = ""
+    safety_status: str = "STRUCTURAL_VALIDATED"
+    scanner_name: str = "structural-v1"
 
 
 @dataclass(frozen=True)
@@ -115,4 +118,7 @@ def job_from_row(row: Any) -> KnowledgeIngestionJob:
         reviewed_at=row["reviewed_at"],
         started_at=row["started_at"],
         finished_at=row["finished_at"],
+        content_sha256=str(row["content_sha256"] or ""),
+        safety_status=str(row["safety_status"] or "UNKNOWN"),
+        scanner_name=str(row["scanner_name"] or "unknown"),
     )

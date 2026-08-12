@@ -36,6 +36,13 @@
   Worker 以数据库原子 Claim 进入 `INDEXING`，只有父子节点、Embedding 和发布事务完成后
   才标记 `SUCCEEDED`。失败任务保留错误类型、尝试次数和审核记录，支持有限次数人工重试；
   组织管理员只能看到签名组织范围内的组织知识，平台管理员才可管理全局知识。
+- 文件安全与存储：上传会在解析和存储前执行 UTF-8、文件签名、Office ZIP 路径、加密包、
+  符号链接、宏文件和解压大小检查，并记录 SHA-256 与扫描器版本。存储支持本地适配器和
+  S3-compatible/MinIO 适配器；当前结构扫描不是杀毒引擎，生产环境必须接入 ClamAV 或云端
+  文件安全服务。
+- 索引 Worker：`KnowledgeIngestionWorker` 提供有界轮询入口，任务通过 PostgreSQL 原子 Claim
+  防止重复执行；超过重试上限的 `FAILED` 任务即为死信状态，后续可由独立 Worker Deployment
+  或队列消费者接管，不依赖单个 API 进程内存。
 - Prometheus：低基数 HTTP 请求量、耗时、并发和构建信息指标。
 - OpenTelemetry：可选 OTLP/HTTP Trace 导出，默认关闭且不发送 Prompt 或用户档案。
 
@@ -113,6 +120,10 @@ RAG 表结构通过 `make agent-migrate` 显式升级，不在服务启动时自
 查询。接口仍只接受认证服务签发的 `X-Agent-Context`，不会信任表单中的用户或角色字段。
 本地暂存目录默认是 `./var/rag-staging`，已加入 Git 忽略；生产环境应替换为带生命周期、
 加密、恶意文件扫描和访问审计的对象存储适配器。
+
+本地可通过 `make infra-up-storage` 启动 MinIO；将 `AGENT_RAG_STORAGE_BACKEND` 改为 `s3`
+并填写 S3 配置后，上传对象会写入 `knowledge/` 前缀。MinIO 账号只用于本地开发，生产环境
+必须使用 Secret Manager 注入独立凭证。
 
 本地连接默认使用 Docker Compose 创建的 `fitness-agent-postgres`：宿主机
 `127.0.0.1:5433` 映射到容器 `5432`，数据库 `fitness_agent`，用户 `fitness_agent`。

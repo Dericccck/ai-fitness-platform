@@ -35,12 +35,13 @@ class KnowledgeIngestionRepository:
                 id, source_uri, original_filename, storage_key, content_type, size_bytes,
                 title, document_type, organization_id, owner_user_id, visibility, allowed_roles,
                 effective_from, effective_to, requested_version, submitted_by, status,
-                attempt_count, max_attempts
+                attempt_count, max_attempts, content_sha256, safety_status, scanner_name
             ) VALUES (
                 :id, :source_uri, :original_filename, :storage_key, :content_type, :size_bytes,
                 :title, :document_type, :organization_id, :owner_user_id, :visibility,
                 :allowed_roles, :effective_from, :effective_to, :requested_version,
-                :submitted_by, 'PENDING_REVIEW', 0, :max_attempts
+                :submitted_by, 'PENDING_REVIEW', 0, :max_attempts, :content_sha256,
+                :safety_status, :scanner_name
             )
             RETURNING *
             """
@@ -93,6 +94,24 @@ class KnowledgeIngestionRepository:
         async with self._database.engine.connect() as connection:
             rows = (await connection.execute(statement, params)).mappings().all()
         return [job_from_row(row) for row in rows]
+
+    async def list_queued_ids(self, *, limit: int = 10) -> list[str]:
+        """Return bounded queued IDs; each worker still claims atomically before processing."""
+
+        if limit < 1 or limit > 100:
+            raise ValueError("worker batch size must be between 1 and 100")
+        statement = text(
+            """
+            SELECT id
+            FROM knowledge_ingestion_jobs
+            WHERE status = 'QUEUED'
+            ORDER BY created_at
+            LIMIT :limit
+            """
+        )
+        async with self._database.engine.connect() as connection:
+            rows = (await connection.execute(statement, {"limit": limit})).mappings().all()
+        return [str(row["id"]) for row in rows]
 
     async def approve(
         self, job_id: str, *, reviewer_id: str, comment: str | None
@@ -254,4 +273,7 @@ def _job_params(job: KnowledgeIngestionJob) -> dict[str, Any]:
         "requested_version": job.requested_version,
         "submitted_by": job.submitted_by,
         "max_attempts": job.max_attempts,
+        "content_sha256": job.content_sha256,
+        "safety_status": job.safety_status,
+        "scanner_name": job.scanner_name,
     }
