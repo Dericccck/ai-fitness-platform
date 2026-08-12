@@ -140,7 +140,9 @@ RAG 表结构通过 `make agent-migrate` 显式升级，不在服务启动时自
 
 检索引用接口为 `POST /api/v1/agent/knowledge/search`，只返回已完成权限过滤的来源引用，
 包括来源 URI、版本、章节、PDF 页码、Excel 工作表、表格序号/行范围和命中片段。离线评测
-样例位于 `evals/rag_smoke.json`，当前提供 Recall@K 和 MRR 指标函数，不使用线上用户数据。
+样例位于 `evals/rag_smoke.json`，阈值位于 `evals/rag_thresholds.json`。本地执行
+`make agent-eval` 会校验 Recall@K、MRR 和禁止 ID 命中数；CI 会把同一命令作为质量门禁。
+当前是稳定的黄金结果回归集，不使用线上用户数据；后续接入真实评测数据库时复用相同指标和阈值模型。
 
 本地连接默认使用 Docker Compose 创建的 `fitness-agent-postgres`：宿主机
 `127.0.0.1:5433` 映射到容器 `5432`，数据库 `fitness_agent`，用户 `fitness_agent`。

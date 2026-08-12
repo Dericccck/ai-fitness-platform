@@ -4,7 +4,7 @@ AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-up-storage infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-run agent-reindex-worker agent-image gateway-check gateway-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-run agent-reindex-worker agent-image gateway-check gateway-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
@@ -17,6 +17,7 @@ help:
 	@echo "  agent-migrate Apply Agent PostgreSQL migrations"
 	@echo "  agent-format Format Python code"
 	@echo "  agent-check  Run Python lint, type checks, and tests"
+	@echo "  agent-eval   Run deterministic RAG quality and permission gates"
 	@echo "  agent-run    Start the Agent API locally"
 	@echo "  agent-reindex-worker Start the knowledge index rebuild worker locally"
 	@echo "  agent-image  Build the production Agent container image"
@@ -54,6 +55,10 @@ agent-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run ruff format --check .
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run mypy app
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run pytest
+
+agent-eval:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.rag.evaluation_cli \
+		--cases evals/rag_smoke.json --thresholds evals/rag_thresholds.json
 
 agent-run:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8090

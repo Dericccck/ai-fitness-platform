@@ -50,6 +50,9 @@ jobs:
       - name: Test
         run: uv run pytest
 
+      - name: RAG evaluation quality gate
+        run: uv run python -m app.rag.evaluation_cli --cases evals/rag_smoke.json --thresholds evals/rag_thresholds.json
+
       - name: Build production container image
         run: docker build --file Dockerfile --tag fitness-agent-service:${{ github.sha }} .
 

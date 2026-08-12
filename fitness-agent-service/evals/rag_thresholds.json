@@ -1,0 +1,6 @@
+{
+  "k": 5,
+  "min_recall_at_k": 1.0,
+  "min_mrr": 1.0,
+  "max_forbidden_hits": 0
+}

@@ -2,11 +2,15 @@
   {
     "case_id": "warmup-001",
     "query": "训练前如何热身",
-    "relevant_ids": ["warmup-guide-1"]
+    "relevant_ids": ["warmup-guide-1"],
+    "forbidden_ids": ["private-weight-loss-1"],
+    "retrieved_ids": ["warmup-guide-1", "mobility-basics-1"]
   },
   {
     "case_id": "safety-001",
     "query": "膝盖疼痛时如何调整深蹲",
-    "relevant_ids": ["safety-squat-1"]
+    "relevant_ids": ["safety-squat-1"],
+    "forbidden_ids": ["other-org-squat-1"],
+    "retrieved_ids": ["safety-squat-1", "squat-form-1"]
   }
 ]
