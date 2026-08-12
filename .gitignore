@@ -10,6 +10,9 @@
 /log/
 /log-dir/
 /upload-dir/
+
+# 本地 RAG 原始资料可能带有版权限制或敏感内容，不提交到 Git。
+/fitness-agent-service/data/knowledge/raw/
 /user-avatar-dir/
 
 # Python Agent service
