@@ -29,7 +29,7 @@ dependencies = [
     "python-multipart>=0.0.20,<1.0",
     "pydantic-settings>=2.6,<3.0",
     "python-docx>=1.1,<2.0",
-    "redis[hiredis]>=5.2,<6.0",
+    "redis[hiredis]>=5.2,<9.0",
     # 与 learning-langchain-CN 的本地 BGE-M3/BGE-Reranker 运行时保持稳定兼容，
     # 避免无约束升级到包含不必要 CUDA 组件的未来版本。
     "sentence-transformers==3.0.1",
