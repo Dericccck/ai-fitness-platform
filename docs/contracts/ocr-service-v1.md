@@ -3,6 +3,9 @@
 这是 Agent 服务与独立 OCR 服务之间的最小 HTTP 契约。OCR 服务可以由内部 GPU 服务或云厂商适配器实现，
 但不能改变 Agent 的父子节点、引用和权限流程。
 
+当前仓库的自建实现位于 `fitness-ocr-service`，生产默认接入
+PaddleOCR PP-StructureV3；接口层不依赖具体 OCR 厂商。
+
 ## Request
 
 ```http

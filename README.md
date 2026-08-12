@@ -11,6 +11,8 @@
 - 历史 Java 8 + Spring Boot 源码：作为用户、机构、教练、课程、合同和预约规则的业务参考。
 - `fitness-core-gateway`：独立、可复现构建的健身核心 Tool Gateway，提供受权限保护的只读业务查询。
 - `fitness-agent-service`：承载 Agent 编排、模型网关、RAG、Memory 和 Tool 调用。
+- `fitness-ocr-service`：独立 OCR/文档结构化服务，默认适配 PaddleOCR PP-StructureV3，按 HTTP
+  契约向 Agent 返回带页码的文本与表格 block。
 - PostgreSQL/pgvector：承载 Agent 状态、长期记忆、知识索引和审计扩展数据。
 - Redis：承载缓存、短期状态、幂等与分布式协作数据。
 
@@ -20,6 +22,7 @@
 make infra-up
 make agent-sync
 make agent-check
+make ocr-check
 make gateway-check
 make agent-image
 ```

@@ -66,6 +66,10 @@ make agent-migrate
 make agent-run
 ```
 
+本地若要实际处理扫描型 PDF，还需在 Linux/GPU 或 amd64 推理节点启动独立 OCR 服务：
+`make infra-up-ocr`。macOS 开发机可以只运行 Agent，并把 `AGENT_RAG_OCR_ENDPOINT_URL` 指向
+远程 OCR 服务。
+
 `/health/live` 只检查进程，`/health/ready` 检查 PostgreSQL、Redis 和三个模型能力是否均已配置并可用。
 没有配置真实模型凭证时服务不会伪装成 ready。
 
@@ -159,7 +163,8 @@ AGENT_RAG_OCR_ENDPOINT_URL=<private-ocr-service>/v1/parse
 
 OCR 服务需要返回 `media_type`、`warnings` 和 `blocks` 数组；每个 block 至少包含 `kind` 和
 `content`，可附带 `source_page`、`heading_path`、`table_index`、`row_start`、`row_end`。
-完整协议适配代码见 `app/rag/ocr.py`。
+当前仓库的自建 OCR 服务位于 `../fitness-ocr-service`，默认使用 PaddleOCR PP-StructureV3；完整
+协议文档见 `docs/contracts/ocr-service-v1.md`，Agent 侧适配代码见 `app/rag/ocr.py`。
 
 索引重建任务只读取已审核文件，复用当前解析、清洗、父子分块、Embedding 和原子替换流程，
 用于 Embedding 模型升级、切分策略调整或索引修复，不会直接修改 Java 健身业务事实。

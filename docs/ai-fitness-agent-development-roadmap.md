@@ -461,7 +461,8 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 
 状态：RAG 基础数据模型、pgvector 权限过滤召回、真实 Embedding/Reranker 编排、统一多格式解析、
 Markdown/DOCX/PDF/XLSX 清洗切片、checksum 增量索引、父子节点扩展、混合检索、完整引用 API、
-OCR 适配器和离线评测门禁已完成可验证切片；真实 OCR/ClamAV 服务联调和评测数据持续扩充待继续。
+OCR 适配器、独立 OCR 服务骨架、离线评测门禁和真实 ClamAV 联调已完成可验证切片；PaddleOCR
+模型在 Linux CPU/GPU 节点上的真实文档集压测与评测数据扩充待继续。
 
 工作内容：
 
@@ -695,12 +696,14 @@ OCR 适配器和离线评测门禁已完成可验证切片；真实 OCR/ClamAV �
 - RAG 评测门禁：增加黄金结果回归集、Recall@K/MRR 最低阈值和越权 ID 零容忍检查，已接入本地
   Make 命令与 GitHub Actions。
 - 文件安全与 OCR：增加 ClamAV `INSTREAM`、HTTP OCR、扫描型/混合型 PDF 缺失页处理，以及
-  独立 malware verdict 审计字段；生产环境配置真实服务地址后即可切换。
+  独立 malware verdict 审计字段；已落地独立 `fitness-ocr-service`，默认接入 PaddleOCR
+  PP-StructureV3，保留厂商可替换的 `/v1/parse` 契约。
 
 下一步按顺序执行：
 
 1. 接入真实对象存储生命周期，并将 Worker 部署为独立进程。
-2. 把 OCR/ClamAV 适配器接入实际部署网络，补充真实服务联调和评测集自动化门禁的持续数据扩充。
+2. 在 Linux CPU/GPU 节点启动 PaddleOCR OCR 服务，使用真实扫描 PDF/表格评测集验证页码映射、
+   表头保留、OCR 置信度和吞吐，再把结果接入持续质量门禁。
 3. 在 RAG 骨架上接入预约写工具、确认凭证、幂等和审计。
 4. 建立训练领域表、训练 Tool Gateway 和 Fitness Agent 的结构化计划流程。
 5. 再推进 Operations Agent、Memory 和主动提醒等后续阶段。

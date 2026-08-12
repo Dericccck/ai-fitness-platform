@@ -75,6 +75,47 @@ jobs:
       - name: Test fitness core gateway
         run: ./mvnw --batch-mode -f fitness-core-gateway/pom.xml clean test
 
+  ocr-service:
+    name: OCR Service
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fitness-ocr-service
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version-file: fitness-ocr-service/.python-version
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b # v8.1.0
+        with:
+          version: "0.11.32"
+          enable-cache: true
+          cache-dependency-glob: fitness-ocr-service/uv.lock
+
+      # 契约测试使用注入的 fake engine，不在 CI 中下载大型 Paddle 推理模型。
+      - name: Install locked service dependencies
+        run: uv sync --locked --extra dev
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Type check
+        run: uv run mypy app
+
+      - name: Test OCR HTTP contract
+        run: uv run pytest
+
+      - name: Build OCR production image
+        run: docker build --file Dockerfile --tag fitness-ocr-service:${{ github.sha }} .
+
   secret-scan:
     name: Secret Scan
     runs-on: ubuntu-latest

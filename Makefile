@@ -4,13 +4,14 @@ AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-up-storage infra-up-security infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-security-check agent-run agent-reindex-worker agent-image gateway-check gateway-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-security-check agent-run agent-reindex-worker agent-image ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
 	@echo "  infra-up     Start PostgreSQL/pgvector and Redis"
 	@echo "  infra-up-storage Start PostgreSQL/Redis and optional MinIO object storage"
 	@echo "  infra-up-security Start PostgreSQL/Redis and ClamAV security service"
+	@echo "  infra-up-ocr  Build/start the independent PaddleOCR service"
 	@echo "  infra-down   Stop local Agent infrastructure without deleting data"
 	@echo "  observability-up Start the local OpenTelemetry Collector"
 	@echo "  agent-lock   Resolve and update the Python dependency lock file"
@@ -35,6 +36,9 @@ infra-up-storage:
 
 infra-up-security:
 	docker compose -f $(COMPOSE_FILE) --profile security up -d
+
+infra-up-ocr:
+	docker compose -f $(COMPOSE_FILE) --profile ocr up -d --build agent-ocr
 
 infra-down:
 	docker compose -f $(COMPOSE_FILE) down
@@ -67,6 +71,21 @@ agent-eval:
 agent-security-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.rag.security_cli
 
+ocr-sync:
+	cd fitness-ocr-service && UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --extra dev
+
+ocr-check:
+	cd fitness-ocr-service && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run ruff check .
+	cd fitness-ocr-service && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run ruff format --check .
+	cd fitness-ocr-service && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run mypy app
+	cd fitness-ocr-service && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run pytest
+
+ocr-run:
+	cd fitness-ocr-service && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8091
+
+ocr-image:
+	docker build --platform linux/amd64 --file fitness-ocr-service/Dockerfile --tag fitness-ocr-service:local fitness-ocr-service
+
 agent-run:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8090
 
@@ -85,4 +104,4 @@ gateway-run:
 legacy-java-diagnostic:
 	./mvnw --batch-mode -DskipTests clean compile
 
-check: agent-check gateway-check
+check: agent-check ocr-check gateway-check

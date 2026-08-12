@@ -22,6 +22,12 @@
 /fitness-agent-service/.ruff_cache/
 /fitness-agent-service/.coverage
 /fitness-agent-service/htmlcov/
+/fitness-ocr-service/.venv/
+/fitness-ocr-service/.env
+/fitness-ocr-service/**/__pycache__/
+/fitness-ocr-service/.pytest_cache/
+/fitness-ocr-service/.mypy_cache/
+/fitness-ocr-service/.ruff_cache/
 /.cache/
 /.mvn/repository/
 

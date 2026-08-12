@@ -62,8 +62,34 @@ services:
     volumes:
       - fitness-agent-clamav-data:/var/lib/clamav
 
+  agent-ocr:
+    # PaddlePaddle CPU wheels target Linux deployment nodes. Local Apple Silicon
+    # development can call this service remotely or run it under amd64 emulation.
+    platform: linux/amd64
+    build:
+      context: ../fitness-ocr-service
+      dockerfile: Dockerfile
+    image: fitness-ocr-service:local
+    container_name: fitness-agent-ocr
+    restart: unless-stopped
+    profiles: ["ocr"]
+    environment:
+      OCR_ENVIRONMENT: ${OCR_ENVIRONMENT:-local}
+      OCR_AUTH_REQUIRED: ${OCR_AUTH_REQUIRED:-false}
+      OCR_API_KEY: ${OCR_API_KEY:-}
+      OCR_DEVICE: ${OCR_DEVICE:-cpu}
+      OCR_MAX_CONCURRENCY: ${OCR_MAX_CONCURRENCY:-1}
+      OCR_MAX_PAGES: ${OCR_MAX_PAGES:-50}
+      OCR_MAX_SOURCE_BYTES: ${OCR_MAX_SOURCE_BYTES:-20971520}
+      PADDLE_HOME: /models/paddle
+    ports:
+      - "8091:8091"
+    volumes:
+      - fitness-agent-ocr-models:/models/paddle
+
 volumes:
   fitness-agent-postgres-data:
   fitness-agent-redis-data:
   fitness-agent-minio-data:
   fitness-agent-clamav-data:
+  fitness-agent-ocr-models:

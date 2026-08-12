@@ -1,0 +1,142 @@
+"""FastAPI entrypoint for the independent OCR service."""
+
+from __future__ import annotations
+
+import asyncio
+import hmac
+import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
+from typing import Annotated
+
+from fastapi import FastAPI, File, Form, Header, HTTPException, UploadFile, status
+
+from .config import Settings, get_settings
+from .engine import DocumentEngine, OcrEngineError, OcrEngineUnavailable, PaddleStructureEngine
+from .models import OcrResponse
+from .service import OcrInputError, PdfOcrService
+
+logger = logging.getLogger(__name__)
+
+
+class AppState:
+    def __init__(self, settings: Settings, engine: DocumentEngine) -> None:
+        self.settings = settings
+        self.engine = engine
+        self.semaphore = asyncio.Semaphore(settings.max_concurrency)
+
+
+def create_app(
+    settings: Settings | None = None,
+    engine: DocumentEngine | None = None,
+) -> FastAPI:
+    """Create the app explicitly so contract tests can inject a fake engine."""
+
+    resolved_settings = settings or get_settings()
+    resolved_engine = engine or PaddleStructureEngine(resolved_settings)
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        app.state.ocr = AppState(resolved_settings, resolved_engine)
+        yield
+
+    app = FastAPI(
+        title="Fitness OCR Service",
+        version="0.1.0",
+        docs_url="/docs" if resolved_settings.api_docs_enabled else None,
+        redoc_url=None,
+        lifespan=lifespan,
+    )
+
+    @app.get("/health/live")
+    async def live() -> dict[str, str]:
+        return {"status": "UP"}
+
+    @app.get("/health/ready")
+    async def ready() -> dict[str, str]:
+        state: AppState = app.state.ocr
+        engine_status = state.engine.status()
+        if not engine_status.ready:
+            raise HTTPException(status_code=503, detail="OCR engine is not ready")
+        return {"status": "READY", "engine": engine_status.engine_name}
+
+    @app.post("/v1/parse", response_model=OcrResponse)
+    async def parse(
+        file: Annotated[UploadFile, File(...)],
+        pages: Annotated[str | None, Form()] = None,
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> OcrResponse:
+        state: AppState = app.state.ocr
+        _verify_authorization(state.settings, authorization)
+        if file.content_type not in {"application/pdf", "application/octet-stream", None}:
+            raise HTTPException(status_code=415, detail="file must be uploaded as a PDF")
+        content = await file.read(state.settings.max_source_bytes + 1)
+        if len(content) > state.settings.max_source_bytes:
+            raise HTTPException(status_code=413, detail="file exceeds the configured size limit")
+        try:
+            return await _run_inference(state, content, pages)
+        except OcrInputError as exc:
+            raise HTTPException(status_code=422, detail=str(exc)) from exc
+        except TimeoutError as exc:
+            raise HTTPException(status_code=504, detail="OCR inference timed out") from exc
+        except (OcrEngineUnavailable, OcrEngineError) as exc:
+            logger.exception("OCR request failed")
+            raise HTTPException(
+                status_code=503, detail="OCR engine failed to process document"
+            ) from exc
+
+    app.state.ocr = AppState(resolved_settings, resolved_engine)
+    return app
+
+
+async def _run_inference(state: AppState, content: bytes, pages: str | None) -> OcrResponse:
+    """Run OCR without releasing the concurrency slot while a timed-out thread drains.
+
+    Python threads cannot be safely killed. If the HTTP deadline expires, the request
+    returns 504 but the worker continues in the background; the semaphore is released
+    only after that worker finishes, preventing overlapping GPU inference.
+    """
+
+    await state.semaphore.acquire()
+    service = PdfOcrService(state.settings, state.engine)
+    worker = asyncio.create_task(asyncio.to_thread(service.parse, content, pages=pages))
+    try:
+        result = await asyncio.wait_for(
+            asyncio.shield(worker), timeout=state.settings.inference_timeout_seconds
+        )
+    except TimeoutError:
+        asyncio.create_task(_drain_worker(worker, state.semaphore))
+        raise
+    except asyncio.CancelledError:
+        asyncio.create_task(_drain_worker(worker, state.semaphore))
+        raise
+    except BaseException:
+        state.semaphore.release()
+        raise
+    else:
+        state.semaphore.release()
+        return result
+
+
+async def _drain_worker(worker: asyncio.Task[OcrResponse], semaphore: asyncio.Semaphore) -> None:
+    """Drain a detached inference task and release its slot exactly once."""
+
+    try:
+        await worker
+    except Exception:
+        logger.exception("background OCR inference failed after request cancellation")
+    finally:
+        semaphore.release()
+
+
+def _verify_authorization(settings: Settings, authorization: str | None) -> None:
+    if not settings.auth_required:
+        return
+    if not settings.api_key:
+        raise HTTPException(status_code=503, detail="OCR service authentication is not configured")
+    expected = f"Bearer {settings.api_key}"
+    if authorization is None or not hmac.compare_digest(authorization, expected):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
+
+
+app = create_app()
