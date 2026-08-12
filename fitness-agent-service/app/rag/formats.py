@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import re
+import unicodedata
+from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass
 from io import BytesIO
@@ -127,7 +130,13 @@ class MarkdownParser:
 
 
 class PdfParser:
-    """提取 PDF 页面文本和布局感知表格，并保留来源页码元数据。"""
+    """提取 PDF 页面文本和表格，并在进入分块前完成一轮保守清洗。
+
+    PDF 的文本层经常把网页导航、页眉页脚和字体映射字符混入正文。这里先按页收集
+    原始行，再做模板过滤、重复行识别、Unicode 规范化和有限的段落重组，最后才生成
+    ``ParsedBlock``。这样父节点不会直接继承整页的版式噪声；原始文件仍由对象存储或
+    本地资料目录保留，清洗规则变化后可以重新解析。
+    """
 
     def __init__(self, *, ocr_provider: PdfOcrProvider | None = None) -> None:
         self.ocr_provider = ocr_provider
@@ -139,16 +148,25 @@ class PdfParser:
         warnings: list[str] = []
         missing_pages: list[int] = []
         with pdfplumber.open(BytesIO(content)) as document:
+            page_records: list[tuple[int, list[str], list[list[list[str | None]]]]] = []
             for page_number, page in enumerate(document.pages, start=1):
-                text = (page.extract_text(layout=True) or "").strip()
-                tables = page.extract_tables() or []
-                if text:
+                tables = _extract_pdf_tables(page)
+                raw_text = _extract_pdf_text_outside_tables(page, tables)
+                raw_lines = [line for line in raw_text.splitlines() if line.strip()]
+                page_records.append((page_number, raw_lines, tables))
+
+            repeated_lines = _repeated_pdf_lines([raw_lines for _, raw_lines, _ in page_records])
+            for page_number, raw_lines, tables in page_records:
+                cleaned_lines = _clean_pdf_lines(raw_lines, repeated_lines=repeated_lines)
+                if _is_pdf_toc_page(cleaned_lines):
+                    cleaned_lines = []
+                for text_block in _split_pdf_text_blocks(cleaned_lines):
                     blocks.append(
                         ParsedBlock(
                             kind="TEXT",
-                            content=text,
+                            content=text_block,
                             source_page=page_number,
-                            metadata={"parser": "pdfplumber"},
+                            metadata={"parser": "pdfplumber", "cleaned": True},
                         )
                     )
                 for table_index, table in enumerate(tables):
@@ -160,10 +178,16 @@ class PdfParser:
                                 content=normalized,
                                 source_page=page_number,
                                 table_index=table_index,
-                                metadata={"parser": "pdfplumber"},
+                                row_start=1,
+                                row_end=len(table),
+                                metadata={
+                                    "parser": "pdfplumber",
+                                    "cleaned": True,
+                                    "table_header_repeated": True,
+                                },
                             )
                         )
-                if not text and not tables:
+                if not raw_lines and not tables:
                     missing_pages.append(page_number)
                     warnings.append(f"page {page_number} has no extractable text or table")
         if missing_pages and self.ocr_provider is not None:
@@ -181,6 +205,254 @@ class PdfParser:
                 "PDF contains no extractable text; scanned PDFs require an approved OCR pipeline"
             )
         return ParsedDocument(tuple(blocks), "application/pdf", tuple(warnings))
+
+
+_PDF_TOC_MARKERS = ("table of contents", "目录")
+_PDF_DOT_LEADER = re.compile(r"(?:\.{4,}|·{4,}|…{2,})\s*\d+\s*$")
+_PDF_TEMPLATE_PATTERNS = (
+    re.compile(r"无障碍浏览\s*网站导航\s*公务员邮箱"),
+    re.compile(r"请输入关键字\s*搜"),
+    re.compile(r"^(?:首\s*页|首页)\s*[>＞].*$"),
+    re.compile(r"^首\s*页\s+机\s*构\s+公\s*开\s+资\s*讯\s+服\s*务\s+互\s*动$"),
+    re.compile(r"(?:打印此页|关闭窗口|关闭窗⼜|print this page|close window)", re.IGNORECASE),
+    re.compile(r"(?:版权所有|网站标识码|ICP备|公安网安备|通讯地址|邮政编码|信访电话)"),
+    re.compile(r"^联系电话[:：]|^字体[:：]\s*[大中小]+$|^发布时间[:：]"),
+    re.compile(r"^(?:accessibility|site navigation|copyright)\b", re.IGNORECASE),
+)
+_PDF_SENTENCE_END = frozenset("。！？.!?；;：:")
+_CJK = re.compile(r"[\u3400-\u9fff]")
+_PDF_ENGLISH_HEADING_WORDS = frozenset(
+    ["and", "or", "the", "of", "for", "to", "in", "on", "with", "from", "among"]
+)
+
+
+def _normalize_pdf_line(line: str) -> str:
+    """修复 PDF 常见的兼容字符和空白，但不改动正文数值。"""
+
+    normalized = unicodedata.normalize("NFKC", line).replace("\u00a0", " ")
+    return re.sub(r"\s+", " ", normalized).strip()
+
+
+def _is_pdf_template_line(line: str) -> bool:
+    """判断网页打印模板行，规则只删除高置信度的导航/版权内容。"""
+
+    return any(pattern.search(line) for pattern in _PDF_TEMPLATE_PATTERNS)
+
+
+def _is_pdf_layout_noise_table(table: Sequence[Sequence[str | None]]) -> bool:
+    """过滤网页导航布局表格，但保留正文业务表格。"""
+
+    cells = [
+        _normalize_pdf_line(str(cell))
+        for row in table
+        for cell in row
+        if cell is not None and str(cell).strip()
+    ]
+    if not cells:
+        return True
+    joined = " ".join(cells)
+    return any(
+        marker in joined
+        for marker in (
+            "无障碍浏览",
+            "网站导航",
+            "公务员邮箱",
+            "请输入关键字",
+            "首页 >",
+            "打印此页",
+            "关闭窗口",
+            "版权所有",
+        )
+    )
+
+
+def _repeated_pdf_lines(page_lines: Sequence[Sequence[str]]) -> frozenset[str]:
+    """识别出现在页首/页尾且跨页重复的页眉页脚，避免误删正文标题。"""
+
+    counts: Counter[str] = Counter()
+    edge_counts: Counter[str] = Counter()
+    for lines in page_lines:
+        normalized_lines = [_normalize_pdf_line(line) for line in lines if line.strip()]
+        counts.update(normalized_lines)
+        edge_lines = normalized_lines[:3] + normalized_lines[-3:]
+        edge_counts.update(edge_lines)
+    return frozenset(
+        line
+        for line, count in counts.items()
+        if count >= 2
+        and edge_counts[line] >= 2
+        and len(line) <= 180
+        and line[-1:] not in _PDF_SENTENCE_END
+    )
+
+
+def _clean_pdf_lines(
+    raw_lines: Sequence[str],
+    *,
+    repeated_lines: frozenset[str] = frozenset(),
+) -> list[str]:
+    """清除高置信度模板行、目录页码点线，并统一 PDF 字体映射字符。"""
+
+    cleaned: list[str] = []
+    for raw_line in raw_lines:
+        line = _normalize_pdf_line(raw_line)
+        if not line or _is_pdf_template_line(line):
+            continue
+        if line in repeated_lines or _PDF_DOT_LEADER.search(line):
+            continue
+        cleaned.append(line)
+    return cleaned
+
+
+def _is_pdf_toc_page(lines: Sequence[str]) -> bool:
+    """检测目录页并整页排除，避免只删除页码后留下无语义的标题列表。"""
+
+    lowered_lines = [line.lower().strip() for line in lines[:12]]
+    has_toc_marker = any(
+        line == marker or line == "contents" or line.startswith(f"{marker} ")
+        for line in lowered_lines
+        for marker in _PDF_TOC_MARKERS
+    )
+    return has_toc_marker and len(lines) >= 3
+
+
+def _is_pdf_structural_line(line: str) -> bool:
+    """识别标题、列表和编号项，用于限制父节点范围。"""
+
+    if line.startswith(("•", "▪", "- ", "* ")):
+        return True
+    if re.match(r"^(?:[一二三四五六七八九十]+、|（[一二三四五六七八九十]+）|\d+[、.)])", line):
+        return True
+    if line.endswith(("？", "!", "?", "!")):
+        return True
+    if re.match(r"^(?:第\s*\S+章|Chapter\s+\d+|Appendix\s+\d+)", line, re.IGNORECASE):
+        return True
+    if _CJK.search(line):
+        # 中文正文在 PDF 中常被按视觉宽度拆成多行，不能仅凭“短”就切开；
+        # 只有很短且没有逗号/冒号等连接标点的行，才保守地视为小标题。
+        return (
+            len(line) <= 16
+            and not any(mark in line for mark in "，,；;：:、")
+            and not line.endswith(tuple(_PDF_SENTENCE_END))
+        )
+    # 英文 PDF 也会把一个段落按版心宽度拆成多行，因此不能把所有短行都当标题。
+    # 仅接受标题式大小写、明确的章节名或版本名，降低普通正文被切碎的概率。
+    if re.match(r"^(?:\d+(?:st|nd|rd|th)?\s+edition)$", line, re.IGNORECASE):
+        return True
+    words = re.findall(r"[A-Za-z][A-Za-z'-]*", line)
+    if not words or len(line) > 64 or len(words) > 8:
+        return False
+    return all(word[0].isupper() or word.lower() in _PDF_ENGLISH_HEADING_WORDS for word in words)
+
+
+def _join_pdf_lines(lines: Sequence[str]) -> str:
+    """按中英文边界合并 PDF 换行，避免中文被插入空格、英文单词被粘连。"""
+
+    result = ""
+    for line in lines:
+        if not result:
+            result = line
+            continue
+        previous = result[-1:]
+        first = line[:1]
+        if previous == "-" and first.isascii() and first.isalpha():
+            result = result[:-1] + line
+        elif (
+            (_CJK.search(previous) and _CJK.search(first))
+            or (previous in "。！？；：，," and _CJK.search(first))
+            or previous in "([{／/"
+            or first in "，。；：！？、)]}】》%％,.!?;:/"
+        ):
+            result += line
+        else:
+            result += " " + line
+    return result.strip()
+
+
+def _split_pdf_text_blocks(lines: Sequence[str], *, max_block_chars: int = 900) -> list[str]:
+    """将页面文本切成有界上下文块，避免父节点直接膨胀为整页。"""
+
+    blocks: list[str] = []
+    current: list[str] = []
+    current_length = 0
+
+    def flush() -> None:
+        nonlocal current, current_length
+        if current:
+            content = _join_pdf_lines(current)
+            if content:
+                blocks.append(content)
+        current = []
+        current_length = 0
+
+    for line in lines:
+        if current and (_is_pdf_structural_line(current[-1]) or _is_pdf_structural_line(line)):
+            flush()
+        current.append(line)
+        current_length += len(line)
+        if (current_length >= max_block_chars and line[-1:] in _PDF_SENTENCE_END) or (
+            current_length >= max_block_chars + 180
+        ):
+            flush()
+    flush()
+    return blocks
+
+
+def _extract_pdf_tables(page: object) -> list[list[list[str | None]]]:
+    """优先使用带坐标的表格对象，为正文排除表格区域并保留表头。"""
+
+    try:
+        tables = page.find_tables()  # type: ignore[attr-defined]
+        extracted = [table.extract() for table in tables]
+    except Exception:  # noqa: BLE001 - 单页表格失败时回退到 pdfplumber 基础接口
+        extracted = []
+    extracted = [table for table in extracted if not _is_pdf_layout_noise_table(table)]
+    if extracted:
+        return extracted
+    try:
+        fallback = page.extract_tables() or []  # type: ignore[attr-defined]
+        return [table for table in fallback if not _is_pdf_layout_noise_table(table)]
+    except Exception:  # noqa: BLE001 - 解析失败由空表交给正文/OCR流程处理
+        return []
+
+
+def _extract_pdf_text_outside_tables(
+    page: object,
+    tables: Sequence[Sequence[Sequence[str | None]]],
+) -> str:
+    """提取页面正文；表格坐标可用时先从文本层排除表格，避免表格重复入库。"""
+
+    # ``extract_tables`` 的回退结果没有坐标，不能猜测区域；此时保留文本并依赖后续
+    # 质量评测发现重复，避免错误裁剪正文。
+    try:
+        table_objects = page.find_tables()  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        table_objects = []
+    if not table_objects or not tables:
+        return page.extract_text(layout=False) or ""  # type: ignore[attr-defined]
+    boxes = [table.bbox for table in table_objects]
+
+    def keep_object(obj: dict[str, object]) -> bool:
+        x0, x1 = obj.get("x0"), obj.get("x1")
+        top, bottom = obj.get("top"), obj.get("bottom")
+        if not all(isinstance(value, (int, float)) for value in (x0, x1, top, bottom)):
+            return True
+        assert isinstance(x0, (int, float))
+        assert isinstance(x1, (int, float))
+        assert isinstance(top, (int, float))
+        assert isinstance(bottom, (int, float))
+        center_x = (x0 + x1) / 2
+        center_y = (top + bottom) / 2
+        return not any(
+            left <= center_x <= right and upper <= center_y <= lower
+            for left, upper, right, lower in boxes
+        )
+
+    try:
+        filtered_page = page.filter(keep_object)  # type: ignore[attr-defined]
+        return filtered_page.extract_text(layout=False) or ""
+    except Exception:  # noqa: BLE001 - 坐标过滤失败时保留原文本，不丢正文
+        return page.extract_text(layout=False) or ""  # type: ignore[attr-defined]
 
 
 class DocxParser:
