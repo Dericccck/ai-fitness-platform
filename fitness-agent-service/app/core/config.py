@@ -40,9 +40,21 @@ class Settings(BaseSettings):
     database_url: str = (
         "postgresql+asyncpg://fitness_agent:fitness_agent@127.0.0.1:5433/fitness_agent"
     )
+    checkpoint_database_url: str = ""
     redis_url: str = "redis://127.0.0.1:6380/0"
     db_pool_size: int = 10
     db_max_overflow: int = 20
+    checkpoint_pool_min_size: int = Field(default=1, ge=1, le=10)
+    checkpoint_pool_max_size: int = Field(default=5, ge=1, le=30)
+    session_lock_ttl_seconds: int = Field(default=60, ge=10, le=300)
+
+    gateway_context_signing_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "GATEWAY_CONTEXT_SIGNING_SECRET", "AGENT_GATEWAY_CONTEXT_SIGNING_SECRET"
+        ),
+    )
+    gateway_context_max_ttl_seconds: int = Field(default=300, ge=60, le=900)
 
     # 优先读取学习项目使用的 DEEPSEEK_* 变量；AGENT_LLM_* 仅作为历史兼容配置，
     # 避免已有本地环境升级时突然失效。生产部署建议统一使用 DEEPSEEK_*。
@@ -121,6 +133,13 @@ class Settings(BaseSettings):
         """判断 Agent 是否具备调用 Java 健身核心 Gateway 的最小配置。"""
 
         return bool(self.gateway_base_url and self.gateway_internal_service_token)
+
+    @property
+    def checkpoint_conninfo(self) -> str:
+        """返回 psycopg 使用的连接串，避免把 SQLAlchemy 方言传给 Checkpointer。"""
+
+        connection_url = self.checkpoint_database_url or self.database_url
+        return connection_url.replace("postgresql+asyncpg://", "postgresql://", 1)
 
 
 @lru_cache

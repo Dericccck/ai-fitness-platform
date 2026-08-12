@@ -14,6 +14,7 @@ from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from app.infrastructure.cache import SessionLockManager, SessionLockUnavailable
 from app.infrastructure.gateway_client import GatewayRequestContext
 from app.infrastructure.model_gateway import (
     ModelConfigurationError,
@@ -36,6 +37,10 @@ class SupervisorRuntimeError(RuntimeError):
     """Supervisor 无法安全完成当前请求时抛出。"""
 
 
+class SupervisorSessionBusy(SupervisorRuntimeError):
+    """同一会话正在执行另一个请求。"""
+
+
 class ToolStepLimitExceeded(SupervisorRuntimeError):
     """模型连续请求工具超过预算，防止循环调用消耗失控。"""
 
@@ -51,6 +56,7 @@ class SupervisorRequest:
     user_message: str
     gateway_context: GatewayRequestContext
     conversation_id: str
+    thread_id: str | None = None
     locale: str = "zh-CN"
 
 
@@ -86,10 +92,14 @@ class Supervisor:
         tools: ToolRegistry,
         *,
         max_tool_steps: int = 4,
+        checkpointer: Any | None = None,
+        session_lock: SessionLockManager | None = None,
     ) -> None:
         self.models = models
         self.tools = tools
         self.max_tool_steps = max_tool_steps
+        self._checkpointer = checkpointer
+        self.session_lock = session_lock
         self._graph = self._build_graph()
 
     async def invoke(self, request: SupervisorRequest) -> SupervisorResponse:
@@ -110,8 +120,35 @@ class Supervisor:
             "input_tokens": 0,
             "output_tokens": 0,
         }
+        thread_id = request.thread_id or request.conversation_id
+        config = {"configurable": {"thread_id": thread_id}}
+
+        async def run_with_persisted_history() -> Any:
+            # Checkpoint 只会保存状态，不会自动把本次新消息拼接到业务上下文中。
+            # 每次请求都先读取同一 thread 的最新状态，再追加当前 user message，
+            # 确保跨 HTTP 请求的多轮对话真正连续，同时避免重复写入 system prompt。
+            previous_values: dict[str, Any] = {}
+            if self._checkpointer is not None:
+                previous = await self._graph.aget_state(config)
+                previous_values = previous.values if previous else {}
+            previous_messages = previous_values.get("messages", [])
+            if previous_messages:
+                initial["messages"] = [
+                    *previous_messages,
+                    {"role": "user", "content": request.user_message},
+                ]
+                initial["input_tokens"] = previous_values.get("input_tokens", 0)
+                initial["output_tokens"] = previous_values.get("output_tokens", 0)
+            return await self._graph.ainvoke(initial, config=config)
+
         try:
-            final_state = await self._graph.ainvoke(initial)
+            if self.session_lock is None:
+                final_state = await run_with_persisted_history()
+            else:
+                async with self.session_lock.hold(thread_id):
+                    final_state = await run_with_persisted_history()
+        except SessionLockUnavailable as exc:
+            raise SupervisorSessionBusy("conversation is already being processed") from exc
         except (ModelConfigurationError, ModelResponseError, ToolRegistryError) as exc:
             raise SupervisorRuntimeError("supervisor execution failed") from exc
 
@@ -137,7 +174,7 @@ class Supervisor:
             {"tools": "tools", "finish": END},
         )
         graph.add_edge("tools", "model")
-        return graph.compile()
+        return graph.compile(checkpointer=self._checkpointer)
 
     async def _model_node(self, state: SupervisorState) -> dict[str, Any]:
         tool_schemas = (

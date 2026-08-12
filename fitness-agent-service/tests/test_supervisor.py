@@ -1,6 +1,7 @@
 from typing import Any, cast
 
 import pytest
+from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, ConfigDict
 
 from app.agent.supervisor import (
@@ -114,6 +115,31 @@ async def test_supervisor_runs_model_tool_model_cycle_and_returns_real_result() 
     assert len(models.tools_seen) == 2
     assert models.tools_seen[0]
     assert models.tools_seen[1] == []
+
+
+async def test_supervisor_restores_previous_conversation_messages() -> None:
+    models = FakeModels(
+        [
+            ModelTurn(content="第一轮回答。", tool_calls=()),
+            ModelTurn(content="第二轮回答。", tool_calls=()),
+        ]
+    )
+    supervisor = Supervisor(
+        cast(ModelGateway, models),
+        build_registry([]),
+        checkpointer=InMemorySaver(),
+    )
+
+    await supervisor.invoke(request("我想减脂"))
+    response = await supervisor.invoke(request("继续安排训练"))
+
+    assert response.answer == "第二轮回答。"
+    assert models.tools_seen[1]
+    # FakeModels 的工具参数之外没有记录消息，因此通过 Runtime 图状态验证历史。
+    state = await supervisor._graph.aget_state({"configurable": {"thread_id": "conversation-1"}})
+    contents = [message["content"] for message in state.values["messages"]]
+    assert contents.count("我想减脂") == 1
+    assert contents.count("继续安排训练") == 1
 
 
 async def test_supervisor_wraps_unknown_model_tool_as_runtime_failure() -> None:

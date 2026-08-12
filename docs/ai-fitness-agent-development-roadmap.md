@@ -439,7 +439,7 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 
 ### 阶段 3：Agent Runtime 与 Supervisor
 
-状态：已完成统一非流式对话接口、LangGraph Supervisor 基础图、模型 Tool Calling 协议、工具步数预算和旧业务范围护栏；SSE 流式响应、PostgreSQL/Redis Checkpoint、角色意图评测和 Prompt 版本管理待继续建设。
+状态：已完成统一非流式对话接口、LangGraph Supervisor 基础图、模型 Tool Calling 协议、工具步数预算、旧业务范围护栏和 PostgreSQL/Redis 会话持久化基础；SSE 流式响应、断线恢复 API、角色意图评测和 Prompt 版本管理待继续建设。
 
 工作内容：
 
@@ -447,7 +447,9 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 - 已使用 LangGraph 构建 Supervisor 状态图，支持模型回合、工具回合和最终回答回合。
 - 已建立 DeepSeek OpenAI-compatible Tool Calling 响应规范化、工具步数预算和未配置模型的明确失败语义；配置沿用 `learning-langchain-CN` 的 `DEEPSEEK_*` 变量。
 - 已增加赛事、作品和活动运营范围护栏；这些遗留业务不进入当前健身 Agent 路由。
-- SSE 流式响应和断线恢复待 Checkpoint 契约确定后接入。
+- 已接入 PostgreSQL LangGraph Checkpoint、启动期官方表迁移、Redis 会话锁和按签名身份隔离的匿名 thread_id。
+- 已实现同一会话后续请求读取最新 Checkpoint 并恢复历史消息；会话锁包围“读取历史→执行图→写入新 Checkpoint”完整临界区。
+- 已增加会话并发冲突返回 409 的协议；SSE 流式响应和断线恢复 API 待基于 Checkpoint 契约接入。
 - 建立角色路由、意图分类、任务状态和失败恢复。
 - 接入 PostgreSQL/Redis Checkpoint。
 - 统一模型超时、重试、限流、Token 预算和结构化输出。

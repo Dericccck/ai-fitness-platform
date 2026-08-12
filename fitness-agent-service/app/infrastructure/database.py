@@ -1,7 +1,64 @@
+from typing import Any
+
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
 
 from app.core.config import Settings
+
+
+class CheckpointStore:
+    """LangGraph PostgreSQL Checkpointer 的生命周期适配器。
+
+    Checkpointer 使用独立 psycopg 连接池，因为 LangGraph 的异步 Saver 需要 psycopg
+    协议；普通业务查询仍使用下方 SQLAlchemy AsyncEngine。两者共享同一 PostgreSQL
+    实例，但职责分离，避免 Agent 状态和健身业务事实混用。
+    """
+
+    def __init__(self, settings: Settings) -> None:
+        from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
+        from psycopg.rows import dict_row
+        from psycopg_pool import AsyncConnectionPool
+
+        self._pool = AsyncConnectionPool(
+            conninfo=settings.checkpoint_conninfo,
+            min_size=settings.checkpoint_pool_min_size,
+            max_size=settings.checkpoint_pool_max_size,
+            open=False,
+            kwargs={
+                "autocommit": True,
+                "prepare_threshold": 0,
+                "row_factory": dict_row,
+            },
+        )
+        self._saver_type: Any = AsyncPostgresSaver
+        self._saver: Any = None
+
+    async def start(self) -> None:
+        """打开连接池并执行官方 Checkpoint 表迁移。"""
+
+        await self._pool.open()
+        self._saver = self._saver_type(self._pool)
+        await self._saver.setup()
+
+    @property
+    def saver(self) -> Any:
+        """返回已经初始化的 Saver，启动顺序错误时立即失败。"""
+
+        if self._saver is None:
+            raise RuntimeError("checkpoint store has not been started")
+        return self._saver
+
+    async def ping(self) -> None:
+        """执行 Checkpointer 专用连接池的只读探活。"""
+
+        async with self._pool.connection() as connection, connection.cursor() as cursor:
+            await cursor.execute("SELECT 1")
+            await cursor.fetchone()
+
+    async def close(self) -> None:
+        """关闭 Checkpointer 连接池。"""
+
+        await self._pool.close()
 
 
 class Database:

@@ -29,6 +29,7 @@ async def ready(request: Request, response: Response) -> dict[str, object]:
     settings = request.app.state.settings
     checks: dict[str, object] = {
         "database": "unknown",
+        "checkpoint": "unknown",
         "redis": "unknown",
         "llm": settings.llm_configured,
         "embedding": settings.embedding_configured,
@@ -44,6 +45,12 @@ async def ready(request: Request, response: Response) -> dict[str, object]:
         checks["database"] = {"status": "failed", "error": type(exc).__name__}
 
     try:
+        await request.app.state.checkpoint_store.ping()
+        checks["checkpoint"] = "ok"
+    except Exception as exc:  # noqa: BLE001 - health endpoint must report a stable response
+        checks["checkpoint"] = {"status": "failed", "error": type(exc).__name__}
+
+    try:
         await request.app.state.cache.ping()
         checks["redis"] = "ok"
     except Exception as exc:  # noqa: BLE001 - health endpoint must report a stable response
@@ -51,6 +58,7 @@ async def ready(request: Request, response: Response) -> dict[str, object]:
 
     ready_state = (
         checks["database"] == "ok"
+        and checks["checkpoint"] == "ok"
         and checks["redis"] == "ok"
         and checks["llm"] is True
         and checks["embedding"] is True

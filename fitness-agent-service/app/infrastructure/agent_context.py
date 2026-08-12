@@ -1,0 +1,116 @@
+"""签名 AgentContext 验证和会话隔离工具。
+
+Java Gateway 会在每次 Tool 调用时验证 AgentContext。Agent 服务在会话持久化前再做一次
+同密钥验证，只为得到稳定的 subject scope，防止不同用户使用同一个 conversation_id
+读取彼此的 LangGraph checkpoint。真正的业务权限仍以 Java Gateway 的验证结果为准。
+"""
+
+from __future__ import annotations
+
+import base64
+import hashlib
+import hmac
+import json
+import time
+from dataclasses import dataclass
+from typing import Any, cast
+
+
+class AgentContextVerificationError(RuntimeError):
+    """签名上下文缺失、篡改、过期或 claims 不完整。"""
+
+
+@dataclass(frozen=True)
+class AgentIdentity:
+    subject: str
+    organization_ids: frozenset[str]
+    roles: frozenset[str]
+    issued_at: int
+    expires_at: int
+
+
+class AgentContextVerifier:
+    """与 Java Gateway 保持一致的 base64url + HMAC-SHA256 验证器。"""
+
+    def __init__(self, secret: str, *, max_ttl_seconds: int = 300) -> None:
+        self.secret = secret.encode("utf-8")
+        self.max_ttl_seconds = max_ttl_seconds
+
+    def verify(self, token: str) -> AgentIdentity:
+        if not self.secret or not token or len(token) > 8192:
+            raise AgentContextVerificationError("invalid agent context")
+        parts = token.split(".")
+        if len(parts) != 2:
+            raise AgentContextVerificationError("invalid agent context format")
+        try:
+            payload = _decode_base64url(parts[0])
+            signature = _decode_base64url(parts[1])
+        except ValueError as exc:
+            raise AgentContextVerificationError("invalid agent context encoding") from exc
+
+        expected = hmac.new(self.secret, payload, hashlib.sha256).digest()
+        if not hmac.compare_digest(expected, signature):
+            raise AgentContextVerificationError("invalid agent context signature")
+        try:
+            claims = json.loads(payload)
+            subject = _required_text(claims, "sub")
+            organizations = _required_string_set(claims, "orgs")
+            roles = _required_string_set(claims, "roles")
+            issued_at = _required_int(claims, "iat")
+            expires_at = _required_int(claims, "exp")
+            _required_text(claims, "nonce")
+        except (TypeError, ValueError, KeyError) as exc:
+            raise AgentContextVerificationError("invalid agent context claims") from exc
+
+        now = int(time.time())
+        if (
+            expires_at <= issued_at
+            or expires_at > issued_at + self.max_ttl_seconds
+            or issued_at > now + 30
+            or expires_at <= now
+        ):
+            raise AgentContextVerificationError("expired or invalid agent context")
+        return AgentIdentity(subject, organizations, roles, issued_at, expires_at)
+
+
+def conversation_thread_id(conversation_id: str, identity: AgentIdentity) -> str:
+    """生成不包含原始用户 ID 的稳定 checkpoint thread_id。"""
+
+    scope = (
+        f"{identity.subject}:{','.join(sorted(identity.organization_ids))}:"
+        f"{','.join(sorted(identity.roles))}:{conversation_id}"
+    )
+    digest = hashlib.sha256(scope.encode("utf-8")).hexdigest()
+    return f"fitness:{digest}"
+
+
+def _decode_base64url(value: str) -> bytes:
+    if not value:
+        raise ValueError("empty base64 value")
+    padding = "=" * (-len(value) % 4)
+    return base64.urlsafe_b64decode(value + padding)
+
+
+def _required_text(claims: Any, key: str) -> str:
+    value = claims[key]
+    if not isinstance(value, str) or not value:
+        raise ValueError(key)
+    return value
+
+
+def _required_string_set(claims: Any, key: str) -> frozenset[str]:
+    value = claims[key]
+    if (
+        not isinstance(value, list)
+        or not value
+        or not all(isinstance(item, str) and item for item in value)
+    ):
+        raise ValueError(key)
+    return frozenset(value)
+
+
+def _required_int(claims: Any, key: str) -> int:
+    value = claims[key]
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise TypeError(key)
+    return cast(int, value)

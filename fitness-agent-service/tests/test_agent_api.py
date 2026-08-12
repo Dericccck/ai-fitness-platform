@@ -6,6 +6,7 @@ from httpx import ASGITransport, AsyncClient
 from app.agent.supervisor import SupervisorResponse
 from app.api.middleware.request_context import RequestContextMiddleware
 from app.api.routes.agent import router
+from app.infrastructure.agent_context import AgentIdentity
 
 
 class FakeSupervisor:
@@ -18,9 +19,22 @@ class FakeSupervisor:
         return self.response
 
 
+class FakeContextVerifier:
+    def verify(self, token: str) -> AgentIdentity:
+        assert token == "signed-context"
+        return AgentIdentity(
+            subject="user-1",
+            organization_ids=frozenset({"org-1"}),
+            roles=frozenset({"STUDENT"}),
+            issued_at=1,
+            expires_at=2,
+        )
+
+
 def build_app(supervisor: FakeSupervisor) -> FastAPI:
     test_app = FastAPI()
     test_app.state.supervisor = supervisor
+    test_app.state.context_verifier = FakeContextVerifier()
     test_app.add_middleware(RequestContextMiddleware)
     test_app.include_router(router)
     return test_app

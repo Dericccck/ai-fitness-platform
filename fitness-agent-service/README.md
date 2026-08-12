@@ -21,6 +21,7 @@
 - Fitness Core Gateway：Java 只读业务 Tool 服务，查询用户、机构、课程、合同、课时和预约。
 - Tool Registry：版本化注册首批健身只读工具，校验输入 Schema、限制未知工具，并记录不含原始参数的调用审计。
 - Supervisor Runtime：基于 LangGraph 执行模型 Tool Calling、工具预算、真实结果回填和业务范围护栏。
+- 会话持久化：PostgreSQL 保存 LangGraph Checkpoint，Redis 负责会话互斥锁和短期状态。
 - Prometheus：低基数 HTTP 请求量、耗时、并发和构建信息指标。
 - OpenTelemetry：可选 OTLP/HTTP Trace 导出，默认关闭且不发送 Prompt 或用户档案。
 
@@ -80,7 +81,12 @@ Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry
 当前对话接口为 `POST /api/v1/agent/chat`。调用方必须传入认证服务签发的
 `X-Agent-Context`，以及 `conversation_id`、`message` 和可选 `locale`；接口拒绝额外的
 用户/组织/角色字段。当前先提供非流式稳定协议，SSE、Checkpoint 和断线恢复将在会话持久化
-边界完成后接入。
+边界进一步验证后接入。
+
+当前版本已接入 PostgreSQL LangGraph Checkpoint 和 Redis 会话锁：同一用户/组织/角色范围
+内的 `conversation_id` 会生成稳定的匿名 `thread_id`，不同身份即使使用相同会话 ID 也
+无法读取同一份状态；后续请求会读取最新 Checkpoint 并恢复历史消息；同一会话的并发请求会返回 409。PostgreSQL 是会话状态事实源，Redis
+只承担短租约互斥和短期状态，不作为长期会话数据的唯一存储。
 
 ## 生产镜像
 

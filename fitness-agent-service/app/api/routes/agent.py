@@ -16,9 +16,14 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.agent.supervisor import (
     SupervisorRequest,
     SupervisorRuntimeError,
+    SupervisorSessionBusy,
     UnsupportedLegacyRequest,
 )
 from app.api.middleware.request_context import normalize_context_id
+from app.infrastructure.agent_context import (
+    AgentContextVerificationError,
+    conversation_thread_id,
+)
 from app.infrastructure.gateway_client import GatewayRequestContext
 
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
@@ -61,6 +66,14 @@ async def chat(
             detail="signed agent context is required",
         )
 
+    try:
+        identity = request.app.state.context_verifier.verify(x_agent_context)
+    except AgentContextVerificationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="invalid signed agent context",
+        ) from exc
+
     request_id = normalize_context_id(x_request_id) or str(uuid4())
     trace_id = normalize_context_id(x_trace_id) or request_id
     supervisor = request.app.state.supervisor
@@ -74,11 +87,17 @@ async def chat(
                     trace_id=trace_id,
                 ),
                 conversation_id=payload.conversation_id,
+                thread_id=conversation_thread_id(payload.conversation_id, identity),
                 locale=payload.locale,
             )
         )
     except UnsupportedLegacyRequest as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    except SupervisorSessionBusy as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="conversation is already being processed",
+        ) from exc
     except SupervisorRuntimeError as exc:
         # 不把模型、Gateway、Prompt 或签名上下文详情返回给调用方；具体原因通过
         # request_id/trace_id 在结构化日志和 Trace 系统中定位。

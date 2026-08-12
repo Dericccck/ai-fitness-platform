@@ -14,8 +14,9 @@ from app.core.config import get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import HttpMetrics, MetricsMiddleware
 from app.core.telemetry import configure_tracing
-from app.infrastructure.cache import Cache
-from app.infrastructure.database import Database
+from app.infrastructure.agent_context import AgentContextVerifier
+from app.infrastructure.cache import Cache, SessionLockManager
+from app.infrastructure.database import CheckpointStore, Database
 from app.infrastructure.gateway_client import GatewayClient
 from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient
@@ -41,28 +42,43 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
     settings = get_settings()
 
-    # app.state 目前承担轻量依赖容器的职责。后续接入 Tracing、Tool Registry 和
-    # LangGraph Checkpointer 时仍从这里统一装配，避免业务 Agent 自行读取环境变量。
+    # app.state 承担轻量依赖容器的职责。数据库、Checkpoint、Redis、Tool Registry 和
+    # LangGraph Supervisor 都在这里统一装配，避免业务 Agent 自行读取环境变量或创建连接。
     app.state.settings = settings
     app.state.database = Database(settings)
     app.state.cache = Cache(settings.redis_url)
+    app.state.checkpoint_store = CheckpointStore(settings)
+    app.state.context_verifier = AgentContextVerifier(
+        settings.gateway_context_signing_secret,
+        max_ttl_seconds=settings.gateway_context_max_ttl_seconds,
+    )
     app.state.models = ModelGateway(settings)
     app.state.reranker = RerankerClient(settings)
     app.state.gateway = GatewayClient(settings)
     # Tool Registry 是 Agent 调用业务能力的唯一入口。它在启动期完成固定工具注册，
     # 让后续 Supervisor 只能看到有 Schema、角色元数据和审计边界的工具集合。
     app.state.tool_registry = build_fitness_tool_registry(app.state.gateway)
-    app.state.supervisor = Supervisor(
-        app.state.models,
-        app.state.tool_registry,
-        max_tool_steps=settings.agent_max_tool_steps,
+    app.state.session_lock = SessionLockManager(
+        app.state.cache.client,
+        ttl_seconds=settings.session_lock_ttl_seconds,
     )
     try:
+        # Checkpointer 在服务启动阶段创建官方表结构；如果数据库不可用则拒绝启动，
+        # 避免服务看似在线却丢失会话状态。
+        await app.state.checkpoint_store.start()
+        app.state.supervisor = Supervisor(
+            app.state.models,
+            app.state.tool_registry,
+            max_tool_steps=settings.agent_max_tool_steps,
+            checkpointer=app.state.checkpoint_store.saver,
+            session_lock=app.state.session_lock,
+        )
         yield
     finally:
         # 即使请求处理出现异常，FastAPI 仍会进入 finally，确保连接被关闭。
         await app.state.models.close()
         await app.state.gateway.close()
+        await app.state.checkpoint_store.close()
         await app.state.cache.close()
         await app.state.database.close()
         if app.state.trace_provider is not None:
