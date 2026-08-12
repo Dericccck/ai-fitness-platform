@@ -14,7 +14,12 @@ RAW_ROOT = SERVICE_ROOT / "data" / "knowledge" / "raw"
 MANIFEST_PATH = SERVICE_ROOT / "data" / "knowledge" / "manifest.json"
 
 READ_ROLES = ["SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH", "STUDENT"]
-REFERENCE_ONLY_FILES = frozenset({"Physical_Activity_Guidelines_2nd_edition_Presentation.pdf"})
+REFERENCE_ONLY_FILES = frozenset(
+    {
+        "Physical_Activity_Guidelines_2nd_edition.pdf",
+        "Physical_Activity_Guidelines_2nd_edition_Presentation.pdf",
+    }
+)
 
 # 来源 URL 固定记录在清单中，避免后续重新导入时丢失来源链路。
 SOURCE_URLS = {
@@ -123,6 +128,8 @@ def metadata_for(category: str, file_name: str, suffix: str) -> dict[str, Any]:
         document_type = "PHYSICAL_ACTIVITY_GUIDELINE"
         source_authority = "WHO" if file_name.startswith("WHO") else "U.S. HHS ODPHP"
         license_note = "按 WHO 或 U.S. HHS ODPHP 来源页面的版权和署名要求使用"
+        if file_name in REFERENCE_ONLY_FILES:
+            license_note = "仅作为人工参考；当前 PDF 文本层存在版式噪声，暂不进入 RAG"
     elif category == "reference-not-indexed":
         document_type = "REFERENCE_PRESENTATION"
         source_authority = "U.S. HHS ODPHP"

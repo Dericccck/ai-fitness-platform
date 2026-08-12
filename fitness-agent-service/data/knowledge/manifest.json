@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-12T15:01:46+00:00",
+  "generated_at": "2026-08-12T15:21:00+00:00",
   "raw_root": "data/knowledge/raw",
   "entry_count": 21,
   "entries": [
@@ -240,9 +240,9 @@
       "organization_id": null,
       "source_authority": "U.S. HHS ODPHP",
       "source_url": "https://odphp.health.gov/our-work/nutrition-physical-activity/physical-activity-guidelines/current-guidelines",
-      "source_license": "按 WHO 或 U.S. HHS ODPHP 来源页面的版权和署名要求使用",
-      "indexable": true,
-      "status": "PENDING_REVIEW"
+      "source_license": "仅作为人工参考；当前 PDF 文本层存在版式噪声，暂不进入 RAG",
+      "indexable": false,
+      "status": "REFERENCE_ONLY"
     },
     {
       "relative_path": "data/knowledge/raw/international-guidelines/Physical_Activity_Guidelines_2nd_edition_Presentation.pdf",
@@ -264,7 +264,7 @@
       "organization_id": null,
       "source_authority": "U.S. HHS ODPHP",
       "source_url": "https://odphp.health.gov/our-work/nutrition-physical-activity/physical-activity-guidelines/current-guidelines",
-      "source_license": "按 WHO 或 U.S. HHS ODPHP 来源页面的版权和署名要求使用",
+      "source_license": "仅作为人工参考；当前 PDF 文本层存在版式噪声，暂不进入 RAG",
       "indexable": false,
       "status": "REFERENCE_ONLY"
     },

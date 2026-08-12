@@ -12,6 +12,9 @@
 - `medical-guidelines/`：慢性病、肾脏和其他需要人工审核的医疗相关资料。
 - `international-guidelines/`：WHO 和美国身体活动指南等外文资料。
 - `reference-not-indexed/`：当前解析器暂不直接入库的参考文件，例如 PPTX。
+- `international-guidelines/` 中的美国《Physical Activity Guidelines for Americans, 2nd edition》
+  完整版和演示版 PDF 暂作为人工参考，不进入 RAG；完整版存在断词、目录、页眉页脚和表格版式噪声，
+  待 PDF 解析专项完成并通过质量评测后再考虑重新索引。
 
 ## 入库规则
 
@@ -32,7 +35,7 @@ KNOWLEDGE_OCR_ENDPOINT=http://127.0.0.1:8091/v1/parse make knowledge-validate-oc
 ```
 
 `manifest.json` 只保存路径、哈希、来源和审核元数据，不保存原始文件内容。PDF 和 DOCX 会进入
-解析验证；PPTX 当前标记为 `REFERENCE_ONLY`，不会误进入索引。验证结果中的
+解析验证；版式复杂的美国指南 PDF 和 PPTX 当前标记为 `REFERENCE_ONLY`，不会误进入索引。验证结果中的
 `PASS_WITH_WARNINGS` 通常表示 PDF 存在无法提取文本的页面，需要后续接入真实 OCR 后复核。
 `knowledge-validate-ocr` 会把缺失页交给独立 OCR 服务，只回填缺失页，不重复识别已有文本页；
 OCR 服务不可用、返回结构不符合契约或哈希发生变化时，验证不会伪装成通过。
