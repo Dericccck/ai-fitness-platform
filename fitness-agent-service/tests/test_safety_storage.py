@@ -105,6 +105,31 @@ def test_clamav_scanner_rejects_infected_response(monkeypatch: pytest.MonkeyPatc
         ClamAvScanner("clamav").scan("guide.md", b"# Warmup")
 
 
+def test_clamav_scanner_accepts_nul_terminated_clean_response(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def sendall(self, data: bytes) -> None:
+            return None
+
+        def recv(self, size: int) -> bytes:
+            return b"stream: OK\x00"
+
+    monkeypatch.setattr(
+        "app.rag.safety.socket.create_connection", lambda address, timeout: FakeConnection()
+    )
+
+    result = ClamAvScanner("clamav").scan("guide.md", b"# Warmup")
+
+    assert result.status == "CLEAN"
+
+
 def test_clamav_scanner_fails_closed_when_service_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

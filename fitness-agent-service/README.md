@@ -34,8 +34,8 @@
   行范围会随子节点保存，解析失败不会静默按纯文本入库。
 - 父子节点：子节点参与向量召回，父节点保存章节或表格完整上下文；命中后按 `parent_id`
   扩展且同一父节点只注入一次，所有格式的表格子节点都会转为带表头的 Markdown 表示，
-  并记录表格序号、页码/工作表和行范围。扫描型 PDF 当前会明确要求后续 OCR 流程，不会把
-  空内容写入知识库。
+  并记录表格序号、页码/工作表和行范围。扫描型 PDF 或混合型 PDF 的空白页会进入 OCR 服务，
+  OCR 失败不会把空内容写入知识库。
 - 知识库管理：管理员上传先进入私有暂存区和 `PENDING_REVIEW`，审核通过后进入 `QUEUED`；
   Worker 以数据库原子 Claim 进入 `INDEXING`，只有父子节点、Embedding 和发布事务完成后
   才标记 `SUCCEEDED`。失败任务保留错误类型、尝试次数和审核记录，支持有限次数人工重试；
@@ -56,10 +56,11 @@
 
 ## 本地启动
 
+以下命令均在仓库根目录执行；本地环境模板会启用 ClamAV，模型密钥仍需按个人环境补充。
+
 ```bash
-cp .env.example .env
-cd ..
-make infra-up
+cp deployment/environments/agent.local.env.example fitness-agent-service/.env
+make infra-up-security
 make agent-sync
 make agent-migrate
 make agent-run
@@ -136,6 +137,16 @@ RAG 表结构通过 `make agent-migrate` 显式升级，不在服务启动时自
 本地可通过 `make infra-up-storage` 启动 MinIO；将 `AGENT_RAG_STORAGE_BACKEND` 改为 `s3`
 并填写 S3 配置后，上传对象会写入 `knowledge/` 前缀。MinIO 账号只用于本地开发，生产环境
 必须使用 Secret Manager 注入独立凭证。
+
+本地真实验证 ClamAV：
+
+```bash
+make infra-up-security
+make agent-security-check
+```
+
+如果尚未复制本地环境模板，请先执行上面的 `cp` 命令。该命令会连接本地 ClamAV，验证正常文件通过，并使用 EICAR 测试签名验证感染文件被拒绝；
+EICAR 是专门用于杀毒软件测试的标准字符串，不是真实病毒。
 
 生产环境至少需要配置：
 

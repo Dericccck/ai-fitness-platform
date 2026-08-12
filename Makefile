@@ -4,12 +4,13 @@ AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-up-storage infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-run agent-reindex-worker agent-image gateway-check gateway-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-up-security infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-security-check agent-run agent-reindex-worker agent-image gateway-check gateway-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
 	@echo "  infra-up     Start PostgreSQL/pgvector and Redis"
 	@echo "  infra-up-storage Start PostgreSQL/Redis and optional MinIO object storage"
+	@echo "  infra-up-security Start PostgreSQL/Redis and ClamAV security service"
 	@echo "  infra-down   Stop local Agent infrastructure without deleting data"
 	@echo "  observability-up Start the local OpenTelemetry Collector"
 	@echo "  agent-lock   Resolve and update the Python dependency lock file"
@@ -31,6 +32,9 @@ infra-up:
 
 infra-up-storage:
 	docker compose -f $(COMPOSE_FILE) --profile storage up -d
+
+infra-up-security:
+	docker compose -f $(COMPOSE_FILE) --profile security up -d
 
 infra-down:
 	docker compose -f $(COMPOSE_FILE) down
@@ -59,6 +63,9 @@ agent-check:
 agent-eval:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.rag.evaluation_cli \
 		--cases evals/rag_smoke.json --thresholds evals/rag_thresholds.json
+
+agent-security-check:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.rag.security_cli
 
 agent-run:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8090

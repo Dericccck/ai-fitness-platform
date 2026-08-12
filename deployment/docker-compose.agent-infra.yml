@@ -49,7 +49,21 @@ services:
     volumes:
       - fitness-agent-minio-data:/data
 
+  agent-clamav:
+    # Debian official image is multi-architecture and works on both Apple Silicon
+    # development machines and amd64 production nodes. Pin a digest in deployment
+    # manifests for production; this local tag tracks the approved stable line.
+    image: clamav/clamav-debian:stable
+    container_name: fitness-agent-clamav
+    restart: unless-stopped
+    profiles: ["security"]
+    ports:
+      - "3310:3310"
+    volumes:
+      - fitness-agent-clamav-data:/var/lib/clamav
+
 volumes:
   fitness-agent-postgres-data:
   fitness-agent-redis-data:
   fitness-agent-minio-data:
+  fitness-agent-clamav-data:

@@ -155,7 +155,12 @@ class ClamAvScanner:
                     connection.sendall(len(chunk).to_bytes(4, "big"))
                     connection.sendall(chunk)
                 connection.sendall((0).to_bytes(4, "big"))
-                response = connection.recv(4096).decode("utf-8", errors="replace").strip()
+                # ClamAV 的 INSTREAM 响应通常以 NUL 字节结束（例如
+                # ``stream: OK\\0``），不能只调用 ``strip()``，因为它不会移除 NUL。
+                # 这里仅清理协议允许的边界字符，保留正文，避免把真实 verdict 截断。
+                response = (
+                    connection.recv(4096).decode("utf-8", errors="replace").strip("\x00\r\n ")
+                )
         except OSError as exc:
             raise DocumentSecurityUnavailable("malware scanner is unavailable") from exc
 
