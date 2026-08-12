@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import hashlib
+import json
 import re
-import unicodedata
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
+from .formats import DocumentParserRegistry, ParsedBlock
 from .models import (
     KnowledgeChunkInput,
     KnowledgeDocumentInput,
@@ -16,8 +18,8 @@ from .models import (
 )
 from .repository import KnowledgeRepository
 from .service import RagSearchError, RagService
+from .text import clean_markdown
 
-_FRONT_MATTER = re.compile(r"\A---\s*\n.*?\n---\s*(?:\n|\Z)", re.DOTALL)
 _HEADING = re.compile(r"^(#{1,6})\s+(.+?)\s*$")
 _SENTENCE_END = re.compile(r"(?<=[。！？.!?])\s+")
 
@@ -54,6 +56,9 @@ class ChunkDraft:
     table_index: int | None = None
     row_start: int | None = None
     row_end: int | None = None
+    source_page: int | None = None
+    source_sheet: str | None = None
+    metadata: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -83,6 +88,7 @@ class DocumentIngestionService:
         *,
         max_chunk_chars: int = 1200,
         overlap_chars: int = 120,
+        parser_registry: DocumentParserRegistry | None = None,
     ) -> None:
         if max_chunk_chars <= 0 or overlap_chars < 0 or overlap_chars >= max_chunk_chars:
             raise ValueError("invalid chunking limits")
@@ -90,12 +96,67 @@ class DocumentIngestionService:
         self.rag_service = rag_service
         self.max_chunk_chars = max_chunk_chars
         self.overlap_chars = overlap_chars
+        self.parser_registry = parser_registry or DocumentParserRegistry()
 
     async def ingest(self, request: IngestionRequest) -> IngestionResult:
         """Clean, chunk, deduplicate, embed, and atomically publish a document."""
 
         cleaned = clean_markdown(request.raw_content)
-        checksum = content_checksum(cleaned)
+        drafts = chunk_markdown(
+            cleaned,
+            max_chunk_chars=self.max_chunk_chars,
+            overlap_chars=self.overlap_chars,
+        )
+        return await self._publish(request, checksum=content_checksum(cleaned), drafts=drafts)
+
+    async def ingest_file(
+        self,
+        request: IngestionRequest,
+        *,
+        file_name: str,
+        content: bytes,
+    ) -> IngestionResult:
+        """Parse a binary source, preserve coordinates, then use the same publish path."""
+
+        parsed = self.parser_registry.parse(content, file_name=file_name)
+        drafts = chunk_parsed_blocks(
+            parsed.blocks,
+            max_chunk_chars=self.max_chunk_chars,
+            overlap_chars=self.overlap_chars,
+        )
+        checksum_material = "\n\n".join(
+            json.dumps(
+                {
+                    "kind": block.kind,
+                    "content": block.content,
+                    "heading_path": block.heading_path,
+                    "source_page": block.source_page,
+                    "source_sheet": block.source_sheet,
+                    "table_index": block.table_index,
+                    "row_start": block.row_start,
+                    "row_end": block.row_end,
+                    "metadata": block.metadata,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+            for block in parsed.blocks
+        )
+        return await self._publish(
+            request,
+            checksum=content_checksum(checksum_material),
+            drafts=drafts,
+        )
+
+    async def _publish(
+        self,
+        request: IngestionRequest,
+        *,
+        checksum: str,
+        drafts: Sequence[ChunkDraft],
+    ) -> IngestionResult:
+        """Check versioning and atomically publish normalized child/parent nodes."""
+
         current = await self.repository.get_current_document(request.source_uri)
         if current is not None:
             if current.checksum == checksum:
@@ -111,11 +172,6 @@ class DocumentIngestionService:
                     f"document version {request.version} is not newer than {current.version}"
                 )
 
-        drafts = chunk_markdown(
-            cleaned,
-            max_chunk_chars=self.max_chunk_chars,
-            overlap_chars=self.overlap_chars,
-        )
         if not drafts:
             raise RagSearchError("document produced no indexable chunks")
 
@@ -135,10 +191,16 @@ class DocumentIngestionService:
             effective_to=request.effective_to,
         )
         parents: list[KnowledgeParentInput] = []
-        parent_ids: dict[tuple[tuple[str, ...], str], str] = {}
+        parent_ids: dict[tuple[Any, ...], str] = {}
         chunk_inputs: list[KnowledgeChunkInput] = []
         for index, draft in enumerate(drafts):
-            parent_key = (draft.heading_path, draft.parent_content)
+            parent_key = (
+                draft.heading_path,
+                draft.parent_content,
+                draft.source_page,
+                draft.source_sheet,
+                draft.table_index,
+            )
             parent_id = parent_ids.get(parent_key)
             if parent_id is None:
                 parent_id = parent_node_id(document_id, len(parents), draft.parent_content)
@@ -149,11 +211,11 @@ class DocumentIngestionService:
                         document_id=document_id,
                         content=draft.parent_content,
                         section_path=draft.heading_path,
-                        source_page=None,
+                        source_page=draft.source_page,
                         table_index=draft.table_index,
                         row_start=draft.row_start,
                         row_end=draft.row_end,
-                        metadata={"heading_path": list(draft.heading_path)},
+                        metadata=_source_metadata(draft),
                     )
                 )
             chunk_inputs.append(
@@ -170,7 +232,7 @@ class DocumentIngestionService:
                     document_type=request.document_type,
                     effective_from=request.effective_from,
                     effective_to=request.effective_to,
-                    metadata={"heading_path": list(draft.heading_path)},
+                    metadata=_source_metadata(draft),
                     parent_id=parent_id,
                 )
             )
@@ -185,27 +247,57 @@ class DocumentIngestionService:
         )
 
 
-def clean_markdown(raw_content: str) -> str:
-    """Normalize Markdown while preserving headings, bullets, and paragraph boundaries."""
+def chunk_parsed_blocks(
+    blocks: Sequence[ParsedBlock],
+    *,
+    max_chunk_chars: int,
+    overlap_chars: int,
+) -> list[ChunkDraft]:
+    """Chunk parser output while copying page/sheet/table provenance to each child."""
 
-    normalized = unicodedata.normalize("NFKC", raw_content).replace("\r\n", "\n")
-    normalized = normalized.replace("\r", "\n").lstrip("\ufeff")
-    normalized = _FRONT_MATTER.sub("", normalized, count=1)
-    lines: list[str] = []
-    previous_blank = False
-    for raw_line in normalized.split("\n"):
-        line = raw_line.strip()
-        if not line:
-            if not previous_blank:
-                lines.append("")
-            previous_blank = True
-            continue
-        lines.append(line)
-        previous_blank = False
-    cleaned = "\n".join(lines).strip()
-    if not cleaned:
-        raise ValueError("document content must not be empty")
-    return cleaned
+    drafts: list[ChunkDraft] = []
+    for block in blocks:
+        block_drafts = _split_block(
+            block.content,
+            block.heading_path,
+            max_chunk_chars=max_chunk_chars,
+            overlap_chars=overlap_chars,
+            table_index=block.table_index if block.kind == "TABLE" else None,
+        )
+        for draft in block_drafts:
+            drafts.append(
+                ChunkDraft(
+                    content=draft.content,
+                    heading_path=draft.heading_path,
+                    parent_content=draft.parent_content,
+                    table_index=draft.table_index,
+                    row_start=draft.row_start,
+                    row_end=draft.row_end,
+                    source_page=block.source_page,
+                    source_sheet=block.source_sheet,
+                    metadata=block.metadata,
+                )
+            )
+    return drafts
+
+
+def _source_metadata(draft: ChunkDraft) -> dict[str, Any]:
+    """Build auditable metadata without putting authorization decisions in JSON."""
+
+    metadata: dict[str, Any] = {
+        "heading_path": list(draft.heading_path),
+    }
+    if draft.source_page is not None:
+        metadata["source_page"] = draft.source_page
+    if draft.source_sheet is not None:
+        metadata["source_sheet"] = draft.source_sheet
+    if draft.row_start is not None:
+        metadata["row_start"] = draft.row_start
+    if draft.row_end is not None:
+        metadata["row_end"] = draft.row_end
+    if draft.metadata:
+        metadata.update(draft.metadata)
+    return metadata
 
 
 def chunk_markdown(
@@ -346,6 +438,7 @@ def _split_table_block(
             overlap_chars=0,
             prefix=prefix,
             parent_content=parent_content,
+            table_index=table_index,
         )
 
     result: list[ChunkDraft] = []
@@ -403,6 +496,7 @@ def _split_long_text(
     overlap_chars: int,
     prefix: str,
     parent_content: str,
+    table_index: int | None = None,
 ) -> list[ChunkDraft]:
     """Bound pathological paragraphs such as copied tables or long URLs."""
 
@@ -412,7 +506,14 @@ def _split_long_text(
         end = min(start + available, len(text))
         piece = text[start:end].strip()
         if piece:
-            result.append(ChunkDraft(prefix + piece, heading_path, parent_content))
+            result.append(
+                ChunkDraft(
+                    prefix + piece,
+                    heading_path,
+                    parent_content,
+                    table_index=table_index,
+                )
+            )
         if end == len(text):
             break
         start = max(end - overlap_chars, start + 1)

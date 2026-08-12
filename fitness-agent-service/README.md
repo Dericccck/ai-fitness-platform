@@ -24,10 +24,14 @@
 - 会话持久化：PostgreSQL 保存 LangGraph Checkpoint，Redis 负责会话互斥锁和短期状态。
 - RAG 基础：Alembic 管理版本化知识文档、切片、租户/角色权限字段和 pgvector HNSW 索引；
   检索顺序固定为服务端权限过滤 → 向量候选召回 → 真实 Reranker → 带来源证据的 Agent 上下文。
-- 文档索引：`DocumentIngestionService` 负责 Markdown 清洗、标题/段落语义切片、checksum 去重、
-  稳定文档/切片 ID，以及新版本发布时的旧版本归档；Embedding 和切片写入受批次和事务边界控制。
+- 文档索引：`DocumentIngestionService` 负责统一解析 Markdown/TXT、PDF、DOCX、XLSX，执行文本
+  清洗、标题/段落语义切片、checksum 去重、稳定文档/切片 ID，以及新版本发布时的旧版本归档；
+  Embedding 和切片写入受批次和事务边界控制。PDF 页码、DOCX 标题层级、XLSX 工作表和表格
+  行范围会随子节点保存，解析失败不会静默按纯文本入库。
 - 父子节点：子节点参与向量召回，父节点保存章节或表格完整上下文；命中后按 `parent_id`
-  扩展且同一父节点只注入一次，Markdown 表格子节点会重复表头并记录表格序号和行范围。
+  扩展且同一父节点只注入一次，所有格式的表格子节点都会转为带表头的 Markdown 表示，
+  并记录表格序号、页码/工作表和行范围。扫描型 PDF 当前会明确要求后续 OCR 流程，不会把
+  空内容写入知识库。
 - Prometheus：低基数 HTTP 请求量、耗时、并发和构建信息指标。
 - OpenTelemetry：可选 OTLP/HTTP Trace 导出，默认关闭且不发送 Prompt 或用户档案。
 

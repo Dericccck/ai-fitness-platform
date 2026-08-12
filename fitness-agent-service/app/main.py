@@ -20,6 +20,7 @@ from app.infrastructure.database import CheckpointStore, Database
 from app.infrastructure.gateway_client import GatewayClient
 from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient
+from app.rag.formats import DocumentParserRegistry
 from app.rag.ingestion import DocumentIngestionService
 from app.rag.repository import KnowledgeRepository
 from app.rag.service import RagService
@@ -72,6 +73,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.rag_service,
         max_chunk_chars=settings.rag_chunk_max_chars,
         overlap_chars=settings.rag_chunk_overlap_chars,
+        parser_registry=DocumentParserRegistry(
+            max_source_bytes=settings.rag_max_source_bytes,
+        ),
     )
     app.state.gateway = GatewayClient(settings)
     # Tool Registry 是 Agent 调用业务能力的唯一入口。它在启动期完成固定工具注册，

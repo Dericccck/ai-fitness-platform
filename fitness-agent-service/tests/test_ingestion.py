@@ -3,11 +3,13 @@ from typing import Any
 
 import pytest
 
+from app.rag.formats import ParsedBlock
 from app.rag.ingestion import (
     DocumentIngestionService,
     IngestionConflictError,
     IngestionRequest,
     chunk_markdown,
+    chunk_parsed_blocks,
     clean_markdown,
     content_checksum,
 )
@@ -127,6 +129,17 @@ def test_markdown_table_chunks_repeat_header_and_record_row_range() -> None:
     assert chunks[-1].row_end == 3
 
 
+def test_oversized_table_header_keeps_table_provenance() -> None:
+    content = clean_markdown(
+        "# 训练计划\n\n| 非常长的动作名称和说明 | 非常长的组数说明 |\n|---|---|\n| 深蹲 | 4 |"
+    )
+
+    chunks = chunk_markdown(content, max_chunk_chars=40, overlap_chars=0)
+
+    assert chunks
+    assert all(item.table_index == 0 for item in chunks)
+
+
 async def test_ingestion_rejects_non_increasing_changed_version() -> None:
     repository = FakeRepository(
         KnowledgeDocumentSnapshot(
@@ -141,3 +154,55 @@ async def test_ingestion_rejects_non_increasing_changed_version() -> None:
 
     with pytest.raises(IngestionConflictError):
         await service.ingest(request("# 新内容\n\n准备身体。", version=3))
+
+
+def test_chunk_parsed_blocks_carries_page_sheet_and_table_metadata() -> None:
+    drafts = chunk_parsed_blocks(
+        [
+            ParsedBlock(
+                kind="TABLE",
+                content="| Exercise | Sets |\n|---|---|\n| Squat | 4 |",
+                heading_path=("Beginner Plan",),
+                source_sheet="Week 1",
+                table_index=2,
+                metadata={"parser": "openpyxl"},
+            )
+        ],
+        max_chunk_chars=120,
+        overlap_chars=0,
+    )
+
+    assert drafts[0].source_sheet == "Week 1"
+    assert drafts[0].table_index == 2
+    assert drafts[0].metadata == {"parser": "openpyxl"}
+
+
+async def test_ingest_file_indexes_xlsx_with_source_metadata() -> None:
+    from io import BytesIO
+
+    from openpyxl import Workbook
+
+    workbook = Workbook()
+    sheet = workbook.active
+    assert sheet is not None
+    sheet.title = "Week 1"
+    sheet.append(["Exercise", "Sets"])
+    sheet.append(["Squat", 4])
+    payload = BytesIO()
+    workbook.save(payload)
+
+    repository = FakeRepository()
+    rag = FakeRagService()
+    service = DocumentIngestionService(repository, rag)
+    result = await service.ingest_file(
+        request("", version=1),
+        file_name="plan.xlsx",
+        content=payload.getvalue(),
+    )
+
+    assert result.status == "INDEXED"
+    document, chunks, parents = rag.calls[0]
+    assert document.checksum == result.checksum
+    assert chunks[0].metadata["source_sheet"] == "Week 1"
+    assert chunks[0].metadata["parser"] == "openpyxl"
+    assert parents[0].metadata["source_sheet"] == "Week 1"
