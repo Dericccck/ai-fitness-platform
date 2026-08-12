@@ -92,10 +92,14 @@ class Settings(BaseSettings):
     # RAG limits are bounded at the service boundary. A chat request cannot
     # increase database, reranker, or prompt costs by overriding these values.
     rag_candidate_limit: int = Field(default=20, ge=1, le=100)
+    rag_keyword_candidate_limit: int = Field(default=20, ge=1, le=100)
     rag_top_k: int = Field(default=5, ge=1, le=20)
     rag_embedding_batch_size: int = Field(default=32, ge=1, le=128)
     rag_chunk_max_chars: int = Field(default=1200, ge=400, le=4000)
     rag_chunk_overlap_chars: int = Field(default=120, ge=0, le=500)
+    rag_vector_weight: float = Field(default=0.6, ge=0, le=1)
+    rag_keyword_weight: float = Field(default=0.4, ge=0, le=1)
+    rag_rrf_k: int = Field(default=60, ge=1, le=200)
     rag_max_source_bytes: int = Field(default=20 * 1024 * 1024, ge=1, le=100 * 1024 * 1024)
     rag_staging_dir: str = "./var/rag-staging"
     rag_storage_backend: Literal["local", "s3"] = "local"

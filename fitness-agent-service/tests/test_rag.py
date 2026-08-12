@@ -5,7 +5,7 @@ import pytest
 
 from app.infrastructure.reranker import RerankResult
 from app.rag.models import KnowledgeChunk, KnowledgeChunkInput, RetrievalScope
-from app.rag.service import RagSearchError, RagSearchResult, RagService
+from app.rag.service import RagSearchError, RagSearchResult, RagService, _fuse_candidates
 
 
 class FakeModels:
@@ -33,6 +33,13 @@ class FakeRepository:
         assert scope.roles == frozenset({"STUDENT"})
         assert limit == 20
         return self.candidates
+
+    async def search_keyword_candidates(
+        self, query: str, scope: Any, *, limit: int
+    ) -> list[KnowledgeChunk]:
+        assert query == "如何热身"
+        assert limit == 20
+        return []
 
 
 class FakeReranker:
@@ -62,6 +69,23 @@ def chunk(identifier: str, content: str) -> KnowledgeChunk:
 
 def scope() -> RetrievalScope:
     return RetrievalScope("user-1", frozenset({"org-1"}), frozenset({"STUDENT"}))
+
+
+def test_hybrid_fusion_uses_reciprocal_rank_and_deduplicates_chunks() -> None:
+    vector = [chunk("a", "向量命中"), chunk("shared", "共同命中")]
+    keyword = [chunk("shared", "共同命中"), chunk("b", "关键词命中")]
+
+    fused = _fuse_candidates(
+        vector,
+        keyword,
+        vector_weight=0.6,
+        keyword_weight=0.4,
+        rrf_k=60,
+        limit=10,
+    )
+
+    assert [item.id for item in fused] == ["shared", "a", "b"]
+    assert len({item.id for item in fused}) == 3
 
 
 async def test_rag_embeds_queries_filters_candidates_and_uses_reranker() -> None:
@@ -156,3 +180,27 @@ def test_rag_prompt_context_expands_each_parent_only_once() -> None:
 
     assert context.count("完整章节内容") == 1
     assert "命中片段 B" in context
+
+
+def test_rag_citation_preserves_parser_coordinates() -> None:
+    item = KnowledgeChunk(
+        **{
+            **chunk("a", "表格命中").__dict__,
+            "metadata": {
+                "heading_path": ["训练计划"],
+                "source_page": 4,
+                "source_sheet": "Week 1",
+                "table_index": 2,
+                "row_start": 3,
+                "row_end": 5,
+            },
+        }
+    )
+
+    citation = RagSearchResult((item,)).citations()[0]
+
+    assert citation.citation_id == "doc-1:0"
+    assert citation.section_path == ("训练计划",)
+    assert citation.source_page == 4
+    assert citation.source_sheet == "Week 1"
+    assert citation.row_start == 3

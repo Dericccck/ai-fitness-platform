@@ -1,0 +1,12 @@
+[
+  {
+    "case_id": "warmup-001",
+    "query": "训练前如何热身",
+    "relevant_ids": ["warmup-guide-1"]
+  },
+  {
+    "case_id": "safety-001",
+    "query": "膝盖疼痛时如何调整深蹲",
+    "relevant_ids": ["safety-squat-1"]
+  }
+]

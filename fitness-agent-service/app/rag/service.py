@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
@@ -11,6 +12,7 @@ from app.infrastructure.reranker import RerankerClient, RerankResult
 from .models import (
     KnowledgeChunk,
     KnowledgeChunkInput,
+    KnowledgeCitation,
     KnowledgeDocumentInput,
     KnowledgeParentInput,
     RetrievalScope,
@@ -28,6 +30,11 @@ class RagSearchResult:
 
     chunks: tuple[KnowledgeChunk, ...]
 
+    def citations(self) -> tuple[KnowledgeCitation, ...]:
+        """Return stable source references without exposing parent context twice."""
+
+        return tuple(_citation_from_chunk(chunk) for chunk in self.chunks)
+
     def as_prompt_context(self) -> str:
         """Render parent-expanded evidence while avoiding repeated parent text."""
 
@@ -41,10 +48,7 @@ class RagSearchResult:
         ]
         shown_parents: set[str] = set()
         for index, chunk in enumerate(self.chunks, start=1):
-            citation = (
-                f"[证据{index}] {chunk.title}（来源：{chunk.source_uri}，版本：{chunk.version}，"
-                f"切片：{chunk.chunk_index}，相似度：{chunk.similarity:.4f}）"
-            )
+            citation = f"[证据{index}] {_citation_label(_citation_from_chunk(chunk))}"
             parent_key = chunk.parent_id or chunk.id
             if chunk.parent_content and parent_key not in shown_parents:
                 shown_parents.add(parent_key)
@@ -64,17 +68,29 @@ class RagService:
         reranker: RerankerClient,
         *,
         candidate_limit: int = 20,
+        keyword_candidate_limit: int = 20,
         top_k: int = 5,
         embedding_batch_size: int = 32,
         embedding_dimensions: int | None = None,
+        vector_weight: float = 0.6,
+        keyword_weight: float = 0.4,
+        rrf_k: int = 60,
     ) -> None:
         self.repository = repository
         self.models = models
         self.reranker = reranker
         self.candidate_limit = candidate_limit
+        self.keyword_candidate_limit = keyword_candidate_limit
         self.top_k = top_k
         self.embedding_batch_size = embedding_batch_size
         self.embedding_dimensions = embedding_dimensions
+        if vector_weight < 0 or keyword_weight < 0 or vector_weight + keyword_weight <= 0:
+            raise ValueError("retrieval weights must be non-negative and not both zero")
+        if rrf_k < 1:
+            raise ValueError("rrf_k must be positive")
+        self.vector_weight = vector_weight
+        self.keyword_weight = keyword_weight
+        self.rrf_k = rrf_k
 
     async def index_chunks(
         self,
@@ -126,8 +142,21 @@ class RagService:
         _validate_embedding_dimensions(query_embedding, self.embedding_dimensions)
         if len(query_embedding) != 1:
             raise RagSearchError("embedding provider returned an invalid query result")
-        candidates = await self.repository.search_candidates(
-            query_embedding[0], scope, limit=self.candidate_limit
+        vector_candidates, keyword_candidates = await asyncio.gather(
+            self.repository.search_candidates(
+                query_embedding[0], scope, limit=self.candidate_limit
+            ),
+            self.repository.search_keyword_candidates(
+                query, scope, limit=self.keyword_candidate_limit
+            ),
+        )
+        candidates = _fuse_candidates(
+            vector_candidates,
+            keyword_candidates,
+            vector_weight=self.vector_weight,
+            keyword_weight=self.keyword_weight,
+            rrf_k=self.rrf_k,
+            limit=self.candidate_limit,
         )
         if not candidates:
             return RagSearchResult(())
@@ -161,6 +190,89 @@ def _select_ranked_chunks(
         if len(selected) >= top_k:
             break
     return selected
+
+
+def _fuse_candidates(
+    vector_candidates: Sequence[KnowledgeChunk],
+    keyword_candidates: Sequence[KnowledgeChunk],
+    *,
+    vector_weight: float,
+    keyword_weight: float,
+    rrf_k: int,
+    limit: int,
+) -> list[KnowledgeChunk]:
+    """Fuse heterogeneous scores by rank so one provider cannot dominate by scale."""
+
+    by_id: dict[str, KnowledgeChunk] = {}
+    fused_scores: dict[str, float] = {}
+    for rank, candidate in enumerate(vector_candidates, start=1):
+        by_id[candidate.id] = candidate
+        fused_scores[candidate.id] = fused_scores.get(candidate.id, 0.0) + vector_weight / (
+            rrf_k + rank
+        )
+    for rank, candidate in enumerate(keyword_candidates, start=1):
+        by_id.setdefault(candidate.id, candidate)
+        fused_scores[candidate.id] = fused_scores.get(candidate.id, 0.0) + keyword_weight / (
+            rrf_k + rank
+        )
+    ordered_ids = sorted(
+        fused_scores,
+        key=lambda candidate_id: (-fused_scores[candidate_id], candidate_id),
+    )[:limit]
+    return [
+        replace(by_id[candidate_id], similarity=fused_scores[candidate_id])
+        for candidate_id in ordered_ids
+    ]
+
+
+def _citation_from_chunk(chunk: KnowledgeChunk) -> KnowledgeCitation:
+    """Convert parser metadata into a bounded citation contract."""
+
+    metadata = chunk.metadata
+    heading_path = metadata.get("heading_path", chunk.parent_section_path)
+    section_path = (
+        tuple(str(item) for item in heading_path)
+        if isinstance(heading_path, list)
+        else chunk.parent_section_path
+    )
+    return KnowledgeCitation(
+        citation_id=f"{chunk.document_id}:{chunk.chunk_index}",
+        title=chunk.title,
+        source_uri=chunk.source_uri,
+        document_type=chunk.document_type,
+        version=chunk.version,
+        chunk_index=chunk.chunk_index,
+        section_path=section_path,
+        source_page=_optional_metadata_int(metadata, "source_page"),
+        source_sheet=_optional_metadata_text(metadata, "source_sheet"),
+        table_index=_optional_metadata_int(metadata, "table_index"),
+        row_start=_optional_metadata_int(metadata, "row_start"),
+        row_end=_optional_metadata_int(metadata, "row_end"),
+        snippet=chunk.content[:1000],
+        score=chunk.similarity,
+    )
+
+
+def _citation_label(citation: KnowledgeCitation) -> str:
+    """Keep prompt provenance compact while retaining enough detail for an answer."""
+
+    location = " / ".join(citation.section_path) or "根文档"
+    page = f"，页码：{citation.source_page}" if citation.source_page is not None else ""
+    sheet = f"，工作表：{citation.source_sheet}" if citation.source_sheet else ""
+    return (
+        f"{citation.title}（来源：{citation.source_uri}，版本：{citation.version}，"
+        f"位置：{location}{page}{sheet}，切片：{citation.chunk_index}）"
+    )
+
+
+def _optional_metadata_int(metadata: dict[str, object], key: str) -> int | None:
+    value = metadata.get(key)
+    return int(value) if isinstance(value, int) and not isinstance(value, bool) else None
+
+
+def _optional_metadata_text(metadata: dict[str, object], key: str) -> str | None:
+    value = metadata.get(key)
+    return value if isinstance(value, str) else None
 
 
 def _validate_embedding_dimensions(

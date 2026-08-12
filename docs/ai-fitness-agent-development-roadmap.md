@@ -482,6 +482,9 @@ Markdown/DOCX/PDF/XLSX 清洗切片、checksum 增量索引和父子节点扩展
   签名、UTF-8、Office ZIP 路径/宏/加密/解压大小和 SHA-256 安全检查；增加有界 Worker 轮询
   入口和超过重试上限后的 FAILED 死信语义。OCR 目前只提供注入式 Provider 边界，尚未接真实
   OCR 服务或外部杀毒服务。
+- 已增加关键词与向量混合召回：PostgreSQL `tsvector`/`pg_trgm` 与 pgvector 并行执行权限过滤，
+  服务层使用 RRF 融合后再调用真实 Reranker；新增带页码、工作表、行范围的引用 API，以及
+  Recall@K/MRR 离线评测骨架和健身检索样例。
 - 实现关键词与向量混合召回、元数据过滤和 Reranker。
 - 建立引用、知识过期、重建索引和质量评测。
 - 导入首批健身专业知识和业务规则文档。
@@ -689,7 +692,7 @@ Markdown/DOCX/PDF/XLSX 清洗切片、checksum 增量索引和父子节点扩展
 下一步按顺序执行：
 
 1. 接入真实对象存储生命周期、ClamAV/云端文件扫描和 OCR 服务，并将 Worker 部署为独立进程。
-2. 增加混合检索、索引重建、完整引用 API 和离线 RAG 评测。
+2. 接入真实 OCR/外部文件安全服务，增加索引重建任务和评测集自动化门禁。
 3. 在 RAG 骨架上接入预约写工具、确认凭证、幂等和审计。
 4. 建立训练领域表、训练 Tool Gateway 和 Fitness Agent 的结构化计划流程。
 5. 再推进 Operations Agent、Memory 和主动提醒等后续阶段。

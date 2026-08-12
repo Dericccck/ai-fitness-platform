@@ -291,6 +291,8 @@ def _source_metadata(draft: ChunkDraft) -> dict[str, Any]:
         metadata["source_page"] = draft.source_page
     if draft.source_sheet is not None:
         metadata["source_sheet"] = draft.source_sheet
+    if draft.table_index is not None:
+        metadata["table_index"] = draft.table_index
     if draft.row_start is not None:
         metadata["row_start"] = draft.row_start
     if draft.row_end is not None:

@@ -11,6 +11,7 @@ from app.api.middleware.request_context import RequestContextMiddleware
 from app.api.routes.admin_knowledge import router as admin_knowledge_router
 from app.api.routes.agent import router as agent_router
 from app.api.routes.health import router as health_router
+from app.api.routes.rag import router as rag_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import HttpMetrics, MetricsMiddleware
@@ -71,9 +72,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.models,
         app.state.reranker,
         candidate_limit=settings.rag_candidate_limit,
+        keyword_candidate_limit=settings.rag_keyword_candidate_limit,
         top_k=settings.rag_top_k,
         embedding_batch_size=settings.rag_embedding_batch_size,
         embedding_dimensions=settings.embedding_dimensions,
+        vector_weight=settings.rag_vector_weight,
+        keyword_weight=settings.rag_keyword_weight,
+        rrf_k=settings.rag_rrf_k,
     )
     app.state.document_ingestion = DocumentIngestionService(
         app.state.knowledge_repository,
@@ -144,6 +149,7 @@ if runtime_settings.metrics_enabled:
 app.add_middleware(RequestContextMiddleware, service_name=runtime_settings.service_name)
 app.include_router(agent_router)
 app.include_router(admin_knowledge_router)
+app.include_router(rag_router)
 app.include_router(health_router)
 
 

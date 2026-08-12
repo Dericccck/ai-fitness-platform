@@ -274,24 +274,73 @@ class KnowledgeRepository:
         async with self._database.engine.connect() as connection:
             result = await connection.execute(statement, params)
             rows = result.mappings().all()
-        return [
-            KnowledgeChunk(
-                id=str(row["id"]),
-                document_id=str(row["document_id"]),
-                chunk_index=int(row["chunk_index"]),
-                content=str(row["content"]),
-                source_uri=str(row["source_uri"]),
-                title=str(row["title"]),
-                document_type=str(row["document_type"]),
-                version=int(row["version"]),
-                similarity=float(row["similarity"]),
-                metadata=dict(row["metadata"] or {}),
-                parent_id=str(row["parent_id"]) if row["parent_id"] else None,
-                parent_content=str(row["parent_content"]) if row["parent_content"] else None,
-                parent_section_path=tuple(row["parent_section_path"] or ()),
-            )
-            for row in rows
+        return _rows_to_chunks(rows)
+
+    async def search_keyword_candidates(
+        self,
+        query: str,
+        scope: RetrievalScope,
+        *,
+        limit: int,
+    ) -> list[KnowledgeChunk]:
+        """Recall authorized lexical candidates using FTS plus pg_trgm similarity."""
+
+        if not query.strip() or not scope.organization_ids or not scope.roles:
+            return []
+        role_clauses = [
+            f"c.allowed_roles && ARRAY[:keyword_role_{index}]::text[]"
+            for index, _ in enumerate(sorted(scope.roles))
         ]
+        role_parameters = {
+            f"keyword_role_{index}": role for index, role in enumerate(sorted(scope.roles))
+        }
+        statement = text(
+            """
+            SELECT
+                c.id, c.document_id, c.chunk_index, c.content,
+                d.source_uri, d.title, c.document_type, d.version,
+                GREATEST(
+                    ts_rank_cd(c.search_vector, websearch_to_tsquery('simple', :query)),
+                    similarity(c.content, :query)
+                ) AS similarity,
+                c.metadata, c.parent_id,
+                p.content AS parent_content,
+                p.section_path AS parent_section_path
+            FROM knowledge_chunks c
+            JOIN knowledge_documents d ON d.id = c.document_id
+            LEFT JOIN knowledge_parents p ON p.id = c.parent_id AND p.document_id = c.document_id
+            WHERE d.status = 'PUBLISHED'
+              AND c.effective_from <= CURRENT_TIMESTAMP
+              AND (c.effective_to IS NULL OR c.effective_to > CURRENT_TIMESTAMP)
+              AND (
+                    c.visibility = 'GLOBAL'
+                    OR (c.visibility = 'ORGANIZATION' AND c.organization_id IN :organization_ids)
+                    OR (c.visibility = 'PRIVATE' AND c.owner_user_id = :subject)
+              )
+              AND (
+                    cardinality(c.allowed_roles) = 0
+                    OR :role_filter_enabled = false
+                    OR ({role_filter})
+              )
+              AND (
+                    c.search_vector @@ websearch_to_tsquery('simple', :query)
+                    OR c.content ILIKE '%' || :query || '%'
+              )
+            ORDER BY similarity DESC
+            LIMIT :limit
+            """.format(role_filter=" OR ".join(role_clauses))
+        ).bindparams(bindparam("organization_ids", expanding=True))
+        params: dict[str, Any] = {
+            "query": query.strip(),
+            "organization_ids": sorted(scope.organization_ids),
+            "subject": scope.subject,
+            "role_filter_enabled": bool(role_clauses),
+            "limit": limit,
+            **role_parameters,
+        }
+        async with self._database.engine.connect() as connection:
+            rows = (await connection.execute(statement, params)).mappings().all()
+        return _rows_to_chunks(rows)
 
 
 def _vector_literal(values: Sequence[float]) -> str:
@@ -305,6 +354,29 @@ def _vector_literal(values: Sequence[float]) -> str:
     if not values:
         raise ValueError("embedding must not be empty")
     return "[" + ",".join(str(float(value)) for value in values) + "]"
+
+
+def _rows_to_chunks(rows: Sequence[Any]) -> list[KnowledgeChunk]:
+    """Map both vector and lexical query rows to the same provenance model."""
+
+    return [
+        KnowledgeChunk(
+            id=str(row["id"]),
+            document_id=str(row["document_id"]),
+            chunk_index=int(row["chunk_index"]),
+            content=str(row["content"]),
+            source_uri=str(row["source_uri"]),
+            title=str(row["title"]),
+            document_type=str(row["document_type"]),
+            version=int(row["version"]),
+            similarity=float(row["similarity"]),
+            metadata=dict(row["metadata"] or {}),
+            parent_id=str(row["parent_id"]) if row["parent_id"] else None,
+            parent_content=str(row["parent_content"]) if row["parent_content"] else None,
+            parent_section_path=tuple(row["parent_section_path"] or ()),
+        )
+        for row in rows
+    ]
 
 
 def _chunk_params(

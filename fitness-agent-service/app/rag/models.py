@@ -38,6 +38,26 @@ class KnowledgeChunk:
 
 
 @dataclass(frozen=True)
+class KnowledgeCitation:
+    """Stable user-visible citation assembled only from authorized chunk provenance."""
+
+    citation_id: str
+    title: str
+    source_uri: str
+    document_type: str
+    version: int
+    chunk_index: int
+    section_path: tuple[str, ...]
+    source_page: int | None
+    source_sheet: str | None
+    table_index: int | None
+    row_start: int | None
+    row_end: int | None
+    snippet: str
+    score: float
+
+
+@dataclass(frozen=True)
 class KnowledgeDocumentInput:
     """A publishable document version that owns one or more chunks."""
 

@@ -23,7 +23,11 @@
 - Supervisor Runtime：基于 LangGraph 执行模型 Tool Calling、工具预算、真实结果回填和业务范围护栏。
 - 会话持久化：PostgreSQL 保存 LangGraph Checkpoint，Redis 负责会话互斥锁和短期状态。
 - RAG 基础：Alembic 管理版本化知识文档、切片、租户/角色权限字段和 pgvector HNSW 索引；
-  检索顺序固定为服务端权限过滤 → 向量候选召回 → 真实 Reranker → 带来源证据的 Agent 上下文。
+  检索顺序固定为服务端权限过滤 → 向量/关键词混合候选召回 → RRF 融合 → 真实 Reranker
+  → 带来源证据的 Agent 上下文。
+- 混合召回：PostgreSQL `tsvector` 全文索引和 `pg_trgm` GIN 索引与 pgvector 并行工作；两条
+  路径都独立执行租户、角色、所有者、生效时间和发布状态过滤，随后按 Reciprocal Rank Fusion
+  融合，避免向量分数和关键词分数直接比较。
 - 文档索引：`DocumentIngestionService` 负责统一解析 Markdown/TXT、PDF、DOCX、XLSX，执行文本
   清洗、标题/段落语义切片、checksum 去重、稳定文档/切片 ID，以及新版本发布时的旧版本归档；
   Embedding 和切片写入受批次和事务边界控制。PDF 页码、DOCX 标题层级、XLSX 工作表和表格
@@ -124,6 +128,10 @@ RAG 表结构通过 `make agent-migrate` 显式升级，不在服务启动时自
 本地可通过 `make infra-up-storage` 启动 MinIO；将 `AGENT_RAG_STORAGE_BACKEND` 改为 `s3`
 并填写 S3 配置后，上传对象会写入 `knowledge/` 前缀。MinIO 账号只用于本地开发，生产环境
 必须使用 Secret Manager 注入独立凭证。
+
+检索引用接口为 `POST /api/v1/agent/knowledge/search`，只返回已完成权限过滤的来源引用，
+包括来源 URI、版本、章节、PDF 页码、Excel 工作表、表格序号/行范围和命中片段。离线评测
+样例位于 `evals/rag_smoke.json`，当前提供 Recall@K 和 MRR 指标函数，不使用线上用户数据。
 
 本地连接默认使用 Docker Compose 创建的 `fitness-agent-postgres`：宿主机
 `127.0.0.1:5433` 映射到容器 `5432`，数据库 `fitness_agent`，用户 `fitness_agent`。
