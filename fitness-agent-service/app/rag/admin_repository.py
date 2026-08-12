@@ -107,7 +107,9 @@ class KnowledgeIngestionRepository:
             ORDER BY created_at DESC
             LIMIT :limit
             """
-        ).bindparams(bindparam("organization_ids", expanding=True))
+        )
+        if not platform_wide:
+            statement = statement.bindparams(bindparam("organization_ids", expanding=True))
         params: dict[str, Any] = {
             "limit": limit,
             "organization_ids": sorted(organization_ids),
