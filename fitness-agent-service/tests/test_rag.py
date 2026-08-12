@@ -5,7 +5,7 @@ import pytest
 
 from app.infrastructure.reranker import RerankResult
 from app.rag.models import KnowledgeChunk, KnowledgeChunkInput, RetrievalScope
-from app.rag.service import RagSearchError, RagService
+from app.rag.service import RagSearchError, RagSearchResult, RagService
 
 
 class FakeModels:
@@ -140,3 +140,19 @@ async def test_rag_rejects_unexpected_embedding_dimension() -> None:
 
     with pytest.raises(RagSearchError, match="dimension"):
         await service.search("如何热身", scope())
+
+
+def test_rag_prompt_context_expands_each_parent_only_once() -> None:
+    first = chunk("a", "命中片段 A")
+    second = chunk("b", "命中片段 B")
+    first = KnowledgeChunk(
+        **{**first.__dict__, "parent_id": "parent-1", "parent_content": "完整章节内容"}
+    )
+    second = KnowledgeChunk(
+        **{**second.__dict__, "parent_id": "parent-1", "parent_content": "完整章节内容"}
+    )
+
+    context = RagSearchResult((first, second)).as_prompt_context()
+
+    assert context.count("完整章节内容") == 1
+    assert "命中片段 B" in context

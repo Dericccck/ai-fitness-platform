@@ -26,6 +26,8 @@
   检索顺序固定为服务端权限过滤 → 向量候选召回 → 真实 Reranker → 带来源证据的 Agent 上下文。
 - 文档索引：`DocumentIngestionService` 负责 Markdown 清洗、标题/段落语义切片、checksum 去重、
   稳定文档/切片 ID，以及新版本发布时的旧版本归档；Embedding 和切片写入受批次和事务边界控制。
+- 父子节点：子节点参与向量召回，父节点保存章节或表格完整上下文；命中后按 `parent_id`
+  扩展且同一父节点只注入一次，Markdown 表格子节点会重复表头并记录表格序号和行范围。
 - Prometheus：低基数 HTTP 请求量、耗时、并发和构建信息指标。
 - OpenTelemetry：可选 OTLP/HTTP Trace 导出，默认关闭且不发送 Prompt 或用户档案。
 

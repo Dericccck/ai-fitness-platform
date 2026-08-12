@@ -459,7 +459,7 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 
 ### 阶段 4：企业级 RAG
 
-状态：RAG 基础数据模型、pgvector 权限过滤召回、真实 Embedding/Reranker 编排、Markdown 清洗切片和 checksum 增量索引已完成首个可验证切片；混合检索、完整引用 API 和离线评测待继续建设。
+状态：RAG 基础数据模型、pgvector 权限过滤召回、真实 Embedding/Reranker 编排、Markdown 清洗切片、checksum 增量索引和父子节点扩展已完成首个可验证切片；多格式解析、混合检索、完整引用 API 和离线评测待继续建设。
 
 工作内容：
 
@@ -468,6 +468,7 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 - 已实现 RAG 领域接口：Embedding 批处理、服务端权限过滤、候选召回、真实 Reranker 和来源证据渲染。
 - 已把 Fitness 路由的检索证据接入 Supervisor；Reranker 未配置时不允许静默降级。
 - 已实现 Markdown 文档清洗、标题/段落切片、稳定文档/切片 ID、checksum 去重和旧版本归档。
+- 已增加 `knowledge_parents` 和 `parent_id`：子节点负责召回，父节点负责补充章节/表格上下文；表格子节点重复表头并记录行范围。
 - 已完成本地 PostgreSQL/pgvector 真实集成验证：写入一条临时知识切片后，组织/角色权限过滤通过并清理测试数据。
 - 接入文档解析、清洗和增量索引流程。
 - 实现关键词与向量混合召回、元数据过滤和 Reranker。
@@ -674,11 +675,12 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 
 下一步按顺序执行：
 
-1. 增加混合检索、索引重建、引用 API 和离线 RAG 评测。
-2. 将文档索引接入管理员知识库上传/审核流程，并补充失败重试和任务状态。
-3. 在 RAG 骨架上接入预约写工具、确认凭证、幂等和审计。
-4. 建立训练领域表、训练 Tool Gateway 和 Fitness Agent 的结构化计划流程。
-5. 再推进 Operations Agent、Memory 和主动提醒等后续阶段。
+1. 增加 PDF/DOCX/Excel 解析、多格式表格结构化和失败重试任务。
+2. 增加混合检索、索引重建、引用 API 和离线 RAG 评测。
+3. 将文档索引接入管理员知识库上传/审核流程，并补充任务状态。
+4. 在 RAG 骨架上接入预约写工具、确认凭证、幂等和审计。
+5. 建立训练领域表、训练 Tool Gateway 和 Fitness Agent 的结构化计划流程。
+6. 再推进 Operations Agent、Memory 和主动提醒等后续阶段。
 
 后续开发不得跳过 Tool Gateway 和权限层，直接从对话 Prompt 开始拼装业务 Agent；RAG
 内容也不能替代预约、合同、课时和训练记录等 Java 业务事实。

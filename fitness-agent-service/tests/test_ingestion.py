@@ -24,10 +24,12 @@ class FakeRepository:
 
 class FakeRagService:
     def __init__(self) -> None:
-        self.calls: list[tuple[KnowledgeDocumentInput, Any]] = []
+        self.calls: list[tuple[KnowledgeDocumentInput, Any, Any]] = []
 
-    async def index_document(self, document: KnowledgeDocumentInput, chunks: Any) -> None:
-        self.calls.append((document, chunks))
+    async def index_document(
+        self, document: KnowledgeDocumentInput, chunks: Any, *, parents: Any = ()
+    ) -> None:
+        self.calls.append((document, chunks, parents))
 
 
 def request(content: str, *, version: int = 1) -> IngestionRequest:
@@ -96,12 +98,33 @@ async def test_ingestion_indexes_new_version_with_deterministic_chunks() -> None
     assert result.version == 2
     assert result.chunk_count == 1
     assert len(rag.calls) == 1
-    document, chunks = rag.calls[0]
+    document, chunks, parents = rag.calls[0]
     assert document.version == 2
     assert document.checksum == result.checksum
     assert chunks[0].document_id == result.document_id
     assert chunks[0].metadata["heading_path"] == ["热身"]
+    assert chunks[0].parent_id == parents[0].id
+    assert parents[0].content == "热身\n准备身体。"
     assert chunks[0].id
+
+
+def test_markdown_table_chunks_repeat_header_and_record_row_range() -> None:
+    content = clean_markdown(
+        "# 训练计划\n\n"
+        "| 动作 | 组数 | 次数 |\n"
+        "|---|---:|---:|\n"
+        "| 深蹲 | 4 | 12 |\n"
+        "| 卧推 | 3 | 10 |\n"
+        "| 硬拉 | 3 | 8 |"
+    )
+
+    chunks = chunk_markdown(content, max_chunk_chars=65, overlap_chars=0)
+
+    assert len(chunks) >= 2
+    assert all("| 动作 | 组数 | 次数 |" in item.content for item in chunks)
+    assert all(item.table_index == 0 for item in chunks)
+    assert chunks[0].row_start == 1
+    assert chunks[-1].row_end == 3
 
 
 async def test_ingestion_rejects_non_increasing_changed_version() -> None:

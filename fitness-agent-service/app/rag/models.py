@@ -32,6 +32,9 @@ class KnowledgeChunk:
     version: int
     similarity: float
     metadata: dict[str, Any]
+    parent_id: str | None = None
+    parent_content: str | None = None
+    parent_section_path: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -64,6 +67,21 @@ class KnowledgeDocumentSnapshot:
 
 
 @dataclass(frozen=True)
+class KnowledgeParentInput:
+    """Context node stored without an embedding and expanded after child recall."""
+
+    id: str
+    document_id: str
+    content: str
+    section_path: tuple[str, ...]
+    source_page: int | None
+    table_index: int | None
+    row_start: int | None
+    row_end: int | None
+    metadata: dict[str, Any]
+
+
+@dataclass(frozen=True)
 class KnowledgeChunkInput:
     """Chunk input before persistence and embedding generation."""
 
@@ -80,3 +98,4 @@ class KnowledgeChunkInput:
     effective_from: datetime
     effective_to: datetime | None
     metadata: dict[str, Any]
+    parent_id: str | None = None

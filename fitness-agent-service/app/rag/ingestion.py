@@ -12,6 +12,7 @@ from typing import Literal
 from .models import (
     KnowledgeChunkInput,
     KnowledgeDocumentInput,
+    KnowledgeParentInput,
 )
 from .repository import KnowledgeRepository
 from .service import RagSearchError, RagService
@@ -45,10 +46,14 @@ class IngestionRequest:
 
 @dataclass(frozen=True)
 class ChunkDraft:
-    """Clean chunk content and the heading context used to explain its scope."""
+    """Child content plus the parent context that contains its full section."""
 
     content: str
     heading_path: tuple[str, ...]
+    parent_content: str
+    table_index: int | None = None
+    row_start: int | None = None
+    row_end: int | None = None
 
 
 @dataclass(frozen=True)
@@ -129,25 +134,48 @@ class DocumentIngestionService:
             effective_from=request.effective_from,
             effective_to=request.effective_to,
         )
-        chunks = tuple(
-            KnowledgeChunkInput(
-                id=chunk_id(document_id, index, draft.content),
-                document_id=document_id,
-                chunk_index=index,
-                content=draft.content,
-                content_hash=content_checksum(draft.content),
-                organization_id=request.organization_id,
-                owner_user_id=request.owner_user_id,
-                visibility=request.visibility,
-                allowed_roles=request.allowed_roles,
-                document_type=request.document_type,
-                effective_from=request.effective_from,
-                effective_to=request.effective_to,
-                metadata={"heading_path": list(draft.heading_path)},
+        parents: list[KnowledgeParentInput] = []
+        parent_ids: dict[tuple[tuple[str, ...], str], str] = {}
+        chunk_inputs: list[KnowledgeChunkInput] = []
+        for index, draft in enumerate(drafts):
+            parent_key = (draft.heading_path, draft.parent_content)
+            parent_id = parent_ids.get(parent_key)
+            if parent_id is None:
+                parent_id = parent_node_id(document_id, len(parents), draft.parent_content)
+                parent_ids[parent_key] = parent_id
+                parents.append(
+                    KnowledgeParentInput(
+                        id=parent_id,
+                        document_id=document_id,
+                        content=draft.parent_content,
+                        section_path=draft.heading_path,
+                        source_page=None,
+                        table_index=draft.table_index,
+                        row_start=draft.row_start,
+                        row_end=draft.row_end,
+                        metadata={"heading_path": list(draft.heading_path)},
+                    )
+                )
+            chunk_inputs.append(
+                KnowledgeChunkInput(
+                    id=chunk_id(document_id, index, draft.content),
+                    document_id=document_id,
+                    chunk_index=index,
+                    content=draft.content,
+                    content_hash=content_checksum(draft.content),
+                    organization_id=request.organization_id,
+                    owner_user_id=request.owner_user_id,
+                    visibility=request.visibility,
+                    allowed_roles=request.allowed_roles,
+                    document_type=request.document_type,
+                    effective_from=request.effective_from,
+                    effective_to=request.effective_to,
+                    metadata={"heading_path": list(draft.heading_path)},
+                    parent_id=parent_id,
+                )
             )
-            for index, draft in enumerate(drafts)
-        )
-        await self.rag_service.index_document(document, chunks)
+        chunks = tuple(chunk_inputs)
+        await self.rag_service.index_document(document, chunks, parents=tuple(parents))
         return IngestionResult(
             status="INDEXED",
             document_id=document_id,
@@ -192,41 +220,44 @@ def chunk_markdown(
         raise ValueError("invalid chunking limits")
 
     heading_path: list[str] = []
-    blocks: list[ChunkDraft] = []
+    sections: list[tuple[tuple[str, ...], str]] = []
     current_lines: list[str] = []
     current_path: tuple[str, ...] = ()
 
-    def flush() -> None:
-        if not current_lines:
-            return
+    def flush_section() -> None:
         body = "\n".join(current_lines).strip()
         if body:
-            blocks.extend(
-                _split_block(
-                    body,
-                    current_path,
-                    max_chunk_chars=max_chunk_chars,
-                    overlap_chars=overlap_chars,
-                )
-            )
+            sections.append((current_path, body))
         current_lines.clear()
 
     for line in cleaned_content.split("\n") + [""]:
         heading = _HEADING.match(line)
         if heading:
-            flush()
+            flush_section()
             level = len(heading.group(1))
             heading_path[:] = heading_path[: level - 1]
             heading_path.append(heading.group(2).strip())
             current_path = tuple(heading_path)
             continue
-        if not line.strip():
-            flush()
-            continue
-        if not current_lines:
-            current_path = tuple(heading_path)
         current_lines.append(line)
-    return blocks
+    flush_section()
+
+    drafts: list[ChunkDraft] = []
+    table_index = 0
+    for section_path, body in sections:
+        current_table_index = table_index if _is_markdown_table(body) else None
+        if current_table_index is not None:
+            table_index += 1
+        drafts.extend(
+            _split_block(
+                body,
+                section_path,
+                max_chunk_chars=max_chunk_chars,
+                overlap_chars=overlap_chars,
+                table_index=current_table_index,
+            )
+        )
+    return drafts
 
 
 def _split_block(
@@ -235,13 +266,24 @@ def _split_block(
     *,
     max_chunk_chars: int,
     overlap_chars: int,
+    table_index: int | None,
 ) -> list[ChunkDraft]:
     """Keep short blocks intact and split long prose without cutting every word."""
 
     prefix = f"{' / '.join(heading_path)}\n" if heading_path else ""
+    parent_content = prefix + body
+    if table_index is not None:
+        return _split_table_block(
+            body,
+            heading_path,
+            parent_content=parent_content,
+            prefix=prefix,
+            table_index=table_index,
+            max_chunk_chars=max_chunk_chars,
+        )
     available = max_chunk_chars - len(prefix)
     if len(body) <= available:
-        return [ChunkDraft(prefix + body, heading_path)]
+        return [ChunkDraft(prefix + body, heading_path, parent_content)]
 
     sentences = [part.strip() for part in _SENTENCE_END.split(body) if part.strip()]
     if not sentences:
@@ -251,7 +293,7 @@ def _split_block(
     for sentence in sentences:
         if len(sentence) > available:
             if current:
-                result.append(ChunkDraft(prefix + current, heading_path))
+                result.append(ChunkDraft(prefix + current, heading_path, parent_content))
                 current = ""
             result.extend(
                 _split_long_text(
@@ -260,17 +302,97 @@ def _split_block(
                     available=available,
                     overlap_chars=overlap_chars,
                     prefix=prefix,
+                    parent_content=parent_content,
                 )
             )
             continue
         candidate = f"{current} {sentence}".strip()
         if current and len(candidate) > available:
-            result.append(ChunkDraft(prefix + current, heading_path))
+            result.append(ChunkDraft(prefix + current, heading_path, parent_content))
             current = _overlap_tail(current, overlap_chars)
         current = f"{current} {sentence}".strip()
     if current:
-        result.append(ChunkDraft(prefix + current, heading_path))
+        result.append(ChunkDraft(prefix + current, heading_path, parent_content))
     return result
+
+
+def _split_table_block(
+    body: str,
+    heading_path: tuple[str, ...],
+    *,
+    parent_content: str,
+    prefix: str,
+    table_index: int,
+    max_chunk_chars: int,
+) -> list[ChunkDraft]:
+    """Split a Markdown table by row groups while repeating its header."""
+
+    lines = [line.strip() for line in body.split("\n") if line.strip()]
+    separator_index = next(
+        (index for index, line in enumerate(lines) if _is_table_separator(line)),
+        None,
+    )
+    if separator_index is None or separator_index == 0:
+        return [ChunkDraft(prefix + body, heading_path, parent_content, table_index)]
+
+    header = "\n".join(lines[: separator_index + 1])
+    rows = lines[separator_index + 1 :]
+    available = max_chunk_chars - len(prefix)
+    if len(header) > available:
+        return _split_long_text(
+            body,
+            heading_path,
+            available=available,
+            overlap_chars=0,
+            prefix=prefix,
+            parent_content=parent_content,
+        )
+
+    result: list[ChunkDraft] = []
+    current_rows: list[str] = []
+    row_start = 1
+    for row_number, row in enumerate(rows, start=1):
+        candidate = "\n".join([header, *current_rows, row])
+        if current_rows and len(candidate) > available:
+            result.append(
+                ChunkDraft(
+                    prefix + "\n".join([header, *current_rows]),
+                    heading_path,
+                    parent_content,
+                    table_index,
+                    row_start,
+                    row_number - 1,
+                )
+            )
+            current_rows = []
+            row_start = row_number
+        current_rows.append(row)
+    if current_rows:
+        result.append(
+            ChunkDraft(
+                prefix + "\n".join([header, *current_rows]),
+                heading_path,
+                parent_content,
+                table_index,
+                row_start,
+                len(rows),
+            )
+        )
+    return result
+
+
+def _is_markdown_table(body: str) -> bool:
+    """Detect a Markdown table without interpreting arbitrary pipe-delimited prose."""
+
+    lines = [line.strip() for line in body.split("\n") if line.strip()]
+    return len(lines) >= 2 and any(_is_table_separator(line) for line in lines)
+
+
+def _is_table_separator(line: str) -> bool:
+    """Recognize the Markdown delimiter row used below a table header."""
+
+    cells = [cell.strip() for cell in line.strip("|").split("|")]
+    return bool(cells) and all(bool(re.fullmatch(r":?-{3,}:?", cell)) for cell in cells)
 
 
 def _split_long_text(
@@ -280,6 +402,7 @@ def _split_long_text(
     available: int,
     overlap_chars: int,
     prefix: str,
+    parent_content: str,
 ) -> list[ChunkDraft]:
     """Bound pathological paragraphs such as copied tables or long URLs."""
 
@@ -289,7 +412,7 @@ def _split_long_text(
         end = min(start + available, len(text))
         piece = text[start:end].strip()
         if piece:
-            result.append(ChunkDraft(prefix + piece, heading_path))
+            result.append(ChunkDraft(prefix + piece, heading_path, parent_content))
         if end == len(text):
             break
         start = max(end - overlap_chars, start + 1)
@@ -321,4 +444,12 @@ def chunk_id(document_id: str, index: int, content: str) -> str:
 
     return hashlib.sha256(
         f"{document_id}\n{index}\n{content_checksum(content)}".encode()
+    ).hexdigest()
+
+
+def parent_node_id(document_id: str, index: int, content: str) -> str:
+    """Generate a stable ID for the context node expanded after child recall."""
+
+    return hashlib.sha256(
+        f"parent\n{document_id}\n{index}\n{content_checksum(content)}".encode()
     ).hexdigest()

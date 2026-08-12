@@ -15,6 +15,7 @@ from .models import (
     KnowledgeChunkInput,
     KnowledgeDocumentInput,
     KnowledgeDocumentSnapshot,
+    KnowledgeParentInput,
     RetrievalScope,
 )
 
@@ -79,12 +80,12 @@ class KnowledgeRepository:
             """
             INSERT INTO knowledge_chunks (
                 id, document_id, chunk_index, content, content_hash, embedding,
-                organization_id, owner_user_id, visibility, allowed_roles,
+                organization_id, owner_user_id, visibility, allowed_roles, parent_id,
                 document_type, effective_from, effective_to, metadata
             ) VALUES (
                 :id, :document_id, :chunk_index, :content, :content_hash,
                 CAST(:embedding AS vector), :organization_id, :owner_user_id,
-                :visibility, :allowed_roles, :document_type, :effective_from,
+                :visibility, :allowed_roles, :parent_id, :document_type, :effective_from,
                 :effective_to, CAST(:metadata AS json)
             )
             """
@@ -98,6 +99,8 @@ class KnowledgeRepository:
         document: KnowledgeDocumentInput,
         chunks: Sequence[KnowledgeChunkInput],
         embeddings: Sequence[Sequence[float]],
+        *,
+        parents: Sequence[KnowledgeParentInput] = (),
     ) -> None:
         """Upsert one document version and replace its chunks atomically.
 
@@ -136,7 +139,23 @@ class KnowledgeRepository:
                 updated_at = CURRENT_TIMESTAMP
             """
         )
-        delete_statement = text("DELETE FROM knowledge_chunks WHERE document_id = :document_id")
+        delete_chunks_statement = text(
+            "DELETE FROM knowledge_chunks WHERE document_id = :document_id"
+        )
+        delete_parents_statement = text(
+            "DELETE FROM knowledge_parents WHERE document_id = :document_id"
+        )
+        parent_statement = text(
+            """
+            INSERT INTO knowledge_parents (
+                id, document_id, content, section_path, source_page, table_index,
+                row_start, row_end, metadata
+            ) VALUES (
+                :id, :document_id, :content, :section_path, :source_page,
+                :table_index, :row_start, :row_end, CAST(:metadata AS json)
+            )
+            """
+        )
         archive_statement = text(
             """
             UPDATE knowledge_documents
@@ -150,12 +169,12 @@ class KnowledgeRepository:
             """
             INSERT INTO knowledge_chunks (
                 id, document_id, chunk_index, content, content_hash, embedding,
-                organization_id, owner_user_id, visibility, allowed_roles,
+                organization_id, owner_user_id, visibility, allowed_roles, parent_id,
                 document_type, effective_from, effective_to, metadata
             ) VALUES (
                 :id, :document_id, :chunk_index, :content, :content_hash,
                 CAST(:embedding AS vector), :organization_id, :owner_user_id,
-                :visibility, :allowed_roles, :document_type, :effective_from,
+                :visibility, :allowed_roles, :parent_id, :document_type, :effective_from,
                 :effective_to, CAST(:metadata AS json)
             )
             """
@@ -183,7 +202,10 @@ class KnowledgeRepository:
                 {"source_uri": document.source_uri, "document_id": document.id},
             )
             await connection.execute(document_statement, document_params)
-            await connection.execute(delete_statement, {"document_id": document.id})
+            await connection.execute(delete_chunks_statement, {"document_id": document.id})
+            await connection.execute(delete_parents_statement, {"document_id": document.id})
+            if parents:
+                await connection.execute(parent_statement, _parent_params(parents))
             await connection.execute(chunk_statement, _chunk_params(chunks, embeddings))
 
     async def search_candidates(
@@ -215,10 +237,15 @@ class KnowledgeRepository:
                 c.document_type,
                 d.version,
                 1 - (c.embedding <=> CAST(:embedding AS vector)) AS similarity,
-                c.metadata
+                c.metadata,
+                c.parent_id,
+                p.content AS parent_content,
+                p.section_path AS parent_section_path
             FROM knowledge_chunks c
             JOIN knowledge_documents d ON d.id = c.document_id
+            LEFT JOIN knowledge_parents p ON p.id = c.parent_id AND p.document_id = c.document_id
             WHERE d.status = 'PUBLISHED'
+              AND c.embedding IS NOT NULL
               AND c.visibility = d.visibility
               AND c.effective_from <= CURRENT_TIMESTAMP
               AND (c.effective_to IS NULL OR c.effective_to > CURRENT_TIMESTAMP)
@@ -259,6 +286,9 @@ class KnowledgeRepository:
                 version=int(row["version"]),
                 similarity=float(row["similarity"]),
                 metadata=dict(row["metadata"] or {}),
+                parent_id=str(row["parent_id"]) if row["parent_id"] else None,
+                parent_content=str(row["parent_content"]) if row["parent_content"] else None,
+                parent_section_path=tuple(row["parent_section_path"] or ()),
             )
             for row in rows
         ]
@@ -299,6 +329,26 @@ def _chunk_params(
             "effective_from": chunk.effective_from,
             "effective_to": chunk.effective_to,
             "metadata": json.dumps(chunk.metadata, ensure_ascii=False),
+            "parent_id": chunk.parent_id,
         }
         for chunk, embedding in zip(chunks, embeddings, strict=True)
+    ]
+
+
+def _parent_params(parents: Sequence[KnowledgeParentInput]) -> list[dict[str, Any]]:
+    """Serialize parent context rows for one document transaction."""
+
+    return [
+        {
+            "id": parent.id,
+            "document_id": parent.document_id,
+            "content": parent.content,
+            "section_path": list(parent.section_path),
+            "source_page": parent.source_page,
+            "table_index": parent.table_index,
+            "row_start": parent.row_start,
+            "row_end": parent.row_end,
+            "metadata": json.dumps(parent.metadata, ensure_ascii=False),
+        }
+        for parent in parents
     ]
