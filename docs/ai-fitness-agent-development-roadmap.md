@@ -439,10 +439,15 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 
 ### 阶段 3：Agent Runtime 与 Supervisor
 
+状态：已完成统一非流式对话接口、LangGraph Supervisor 基础图、模型 Tool Calling 协议、工具步数预算和旧业务范围护栏；SSE 流式响应、PostgreSQL/Redis Checkpoint、角色意图评测和 Prompt 版本管理待继续建设。
+
 工作内容：
 
-- 建立统一对话 API、SSE 流式响应和会话协议。
-- 使用 LangGraph 构建 Supervisor 状态图。
+- 已建立统一非流式对话 API 和会话请求协议，要求透传已签名 AgentContext。
+- 已使用 LangGraph 构建 Supervisor 状态图，支持模型回合、工具回合和最终回答回合。
+- 已建立模型 Tool Calling 供应商响应规范化、工具步数预算和未配置模型的明确失败语义。
+- 已增加赛事、作品和活动运营范围护栏；这些遗留业务不进入当前健身 Agent 路由。
+- SSE 流式响应和断线恢复待 Checkpoint 契约确定后接入。
 - 建立角色路由、意图分类、任务状态和失败恢复。
 - 接入 PostgreSQL/Redis Checkpoint。
 - 统一模型超时、重试、限流、Token 预算和结构化输出。

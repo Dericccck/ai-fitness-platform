@@ -20,6 +20,7 @@
 - Reranker：可配置的 HTTP 服务，不提供本地 mock 或静默降级。
 - Fitness Core Gateway：Java 只读业务 Tool 服务，查询用户、机构、课程、合同、课时和预约。
 - Tool Registry：版本化注册首批健身只读工具，校验输入 Schema、限制未知工具，并记录不含原始参数的调用审计。
+- Supervisor Runtime：基于 LangGraph 执行模型 Tool Calling、工具预算、真实结果回填和业务范围护栏。
 - Prometheus：低基数 HTTP 请求量、耗时、并发和构建信息指标。
 - OpenTelemetry：可选 OTLP/HTTP Trace 导出，默认关闭且不发送 Prompt 或用户档案。
 
@@ -68,9 +69,14 @@ Python 版本固定为 3.11，`uv.lock` 是依赖事实源；CI 和本地均使�
 和连接超时做有限指数退避，对 401、403、404 和参数错误不重试。完整 HTTP 契约见
 `docs/contracts/fitness-core-gateway-v1.md`。
 
-Agent Runtime 后续接入 Supervisor 时必须通过 `app.state.tool_registry` 获取工具定义和
-调用入口；不能在 Prompt、Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry
+Supervisor 必须通过 `app.state.tool_registry` 获取工具定义和调用入口；不能在 Prompt、
+Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry
 只包含只读工具，预约写操作要等确认凭证、幂等键和 Java 事务审计完成后再加入。
+
+当前对话接口为 `POST /api/v1/agent/chat`。调用方必须传入认证服务签发的
+`X-Agent-Context`，以及 `conversation_id`、`message` 和可选 `locale`；接口拒绝额外的
+用户/组织/角色字段。当前先提供非流式稳定协议，SSE、Checkpoint 和断线恢复将在会话持久化
+边界完成后接入。
 
 ## 生产镜像
 

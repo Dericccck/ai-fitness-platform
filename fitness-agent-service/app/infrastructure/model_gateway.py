@@ -1,3 +1,5 @@
+import json
+from dataclasses import dataclass
 from typing import Any
 
 from openai import AsyncOpenAI
@@ -7,6 +9,29 @@ from app.core.config import Settings
 
 class ModelConfigurationError(RuntimeError):
     """真实模型服务未完成配置时抛出，防止生产流程静默使用假结果。"""
+
+
+class ModelResponseError(RuntimeError):
+    """模型返回无法被 Agent Runtime 解释的结果时抛出。"""
+
+
+@dataclass(frozen=True)
+class ModelToolCall:
+    """模型请求调用一个已注册工具的结构化意图。"""
+
+    call_id: str
+    name: str
+    arguments: dict[str, Any]
+
+
+@dataclass(frozen=True)
+class ModelTurn:
+    """一次模型回合的文本、工具调用和可选用量信息。"""
+
+    content: str
+    tool_calls: tuple[ModelToolCall, ...]
+    input_tokens: int | None = None
+    output_tokens: int | None = None
 
 
 class ModelGateway:
@@ -27,10 +52,12 @@ class ModelGateway:
         self._llm = AsyncOpenAI(
             api_key=settings.llm_api_key or "not-configured",
             base_url=settings.llm_base_url,
+            timeout=settings.llm_timeout_seconds,
         )
         self._embedding = AsyncOpenAI(
             api_key=settings.embedding_effective_api_key or "not-configured",
             base_url=settings.embedding_base_url,
+            timeout=settings.llm_timeout_seconds,
         )
 
     async def chat(
@@ -55,6 +82,62 @@ class ModelGateway:
             temperature=temperature,
         )
         return response.choices[0].message.content or ""
+
+    async def chat_with_tools(
+        self,
+        messages: list[dict[str, Any]],
+        *,
+        tools: list[dict[str, Any]],
+        temperature: float = 0.2,
+    ) -> ModelTurn:
+        """调用支持 Tool Calling 的模型，并规范化为 Runtime 自有协议。
+
+        OpenAI-compatible 供应商的响应对象不能直接泄漏到业务编排层，否则更换模型
+        供应商会导致整个 Agent 图改动。这里严格解析 tool name、call id 和 JSON 参数；
+        任一工具参数不是合法 JSON 都会失败，Runtime 不会猜测或修复模型意图。
+        """
+
+        if not self.settings.llm_configured:
+            raise ModelConfigurationError("LLM provider is not configured")
+        request: dict[str, Any] = {
+            "model": self.settings.llm_model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": self.settings.llm_max_output_tokens,
+        }
+        # 工具预算耗尽后仍需要让模型基于最后一次真实工具结果生成最终答复，
+        # 此时显式不传 tools，避免模型继续发起新的业务调用。
+        if tools:
+            request["tools"] = tools
+            request["tool_choice"] = "auto"
+        response = await self._llm.chat.completions.create(**request)
+        if not response.choices:
+            raise ModelResponseError("LLM returned no choices")
+
+        message = response.choices[0].message
+        parsed_calls: list[ModelToolCall] = []
+        for raw_call in message.tool_calls or []:
+            try:
+                arguments = json.loads(raw_call.function.arguments)
+            except (TypeError, json.JSONDecodeError) as exc:
+                raise ModelResponseError("LLM returned invalid tool arguments") from exc
+            if not isinstance(arguments, dict):
+                raise ModelResponseError("LLM tool arguments must be a JSON object")
+            parsed_calls.append(
+                ModelToolCall(
+                    call_id=raw_call.id,
+                    name=raw_call.function.name,
+                    arguments=arguments,
+                )
+            )
+
+        usage = response.usage
+        return ModelTurn(
+            content=message.content or "",
+            tool_calls=tuple(parsed_calls),
+            input_tokens=usage.prompt_tokens if usage else None,
+            output_tokens=usage.completion_tokens if usage else None,
+        )
 
     async def embed(self, texts: list[str]) -> list[list[float]]:
         """批量生成向量，并保持结果顺序与输入文本一致。

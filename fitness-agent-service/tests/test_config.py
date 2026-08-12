@@ -14,5 +14,7 @@ def test_provider_configuration_is_explicit() -> None:
     assert settings.llm_configured is True
     assert settings.embedding_configured is True
     assert settings.reranker_configured is True
+    assert settings.llm_timeout_seconds == 30
+    assert settings.agent_max_tool_steps == 4
     assert settings.otel_configured is False
     assert settings.gateway_configured is False

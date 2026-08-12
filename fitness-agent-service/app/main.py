@@ -6,7 +6,9 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.responses import Response
 
 from app.agent.fitness_tools import build_fitness_tool_registry
+from app.agent.supervisor import Supervisor
 from app.api.middleware.request_context import RequestContextMiddleware
+from app.api.routes.agent import router as agent_router
 from app.api.routes.health import router as health_router
 from app.core.config import get_settings
 from app.core.logging import configure_logging
@@ -50,6 +52,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Tool Registry 是 Agent 调用业务能力的唯一入口。它在启动期完成固定工具注册，
     # 让后续 Supervisor 只能看到有 Schema、角色元数据和审计边界的工具集合。
     app.state.tool_registry = build_fitness_tool_registry(app.state.gateway)
+    app.state.supervisor = Supervisor(
+        app.state.models,
+        app.state.tool_registry,
+        max_tool_steps=settings.agent_max_tool_steps,
+    )
     try:
         yield
     finally:
@@ -74,6 +81,7 @@ app.state.trace_provider = configure_tracing(app, runtime_settings)
 if runtime_settings.metrics_enabled:
     app.add_middleware(MetricsMiddleware, metrics=http_metrics)
 app.add_middleware(RequestContextMiddleware, service_name=runtime_settings.service_name)
+app.include_router(agent_router)
 app.include_router(health_router)
 
 

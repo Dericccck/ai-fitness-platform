@@ -45,6 +45,9 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.openai.com/v1"
     llm_api_key: str = ""
     llm_model: str = ""
+    llm_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
+    llm_max_output_tokens: int = Field(default=1200, ge=128, le=8192)
+    agent_max_tool_steps: int = Field(default=4, ge=1, le=8)
 
     embedding_base_url: str = "https://api.openai.com/v1"
     embedding_api_key: str = ""
