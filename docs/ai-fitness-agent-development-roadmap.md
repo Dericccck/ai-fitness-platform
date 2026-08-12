@@ -414,7 +414,7 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 
 ### 阶段 2：AgentContext、权限和 Java Tool Gateway
 
-状态：阶段 2 已完成独立 Gateway、签名上下文和首批只读工具的基础实现；写工具、真实数据库集成测试和 Agent 调用契约测试待继续建设。
+状态：阶段 2 已完成独立 Gateway、签名上下文、首批只读工具和 Python Tool Registry 的基础实现；写工具、真实数据库集成测试和 Agent 调用契约测试待继续建设。
 
 工作内容：
 
@@ -423,6 +423,8 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 - 已实现首批只读工具：当前用户、机构、课程、合同和预约查询；所有查询都经过组织范围和用户/教练关系校验。
 - 已实现 Python `GatewayClient`：复用异步连接池，透传签名上下文，统一 400/401/403/404/5xx 错误，并对暂时性 GET 失败做有限重试。
 - 已建立 v1 接口契约文档，固定 Header、Tool 路径、字段视图、列表上限和错误处理语义。
+- 已建立 Python 版本化 Tool Registry：固定工具 ID、输入 Schema、角色元数据、只读/确认标记、未知工具拒绝和安全最小审计事件。
+- 已将首批健身只读工具装配到 Agent 服务生命周期；后续 Supervisor 只能从 Registry 获取工具 Schema，不得直接使用 HTTP 客户端或数据库连接。
 - 后续继续补充真实数据库集成测试，并将写工具纳入 CI 自动测试和安全门禁。
 - 将历史 Java Controller、Service 和表结构作为业务规则参考，不恢复赛事、作品、活动代码，也不直接依赖缺失类型。
 - 审计健身相关 Controller 和 Service 的资源级权限。

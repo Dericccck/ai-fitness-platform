@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.responses import Response
 
+from app.agent.fitness_tools import build_fitness_tool_registry
 from app.api.middleware.request_context import RequestContextMiddleware
 from app.api.routes.health import router as health_router
 from app.core.config import get_settings
@@ -46,6 +47,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.models = ModelGateway(settings)
     app.state.reranker = RerankerClient(settings)
     app.state.gateway = GatewayClient(settings)
+    # Tool Registry 是 Agent 调用业务能力的唯一入口。它在启动期完成固定工具注册，
+    # 让后续 Supervisor 只能看到有 Schema、角色元数据和审计边界的工具集合。
+    app.state.tool_registry = build_fitness_tool_registry(app.state.gateway)
     try:
         yield
     finally:

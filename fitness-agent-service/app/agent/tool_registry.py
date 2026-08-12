@@ -1,0 +1,285 @@
+"""版本化 Tool Registry 及其调用审计边界。
+
+Tool Registry 是模型和业务系统之间的唯一工具入口。模型只能选择已经注册的
+工具；工具输入必须先通过 Pydantic Schema 校验；工具执行失败也必须回传真实失败，
+不能被 Supervisor 或模型包装成“已经成功”。这里暂时只放基础设施和只读工具，后续
+写工具必须继续遵守确认凭证、幂等键和 Java Gateway 权限校验。
+"""
+
+from __future__ import annotations
+
+import re
+from collections.abc import Awaitable, Callable, Mapping
+from dataclasses import dataclass
+from time import perf_counter
+from typing import Any, Literal, Protocol
+
+import structlog
+from pydantic import BaseModel, ConfigDict, ValidationError
+
+from app.infrastructure.gateway_client import GatewayClientError, GatewayRequestContext
+
+ToolHandler = Callable[[BaseModel, "ToolContext"], Awaitable[Any]]
+_TOOL_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]+\.v[0-9]+$")
+
+
+class ToolRegistryError(RuntimeError):
+    """工具注册或调用边界错误的稳定基类。"""
+
+
+class DuplicateToolError(ToolRegistryError):
+    """同一个版本的工具被重复注册。"""
+
+
+class InvalidToolDefinitionError(ToolRegistryError):
+    """工具元数据不满足注册约束。"""
+
+
+class UnknownToolError(ToolRegistryError):
+    """模型请求了未注册的工具。"""
+
+
+class ToolInputValidationError(ToolRegistryError):
+    """工具输入没有通过严格的参数 Schema。"""
+
+
+class ToolExecutionError(ToolRegistryError):
+    """工具内部出现未分类异常，避免把底层异常暴露给模型。"""
+
+
+@dataclass(frozen=True)
+class ToolContext:
+    """一次工具调用的受控上下文。
+
+    signed_context 由上游认证服务签发，Python Agent 只负责透传给 Java Gateway，不能
+    根据自然语言、模型输出或工具参数重新构造主体和组织范围。request_id/trace_id
+    只用于跨服务定位，不承载可被模型修改的权限信息。
+    """
+
+    gateway_context: GatewayRequestContext
+
+
+@dataclass(frozen=True)
+class ToolAuditEvent:
+    """工具审计事件的安全最小字段集合。
+
+    审计刻意不保存原始输入、输出、Prompt、签名上下文或 Token。工具参数可能包含
+    用户 ID、时间范围等敏感信息，若后续需要业务审计，应由 Java Gateway 按其自身
+    脱敏策略记录；Agent 侧只记录调用事实和可定位的错误码。
+    """
+
+    tool_id: str
+    status: Literal["started", "succeeded", "failed"]
+    request_id: str | None
+    trace_id: str | None
+    duration_ms: float | None = None
+    error_code: str | None = None
+
+
+class ToolAuditSink(Protocol):
+    """审计输出接口，生产默认使用结构化日志，测试可以注入记录器。"""
+
+    def record(self, event: ToolAuditEvent) -> None:
+        """接收一个不含敏感参数的工具审计事件。"""
+
+
+class LoggingToolAuditSink:
+    """把工具调用元数据输出到统一结构化日志。"""
+
+    def __init__(self) -> None:
+        self._logger = structlog.get_logger("agent.tools")
+
+    def record(self, event: ToolAuditEvent) -> None:
+        fields: dict[str, Any] = {
+            "tool_id": event.tool_id,
+            "tool_status": event.status,
+            "tool_request_id": event.request_id,
+            "tool_trace_id": event.trace_id,
+        }
+        if event.duration_ms is not None:
+            fields["tool_duration_ms"] = event.duration_ms
+        if event.error_code is not None:
+            fields["tool_error_code"] = event.error_code
+        self._logger.info("agent_tool_call", **fields)
+
+
+@dataclass(frozen=True)
+class ToolDefinition:
+    """一个可被 Agent Runtime 发现和调用的工具定义。"""
+
+    tool_id: str
+    description: str
+    input_model: type[BaseModel]
+    handler: ToolHandler
+    allowed_roles: frozenset[str]
+    read_only: bool
+    requires_confirmation: bool
+
+    @property
+    def version(self) -> str:
+        """从版本化工具 ID 提取版本，避免定义和注册表出现两份状态。"""
+
+        return self.tool_id.rsplit(".", maxsplit=1)[-1]
+
+    def public_spec(self) -> dict[str, Any]:
+        """返回可提供给 Supervisor/模型的工具描述，不包含 Python handler。"""
+
+        return {
+            "name": self.tool_id,
+            "description": self.description,
+            "input_schema": self.input_model.model_json_schema(),
+            "version": self.version,
+            "allowed_roles": sorted(self.allowed_roles),
+            "read_only": self.read_only,
+            "requires_confirmation": self.requires_confirmation,
+        }
+
+
+class ToolRegistry:
+    """集中管理工具定义，并强制执行 Schema、审计和错误边界。"""
+
+    def __init__(self, audit_sink: ToolAuditSink | None = None) -> None:
+        self._definitions: dict[str, ToolDefinition] = {}
+        self._audit_sink = audit_sink or LoggingToolAuditSink()
+
+    def register(self, definition: ToolDefinition) -> None:
+        """注册工具并检查版本、角色和写操作安全元数据。"""
+
+        if not _TOOL_ID_PATTERN.fullmatch(definition.tool_id):
+            raise InvalidToolDefinitionError("tool_id must use a namespaced name ending with .vN")
+        if not definition.description.strip():
+            raise InvalidToolDefinitionError("tool description is required")
+        if not definition.allowed_roles:
+            raise InvalidToolDefinitionError("at least one allowed role is required")
+        if not definition.read_only and not definition.requires_confirmation:
+            raise InvalidToolDefinitionError("write tools must require explicit confirmation")
+        if definition.tool_id in self._definitions:
+            raise DuplicateToolError(f"tool already registered: {definition.tool_id}")
+        self._definitions[definition.tool_id] = definition
+
+    def get(self, tool_id: str) -> ToolDefinition:
+        """按精确版本获取工具；不允许模糊匹配或自动降级到旧版本。"""
+
+        try:
+            return self._definitions[tool_id]
+        except KeyError as exc:
+            raise UnknownToolError(f"unknown tool: {tool_id}") from exc
+
+    def public_specs(self) -> list[dict[str, Any]]:
+        """返回稳定排序的工具 Schema，供 Supervisor 构建受控 Tool Calling。"""
+
+        return [
+            definition.public_spec()
+            for definition in sorted(self._definitions.values(), key=lambda item: item.tool_id)
+        ]
+
+    async def invoke(
+        self,
+        tool_id: str,
+        raw_input: Mapping[str, Any],
+        context: ToolContext,
+    ) -> Any:
+        """校验并调用一个工具，返回 JSON 兼容的 Tool View。
+
+        这里不接受任意可调用对象，也不允许工具名称映射到动态导入路径。这样模型即使
+        输出了未知名称、额外参数或越界 limit，也只能得到明确的工具错误，不能触达
+        数据库或任意 Python 函数。
+        """
+
+        definition = self._get_or_audit_unknown(tool_id, context)
+        started_at = perf_counter()
+        request_id = context.gateway_context.request_id
+        trace_id = context.gateway_context.trace_id
+        self._audit_sink.record(ToolAuditEvent(tool_id, "started", request_id, trace_id))
+
+        try:
+            validated_input = definition.input_model.model_validate(dict(raw_input))
+        except ValidationError as exc:
+            self._record_failure(
+                definition.tool_id, request_id, trace_id, "INVALID_INPUT", started_at
+            )
+            raise ToolInputValidationError(f"invalid input for tool: {definition.tool_id}") from exc
+
+        try:
+            result = await definition.handler(validated_input, context)
+        except GatewayClientError as exc:
+            error_code = exc.code or type(exc).__name__
+            self._record_failure(definition.tool_id, request_id, trace_id, error_code, started_at)
+            # 保留 Gateway 的稳定错误类型，后续 API 层可映射为可恢复的用户提示。
+            raise
+        except Exception as exc:
+            self._record_failure(
+                definition.tool_id, request_id, trace_id, "TOOL_EXECUTION_FAILED", started_at
+            )
+            raise ToolExecutionError("tool execution failed") from exc
+
+        self._audit_sink.record(
+            ToolAuditEvent(
+                definition.tool_id,
+                "succeeded",
+                request_id,
+                trace_id,
+                duration_ms=self._duration_ms(started_at),
+            )
+        )
+        return _to_json_compatible(result)
+
+    def _get_or_audit_unknown(self, tool_id: str, context: ToolContext) -> ToolDefinition:
+        try:
+            return self.get(tool_id)
+        except UnknownToolError:
+            # 未知工具没有可信的定义。只有符合工具 ID 语法的名称才写入日志，避免把
+            # 模型输出中的任意长文本或潜在敏感内容原样带进审计系统。
+            self._audit_sink.record(
+                ToolAuditEvent(
+                    tool_id=tool_id if _TOOL_ID_PATTERN.fullmatch(tool_id) else "<invalid>",
+                    status="failed",
+                    request_id=context.gateway_context.request_id,
+                    trace_id=context.gateway_context.trace_id,
+                    error_code="UNKNOWN_TOOL",
+                )
+            )
+            raise
+
+    def _record_failure(
+        self,
+        tool_id: str,
+        request_id: str | None,
+        trace_id: str | None,
+        error_code: str,
+        started_at: float,
+    ) -> None:
+        self._audit_sink.record(
+            ToolAuditEvent(
+                tool_id,
+                "failed",
+                request_id,
+                trace_id,
+                duration_ms=self._duration_ms(started_at),
+                error_code=error_code,
+            )
+        )
+
+    @staticmethod
+    def _duration_ms(started_at: float) -> float:
+        return round((perf_counter() - started_at) * 1000, 2)
+
+
+def _to_json_compatible(value: Any) -> Any:
+    """把 Gateway Pydantic View 转成可直接交给模型/HTTP 层的 JSON 数据。"""
+
+    if isinstance(value, BaseModel):
+        return value.model_dump(mode="json", by_alias=True)
+    if isinstance(value, list):
+        return [_to_json_compatible(item) for item in value]
+    if isinstance(value, tuple):
+        return [_to_json_compatible(item) for item in value]
+    if isinstance(value, dict):
+        return {key: _to_json_compatible(item) for key, item in value.items()}
+    return value
+
+
+class EmptyToolInput(BaseModel):
+    """无参数工具仍使用严格模型，拒绝模型偷偷传入未定义字段。"""
+
+    model_config = ConfigDict(extra="forbid")

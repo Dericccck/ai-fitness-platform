@@ -55,3 +55,25 @@ Gateway 默认只接受 5 分钟以内的上下文。Agent 不得根据用户自
 | 408/429/5xx | 无固定 code 要求 | 有限指数退避，耗尽后转为不可用 |
 
 当前契约只开放读操作。创建预约、改约、取消预约必须新增确认凭证、幂等键、事务和审计字段后才允许加入。
+
+## Python Tool Registry v1
+
+Python Agent 不直接把模型输出转换成 HTTP 请求，而是先经过进程级 `ToolRegistry`。当前
+注册的工具 ID 为：
+
+```text
+fitness.user.get_current.v1
+fitness.organization.get.v1
+fitness.course.list.v1
+fitness.contract.list.v1
+fitness.appointment.list.v1
+```
+
+每个工具必须固定定义输入 Pydantic Schema、版本、描述、允许角色、是否只读和是否需要
+确认；调用时先拒绝未知工具和额外字段，再由固定适配器调用 `GatewayClient`。组织 ID、
+用户 ID 等参数即使通过 Schema，也只代表查询意图，最终资源权限仍由签名 `AgentContext`
+和 Java Gateway 重新校验。
+
+Agent 侧审计只记录工具 ID、成功/失败、请求 ID、Trace ID、耗时和稳定错误码，不记录原始
+参数、Tool View、Prompt 或签名上下文。后续 Supervisor 只能使用 Registry 暴露的工具
+Schema；写工具还必须在注册阶段声明确认要求，并在 Java Gateway 侧实现幂等和事务审计。
