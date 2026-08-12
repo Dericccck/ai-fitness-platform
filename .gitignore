@@ -15,6 +15,7 @@
 # Python Agent service
 /fitness-agent-service/.venv/
 /fitness-agent-service/.env
+/fitness-agent-service/var/
 /fitness-agent-service/**/__pycache__/
 /fitness-agent-service/.pytest_cache/
 /fitness-agent-service/.mypy_cache/

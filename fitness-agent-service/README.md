@@ -32,6 +32,10 @@
   扩展且同一父节点只注入一次，所有格式的表格子节点都会转为带表头的 Markdown 表示，
   并记录表格序号、页码/工作表和行范围。扫描型 PDF 当前会明确要求后续 OCR 流程，不会把
   空内容写入知识库。
+- 知识库管理：管理员上传先进入私有暂存区和 `PENDING_REVIEW`，审核通过后进入 `QUEUED`；
+  Worker 以数据库原子 Claim 进入 `INDEXING`，只有父子节点、Embedding 和发布事务完成后
+  才标记 `SUCCEEDED`。失败任务保留错误类型、尝试次数和审核记录，支持有限次数人工重试；
+  组织管理员只能看到签名组织范围内的组织知识，平台管理员才可管理全局知识。
 - Prometheus：低基数 HTTP 请求量、耗时、并发和构建信息指标。
 - OpenTelemetry：可选 OTLP/HTTP Trace 导出，默认关闭且不发送 Prompt 或用户档案。
 
@@ -103,6 +107,12 @@ RAG 表结构通过 `make agent-migrate` 显式升级，不在服务启动时自
 `organization_id`、`visibility`、`owner_user_id`、`allowed_roles` 和生效时间由数据库查询
 过滤，模型不能传入或改变这些权限条件；如果候选存在但 Reranker 未配置，检索会失败，不会
 静默退回向量分数排序。
+
+管理员知识库接口位于 `/api/v1/admin/knowledge`：上传使用 multipart 表单，审核接口为
+`/jobs/{job_id}/approve`、`/reject` 和 `/retry`，任务状态可通过 `/jobs` 或具体任务 ID
+查询。接口仍只接受认证服务签发的 `X-Agent-Context`，不会信任表单中的用户或角色字段。
+本地暂存目录默认是 `./var/rag-staging`，已加入 Git 忽略；生产环境应替换为带生命周期、
+加密、恶意文件扫描和访问审计的对象存储适配器。
 
 本地连接默认使用 Docker Compose 创建的 `fitness-agent-postgres`：宿主机
 `127.0.0.1:5433` 映射到容器 `5432`，数据库 `fitness_agent`，用户 `fitness_agent`。

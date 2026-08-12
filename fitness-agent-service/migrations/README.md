@@ -3,7 +3,7 @@
 Agent 服务的结构化数据、Memory、RAG 文档和向量索引统一使用 PostgreSQL + pgvector。
 正式业务表落地前，所有表结构必须通过 Alembic migration 管理，不允许依赖自动建表。
 
-当前已建立版本化知识文档、父节点和检索切片表。执行：
+当前已建立版本化知识文档、父节点、检索切片和可审核索引任务表。执行：
 
 ```bash
 make agent-migrate
@@ -11,6 +11,10 @@ make agent-migrate
 
 后续将继续增加长期 Memory、评测记录和索引重建任务表；训练计划领域表仍由 Java/MySQL
 业务迁移管理。
+
+`knowledge_ingestion_jobs` 记录上传审核、索引 Claim、失败和有限重试状态。上传任务不会
+直接写入可检索的 `knowledge_documents`，只有审核后的后台索引任务完成父子节点、Embedding
+和发布事务后才会成为 `PUBLISHED` 版本。
 
 文档写入由 Agent 服务的 `DocumentIngestionService` 执行：先清洗和切片，再调用真实 Embedding，
 最后通过 Repository 在事务内发布文档版本和切片；相同 checksum 会跳过索引，旧的已发布版本

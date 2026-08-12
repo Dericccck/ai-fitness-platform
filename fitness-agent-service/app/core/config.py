@@ -97,6 +97,8 @@ class Settings(BaseSettings):
     rag_chunk_max_chars: int = Field(default=1200, ge=400, le=4000)
     rag_chunk_overlap_chars: int = Field(default=120, ge=0, le=500)
     rag_max_source_bytes: int = Field(default=20 * 1024 * 1024, ge=1, le=100 * 1024 * 1024)
+    rag_staging_dir: str = "./var/rag-staging"
+    rag_ingestion_max_attempts: int = Field(default=3, ge=1, le=5)
 
     gateway_base_url: str = "http://127.0.0.1:8081"
     gateway_internal_service_token: str = ""

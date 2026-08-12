@@ -8,6 +8,7 @@ from starlette.responses import Response
 from app.agent.fitness_tools import build_fitness_tool_registry
 from app.agent.supervisor import Supervisor
 from app.api.middleware.request_context import RequestContextMiddleware
+from app.api.routes.admin_knowledge import router as admin_knowledge_router
 from app.api.routes.agent import router as agent_router
 from app.api.routes.health import router as health_router
 from app.core.config import get_settings
@@ -20,10 +21,13 @@ from app.infrastructure.database import CheckpointStore, Database
 from app.infrastructure.gateway_client import GatewayClient
 from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient
+from app.rag.admin_repository import KnowledgeIngestionRepository
+from app.rag.admin_service import KnowledgeAdminService
 from app.rag.formats import DocumentParserRegistry
 from app.rag.ingestion import DocumentIngestionService
 from app.rag.repository import KnowledgeRepository
 from app.rag.service import RagService
+from app.rag.storage import LocalDocumentStorage
 
 runtime_settings = get_settings()
 configure_logging(runtime_settings.log_level)
@@ -59,6 +63,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.models = ModelGateway(settings)
     app.state.reranker = RerankerClient(settings)
     app.state.knowledge_repository = KnowledgeRepository(app.state.database)
+    parser_registry = DocumentParserRegistry(max_source_bytes=settings.rag_max_source_bytes)
     app.state.rag_service = RagService(
         app.state.knowledge_repository,
         app.state.models,
@@ -73,9 +78,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.rag_service,
         max_chunk_chars=settings.rag_chunk_max_chars,
         overlap_chars=settings.rag_chunk_overlap_chars,
-        parser_registry=DocumentParserRegistry(
-            max_source_bytes=settings.rag_max_source_bytes,
-        ),
+        parser_registry=parser_registry,
+    )
+    app.state.knowledge_admin = KnowledgeAdminService(
+        KnowledgeIngestionRepository(app.state.database),
+        app.state.knowledge_repository,
+        app.state.document_ingestion,
+        LocalDocumentStorage(settings.rag_staging_dir),
+        parser_registry,
+        max_source_bytes=settings.rag_max_source_bytes,
+        max_attempts=settings.rag_ingestion_max_attempts,
     )
     app.state.gateway = GatewayClient(settings)
     # Tool Registry 是 Agent 调用业务能力的唯一入口。它在启动期完成固定工具注册，
@@ -122,6 +134,7 @@ if runtime_settings.metrics_enabled:
     app.add_middleware(MetricsMiddleware, metrics=http_metrics)
 app.add_middleware(RequestContextMiddleware, service_name=runtime_settings.service_name)
 app.include_router(agent_router)
+app.include_router(admin_knowledge_router)
 app.include_router(health_router)
 
 
