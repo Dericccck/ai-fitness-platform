@@ -94,6 +94,8 @@ class Settings(BaseSettings):
     rag_candidate_limit: int = Field(default=20, ge=1, le=100)
     rag_top_k: int = Field(default=5, ge=1, le=20)
     rag_embedding_batch_size: int = Field(default=32, ge=1, le=128)
+    rag_chunk_max_chars: int = Field(default=1200, ge=400, le=4000)
+    rag_chunk_overlap_chars: int = Field(default=120, ge=0, le=500)
 
     gateway_base_url: str = "http://127.0.0.1:8081"
     gateway_internal_service_token: str = ""

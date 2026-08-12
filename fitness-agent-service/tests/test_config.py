@@ -22,6 +22,8 @@ def test_provider_configuration_is_explicit() -> None:
     assert settings.gateway_configured is False
     assert settings.rag_candidate_limit == 20
     assert settings.rag_top_k == 5
+    assert settings.rag_chunk_max_chars == 1200
+    assert settings.rag_chunk_overlap_chars == 120
 
 
 def test_deepseek_environment_names_are_supported(monkeypatch) -> None:

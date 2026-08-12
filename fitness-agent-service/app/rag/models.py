@@ -53,6 +53,17 @@ class KnowledgeDocumentInput:
 
 
 @dataclass(frozen=True)
+class KnowledgeDocumentSnapshot:
+    """Current persisted version used to decide whether re-indexing is needed."""
+
+    id: str
+    source_uri: str
+    checksum: str
+    version: int
+    status: str
+
+
+@dataclass(frozen=True)
 class KnowledgeChunkInput:
     """Chunk input before persistence and embedding generation."""
 

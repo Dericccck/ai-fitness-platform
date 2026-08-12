@@ -10,7 +10,13 @@ from sqlalchemy import bindparam, text
 
 from app.infrastructure.database import Database
 
-from .models import KnowledgeChunk, KnowledgeChunkInput, KnowledgeDocumentInput, RetrievalScope
+from .models import (
+    KnowledgeChunk,
+    KnowledgeChunkInput,
+    KnowledgeDocumentInput,
+    KnowledgeDocumentSnapshot,
+    RetrievalScope,
+)
 
 
 class KnowledgeRepository:
@@ -24,6 +30,32 @@ class KnowledgeRepository:
 
     def __init__(self, database: Database) -> None:
         self._database = database
+
+    async def get_current_document(self, source_uri: str) -> KnowledgeDocumentSnapshot | None:
+        """Return the currently published version for an immutable source URI."""
+
+        statement = text(
+            """
+            SELECT id, source_uri, checksum, version, status
+            FROM knowledge_documents
+            WHERE source_uri = :source_uri AND status = 'PUBLISHED'
+            ORDER BY version DESC
+            LIMIT 1
+            """
+        )
+        async with self._database.engine.connect() as connection:
+            row = (
+                (await connection.execute(statement, {"source_uri": source_uri})).mappings().first()
+            )
+        if row is None:
+            return None
+        return KnowledgeDocumentSnapshot(
+            id=str(row["id"]),
+            source_uri=str(row["source_uri"]),
+            checksum=str(row["checksum"]),
+            version=int(row["version"]),
+            status=str(row["status"]),
+        )
 
     async def insert_chunks(
         self,
@@ -105,6 +137,15 @@ class KnowledgeRepository:
             """
         )
         delete_statement = text("DELETE FROM knowledge_chunks WHERE document_id = :document_id")
+        archive_statement = text(
+            """
+            UPDATE knowledge_documents
+            SET status = 'ARCHIVED', updated_at = CURRENT_TIMESTAMP
+            WHERE source_uri = :source_uri
+              AND id <> :document_id
+              AND status = 'PUBLISHED'
+            """
+        )
         chunk_statement = text(
             """
             INSERT INTO knowledge_chunks (
@@ -134,6 +175,13 @@ class KnowledgeRepository:
             "effective_to": document.effective_to,
         }
         async with self._database.engine.begin() as connection:
+            # Only one version of a source is searchable at a time. This is
+            # part of the same transaction as the new version, so a failed
+            # embedding write cannot hide the previously published version.
+            await connection.execute(
+                archive_statement,
+                {"source_uri": document.source_uri, "document_id": document.id},
+            )
             await connection.execute(document_statement, document_params)
             await connection.execute(delete_statement, {"document_id": document.id})
             await connection.execute(chunk_statement, _chunk_params(chunks, embeddings))

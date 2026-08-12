@@ -11,3 +11,7 @@ make agent-migrate
 
 后续将继续增加长期 Memory、评测记录和索引重建任务表；训练计划领域表仍由 Java/MySQL
 业务迁移管理。
+
+文档写入由 Agent 服务的 `DocumentIngestionService` 执行：先清洗和切片，再调用真实 Embedding，
+最后通过 Repository 在事务内发布文档版本和切片；相同 checksum 会跳过索引，旧的已发布版本
+会在新版本提交时归档。

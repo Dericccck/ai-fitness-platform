@@ -24,6 +24,8 @@
 - 会话持久化：PostgreSQL 保存 LangGraph Checkpoint，Redis 负责会话互斥锁和短期状态。
 - RAG 基础：Alembic 管理版本化知识文档、切片、租户/角色权限字段和 pgvector HNSW 索引；
   检索顺序固定为服务端权限过滤 → 向量候选召回 → 真实 Reranker → 带来源证据的 Agent 上下文。
+- 文档索引：`DocumentIngestionService` 负责 Markdown 清洗、标题/段落语义切片、checksum 去重、
+  稳定文档/切片 ID，以及新版本发布时的旧版本归档；Embedding 和切片写入受批次和事务边界控制。
 - Prometheus：低基数 HTTP 请求量、耗时、并发和构建信息指标。
 - OpenTelemetry：可选 OTLP/HTTP Trace 导出，默认关闭且不发送 Prompt 或用户档案。
 
@@ -95,6 +97,10 @@ RAG 表结构通过 `make agent-migrate` 显式升级，不在服务启动时自
 `organization_id`、`visibility`、`owner_user_id`、`allowed_roles` 和生效时间由数据库查询
 过滤，模型不能传入或改变这些权限条件；如果候选存在但 Reranker 未配置，检索会失败，不会
 静默退回向量分数排序。
+
+本地连接默认使用 Docker Compose 创建的 `fitness-agent-postgres`：宿主机
+`127.0.0.1:5433` 映射到容器 `5432`，数据库 `fitness_agent`，用户 `fitness_agent`。
+连接配置位于 `AGENT_DATABASE_URL`；PostgreSQL 镜像为 `pgvector/pgvector:pg16`。
 
 ## 生产镜像
 

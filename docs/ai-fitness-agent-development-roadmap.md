@@ -459,7 +459,7 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 
 ### 阶段 4：企业级 RAG
 
-状态：RAG 基础数据模型、pgvector 权限过滤召回、真实 Embedding/Reranker 编排已完成首个可验证切片；文档解析、增量索引、混合检索、完整引用 API 和离线评测待继续建设。
+状态：RAG 基础数据模型、pgvector 权限过滤召回、真实 Embedding/Reranker 编排、Markdown 清洗切片和 checksum 增量索引已完成首个可验证切片；混合检索、完整引用 API 和离线评测待继续建设。
 
 工作内容：
 
@@ -467,6 +467,8 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 - 已建立 Alembic 迁移：知识文档、版本状态、切片、组织/角色/用户范围、生效时间和 pgvector HNSW 索引。
 - 已实现 RAG 领域接口：Embedding 批处理、服务端权限过滤、候选召回、真实 Reranker 和来源证据渲染。
 - 已把 Fitness 路由的检索证据接入 Supervisor；Reranker 未配置时不允许静默降级。
+- 已实现 Markdown 文档清洗、标题/段落切片、稳定文档/切片 ID、checksum 去重和旧版本归档。
+- 已完成本地 PostgreSQL/pgvector 真实集成验证：写入一条临时知识切片后，组织/角色权限过滤通过并清理测试数据。
 - 接入文档解析、清洗和增量索引流程。
 - 实现关键词与向量混合召回、元数据过滤和 Reranker。
 - 建立引用、知识过期、重建索引和质量评测。
@@ -667,12 +669,13 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 - Prometheus Metrics、OpenTelemetry OTLP Trace 导出和本地 Collector。
 - 非 root 多阶段 Agent 生产镜像及容器存活、Metrics 冒烟验证。
 - 阶段 4 RAG 首个可验证切片：知识文档/切片/权限元数据迁移、1536 维 pgvector HNSW
-  索引、服务端权限过滤、Embedding 批处理、真实 Reranker 和来源证据注入 Supervisor。
+  索引、服务端权限过滤、Embedding 批处理、真实 Reranker、来源证据注入 Supervisor，
+  以及 Markdown 清洗、切片和 checksum 增量索引。
 
 下一步按顺序执行：
 
-1. 建立健身知识文档解析、清洗、语义切片和增量索引任务。
-2. 增加混合检索、索引重建、引用 API 和离线 RAG 评测。
+1. 增加混合检索、索引重建、引用 API 和离线 RAG 评测。
+2. 将文档索引接入管理员知识库上传/审核流程，并补充失败重试和任务状态。
 3. 在 RAG 骨架上接入预约写工具、确认凭证、幂等和审计。
 4. 建立训练领域表、训练 Tool Gateway 和 Fitness Agent 的结构化计划流程。
 5. 再推进 Operations Agent、Memory 和主动提醒等后续阶段。
