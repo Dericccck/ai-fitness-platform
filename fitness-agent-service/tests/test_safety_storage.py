@@ -4,7 +4,13 @@ from zipfile import ZipFile
 import pytest
 
 from app.rag.formats import DocumentParserRegistry, ParsedBlock, ParsedDocument
-from app.rag.safety import DocumentSafetyError, StructuralDocumentScanner
+from app.rag.safety import (
+    ClamAvScanner,
+    CompositeDocumentScanner,
+    DocumentSafetyError,
+    DocumentSecurityUnavailable,
+    StructuralDocumentScanner,
+)
 from app.rag.storage import DocumentStorageError, LocalDocumentStorage
 
 
@@ -46,7 +52,9 @@ def test_pdf_parser_can_receive_an_injected_ocr_provider() -> None:
     writer.write(payload)
 
     class FakeOcr:
-        def parse(self, content: bytes, *, file_name: str) -> ParsedDocument:
+        def parse(
+            self, content: bytes, *, file_name: str, pages: tuple[int, ...] = ()
+        ) -> ParsedDocument:
             return ParsedDocument(
                 blocks=(ParsedBlock(kind="TEXT", content="OCR warmup", source_page=1),),
                 media_type="application/pdf",
@@ -57,3 +65,53 @@ def test_pdf_parser_can_receive_an_injected_ocr_provider() -> None:
     )
 
     assert parsed.blocks[0].content == "OCR warmup"
+
+
+def test_composite_scanner_records_external_clean_verdict() -> None:
+    class FakeMalwareScanner:
+        def scan(self, file_name: str, content: bytes):
+            from app.rag.safety import MalwareScanResult
+
+            return MalwareScanResult("CLEAN", "fake-clamav", scanned_at=None)
+
+    result = CompositeDocumentScanner(StructuralDocumentScanner(), FakeMalwareScanner()).scan(
+        "guide.md", b"# Warmup"
+    )
+
+    assert result.status == "CLEAN"
+    assert result.malware_status == "CLEAN"
+    assert result.malware_scanner == "fake-clamav"
+
+
+def test_clamav_scanner_rejects_infected_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeConnection:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return None
+
+        def sendall(self, data: bytes) -> None:
+            return None
+
+        def recv(self, size: int) -> bytes:
+            return b"stream: Eicar-Test-Signature FOUND\n"
+
+    monkeypatch.setattr(
+        "app.rag.safety.socket.create_connection", lambda address, timeout: FakeConnection()
+    )
+
+    with pytest.raises(DocumentSafetyError, match="malware detected"):
+        ClamAvScanner("clamav").scan("guide.md", b"# Warmup")
+
+
+def test_clamav_scanner_fails_closed_when_service_is_unavailable(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def unavailable(address, timeout):
+        raise OSError("connection refused")
+
+    monkeypatch.setattr("app.rag.safety.socket.create_connection", unavailable)
+
+    with pytest.raises(DocumentSecurityUnavailable, match="unavailable"):
+        ClamAvScanner("clamav").scan("guide.md", b"# Warmup")

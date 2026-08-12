@@ -17,7 +17,7 @@ from .admin_repository import KnowledgeIngestionRepository
 from .formats import DocumentParserRegistry
 from .ingestion import DocumentIngestionService, IngestionRequest
 from .repository import KnowledgeRepository
-from .safety import StructuralDocumentScanner
+from .safety import DocumentScanner, StructuralDocumentScanner
 from .storage import DocumentStorage
 
 ADMIN_ROLES = frozenset({"ADMIN", "ORG_ADMIN", "SUPER_ADMIN"})
@@ -40,7 +40,7 @@ class KnowledgeAdminService:
         ingestion: DocumentIngestionService,
         storage: DocumentStorage,
         parser_registry: DocumentParserRegistry,
-        safety_scanner: StructuralDocumentScanner | None = None,
+        safety_scanner: DocumentScanner | None = None,
         *,
         max_source_bytes: int,
         max_attempts: int = 3,
@@ -112,6 +112,10 @@ class KnowledgeAdminService:
             content_sha256=safety_result.sha256,
             safety_status=safety_result.status,
             scanner_name=safety_result.scanner_name,
+            malware_status=safety_result.malware_status,
+            malware_scanner=safety_result.malware_scanner,
+            malware_signature=safety_result.malware_signature,
+            malware_scanned_at=safety_result.malware_scanned_at,
         )
         return await self.jobs.create_job(job=job)
 

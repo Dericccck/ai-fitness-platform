@@ -24,13 +24,14 @@ from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient
 from app.rag.admin_repository import KnowledgeIngestionRepository
 from app.rag.admin_service import KnowledgeAdminService
-from app.rag.formats import DocumentParserRegistry
+from app.rag.formats import DocumentParserRegistry, PdfOcrProvider
 from app.rag.ingestion import DocumentIngestionService
+from app.rag.ocr import HttpPdfOcrProvider
 from app.rag.reindex_repository import KnowledgeReindexRepository
 from app.rag.reindex_service import KnowledgeReindexService
 from app.rag.reindex_worker import KnowledgeReindexWorker
 from app.rag.repository import KnowledgeRepository
-from app.rag.safety import StructuralDocumentScanner
+from app.rag.safety import ClamAvScanner, CompositeDocumentScanner, StructuralDocumentScanner
 from app.rag.service import RagService
 from app.rag.storage import DocumentStorage, LocalDocumentStorage, S3DocumentStorage
 from app.rag.worker import KnowledgeIngestionWorker
@@ -69,7 +70,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.models = ModelGateway(settings)
     app.state.reranker = RerankerClient(settings)
     app.state.knowledge_repository = KnowledgeRepository(app.state.database)
-    parser_registry = DocumentParserRegistry(max_source_bytes=settings.rag_max_source_bytes)
+    parser_registry = DocumentParserRegistry(
+        max_source_bytes=settings.rag_max_source_bytes,
+        pdf_ocr_provider=_build_ocr_provider(settings),
+    )
     app.state.rag_service = RagService(
         app.state.knowledge_repository,
         app.state.models,
@@ -98,7 +102,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.document_ingestion,
         document_storage,
         parser_registry,
-        StructuralDocumentScanner(),
+        _build_document_scanner(settings),
         max_source_bytes=settings.rag_max_source_bytes,
         max_attempts=settings.rag_ingestion_max_attempts,
     )
@@ -182,6 +186,32 @@ def _build_document_storage(settings: Settings) -> DocumentStorage:
         access_key=settings.rag_s3_access_key,
         secret_key=settings.rag_s3_secret_key,
     )
+
+
+def _build_ocr_provider(settings: Settings) -> PdfOcrProvider | None:
+    """Build the configured OCR boundary and fail startup on incomplete production config."""
+
+    if settings.rag_ocr_backend == "disabled":
+        return None
+    return HttpPdfOcrProvider(
+        settings.rag_ocr_endpoint_url,
+        api_key=settings.rag_ocr_api_key,
+        timeout_seconds=settings.rag_ocr_timeout_seconds,
+        max_response_bytes=settings.rag_ocr_max_response_bytes,
+    )
+
+
+def _build_document_scanner(settings: Settings) -> CompositeDocumentScanner:
+    """Compose deterministic checks with the selected fail-closed malware service."""
+
+    malware_scanner = None
+    if settings.rag_malware_scanner_backend == "clamav":
+        malware_scanner = ClamAvScanner(
+            settings.rag_clamav_host,
+            port=settings.rag_clamav_port,
+            timeout_seconds=settings.rag_clamav_timeout_seconds,
+        )
+    return CompositeDocumentScanner(StructuralDocumentScanner(), malware_scanner)
 
 
 @app.get("/metrics", include_in_schema=False)

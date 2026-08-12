@@ -55,8 +55,14 @@ class DocumentParser(Protocol):
 class PdfOcrProvider(Protocol):
     """OCR boundary for scanned PDFs; implementation belongs to a dedicated service."""
 
-    def parse(self, content: bytes, *, file_name: str) -> ParsedDocument:
-        """Return structure-preserving OCR blocks for one PDF."""
+    def parse(
+        self,
+        content: bytes,
+        *,
+        file_name: str,
+        pages: Sequence[int] = (),
+    ) -> ParsedDocument:
+        """Return structure-preserving OCR blocks for selected PDF pages."""
 
 
 class DocumentParserRegistry:
@@ -131,6 +137,7 @@ class PdfParser:
 
         blocks: list[ParsedBlock] = []
         warnings: list[str] = []
+        missing_pages: list[int] = []
         with pdfplumber.open(BytesIO(content)) as document:
             for page_number, page in enumerate(document.pages, start=1):
                 text = (page.extract_text(layout=True) or "").strip()
@@ -157,7 +164,16 @@ class PdfParser:
                             )
                         )
                 if not text and not tables:
+                    missing_pages.append(page_number)
                     warnings.append(f"page {page_number} has no extractable text or table")
+        if missing_pages and self.ocr_provider is not None:
+            ocr_document = self.ocr_provider.parse(
+                content,
+                file_name=file_name,
+                pages=tuple(missing_pages),
+            )
+            blocks.extend(ocr_document.blocks)
+            warnings.extend(ocr_document.warnings)
         if not blocks:
             if self.ocr_provider is not None:
                 return self.ocr_provider.parse(content, file_name=file_name)

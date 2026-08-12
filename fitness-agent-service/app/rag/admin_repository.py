@@ -35,13 +35,15 @@ class KnowledgeIngestionRepository:
                 id, source_uri, original_filename, storage_key, content_type, size_bytes,
                 title, document_type, organization_id, owner_user_id, visibility, allowed_roles,
                 effective_from, effective_to, requested_version, submitted_by, status,
-                attempt_count, max_attempts, content_sha256, safety_status, scanner_name
+                attempt_count, max_attempts, content_sha256, safety_status, scanner_name,
+                malware_status, malware_scanner, malware_signature, malware_scanned_at
             ) VALUES (
                 :id, :source_uri, :original_filename, :storage_key, :content_type, :size_bytes,
                 :title, :document_type, :organization_id, :owner_user_id, :visibility,
                 :allowed_roles, :effective_from, :effective_to, :requested_version,
                 :submitted_by, 'PENDING_REVIEW', 0, :max_attempts, :content_sha256,
-                :safety_status, :scanner_name
+                :safety_status, :scanner_name, :malware_status, :malware_scanner,
+                :malware_signature, :malware_scanned_at
             )
             RETURNING *
             """
@@ -276,4 +278,8 @@ def _job_params(job: KnowledgeIngestionJob) -> dict[str, Any]:
         "content_sha256": job.content_sha256,
         "safety_status": job.safety_status,
         "scanner_name": job.scanner_name,
+        "malware_status": job.malware_status,
+        "malware_scanner": job.malware_scanner,
+        "malware_signature": job.malware_signature,
+        "malware_scanned_at": job.malware_scanned_at,
     }

@@ -460,8 +460,8 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 ### 阶段 4：企业级 RAG
 
 状态：RAG 基础数据模型、pgvector 权限过滤召回、真实 Embedding/Reranker 编排、统一多格式解析、
-Markdown/DOCX/PDF/XLSX 清洗切片、checksum 增量索引和父子节点扩展已完成首个可验证切片；
-混合检索、完整引用 API、OCR 和离线评测待继续建设。
+Markdown/DOCX/PDF/XLSX 清洗切片、checksum 增量索引、父子节点扩展、混合检索、完整引用 API、
+OCR 适配器和离线评测门禁已完成可验证切片；真实 OCR/ClamAV 服务联调和评测数据持续扩充待继续。
 
 工作内容：
 
@@ -473,15 +473,16 @@ Markdown/DOCX/PDF/XLSX 清洗切片、checksum 增量索引和父子节点扩展
 - 已增加 `knowledge_parents` 和 `parent_id`：子节点负责召回，父节点负责补充章节/表格上下文；表格子节点重复表头并记录行范围。
 - 已完成本地 PostgreSQL/pgvector 真实集成验证：写入一条临时知识切片后，组织/角色权限过滤通过并清理测试数据。
 - 已接入统一文档解析、清洗和增量索引流程：支持 Markdown/TXT、PDF、DOCX、XLSX；解析器保留
-  标题层级、PDF 页码、XLSX 工作表、表格序号和行范围，扫描 PDF 明确进入 OCR 待处理错误分支。
+  标题层级、PDF 页码、XLSX 工作表、表格序号和行范围；扫描型和混合型 PDF 的缺失页可进入
+  HTTP OCR 服务。
 - 已将多格式解析结果接入父子节点切片，来源坐标写入结构化引用元数据；增加真实 DOCX/XLSX
   样例、扫描 PDF、大小限制和表格边界测试。
 - 已建立管理员知识库闭环：上传暂存、签名管理员校验、组织范围校验、审核/拒绝、数据库原子
   Claim、索引成功/失败状态和有限次数人工重试；任务失败不会伪装成知识发布成功。
 - 已建立对象存储适配边界：本地目录与 S3-compatible/MinIO 实现可配置切换；上传前增加文件
   签名、UTF-8、Office ZIP 路径/宏/加密/解压大小和 SHA-256 安全检查；增加有界 Worker 轮询
-  入口和超过重试上限后的 FAILED 死信语义。OCR 目前只提供注入式 Provider 边界，尚未接真实
-  OCR 服务或外部杀毒服务。
+  入口和超过重试上限后的 FAILED 死信语义；已增加 ClamAV `INSTREAM` 外部杀毒适配器和独立
+  malware verdict 审计字段，外部服务不可用时 fail-closed。
 - 已增加关键词与向量混合召回：PostgreSQL `tsvector`/`pg_trgm` 与 pgvector 并行执行权限过滤，
   服务层使用 RRF 融合后再调用真实 Reranker；新增带页码、工作表、行范围的引用 API，以及
   Recall@K/MRR 离线评测骨架和健身检索样例。
@@ -692,11 +693,13 @@ Markdown/DOCX/PDF/XLSX 清洗切片、checksum 增量索引和父子节点扩展
   流程，记录文档级成功/跳过/失败状态并支持有限重试。
 - RAG 评测门禁：增加黄金结果回归集、Recall@K/MRR 最低阈值和越权 ID 零容忍检查，已接入本地
   Make 命令与 GitHub Actions。
+- 文件安全与 OCR：增加 ClamAV `INSTREAM`、HTTP OCR、扫描型/混合型 PDF 缺失页处理，以及
+  独立 malware verdict 审计字段；生产环境配置真实服务地址后即可切换。
 
 下一步按顺序执行：
 
-1. 接入真实对象存储生命周期、ClamAV/云端文件扫描和 OCR 服务，并将 Worker 部署为独立进程。
-2. 接入真实 OCR/外部文件安全服务，并把评测集自动化门禁接入 CI。
+1. 接入真实对象存储生命周期，并将 Worker 部署为独立进程。
+2. 把 OCR/ClamAV 适配器接入实际部署网络，补充真实服务联调和评测集自动化门禁的持续数据扩充。
 3. 在 RAG 骨架上接入预约写工具、确认凭证、幂等和审计。
 4. 建立训练领域表、训练 Tool Gateway 和 Fitness Agent 的结构化计划流程。
 5. 再推进 Operations Agent、Memory 和主动提醒等后续阶段。

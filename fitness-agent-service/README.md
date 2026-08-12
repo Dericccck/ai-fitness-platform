@@ -42,8 +42,12 @@
   组织管理员只能看到签名组织范围内的组织知识，平台管理员才可管理全局知识。
 - 文件安全与存储：上传会在解析和存储前执行 UTF-8、文件签名、Office ZIP 路径、加密包、
   符号链接、宏文件和解压大小检查，并记录 SHA-256 与扫描器版本。存储支持本地适配器和
-  S3-compatible/MinIO 适配器；当前结构扫描不是杀毒引擎，生产环境必须接入 ClamAV 或云端
-  文件安全服务。
+  S3-compatible/MinIO 适配器；生产配置可通过 ClamAV `INSTREAM` 协议执行真实杀毒，扫描
+  不可用时默认 fail-closed，不会把文件写入暂存区。结构检查 verdict 与 malware verdict
+  分开审计。
+- OCR：`HttpPdfOcrProvider` 通过独立 HTTP OCR 服务处理扫描型或混合型 PDF，只请求缺失页，
+  严格校验服务返回的文本块、页码、表格和元数据后才进入父子节点切片；OCR 服务不可用或
+  响应不符合契约时，上传不会进入审核队列。
 - 索引 Worker：`KnowledgeIngestionWorker` 提供有界轮询入口，任务通过 PostgreSQL 原子 Claim
   防止重复执行；超过重试上限的 `FAILED` 任务即为死信状态，后续可由独立 Worker Deployment
   或队列消费者接管，不依赖单个 API 进程内存。
@@ -132,6 +136,19 @@ RAG 表结构通过 `make agent-migrate` 显式升级，不在服务启动时自
 本地可通过 `make infra-up-storage` 启动 MinIO；将 `AGENT_RAG_STORAGE_BACKEND` 改为 `s3`
 并填写 S3 配置后，上传对象会写入 `knowledge/` 前缀。MinIO 账号只用于本地开发，生产环境
 必须使用 Secret Manager 注入独立凭证。
+
+生产环境至少需要配置：
+
+```text
+AGENT_RAG_MALWARE_SCANNER_BACKEND=clamav
+AGENT_RAG_CLAMAV_HOST=<private-clamav-service>
+AGENT_RAG_OCR_BACKEND=http
+AGENT_RAG_OCR_ENDPOINT_URL=<private-ocr-service>/v1/parse
+```
+
+OCR 服务需要返回 `media_type`、`warnings` 和 `blocks` 数组；每个 block 至少包含 `kind` 和
+`content`，可附带 `source_page`、`heading_path`、`table_index`、`row_start`、`row_end`。
+完整协议适配代码见 `app/rag/ocr.py`。
 
 索引重建任务只读取已审核文件，复用当前解析、清洗、父子分块、Embedding 和原子替换流程，
 用于 Embedding 模型升级、切分策略调整或索引修复，不会直接修改 Java 健身业务事实。

@@ -28,6 +28,8 @@ from app.rag.admin_models import (
     KnowledgeReindexNotFound,
     KnowledgeUploadMetadata,
 )
+from app.rag.ocr import OcrServiceUnavailable
+from app.rag.safety import DocumentSecurityUnavailable
 
 router = APIRouter(prefix="/api/v1/admin/knowledge", tags=["admin-knowledge"])
 
@@ -59,6 +61,10 @@ class KnowledgeJobResponse(BaseModel):
     content_sha256: str
     safety_status: str
     scanner_name: str
+    malware_status: str
+    malware_scanner: str
+    malware_signature: str | None
+    malware_scanned_at: datetime | None
     created_at: datetime | None
     updated_at: datetime | None
     reviewed_at: datetime | None
@@ -156,6 +162,16 @@ async def upload_document(
         )
     except KnowledgeAdminForbidden as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except DocumentSecurityUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="malware scanner is temporarily unavailable",
+        ) from exc
+    except OcrServiceUnavailable as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="OCR service is temporarily unavailable",
+        ) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
@@ -416,6 +432,10 @@ def _to_response(job: KnowledgeIngestionJob) -> KnowledgeJobResponse:
         content_sha256=job.content_sha256,
         safety_status=job.safety_status,
         scanner_name=job.scanner_name,
+        malware_status=job.malware_status,
+        malware_scanner=job.malware_scanner,
+        malware_signature=job.malware_signature,
+        malware_scanned_at=job.malware_scanned_at,
         created_at=job.created_at,
         updated_at=job.updated_at,
         reviewed_at=job.reviewed_at,

@@ -4,13 +4,20 @@ from __future__ import annotations
 
 import hashlib
 import io
+import socket
 import zipfile
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from pathlib import PurePosixPath
+from typing import Protocol
 
 
 class DocumentSafetyError(ValueError):
     """The upload is malformed, unsafe, or violates archive expansion limits."""
+
+
+class DocumentSecurityUnavailable(DocumentSafetyError):
+    """The configured external malware service cannot provide a safe verdict."""
 
 
 @dataclass(frozen=True)
@@ -20,6 +27,34 @@ class SafetyScanResult:
     sha256: str
     status: str
     scanner_name: str
+    malware_status: str = "NOT_CONFIGURED"
+    malware_scanner: str = "not-configured"
+    malware_signature: str | None = None
+    malware_scanned_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class MalwareScanResult:
+    """External malware verdict stored separately from deterministic structure checks."""
+
+    status: str
+    scanner_name: str
+    signature: str | None = None
+    scanned_at: datetime | None = None
+
+
+class DocumentScanner(Protocol):
+    """Combined upload safety scanner contract used by the admin workflow."""
+
+    def scan(self, file_name: str, content: bytes) -> SafetyScanResult:
+        """Return auditable structural and malware results."""
+
+
+class MalwareScanner(Protocol):
+    """Synchronous malware scanning boundary called before object storage."""
+
+    def scan(self, file_name: str, content: bytes) -> MalwareScanResult:
+        """Return a clean verdict or raise a fail-closed safety error."""
 
 
 class StructuralDocumentScanner:
@@ -83,3 +118,86 @@ class StructuralDocumentScanner:
                     raise DocumentSafetyError("office archive is corrupted")
         except zipfile.BadZipFile as exc:
             raise DocumentSafetyError("office document is not a valid ZIP package") from exc
+
+
+class ClamAvScanner:
+    """Scan bytes through ClamAV's daemon ``INSTREAM`` protocol.
+
+    The adapter does not write uploads to a temporary path. It streams bounded chunks
+    over a private TCP connection and fails closed when ClamAV is unavailable, so a
+    production deployment cannot silently turn off malware protection because the
+    scanning service is unhealthy.
+    """
+
+    def __init__(
+        self,
+        host: str,
+        port: int = 3310,
+        timeout_seconds: float = 10.0,
+        *,
+        chunk_size: int = 1024 * 1024,
+    ) -> None:
+        self.host = host
+        self.port = port
+        self.timeout_seconds = timeout_seconds
+        self.chunk_size = chunk_size
+
+    def scan(self, file_name: str, content: bytes) -> MalwareScanResult:
+        """Send one in-memory upload to ClamAV and parse its stable stream response."""
+
+        try:
+            with socket.create_connection(
+                (self.host, self.port), timeout=self.timeout_seconds
+            ) as connection:
+                connection.sendall(b"zINSTREAM\0")
+                for start in range(0, len(content), self.chunk_size):
+                    chunk = content[start : start + self.chunk_size]
+                    connection.sendall(len(chunk).to_bytes(4, "big"))
+                    connection.sendall(chunk)
+                connection.sendall((0).to_bytes(4, "big"))
+                response = connection.recv(4096).decode("utf-8", errors="replace").strip()
+        except OSError as exc:
+            raise DocumentSecurityUnavailable("malware scanner is unavailable") from exc
+
+        if not response.startswith("stream:"):
+            raise DocumentSafetyError("malware scanner returned an invalid response")
+        verdict = response.removeprefix("stream:").strip()
+        if verdict.endswith(" FOUND"):
+            signature = verdict.removesuffix(" FOUND").strip() or None
+            raise DocumentSafetyError(f"malware detected: {signature or 'unknown signature'}")
+        if verdict != "OK":
+            raise DocumentSafetyError("malware scanner returned an unsafe verdict")
+        return MalwareScanResult(
+            status="CLEAN",
+            scanner_name="clamav-instream",
+            scanned_at=datetime.now(UTC),
+        )
+
+
+class CompositeDocumentScanner:
+    """Run deterministic checks and an external malware scanner in sequence."""
+
+    def __init__(
+        self,
+        structural_scanner: StructuralDocumentScanner,
+        malware_scanner: MalwareScanner | None = None,
+    ) -> None:
+        self.structural_scanner = structural_scanner
+        self.malware_scanner = malware_scanner
+
+    def scan(self, file_name: str, content: bytes) -> SafetyScanResult:
+        """Preserve the structural identity while adding the external security verdict."""
+
+        structural = self.structural_scanner.scan(file_name, content)
+        if self.malware_scanner is None:
+            return structural
+        malware = self.malware_scanner.scan(file_name, content)
+        return SafetyScanResult(
+            sha256=structural.sha256,
+            status="CLEAN",
+            scanner_name=f"{structural.scanner_name}+{malware.scanner_name}",
+            malware_status=malware.status,
+            malware_scanner=malware.scanner_name,
+            malware_signature=malware.signature,
+            malware_scanned_at=malware.scanned_at,
+        )

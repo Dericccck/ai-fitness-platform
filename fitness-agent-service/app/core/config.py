@@ -112,6 +112,15 @@ class Settings(BaseSettings):
     rag_ingestion_worker_batch_size: int = Field(default=10, ge=1, le=100)
     rag_reindex_worker_batch_size: int = Field(default=2, ge=1, le=20)
     rag_reindex_worker_poll_seconds: float = Field(default=2.0, ge=0.1, le=60)
+    rag_ocr_backend: Literal["disabled", "http"] = "disabled"
+    rag_ocr_endpoint_url: str = ""
+    rag_ocr_api_key: str = ""
+    rag_ocr_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
+    rag_ocr_max_response_bytes: int = Field(default=20 * 1024 * 1024, ge=1, le=100 * 1024 * 1024)
+    rag_malware_scanner_backend: Literal["structural", "clamav"] = "structural"
+    rag_clamav_host: str = "127.0.0.1"
+    rag_clamav_port: int = Field(default=3310, ge=1, le=65535)
+    rag_clamav_timeout_seconds: float = Field(default=10.0, gt=0, le=120)
 
     gateway_base_url: str = "http://127.0.0.1:8081"
     gateway_internal_service_token: str = ""

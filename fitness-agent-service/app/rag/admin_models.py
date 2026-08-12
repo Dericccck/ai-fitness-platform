@@ -56,6 +56,10 @@ class KnowledgeIngestionJob:
     content_sha256: str = ""
     safety_status: str = "STRUCTURAL_VALIDATED"
     scanner_name: str = "structural-v1"
+    malware_status: str = "NOT_CONFIGURED"
+    malware_scanner: str = "not-configured"
+    malware_signature: str | None = None
+    malware_scanned_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -203,6 +207,10 @@ def job_from_row(row: Any) -> KnowledgeIngestionJob:
         content_sha256=str(row["content_sha256"] or ""),
         safety_status=str(row["safety_status"] or "UNKNOWN"),
         scanner_name=str(row["scanner_name"] or "unknown"),
+        malware_status=str(row.get("malware_status") or "UNKNOWN"),
+        malware_scanner=str(row.get("malware_scanner") or "unknown"),
+        malware_signature=str(row["malware_signature"]) if row.get("malware_signature") else None,
+        malware_scanned_at=row.get("malware_scanned_at"),
     )
 
 
