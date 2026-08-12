@@ -4,7 +4,7 @@ AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-security-check agent-run agent-reindex-worker agent-image knowledge-manifest knowledge-validate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-security-check agent-run agent-reindex-worker agent-image knowledge-manifest knowledge-validate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
@@ -113,6 +113,10 @@ knowledge-submit-review:
 
 knowledge-approve-safe:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/approve_knowledge_review.py
+
+knowledge-retire-reference:
+	@test -n "$(KNOWLEDGE_FILE_NAME)" || (echo "请设置 KNOWLEDGE_FILE_NAME，例如 Physical_Activity_Guidelines_2nd_edition_Presentation.pdf"; exit 1)
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/retire_knowledge_source.py --file-name "$(KNOWLEDGE_FILE_NAME)"
 
 gateway-check:
 	./mvnw --batch-mode -f fitness-core-gateway/pom.xml clean test

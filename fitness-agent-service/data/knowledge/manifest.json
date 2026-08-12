@@ -1,6 +1,6 @@
 {
   "schema_version": 1,
-  "generated_at": "2026-08-12T12:22:24+00:00",
+  "generated_at": "2026-08-12T15:01:46+00:00",
   "raw_root": "data/knowledge/raw",
   "entry_count": 21,
   "entries": [
@@ -265,8 +265,8 @@
       "source_authority": "U.S. HHS ODPHP",
       "source_url": "https://odphp.health.gov/our-work/nutrition-physical-activity/physical-activity-guidelines/current-guidelines",
       "source_license": "按 WHO 或 U.S. HHS ODPHP 来源页面的版权和署名要求使用",
-      "indexable": true,
-      "status": "PENDING_REVIEW"
+      "indexable": false,
+      "status": "REFERENCE_ONLY"
     },
     {
       "relative_path": "data/knowledge/raw/international-guidelines/WHO guidelines on physical activity and sedentary behaviour.pdf",

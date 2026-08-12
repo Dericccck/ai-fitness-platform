@@ -58,6 +58,55 @@ class KnowledgeRepository:
             status=str(row["status"]),
         )
 
+    async def archive_source(self, source_uri: str) -> tuple[int, int, int]:
+        """下线一个来源并删除其派生父子节点，保留文档版本审计记录。"""
+
+        select_statement = text(
+            """
+            SELECT id
+            FROM knowledge_documents
+            WHERE source_uri = :source_uri AND status = 'PUBLISHED'
+            FOR UPDATE
+            """
+        )
+        async with self._database.engine.begin() as connection:
+            document_ids = [
+                str(row["id"])
+                for row in (
+                    await connection.execute(select_statement, {"source_uri": source_uri})
+                ).mappings()
+            ]
+            if not document_ids:
+                return 0, 0, 0
+            document_id_params = {"document_ids": tuple(document_ids)}
+            chunk_result = await connection.execute(
+                text("DELETE FROM knowledge_chunks WHERE document_id IN :document_ids").bindparams(
+                    bindparam("document_ids", expanding=True)
+                ),
+                document_id_params,
+            )
+            parent_result = await connection.execute(
+                text("DELETE FROM knowledge_parents WHERE document_id IN :document_ids").bindparams(
+                    bindparam("document_ids", expanding=True)
+                ),
+                document_id_params,
+            )
+            document_result = await connection.execute(
+                text(
+                    """
+                    UPDATE knowledge_documents
+                    SET status = 'ARCHIVED', updated_at = CURRENT_TIMESTAMP
+                    WHERE id IN :document_ids
+                    """
+                ).bindparams(bindparam("document_ids", expanding=True)),
+                document_id_params,
+            )
+        return (
+            int(document_result.rowcount or 0),
+            int(parent_result.rowcount or 0),
+            int(chunk_result.rowcount or 0),
+        )
+
     async def insert_chunks(
         self,
         chunks: Sequence[KnowledgeChunkInput],

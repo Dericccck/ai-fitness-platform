@@ -14,6 +14,7 @@ RAW_ROOT = SERVICE_ROOT / "data" / "knowledge" / "raw"
 MANIFEST_PATH = SERVICE_ROOT / "data" / "knowledge" / "manifest.json"
 
 READ_ROLES = ["SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH", "STUDENT"]
+REFERENCE_ONLY_FILES = frozenset({"Physical_Activity_Guidelines_2nd_edition_Presentation.pdf"})
 
 # 来源 URL 固定记录在清单中，避免后续重新导入时丢失来源链路。
 SOURCE_URLS = {
@@ -127,7 +128,21 @@ def metadata_for(category: str, file_name: str, suffix: str) -> dict[str, Any]:
         source_authority = "U.S. HHS ODPHP"
         license_note = "仅作为人工参考，当前解析器不直接入库"
 
-    indexable = suffix in {".pdf", ".docx", ".xlsx", ".md", ".markdown", ".txt"}
+    # reference-not-indexed 目录中的文件只保留人工参考，即使扩展名本身受支持，
+    # 也不能因为“能解析”就自动进入 RAG，避免版式复杂的演示文稿污染检索库。
+    indexable = (
+        file_name not in REFERENCE_ONLY_FILES
+        and category != "reference-not-indexed"
+        and suffix
+        in {
+            ".pdf",
+            ".docx",
+            ".xlsx",
+            ".md",
+            ".markdown",
+            ".txt",
+        }
+    )
     source_url = SOURCE_URLS.get(file_name)
     if source_url is None:
         raise ValueError(f"未配置来源 URL：{file_name}")
