@@ -36,3 +36,18 @@ def test_deepseek_environment_names_are_supported(monkeypatch) -> None:
     assert settings.llm_api_key == "deepseek-key"
     assert settings.llm_model == "deepseek-chat"
     assert settings.llm_base_url == "https://api.deepseek.com"
+
+
+def test_local_embedding_and_reranker_configuration_is_explicit() -> None:
+    settings = Settings(
+        _env_file=None,
+        embedding_backend="local",
+        embedding_model_path="/models/bge-m3",
+        embedding_dimensions=1024,
+        reranker_backend="local",
+        reranker_model_path="/models/bge-reranker-base",
+    )
+
+    assert settings.embedding_configured is True
+    assert settings.embedding_dimensions == 1024
+    assert settings.reranker_configured is True

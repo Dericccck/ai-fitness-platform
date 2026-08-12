@@ -63,6 +63,25 @@ class KnowledgeIngestionRepository:
             raise KnowledgeJobNotFound("knowledge ingestion job was not found")
         return job_from_row(row)
 
+    async def get_active_job_by_source(self, source_uri: str) -> KnowledgeIngestionJob | None:
+        """查询同一来源是否已有未完成任务，避免批量导入重复提交。"""
+
+        statement = text(
+            """
+            SELECT *
+            FROM knowledge_ingestion_jobs
+            WHERE source_uri = :source_uri
+              AND status IN ('PENDING_REVIEW', 'QUEUED', 'INDEXING')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        )
+        async with self._database.engine.connect() as connection:
+            row = (
+                (await connection.execute(statement, {"source_uri": source_uri})).mappings().first()
+            )
+        return job_from_row(row) if row is not None else None
+
     async def list_jobs(
         self,
         *,

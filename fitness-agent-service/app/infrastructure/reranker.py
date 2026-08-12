@@ -1,4 +1,6 @@
+import asyncio
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 
@@ -26,6 +28,7 @@ class RerankerClient:
 
     def __init__(self, settings: Settings) -> None:
         self.settings = settings
+        self._local_model: Any = None
 
     async def rerank(
         self,
@@ -42,6 +45,9 @@ class RerankerClient:
 
         if not self.settings.reranker_configured:
             raise ModelConfigurationError("Reranker provider is not configured")
+
+        if self.settings.reranker_backend == "local":
+            return await asyncio.to_thread(self._rerank_local, query, documents, top_n)
 
         headers = {"Content-Type": "application/json"}
         if self.settings.reranker_api_key:
@@ -70,3 +76,26 @@ class RerankerClient:
             )
             for item in raw_results
         ]
+
+    def _rerank_local(
+        self,
+        query: str,
+        documents: list[str],
+        top_n: int | None,
+    ) -> list[RerankResult]:
+        """在线程池中运行本地 BGE Cross-Encoder，返回原始候选下标。"""
+
+        if self._local_model is None:
+            from sentence_transformers import CrossEncoder
+
+            self._local_model = CrossEncoder(self.settings.reranker_model_path, device="cpu")
+        scores = self._local_model.predict([(query, document) for document in documents])
+        ranked = sorted(
+            (
+                RerankResult(index=index, score=float(score), document=document)
+                for index, (score, document) in enumerate(zip(scores, documents, strict=True))
+            ),
+            key=lambda item: item.score,
+            reverse=True,
+        )
+        return ranked[: top_n or len(ranked)]

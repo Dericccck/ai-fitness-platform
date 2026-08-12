@@ -109,6 +109,12 @@ DeepSeek 配置使用 `DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL` 和 `DEEPSEEK_BASE_U
 `deepseek-v4-flash`，默认关闭 thinking，以保持工具调用参数和结构化响应稳定。旧的
 `AGENT_LLM_*` 变量仍可兼容读取，但新环境统一使用 `DEEPSEEK_*`。
 
+当前本地 RAG 验证默认使用学习项目已下载的 BGE-M3 和 BGE-Reranker Base：
+`AGENT_EMBEDDING_BACKEND=local`、`AGENT_EMBEDDING_MODEL_PATH` 指向 BGE-M3 快照，
+`AGENT_EMBEDDING_DIMENSIONS=1024`，以及 `AGENT_RERANKER_BACKEND=local`、
+`AGENT_RERANKER_MODEL_PATH` 指向 BGE-Reranker 快照。生产环境可切换为 `openai` Embedding
+和 `http` Reranker，但必须同时执行全量索引重建；向量维度变更不能只修改环境变量。
+
 Supervisor 必须通过 `app.state.tool_registry` 获取工具定义和调用入口；不能在 Prompt、
 Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry
 只包含只读工具，预约写操作要等确认凭证、幂等键和 Java 事务审计完成后再加入。

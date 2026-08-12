@@ -79,14 +79,18 @@ class Settings(BaseSettings):
     agent_max_tool_steps: int = Field(default=4, ge=1, le=8)
     llm_thinking_enabled: bool = False
 
+    embedding_backend: Literal["openai", "local"] = "openai"
     embedding_base_url: str = "https://api.openai.com/v1"
     embedding_api_key: str = ""
     embedding_model: str = ""
-    embedding_dimensions: int = Field(default=1536, ge=1, le=4000)
+    embedding_model_path: str = ""
+    embedding_dimensions: int = Field(default=1024, ge=1, le=4000)
 
+    reranker_backend: Literal["http", "local"] = "http"
     reranker_url: str = ""
     reranker_api_key: str = ""
     reranker_model: str = ""
+    reranker_model_path: str = ""
     reranker_timeout_seconds: float = 15.0
 
     # RAG 限制在服务边界统一约束。对话请求不能通过覆盖这些值增加数据库、
@@ -142,6 +146,8 @@ class Settings(BaseSettings):
     def embedding_configured(self) -> bool:
         """判断 Embedding 是否具备发起真实请求所需的最小配置。"""
 
+        if self.embedding_backend == "local":
+            return bool(self.embedding_model_path)
         return bool(self.embedding_effective_api_key and self.embedding_model)
 
     @property
@@ -154,6 +160,8 @@ class Settings(BaseSettings):
     def reranker_configured(self) -> bool:
         """判断 Reranker 端点和模型是否已配置。部分内网端点可不需要 API Key。"""
 
+        if self.reranker_backend == "local":
+            return bool(self.reranker_model_path)
         return bool(self.reranker_url and self.reranker_model)
 
     @property

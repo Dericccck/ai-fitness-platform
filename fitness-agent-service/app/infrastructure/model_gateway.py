@@ -1,3 +1,4 @@
+import asyncio
 import json
 from dataclasses import dataclass
 from typing import Any
@@ -61,6 +62,7 @@ class ModelGateway:
             base_url=settings.embedding_base_url,
             timeout=settings.llm_timeout_seconds,
         )
+        self._local_embedding: Any = None
 
     async def chat(
         self,
@@ -153,11 +155,32 @@ class ModelGateway:
         if not self.settings.embedding_configured:
             raise ModelConfigurationError("Embedding provider is not configured")
 
+        if self.settings.embedding_backend == "local":
+            return await asyncio.to_thread(self._embed_local, texts)
+
         response = await self._embedding.embeddings.create(
             model=self.settings.embedding_model,
             input=texts,
         )
         return [item.embedding for item in response.data]
+
+    def _embed_local(self, texts: list[str]) -> list[list[float]]:
+        """在线程池中执行本地 BGE-M3，避免阻塞 FastAPI 事件循环。"""
+
+        if self._local_embedding is None:
+            from sentence_transformers import SentenceTransformer
+
+            self._local_embedding = SentenceTransformer(
+                self.settings.embedding_model_path,
+                device="cpu",
+            )
+        vectors = self._local_embedding.encode(
+            texts,
+            batch_size=self.settings.rag_embedding_batch_size,
+            normalize_embeddings=True,
+            show_progress_bar=False,
+        )
+        return [[float(value) for value in vector] for vector in vectors]
 
     async def close(self) -> None:
         """关闭底层 HTTP 连接池，在 FastAPI lifespan 结束时调用。"""
@@ -173,10 +196,13 @@ def redact_provider_config(settings: Settings) -> dict[str, Any]:
         "llm": {"configured": settings.llm_configured, "model": settings.llm_model},
         "embedding": {
             "configured": settings.embedding_configured,
+            "backend": settings.embedding_backend,
             "model": settings.embedding_model,
+            "dimensions": settings.embedding_dimensions,
         },
         "reranker": {
             "configured": settings.reranker_configured,
+            "backend": settings.reranker_backend,
             "model": settings.reranker_model,
         },
     }

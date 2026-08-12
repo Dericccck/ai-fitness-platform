@@ -4,7 +4,7 @@ AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-security-check agent-run agent-reindex-worker agent-image knowledge-manifest knowledge-validate knowledge-validate-ocr ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-security-check agent-run agent-reindex-worker agent-image knowledge-manifest knowledge-validate knowledge-validate-ocr knowledge-submit-review ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
@@ -107,6 +107,9 @@ knowledge-validate:
 knowledge-validate-ocr:
 	@test -n "$(KNOWLEDGE_OCR_ENDPOINT)" || (echo "请先设置 KNOWLEDGE_OCR_ENDPOINT，例如 http://127.0.0.1:8091/v1/parse"; exit 1)
 	cd $(AGENT_DIR) && KNOWLEDGE_OCR_ENDPOINT=$(KNOWLEDGE_OCR_ENDPOINT) KNOWLEDGE_OCR_API_KEY=$(KNOWLEDGE_OCR_API_KEY) UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/validate_knowledge_sources.py
+
+knowledge-submit-review:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/submit_knowledge_review.py
 
 gateway-check:
 	./mvnw --batch-mode -f fitness-core-gateway/pom.xml clean test
