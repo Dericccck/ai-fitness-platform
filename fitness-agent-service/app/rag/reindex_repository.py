@@ -1,0 +1,361 @@
+"""Persistence for reproducible knowledge index rebuild batches."""
+
+from __future__ import annotations
+
+from collections.abc import Sequence
+from typing import Any
+
+from sqlalchemy import bindparam, text
+
+from app.infrastructure.database import Database
+
+from .admin_models import (
+    KnowledgeJobNotFound,
+    KnowledgeJobTransitionError,
+    KnowledgeReindexItem,
+    KnowledgeReindexJob,
+    KnowledgeReindexSource,
+    reindex_item_from_row,
+    reindex_job_from_row,
+)
+
+
+class KnowledgeReindexRepository:
+    """Keep batch and document-level rebuild transitions atomic in PostgreSQL."""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def list_sources(
+        self,
+        *,
+        organization_id: str | None = None,
+        document_id: str | None = None,
+    ) -> list[KnowledgeReindexSource]:
+        """Snapshot published documents together with their immutable staged source."""
+
+        statement = text(
+            """
+            SELECT
+                d.id AS document_id, d.source_uri, d.title, d.document_type,
+                d.organization_id, c.owner_user_id, d.visibility,
+                d.applicable_roles, d.effective_from, d.effective_to, d.version,
+                c.storage_key, c.original_filename, c.content_type
+            FROM knowledge_documents d
+            JOIN LATERAL (
+                SELECT j.storage_key, j.original_filename, j.content_type,
+                       j.owner_user_id
+                FROM knowledge_ingestion_jobs j
+                WHERE j.document_id = d.id AND j.status = 'SUCCEEDED'
+                ORDER BY j.finished_at DESC NULLS LAST, j.created_at DESC
+                LIMIT 1
+            ) c ON TRUE
+            WHERE d.status = 'PUBLISHED'
+              AND (:organization_id IS NULL OR d.organization_id = :organization_id)
+              AND (:document_id IS NULL OR d.id = :document_id)
+            ORDER BY d.id
+            """
+        )
+        params = {"organization_id": organization_id, "document_id": document_id}
+        async with self._database.engine.connect() as connection:
+            rows = (await connection.execute(statement, params)).mappings().all()
+        return [_source_from_row(row) for row in rows]
+
+    async def create_job(
+        self,
+        *,
+        job: KnowledgeReindexJob,
+        sources: Sequence[KnowledgeReindexSource],
+        item_ids: Sequence[str],
+    ) -> KnowledgeReindexJob:
+        """Persist the batch and its source snapshot in one transaction."""
+
+        if len(sources) != len(item_ids) or not sources:
+            raise ValueError("a re-index job must contain one item per source")
+        job_statement = text(
+            """
+            INSERT INTO knowledge_reindex_jobs (
+                id, requested_by, organization_id, target_document_id, status,
+                total_documents, max_attempts
+            ) VALUES (
+                :id, :requested_by, :organization_id, :target_document_id,
+                'QUEUED', :total_documents, :max_attempts
+            )
+            RETURNING *
+            """
+        )
+        item_statement = text(
+            """
+            INSERT INTO knowledge_reindex_items (
+                id, job_id, document_id, source_uri, title, document_type,
+                organization_id, owner_user_id, visibility, allowed_roles,
+                effective_from, effective_to, version, storage_key,
+                original_filename, content_type, status, max_attempts
+            ) VALUES (
+                :id, :job_id, :document_id, :source_uri, :title, :document_type,
+                :organization_id, :owner_user_id, :visibility, :allowed_roles,
+                :effective_from, :effective_to, :version, :storage_key,
+                :original_filename, :content_type, 'PENDING', :max_attempts
+            )
+            """
+        )
+        job_params = {
+            "id": job.id,
+            "requested_by": job.requested_by,
+            "organization_id": job.organization_id,
+            "target_document_id": job.target_document_id,
+            "total_documents": len(sources),
+            "max_attempts": job.max_attempts,
+        }
+        item_params = [
+            {
+                "id": item_id,
+                "job_id": job.id,
+                "document_id": source.document_id,
+                "source_uri": source.source_uri,
+                "title": source.title,
+                "document_type": source.document_type,
+                "organization_id": source.organization_id,
+                "owner_user_id": source.owner_user_id,
+                "visibility": source.visibility,
+                "allowed_roles": list(source.allowed_roles),
+                "effective_from": source.effective_from,
+                "effective_to": source.effective_to,
+                "version": source.version,
+                "storage_key": source.storage_key,
+                "original_filename": source.original_filename,
+                "content_type": source.content_type,
+                "max_attempts": job.max_attempts,
+            }
+            for item_id, source in zip(item_ids, sources, strict=True)
+        ]
+        async with self._database.engine.begin() as connection:
+            row = (await connection.execute(job_statement, job_params)).mappings().one()
+            await connection.execute(item_statement, item_params)
+        return reindex_job_from_row(row)
+
+    async def get_job(self, job_id: str) -> KnowledgeReindexJob:
+        statement = text("SELECT * FROM knowledge_reindex_jobs WHERE id = :id")
+        async with self._database.engine.connect() as connection:
+            row = (await connection.execute(statement, {"id": job_id})).mappings().first()
+        if row is None:
+            raise KnowledgeJobNotFound("knowledge re-index job was not found")
+        return reindex_job_from_row(row)
+
+    async def list_jobs(
+        self,
+        *,
+        organization_ids: frozenset[str] = frozenset(),
+        platform_wide: bool = False,
+        limit: int = 50,
+    ) -> list[KnowledgeReindexJob]:
+        if limit < 1 or limit > 100:
+            raise ValueError("re-index job list limit must be between 1 and 100")
+        if not platform_wide and not organization_ids:
+            return []
+        scope_clause = "TRUE" if platform_wide else "organization_id IN :organization_ids"
+        statement = text(
+            f"""
+            SELECT * FROM knowledge_reindex_jobs
+            WHERE {scope_clause}
+            ORDER BY created_at DESC
+            LIMIT :limit
+            """
+        ).bindparams(bindparam("organization_ids", expanding=True))
+        params: dict[str, Any] = {
+            "organization_ids": sorted(organization_ids),
+            "limit": limit,
+        }
+        async with self._database.engine.connect() as connection:
+            rows = (await connection.execute(statement, params)).mappings().all()
+        return [reindex_job_from_row(row) for row in rows]
+
+    async def list_queued_ids(self, *, limit: int = 10) -> list[str]:
+        if limit < 1 or limit > 100:
+            raise ValueError("re-index worker batch size must be between 1 and 100")
+        statement = text(
+            """
+            SELECT id FROM knowledge_reindex_jobs
+            WHERE status = 'QUEUED'
+            ORDER BY created_at
+            LIMIT :limit
+            """
+        )
+        async with self._database.engine.connect() as connection:
+            rows = (await connection.execute(statement, {"limit": limit})).mappings().all()
+        return [str(row["id"]) for row in rows]
+
+    async def claim_job(self, job_id: str) -> KnowledgeReindexJob | None:
+        statement = text(
+            """
+            UPDATE knowledge_reindex_jobs
+            SET status = 'INDEXING', attempt_count = attempt_count + 1,
+                started_at = COALESCE(started_at, CURRENT_TIMESTAMP),
+                updated_at = CURRENT_TIMESTAMP, error_message = NULL
+            WHERE id = :id AND status = 'QUEUED'
+            RETURNING *
+            """
+        )
+        async with self._database.engine.begin() as connection:
+            row = (await connection.execute(statement, {"id": job_id})).mappings().first()
+        return reindex_job_from_row(row) if row is not None else None
+
+    async def list_pending_item_ids(self, job_id: str, *, limit: int = 10) -> list[str]:
+        statement = text(
+            """
+            SELECT id FROM knowledge_reindex_items
+            WHERE job_id = :job_id AND status = 'PENDING'
+            ORDER BY created_at
+            LIMIT :limit
+            """
+        )
+        async with self._database.engine.connect() as connection:
+            rows = (
+                (await connection.execute(statement, {"job_id": job_id, "limit": limit}))
+                .mappings()
+                .all()
+            )
+        return [str(row["id"]) for row in rows]
+
+    async def claim_item(self, item_id: str) -> KnowledgeReindexItem | None:
+        statement = text(
+            """
+            UPDATE knowledge_reindex_items
+            SET status = 'INDEXING', attempt_count = attempt_count + 1,
+                started_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP,
+                error_message = NULL
+            WHERE id = :id AND status = 'PENDING'
+            RETURNING *
+            """
+        )
+        async with self._database.engine.begin() as connection:
+            row = (await connection.execute(statement, {"id": item_id})).mappings().first()
+        return reindex_item_from_row(row) if row is not None else None
+
+    async def complete_item(self, item_id: str, *, skipped: bool) -> KnowledgeReindexItem:
+        target_status = "SKIPPED" if skipped else "SUCCEEDED"
+        statement = text(
+            f"""
+            UPDATE knowledge_reindex_items
+            SET status = '{target_status}', finished_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id AND status = 'INDEXING'
+            RETURNING *
+            """
+        )
+        return await self._transition_item(statement, {"id": item_id})
+
+    async def fail_item(self, item_id: str, *, error_message: str) -> KnowledgeReindexItem:
+        statement = text(
+            """
+            UPDATE knowledge_reindex_items
+            SET status = 'FAILED', error_message = :error_message,
+                finished_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id AND status = 'INDEXING'
+            RETURNING *
+            """
+        )
+        return await self._transition_item(
+            statement, {"id": item_id, "error_message": error_message[:500]}
+        )
+
+    async def finalize_job(self, job_id: str) -> KnowledgeReindexJob:
+        """Calculate counters from item state and close only when all items finish."""
+
+        statement = text(
+            """
+            WITH counts AS (
+                SELECT
+                    COUNT(*) FILTER (WHERE status IN ('SUCCEEDED', 'SKIPPED')) AS processed,
+                    COUNT(*) FILTER (WHERE status = 'SUCCEEDED') AS succeeded,
+                    COUNT(*) FILTER (WHERE status = 'SKIPPED') AS skipped,
+                    COUNT(*) FILTER (WHERE status = 'FAILED') AS failed,
+                    COUNT(*) FILTER (WHERE status IN ('PENDING', 'INDEXING')) AS active
+                FROM knowledge_reindex_items
+                WHERE job_id = :id
+            )
+            UPDATE knowledge_reindex_jobs j
+            SET processed_documents = counts.processed,
+                succeeded_documents = counts.succeeded,
+                skipped_documents = counts.skipped,
+                failed_documents = counts.failed,
+                status = CASE
+                    WHEN counts.active > 0 THEN j.status
+                    WHEN counts.failed > 0 THEN 'FAILED'
+                    ELSE 'SUCCEEDED'
+                END,
+                error_message = CASE
+                    WHEN counts.failed > 0 THEN 'one or more document rebuilds failed'
+                    ELSE NULL
+                END,
+                finished_at = CASE
+                    WHEN counts.active = 0 THEN CURRENT_TIMESTAMP
+                    ELSE j.finished_at
+                END,
+                updated_at = CURRENT_TIMESTAMP
+            FROM counts
+            WHERE j.id = :id
+            RETURNING j.*
+            """
+        )
+        async with self._database.engine.begin() as connection:
+            row = (await connection.execute(statement, {"id": job_id})).mappings().first()
+        if row is None:
+            raise KnowledgeJobNotFound("knowledge re-index job was not found")
+        return reindex_job_from_row(row)
+
+    async def retry(self, job_id: str) -> KnowledgeReindexJob:
+        """Requeue only failed items that still have retry budget."""
+
+        item_statement = text(
+            """
+            UPDATE knowledge_reindex_items
+            SET status = 'PENDING', finished_at = NULL, updated_at = CURRENT_TIMESTAMP
+            WHERE job_id = :job_id AND status = 'FAILED' AND attempt_count < max_attempts
+            """
+        )
+        job_statement = text(
+            """
+            UPDATE knowledge_reindex_jobs
+            SET status = 'QUEUED', finished_at = NULL, error_message = NULL,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :job_id AND status = 'FAILED'
+            RETURNING *
+            """
+        )
+        async with self._database.engine.begin() as connection:
+            result = await connection.execute(item_statement, {"job_id": job_id})
+            if result.rowcount == 0:
+                raise KnowledgeJobTransitionError("no failed re-index item can be retried")
+            row = (await connection.execute(job_statement, {"job_id": job_id})).mappings().first()
+        if row is None:
+            raise KnowledgeJobTransitionError("re-index job is not failed")
+        return reindex_job_from_row(row)
+
+    async def _transition_item(
+        self, statement: Any, params: dict[str, Any]
+    ) -> KnowledgeReindexItem:
+        async with self._database.engine.begin() as connection:
+            row = (await connection.execute(statement, params)).mappings().first()
+        if row is None:
+            raise KnowledgeJobTransitionError("re-index item state transition was rejected")
+        return reindex_item_from_row(row)
+
+
+def _source_from_row(row: Any) -> KnowledgeReindexSource:
+    return KnowledgeReindexSource(
+        document_id=str(row["document_id"]),
+        source_uri=str(row["source_uri"]),
+        title=str(row["title"]),
+        document_type=str(row["document_type"]),
+        organization_id=str(row["organization_id"]) if row["organization_id"] else None,
+        owner_user_id=str(row["owner_user_id"]) if row["owner_user_id"] else None,
+        visibility=row["visibility"],
+        allowed_roles=tuple(row["applicable_roles"] or ()),
+        effective_from=row["effective_from"],
+        effective_to=row["effective_to"],
+        version=int(row["version"]),
+        storage_key=str(row["storage_key"]),
+        original_filename=str(row["original_filename"]),
+        content_type=str(row["content_type"]),
+    )

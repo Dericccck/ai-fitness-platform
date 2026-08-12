@@ -9,8 +9,7 @@ Agent 服务的结构化数据、Memory、RAG 文档和向量索引统一使用 
 make agent-migrate
 ```
 
-后续将继续增加长期 Memory、评测记录和索引重建任务表；训练计划领域表仍由 Java/MySQL
-业务迁移管理。
+后续将继续增加长期 Memory 和评测记录表；训练计划领域表仍由 Java/MySQL 业务迁移管理。
 
 `knowledge_ingestion_jobs` 记录上传审核、索引 Claim、失败和有限重试状态。上传任务不会
 直接写入可检索的 `knowledge_documents`，只有审核后的后台索引任务完成父子节点、Embedding
@@ -29,3 +28,6 @@ make agent-migrate
 
 0005 迁移增加 `tsvector` 全文索引和 `pg_trgm` 三元组索引。关键词召回和向量召回分别完成
 权限过滤后再由服务层做 RRF 融合；索引只是召回加速器，不能替代 SQL 中的 ACL 条件。
+
+0006 迁移增加批量索引重建任务和文档明细；0007 为每条明细补充已审核源文件引用与文档元数据快照，
+执行期间不会因为同一 `source_uri` 的新版本上传而改变重建范围。

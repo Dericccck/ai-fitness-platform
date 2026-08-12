@@ -26,6 +26,9 @@ from app.rag.admin_repository import KnowledgeIngestionRepository
 from app.rag.admin_service import KnowledgeAdminService
 from app.rag.formats import DocumentParserRegistry
 from app.rag.ingestion import DocumentIngestionService
+from app.rag.reindex_repository import KnowledgeReindexRepository
+from app.rag.reindex_service import KnowledgeReindexService
+from app.rag.reindex_worker import KnowledgeReindexWorker
 from app.rag.repository import KnowledgeRepository
 from app.rag.safety import StructuralDocumentScanner
 from app.rag.service import RagService
@@ -88,11 +91,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         parser_registry=parser_registry,
     )
     app.state.knowledge_jobs = KnowledgeIngestionRepository(app.state.database)
+    document_storage = _build_document_storage(settings)
     app.state.knowledge_admin = KnowledgeAdminService(
         app.state.knowledge_jobs,
         app.state.knowledge_repository,
         app.state.document_ingestion,
-        _build_document_storage(settings),
+        document_storage,
         parser_registry,
         StructuralDocumentScanner(),
         max_source_bytes=settings.rag_max_source_bytes,
@@ -102,6 +106,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.knowledge_jobs,
         app.state.knowledge_admin,
         batch_size=settings.rag_ingestion_worker_batch_size,
+    )
+    app.state.knowledge_reindex_jobs = KnowledgeReindexRepository(app.state.database)
+    app.state.knowledge_reindex = KnowledgeReindexService(
+        app.state.knowledge_reindex_jobs,
+        app.state.document_ingestion,
+        document_storage,
+        max_attempts=settings.rag_ingestion_max_attempts,
+        item_batch_size=settings.rag_reindex_worker_batch_size,
+    )
+    app.state.knowledge_reindex_worker = KnowledgeReindexWorker(
+        app.state.knowledge_reindex_jobs,
+        app.state.knowledge_reindex,
+        batch_size=settings.rag_reindex_worker_batch_size,
     )
     app.state.gateway = GatewayClient(settings)
     # Tool Registry 是 Agent 调用业务能力的唯一入口。它在启动期完成固定工具注册，

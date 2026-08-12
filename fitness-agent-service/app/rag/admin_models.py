@@ -16,6 +16,9 @@ JobStatus = Literal[
 ]
 Visibility = Literal["GLOBAL", "ORGANIZATION", "PRIVATE"]
 
+ReindexJobStatus = Literal["QUEUED", "INDEXING", "SUCCEEDED", "FAILED"]
+ReindexItemStatus = Literal["PENDING", "INDEXING", "SUCCEEDED", "SKIPPED", "FAILED"]
+
 
 @dataclass(frozen=True)
 class KnowledgeIngestionJob:
@@ -69,6 +72,81 @@ class KnowledgeUploadMetadata:
     effective_to: datetime | None
 
 
+@dataclass(frozen=True)
+class KnowledgeReindexSource:
+    """Immutable source snapshot used by one re-index item.
+
+    The searchable document table intentionally stores normalized knowledge, not the
+    original binary. Re-indexing therefore snapshots the staged object key at task
+    creation time so a long-running rebuild is reproducible and is not affected by a
+    later upload replacing the same source URI.
+    """
+
+    document_id: str
+    source_uri: str
+    title: str
+    document_type: str
+    organization_id: str | None
+    owner_user_id: str | None
+    visibility: Visibility
+    allowed_roles: tuple[str, ...]
+    effective_from: datetime
+    effective_to: datetime | None
+    version: int
+    storage_key: str
+    original_filename: str
+    content_type: str
+
+
+@dataclass(frozen=True)
+class KnowledgeReindexJob:
+    """Durable batch task for rebuilding already published knowledge documents."""
+
+    id: str
+    requested_by: str
+    organization_id: str | None
+    target_document_id: str | None
+    status: ReindexJobStatus
+    total_documents: int
+    processed_documents: int
+    succeeded_documents: int
+    skipped_documents: int
+    failed_documents: int
+    attempt_count: int
+    max_attempts: int
+    error_message: str | None = None
+    created_at: datetime | None = None
+    updated_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+@dataclass(frozen=True)
+class KnowledgeReindexItem:
+    """One document-level unit inside a re-index batch."""
+
+    id: str
+    job_id: str
+    document_id: str
+    source_uri: str
+    title: str
+    document_type: str
+    organization_id: str | None
+    owner_user_id: str | None
+    visibility: Visibility
+    allowed_roles: tuple[str, ...]
+    effective_from: datetime
+    effective_to: datetime | None
+    version: int
+    storage_key: str
+    original_filename: str
+    content_type: str
+    status: ReindexItemStatus
+    attempt_count: int
+    max_attempts: int
+    error_message: str | None = None
+
+
 class KnowledgeAdminError(RuntimeError):
     """Stable business error for admin workflow transitions."""
 
@@ -83,6 +161,10 @@ class KnowledgeJobTransitionError(KnowledgeAdminError):
 
 class KnowledgeAdminForbidden(KnowledgeAdminError):
     """The signed identity is not allowed to manage the knowledge base."""
+
+
+class KnowledgeReindexNotFound(KnowledgeAdminError):
+    """No published document is available for the requested rebuild scope."""
 
 
 def job_from_row(row: Any) -> KnowledgeIngestionJob:
@@ -121,4 +203,55 @@ def job_from_row(row: Any) -> KnowledgeIngestionJob:
         content_sha256=str(row["content_sha256"] or ""),
         safety_status=str(row["safety_status"] or "UNKNOWN"),
         scanner_name=str(row["scanner_name"] or "unknown"),
+    )
+
+
+def reindex_job_from_row(row: Any) -> KnowledgeReindexJob:
+    """Convert a re-index batch row into a stable domain object."""
+
+    return KnowledgeReindexJob(
+        id=str(row["id"]),
+        requested_by=str(row["requested_by"]),
+        organization_id=str(row["organization_id"]) if row["organization_id"] else None,
+        target_document_id=(str(row["target_document_id"]) if row["target_document_id"] else None),
+        status=row["status"],
+        total_documents=int(row["total_documents"]),
+        processed_documents=int(row["processed_documents"]),
+        succeeded_documents=int(row["succeeded_documents"]),
+        skipped_documents=int(row["skipped_documents"]),
+        failed_documents=int(row["failed_documents"]),
+        attempt_count=int(row["attempt_count"]),
+        max_attempts=int(row["max_attempts"]),
+        error_message=str(row["error_message"]) if row["error_message"] else None,
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+        started_at=row["started_at"],
+        finished_at=row["finished_at"],
+    )
+
+
+def reindex_item_from_row(row: Any) -> KnowledgeReindexItem:
+    """Convert a document-level re-index row without leaking SQL mappings upstream."""
+
+    return KnowledgeReindexItem(
+        id=str(row["id"]),
+        job_id=str(row["job_id"]),
+        document_id=str(row["document_id"]),
+        source_uri=str(row["source_uri"]),
+        title=str(row["title"]),
+        document_type=str(row["document_type"]),
+        organization_id=str(row["organization_id"]) if row["organization_id"] else None,
+        owner_user_id=str(row["owner_user_id"]) if row["owner_user_id"] else None,
+        visibility=row["visibility"],
+        allowed_roles=tuple(row["allowed_roles"] or ()),
+        effective_from=row["effective_from"],
+        effective_to=row["effective_to"],
+        version=int(row["version"]),
+        storage_key=str(row["storage_key"]),
+        original_filename=str(row["original_filename"]),
+        content_type=str(row["content_type"]),
+        status=row["status"],
+        attempt_count=int(row["attempt_count"]),
+        max_attempts=int(row["max_attempts"]),
+        error_message=str(row["error_message"]) if row["error_message"] else None,
     )

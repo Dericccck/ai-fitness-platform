@@ -24,6 +24,8 @@ from app.rag.admin_models import (
     KnowledgeIngestionJob,
     KnowledgeJobNotFound,
     KnowledgeJobTransitionError,
+    KnowledgeReindexJob,
+    KnowledgeReindexNotFound,
     KnowledgeUploadMetadata,
 )
 
@@ -78,6 +80,39 @@ class ReviewRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     comment: str | None = Field(default=None, max_length=500)
+
+
+class ReindexCreateRequest(BaseModel):
+    """Define a rebuild scope; authorization is resolved from the signed context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str | None = Field(default=None, max_length=128)
+    document_id: str | None = Field(default=None, max_length=256)
+
+
+class ReindexJobResponse(BaseModel):
+    """Progress counters exposed to an administrator dashboard."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    requested_by: str
+    organization_id: str | None
+    target_document_id: str | None
+    status: str
+    total_documents: int
+    processed_documents: int
+    succeeded_documents: int
+    skipped_documents: int
+    failed_documents: int
+    attempt_count: int
+    max_attempts: int
+    error_message: str | None
+    created_at: datetime | None
+    updated_at: datetime | None
+    started_at: datetime | None
+    finished_at: datetime | None
 
 
 @router.post(
@@ -231,6 +266,94 @@ async def retry_job(
     return _to_response(job)
 
 
+@router.post(
+    "/reindex/jobs",
+    response_model=ReindexJobResponse,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+async def create_reindex_job(
+    request: Request,
+    background_tasks: BackgroundTasks,
+    payload: ReindexCreateRequest,
+    x_agent_context: str | None = Header(default=None),
+) -> ReindexJobResponse:
+    """Snapshot and enqueue a rebuild of one document, one organization, or all knowledge."""
+
+    identity = _verify_identity(request, x_agent_context)
+    try:
+        job = await request.app.state.knowledge_reindex.create_job(
+            identity,
+            organization_id=payload.organization_id,
+            document_id=payload.document_id,
+        )
+    except KnowledgeAdminForbidden as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except KnowledgeReindexNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    background_tasks.add_task(request.app.state.knowledge_reindex.process_job, job.id)
+    return _to_reindex_response(job)
+
+
+@router.get("/reindex/jobs", response_model=list[ReindexJobResponse])
+async def list_reindex_jobs(
+    request: Request,
+    limit: int = 50,
+    x_agent_context: str | None = Header(default=None),
+) -> list[ReindexJobResponse]:
+    """List only rebuild batches visible to the signed administrator."""
+
+    identity = _verify_identity(request, x_agent_context)
+    try:
+        jobs = await request.app.state.knowledge_reindex.list_jobs(identity, limit=limit)
+    except KnowledgeAdminForbidden as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    return [_to_reindex_response(job) for job in jobs]
+
+
+@router.get("/reindex/jobs/{job_id}", response_model=ReindexJobResponse)
+async def get_reindex_job(
+    job_id: str,
+    request: Request,
+    x_agent_context: str | None = Header(default=None),
+) -> ReindexJobResponse:
+    """Read counters and final status without exposing document content."""
+
+    identity = _verify_identity(request, x_agent_context)
+    try:
+        job = await request.app.state.knowledge_reindex.get_job(identity, job_id)
+    except KnowledgeAdminForbidden as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except KnowledgeJobNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return _to_reindex_response(job)
+
+
+@router.post("/reindex/jobs/{job_id}/retry", response_model=ReindexJobResponse)
+async def retry_reindex_job(
+    job_id: str,
+    request: Request,
+    background_tasks: BackgroundTasks,
+    x_agent_context: str | None = Header(default=None),
+) -> ReindexJobResponse:
+    """Requeue failed document items while their bounded retry budgets remain."""
+
+    identity = _verify_identity(request, x_agent_context)
+    try:
+        job = await request.app.state.knowledge_reindex.retry(identity, job_id)
+    except KnowledgeAdminForbidden as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except KnowledgeJobNotFound as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    except KnowledgeJobTransitionError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    background_tasks.add_task(request.app.state.knowledge_reindex.process_job, job.id)
+    return _to_reindex_response(job)
+
+
 def _verify_identity(request: Request, token: str | None) -> AgentIdentity:
     if not token:
         raise HTTPException(
@@ -296,6 +419,28 @@ def _to_response(job: KnowledgeIngestionJob) -> KnowledgeJobResponse:
         created_at=job.created_at,
         updated_at=job.updated_at,
         reviewed_at=job.reviewed_at,
+        started_at=job.started_at,
+        finished_at=job.finished_at,
+    )
+
+
+def _to_reindex_response(job: KnowledgeReindexJob) -> ReindexJobResponse:
+    return ReindexJobResponse(
+        id=job.id,
+        requested_by=job.requested_by,
+        organization_id=job.organization_id,
+        target_document_id=job.target_document_id,
+        status=job.status,
+        total_documents=job.total_documents,
+        processed_documents=job.processed_documents,
+        succeeded_documents=job.succeeded_documents,
+        skipped_documents=job.skipped_documents,
+        failed_documents=job.failed_documents,
+        attempt_count=job.attempt_count,
+        max_attempts=job.max_attempts,
+        error_message=job.error_message,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
     )

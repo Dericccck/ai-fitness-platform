@@ -122,12 +122,21 @@ RAG 表结构通过 `make agent-migrate` 显式升级，不在服务启动时自
 管理员知识库接口位于 `/api/v1/admin/knowledge`：上传使用 multipart 表单，审核接口为
 `/jobs/{job_id}/approve`、`/reject` 和 `/retry`，任务状态可通过 `/jobs` 或具体任务 ID
 查询。接口仍只接受认证服务签发的 `X-Agent-Context`，不会信任表单中的用户或角色字段。
+
+索引重建接口为 `POST /reindex/jobs`，支持按文档、组织或平台范围创建任务；通过
+`GET /reindex/jobs/{job_id}` 查询进度，失败明细可使用 `POST /reindex/jobs/{job_id}/retry`
+在有限重试预算内重新执行。
 本地暂存目录默认是 `./var/rag-staging`，已加入 Git 忽略；生产环境应替换为带生命周期、
 加密、恶意文件扫描和访问审计的对象存储适配器。
 
 本地可通过 `make infra-up-storage` 启动 MinIO；将 `AGENT_RAG_STORAGE_BACKEND` 改为 `s3`
 并填写 S3 配置后，上传对象会写入 `knowledge/` 前缀。MinIO 账号只用于本地开发，生产环境
 必须使用 Secret Manager 注入独立凭证。
+
+索引重建任务只读取已审核文件，复用当前解析、清洗、父子分块、Embedding 和原子替换流程，
+用于 Embedding 模型升级、切分策略调整或索引修复，不会直接修改 Java 健身业务事实。
+本地可通过 `make agent-reindex-worker` 启动独立轮询进程；生产环境应将它部署为独立 Worker，
+与 API 进程分开扩缩容。
 
 检索引用接口为 `POST /api/v1/agent/knowledge/search`，只返回已完成权限过滤的来源引用，
 包括来源 URI、版本、章节、PDF 页码、Excel 工作表、表格序号/行范围和命中片段。离线评测

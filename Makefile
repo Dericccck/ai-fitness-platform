@@ -4,7 +4,7 @@ AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-up-storage infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-run agent-image gateway-check gateway-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-run agent-reindex-worker agent-image gateway-check gateway-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
@@ -18,6 +18,7 @@ help:
 	@echo "  agent-format Format Python code"
 	@echo "  agent-check  Run Python lint, type checks, and tests"
 	@echo "  agent-run    Start the Agent API locally"
+	@echo "  agent-reindex-worker Start the knowledge index rebuild worker locally"
 	@echo "  agent-image  Build the production Agent container image"
 	@echo "  gateway-check Build and test the independent fitness core Gateway"
 	@echo "  gateway-run  Start the fitness core Gateway locally"
@@ -56,6 +57,9 @@ agent-check:
 
 agent-run:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8090
+
+agent-reindex-worker:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.reindex_worker_main
 
 agent-image:
 	docker build --file $(AGENT_DIR)/Dockerfile --tag fitness-agent-service:local $(AGENT_DIR)

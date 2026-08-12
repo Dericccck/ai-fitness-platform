@@ -98,7 +98,7 @@ class DocumentIngestionService:
         self.overlap_chars = overlap_chars
         self.parser_registry = parser_registry or DocumentParserRegistry()
 
-    async def ingest(self, request: IngestionRequest) -> IngestionResult:
+    async def ingest(self, request: IngestionRequest, *, force: bool = False) -> IngestionResult:
         """Clean, chunk, deduplicate, embed, and atomically publish a document."""
 
         cleaned = clean_markdown(request.raw_content)
@@ -107,7 +107,9 @@ class DocumentIngestionService:
             max_chunk_chars=self.max_chunk_chars,
             overlap_chars=self.overlap_chars,
         )
-        return await self._publish(request, checksum=content_checksum(cleaned), drafts=drafts)
+        return await self._publish(
+            request, checksum=content_checksum(cleaned), drafts=drafts, force=force
+        )
 
     async def ingest_file(
         self,
@@ -115,6 +117,7 @@ class DocumentIngestionService:
         *,
         file_name: str,
         content: bytes,
+        force: bool = False,
     ) -> IngestionResult:
         """Parse a binary source, preserve coordinates, then use the same publish path."""
 
@@ -146,6 +149,7 @@ class DocumentIngestionService:
             request,
             checksum=content_checksum(checksum_material),
             drafts=drafts,
+            force=force,
         )
 
     async def _publish(
@@ -154,12 +158,13 @@ class DocumentIngestionService:
         *,
         checksum: str,
         drafts: Sequence[ChunkDraft],
+        force: bool = False,
     ) -> IngestionResult:
         """Check versioning and atomically publish normalized child/parent nodes."""
 
         current = await self.repository.get_current_document(request.source_uri)
         if current is not None:
-            if current.checksum == checksum:
+            if current.checksum == checksum and not force:
                 return IngestionResult(
                     status="SKIPPED_UNCHANGED",
                     document_id=current.id,
@@ -167,7 +172,9 @@ class DocumentIngestionService:
                     version=current.version,
                     chunk_count=0,
                 )
-            if request.version <= current.version:
+            if request.version < current.version or (
+                request.version == current.version and current.checksum != checksum
+            ):
                 raise IngestionConflictError(
                     f"document version {request.version} is not newer than {current.version}"
                 )

@@ -110,6 +110,8 @@ class Settings(BaseSettings):
     rag_s3_secret_key: str = ""
     rag_ingestion_max_attempts: int = Field(default=3, ge=1, le=5)
     rag_ingestion_worker_batch_size: int = Field(default=10, ge=1, le=100)
+    rag_reindex_worker_batch_size: int = Field(default=2, ge=1, le=20)
+    rag_reindex_worker_poll_seconds: float = Field(default=2.0, ge=0.1, le=60)
 
     gateway_base_url: str = "http://127.0.0.1:8081"
     gateway_internal_service_token: str = ""
