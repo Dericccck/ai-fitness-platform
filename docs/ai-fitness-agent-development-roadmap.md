@@ -445,7 +445,7 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 
 - 已建立统一非流式对话 API 和会话请求协议，要求透传已签名 AgentContext。
 - 已使用 LangGraph 构建 Supervisor 状态图，支持模型回合、工具回合和最终回答回合。
-- 已建立模型 Tool Calling 供应商响应规范化、工具步数预算和未配置模型的明确失败语义。
+- 已建立 DeepSeek OpenAI-compatible Tool Calling 响应规范化、工具步数预算和未配置模型的明确失败语义；配置沿用 `learning-langchain-CN` 的 `DEEPSEEK_*` 变量。
 - 已增加赛事、作品和活动运营范围护栏；这些遗留业务不进入当前健身 Agent 路由。
 - SSE 流式响应和断线恢复待 Checkpoint 契约确定后接入。
 - 建立角色路由、意图分类、任务状态和失败恢复。

@@ -56,6 +56,7 @@ async def test_model_gateway_normalizes_openai_tool_call() -> None:
     assert turn.tool_calls[0].arguments == {"organization_id": "org-1"}
     assert turn.input_tokens == 11
     assert turn.output_tokens == 7
+    assert create.await_args.kwargs["extra_body"] == {"thinking": {"type": "disabled"}}
     create.assert_awaited_once()
 
 

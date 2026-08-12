@@ -15,7 +15,7 @@
 
 - PostgreSQL + pgvector：Agent 会话、Memory、知识库和向量索引。
 - Redis：LangGraph checkpoint、短期会话状态、限流和缓存。
-- LLM：OpenAI-compatible Chat Completions 接口。
+- LLM：DeepSeek OpenAI-compatible Chat Completions 接口，配置变量与 `learning-langchain-CN` 保持一致。
 - Embedding：OpenAI-compatible Embeddings 接口，可与 LLM 使用不同服务商。
 - Reranker：可配置的 HTTP 服务，不提供本地 mock 或静默降级。
 - Fitness Core Gateway：Java 只读业务 Tool 服务，查询用户、机构、课程、合同、课时和预约。
@@ -68,6 +68,10 @@ Python 版本固定为 3.11，`uv.lock` 是依赖事实源；CI 和本地均使�
 每次业务请求还必须由认证服务提供签名的 `GatewayRequestContext`；Client 对 408、429、5xx
 和连接超时做有限指数退避，对 401、403、404 和参数错误不重试。完整 HTTP 契约见
 `docs/contracts/fitness-core-gateway-v1.md`。
+
+DeepSeek 配置使用 `DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL` 和 `DEEPSEEK_BASE_URL`；默认模型为
+`deepseek-v4-flash`，默认关闭 thinking，以保持工具调用参数和结构化响应稳定。旧的
+`AGENT_LLM_*` 变量仍可兼容读取，但新环境统一使用 `DEEPSEEK_*`。
 
 Supervisor 必须通过 `app.state.tool_registry` 获取工具定义和调用入口；不能在 Prompt、
 Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry

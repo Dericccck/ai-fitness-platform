@@ -1,15 +1,16 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import Field
+from pydantic import AliasChoices, Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
     """Agent 服务唯一的运行时配置入口。
 
-    所有配置都使用 ``AGENT_`` 前缀从环境变量或本地 ``.env`` 读取。生产环境只允许
-    通过部署平台的 Secret Manager 注入敏感值，不能把 API Key 或数据库密码写进代码。
+    除了与学习项目保持一致的 ``DEEPSEEK_*`` 模型变量外，其余配置使用 ``AGENT_``
+    前缀从环境变量或本地 ``.env`` 读取。生产环境只允许通过部署平台的 Secret Manager
+    注入敏感值，不能把 API Key 或数据库密码写进代码。
     Agent、API 和基础设施适配器接收同一个 Settings 实例，保证不同模块不会各自采用
     不一致的默认值。
     """
@@ -19,6 +20,7 @@ class Settings(BaseSettings):
         env_prefix="AGENT_",
         case_sensitive=False,
         extra="ignore",
+        populate_by_name=True,
     )
 
     environment: Literal["local", "test", "staging", "production"] = "local"
@@ -42,12 +44,28 @@ class Settings(BaseSettings):
     db_pool_size: int = 10
     db_max_overflow: int = 20
 
-    llm_base_url: str = "https://api.openai.com/v1"
-    llm_api_key: str = ""
-    llm_model: str = ""
+    # 优先读取学习项目使用的 DEEPSEEK_* 变量；AGENT_LLM_* 仅作为历史兼容配置，
+    # 避免已有本地环境升级时突然失效。生产部署建议统一使用 DEEPSEEK_*。
+    llm_base_url: str = Field(
+        default="https://api.deepseek.com",
+        validation_alias=AliasChoices(
+            "DEEPSEEK_BASE_URL", "AGENT_DEEPSEEK_BASE_URL", "AGENT_LLM_BASE_URL"
+        ),
+    )
+    llm_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "DEEPSEEK_API_KEY", "AGENT_DEEPSEEK_API_KEY", "AGENT_LLM_API_KEY"
+        ),
+    )
+    llm_model: str = Field(
+        default="deepseek-v4-flash",
+        validation_alias=AliasChoices("DEEPSEEK_MODEL", "AGENT_DEEPSEEK_MODEL", "AGENT_LLM_MODEL"),
+    )
     llm_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
     llm_max_output_tokens: int = Field(default=1200, ge=128, le=8192)
     agent_max_tool_steps: int = Field(default=4, ge=1, le=8)
+    llm_thinking_enabled: bool = False
 
     embedding_base_url: str = "https://api.openai.com/v1"
     embedding_api_key: str = ""

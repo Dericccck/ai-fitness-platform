@@ -35,12 +35,14 @@ class ModelTurn:
 
 
 class ModelGateway:
-    """LLM 与 Embedding 的统一模型网关。
+    """DeepSeek LLM 与 Embedding 的统一模型网关。
 
     业务 Agent 只能依赖该网关，不能自行创建供应商 SDK 客户端。这样可以在同一位置
     控制模型切换、超时、重试、Tracing、Token 成本和日志脱敏，并防止生产
     环境意外回退到本地 Mock。当前使用 OpenAI-compatible 协议，后续可以在不修改业务
-    Agent 的情况下增加其他供应商适配器。
+    Agent 的情况下增加其他供应商适配器。DeepSeek 使用 OpenAI-compatible API，配置名
+    与 learning-langchain-CN 项目保持一致；默认关闭 thinking，保证 Tool Calling 和
+    结构化输出的响应格式稳定。
     """
 
     def __init__(self, settings: Settings) -> None:
@@ -80,6 +82,7 @@ class ModelGateway:
             model=self.settings.llm_model,
             messages=messages,  # type: ignore[arg-type]
             temperature=temperature,
+            extra_body=_deepseek_extra_body(self.settings.llm_thinking_enabled),
         )
         return response.choices[0].message.content or ""
 
@@ -104,6 +107,7 @@ class ModelGateway:
             "messages": messages,
             "temperature": temperature,
             "max_tokens": self.settings.llm_max_output_tokens,
+            "extra_body": _deepseek_extra_body(self.settings.llm_thinking_enabled),
         }
         # 工具预算耗尽后仍需要让模型基于最后一次真实工具结果生成最终答复，
         # 此时显式不传 tools，避免模型继续发起新的业务调用。
@@ -176,3 +180,9 @@ def redact_provider_config(settings: Settings) -> dict[str, Any]:
             "model": settings.reranker_model,
         },
     }
+
+
+def _deepseek_extra_body(thinking_enabled: bool) -> dict[str, Any]:
+    """生成与 learning-langchain-CN 一致的 DeepSeek thinking 配置。"""
+
+    return {"thinking": {"type": "enabled" if thinking_enabled else "disabled"}}
