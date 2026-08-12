@@ -58,3 +58,23 @@ make knowledge-validate
 2. 与 `docs/rag-baseline-20260812.md` 中的 Recall@K、MRR、引用准确性做前后对比。
 3. 只有通过门禁的资料才生成新的父子节点和 Embedding；失败资料继续人工审核或保持
    `REFERENCE_ONLY`。
+
+## 解析质量门禁首次运行结果
+
+执行命令：
+
+```bash
+make knowledge-quality-gate
+```
+
+本次门禁使用 `evals/document_quality_thresholds.json`，只读取原始资料并复用解析器、
+父子切分逻辑，不写数据库。结果为：
+
+- `PASS`：9 份，适合进入后续审核/索引流程；
+- `REVIEW_REQUIRED`：4 份，主要是医疗或高风险资料，必须人工审核；
+- `BLOCKED`：5 份，主要是扫描 PDF 缺失大量页面，必须先接 OCR 或更换资料；
+- `REFERENCE_ONLY`：3 份，继续仅供人工参考。
+
+这里的 `BLOCKED` 不是解析器崩溃，而是质量门禁主动阻止不完整资料进入知识库。当前最明确的
+阻断原因是 WHO 指南缺少第 1、2、3、5 页，以及 4 份疾病指导原则缺少大部分页面。质量门禁
+命令在存在 `BLOCKED` 或 `REVIEW_REQUIRED` 时返回非零退出码，不能被误认为可以自动发布。

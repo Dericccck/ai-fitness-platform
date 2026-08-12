@@ -78,7 +78,13 @@ make agent-run
 ```bash
 make agent-format
 make agent-check
+make knowledge-quality-gate
 ```
+
+`knowledge-quality-gate` 只读取 `data/knowledge/manifest.json` 中的原始资料，复用当前解析器和
+父子切分逻辑，检查网页/目录噪声率、异常短碎片率、重复率、父节点完整性、表格结构完整性和
+PDF 缺失页。它不会调用 LLM、生成 Embedding 或写入 PostgreSQL；出现 `BLOCKED` 时必须先修复、
+OCR 或人工审核，不能直接执行知识库重建。
 
 历史 Java 项目是不完整的旧源码快照，不属于 Agent 服务质量门禁。阶段 2 新增的健身核心
 Tool Gateway 会拥有独立、可复现的 Java 构建和自动化测试，且不会恢复赛事、作品或活动代码。

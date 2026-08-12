@@ -4,7 +4,7 @@ AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-security-check agent-run agent-reindex-worker agent-image knowledge-manifest knowledge-validate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-security-check agent-run agent-reindex-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
@@ -25,6 +25,7 @@ help:
 	@echo "  agent-image  Build the production Agent container image"
 	@echo "  knowledge-manifest  Generate the local source and SHA-256 manifest"
 	@echo "  knowledge-validate  Validate PDF/DOCX parsing and report warnings"
+	@echo "  knowledge-quality-gate  Check parsed documents and parent/child quality thresholds"
 	@echo "  knowledge-validate-ocr  Validate sources through the real OCR endpoint"
 	@echo "  gateway-check Build and test the independent fitness core Gateway"
 	@echo "  gateway-run  Start the fitness core Gateway locally"
@@ -103,6 +104,9 @@ knowledge-manifest:
 
 knowledge-validate:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/validate_knowledge_sources.py
+
+knowledge-quality-gate:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/validate_document_quality.py
 
 knowledge-validate-ocr:
 	@test -n "$(KNOWLEDGE_OCR_ENDPOINT)" || (echo "请先设置 KNOWLEDGE_OCR_ENDPOINT，例如 http://127.0.0.1:8091/v1/parse"; exit 1)

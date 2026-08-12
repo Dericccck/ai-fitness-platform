@@ -8,6 +8,63 @@ from app.rag.evaluation import (
 from app.rag.evaluation_cli import main
 
 
+def test_document_quality_calculates_noise_duplicates_tables_and_parents() -> None:
+    from app.rag.document_quality import measure_document_quality
+    from app.rag.formats import ParsedBlock
+    from app.rag.ingestion import ChunkDraft
+
+    blocks = [
+        ParsedBlock(kind="TEXT", content="正文内容。" * 30, source_page=1),
+        ParsedBlock(kind="TEXT", content="正文内容。" * 30, source_page=1),
+        ParsedBlock(kind="TEXT", content="网站导航", source_page=1),
+        ParsedBlock(
+            kind="TABLE",
+            content="| 动作 | 组数 |\n| --- | --- |\n| 深蹲 | 4 |",
+            source_page=1,
+        ),
+    ]
+    drafts = [ChunkDraft("正文内容。" * 30, (), "正文内容。" * 30)]
+
+    metrics = measure_document_quality(blocks, drafts, total_pages=1)
+
+    assert metrics.noise_rate == 0.25
+    assert metrics.duplicate_rate == 0.25
+    assert metrics.parent_integrity == 1.0
+    assert metrics.table_integrity == 1.0
+    assert metrics.missing_pages == ()
+
+
+def test_document_quality_thresholds_block_bad_metrics() -> None:
+    from app.rag.document_quality import DocumentQualityThresholds, measure_document_quality
+    from app.rag.formats import ParsedBlock
+
+    metrics = measure_document_quality(
+        [ParsedBlock(kind="TEXT", content="网站导航", source_page=1)],
+        [],
+        total_pages=2,
+    )
+    failures = DocumentQualityThresholds().validate(metrics)
+
+    assert "noise_rate" in " ".join(failures)
+    assert "missing_pages" in " ".join(failures)
+
+
+def test_document_quality_ignores_repeated_titles_and_cross_page_guidance() -> None:
+    from app.rag.document_quality import measure_document_quality
+    from app.rag.formats import ParsedBlock
+
+    blocks = [
+        ParsedBlock(kind="TEXT", content="测试目的", source_page=1),
+        ParsedBlock(kind="TEXT", content="测试目的", source_page=2),
+        ParsedBlock(kind="TEXT", content="核心建议。" * 30, source_page=1),
+        ParsedBlock(kind="TEXT", content="核心建议。" * 30, source_page=2),
+    ]
+
+    metrics = measure_document_quality(blocks, [], total_pages=2)
+
+    assert metrics.duplicate_block_count == 0
+
+
 def test_retrieval_evaluation_calculates_recall_and_mrr() -> None:
     case = RetrievalEvalCase("case-1", "热身", frozenset({"doc-a", "doc-b"}))
 
