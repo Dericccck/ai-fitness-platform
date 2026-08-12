@@ -1,6 +1,7 @@
 # OCR 模型运行环境面向 Linux 部署节点。由于 Paddle 安装包具有平台差异，
 # 本地开发默认不安装推理 extra。
-FROM python:3.11-slim-bookworm
+# 固定基础镜像 manifest，避免构建时因多架构 tag 漂移导致不可复现或摘要冲突。
+FROM --platform=linux/amd64 python@sha256:d29f48a31a8b408ed19272ca1e7b10ebae13b240a27e862d3d4217c528e2e0c3
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -8,7 +9,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PATH="/service/.venv/bin:${PATH}"
 WORKDIR /service
 
-COPY --from=ghcr.io/astral-sh/uv:0.11.32 /uv /uvx /bin/
+# uv 版本同样固定到 manifest digest，保证依赖解析工具不随 tag 漂移。
+COPY --from=ghcr.io/astral-sh/uv@sha256:df4cae8f3a96d175e2e5f992e597550000edbe78fdc2594d5cd8de1a217f504c /uv /uvx /bin/
 COPY pyproject.toml uv.lock .python-version ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --extra inference --no-install-project

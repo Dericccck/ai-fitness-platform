@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -12,6 +14,7 @@ from app.rag.formats import (
     DocumentParserRegistry,
     UnsupportedDocumentFormatError,
 )
+from app.rag.ocr import HttpPdfOcrProvider
 
 SERVICE_ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = SERVICE_ROOT / "data" / "knowledge" / "manifest.json"
@@ -85,14 +88,49 @@ def validate_entry(registry: DocumentParserRegistry, entry: dict[str, Any]) -> d
     return result
 
 
+def _parse_args() -> argparse.Namespace:
+    """解析本地校验参数；默认不调用 OCR，避免意外触发模型推理。"""
+
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "--ocr-endpoint",
+        default=os.getenv("KNOWLEDGE_OCR_ENDPOINT", ""),
+        help="独立 OCR 服务的 /v1/parse 地址；不传则只使用本地文本解析器",
+    )
+    parser.add_argument(
+        "--ocr-api-key",
+        default=os.getenv("KNOWLEDGE_OCR_API_KEY", ""),
+        help="OCR Bearer Token；本地未启用鉴权时可以为空",
+    )
+    parser.add_argument(
+        "--ocr-timeout-seconds",
+        type=float,
+        default=float(os.getenv("KNOWLEDGE_OCR_TIMEOUT_SECONDS", "300")),
+        help="单次 OCR HTTP 请求超时时间",
+    )
+    return parser.parse_args()
+
+
 def main() -> int:
     """读取清单并输出机器可读及人类可读的验证摘要。"""
 
+    args = _parse_args()
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
-    registry = DocumentParserRegistry()
+    ocr_provider = (
+        HttpPdfOcrProvider(
+            args.ocr_endpoint,
+            api_key=args.ocr_api_key,
+            timeout_seconds=args.ocr_timeout_seconds,
+        )
+        if args.ocr_endpoint
+        else None
+    )
+    registry = DocumentParserRegistry(pdf_ocr_provider=ocr_provider)
     results = [validate_entry(registry, entry) for entry in manifest["entries"]]
     summary = {
         "manifest": str(MANIFEST_PATH.relative_to(SERVICE_ROOT)),
+        "ocr_enabled": bool(args.ocr_endpoint),
+        "ocr_endpoint": args.ocr_endpoint or None,
         "total": len(results),
         "pass": sum(item["status"] == "PASS" for item in results),
         "pass_with_warnings": sum(item["status"] == "PASS_WITH_WARNINGS" for item in results),

@@ -28,8 +28,11 @@
 ```bash
 make knowledge-manifest
 make knowledge-validate
+KNOWLEDGE_OCR_ENDPOINT=http://127.0.0.1:8091/v1/parse make knowledge-validate-ocr
 ```
 
 `manifest.json` 只保存路径、哈希、来源和审核元数据，不保存原始文件内容。PDF 和 DOCX 会进入
 解析验证；PPTX 当前标记为 `REFERENCE_ONLY`，不会误进入索引。验证结果中的
 `PASS_WITH_WARNINGS` 通常表示 PDF 存在无法提取文本的页面，需要后续接入真实 OCR 后复核。
+`knowledge-validate-ocr` 会把缺失页交给独立 OCR 服务，只回填缺失页，不重复识别已有文本页；
+OCR 服务不可用、返回结构不符合契约或哈希发生变化时，验证不会伪装成通过。
