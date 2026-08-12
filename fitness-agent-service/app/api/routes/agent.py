@@ -89,6 +89,7 @@ async def chat(
                 conversation_id=payload.conversation_id,
                 thread_id=conversation_thread_id(payload.conversation_id, identity),
                 locale=payload.locale,
+                identity=identity,
             )
         )
     except UnsupportedLegacyRequest as exc:

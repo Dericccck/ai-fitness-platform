@@ -459,9 +459,14 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 
 ### 阶段 4：企业级 RAG
 
+状态：RAG 基础数据模型、pgvector 权限过滤召回、真实 Embedding/Reranker 编排已完成首个可验证切片；文档解析、增量索引、混合检索、完整引用 API 和离线评测待继续建设。
+
 工作内容：
 
 - 建立知识文档、版本、切片、向量和权限数据表。
+- 已建立 Alembic 迁移：知识文档、版本状态、切片、组织/角色/用户范围、生效时间和 pgvector HNSW 索引。
+- 已实现 RAG 领域接口：Embedding 批处理、服务端权限过滤、候选召回、真实 Reranker 和来源证据渲染。
+- 已把 Fitness 路由的检索证据接入 Supervisor；Reranker 未配置时不允许静默降级。
 - 接入文档解析、清洗和增量索引流程。
 - 实现关键词与向量混合召回、元数据过滤和 Reranker。
 - 建立引用、知识过期、重建索引和质量评测。
@@ -661,14 +666,16 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 - local、test、staging、production 配置约定与 Secret 分级规则。
 - Prometheus Metrics、OpenTelemetry OTLP Trace 导出和本地 Collector。
 - 非 root 多阶段 Agent 生产镜像及容器存活、Metrics 冒烟验证。
+- 阶段 4 RAG 首个可验证切片：知识文档/切片/权限元数据迁移、1536 维 pgvector HNSW
+  索引、服务端权限过滤、Embedding 批处理、真实 Reranker 和来源证据注入 Supervisor。
 
 下一步按顺序执行：
 
-1. 建立不依赖赛事遗留代码、可独立构建的健身核心 Java 适配层。
-2. 审计并加固健身相关资源级权限。
-3. 设计并实现签名 AgentContext。
-4. 建立首批只读 Java Tool Gateway。
-5. 建立预约写工具、确认凭证、幂等和审计。
-6. 在此基础上实现 Supervisor 和 Booking Agent。
+1. 建立健身知识文档解析、清洗、语义切片和增量索引任务。
+2. 增加混合检索、索引重建、引用 API 和离线 RAG 评测。
+3. 在 RAG 骨架上接入预约写工具、确认凭证、幂等和审计。
+4. 建立训练领域表、训练 Tool Gateway 和 Fitness Agent 的结构化计划流程。
+5. 再推进 Operations Agent、Memory 和主动提醒等后续阶段。
 
-除非发现安全、数据或基础设施阻塞，后续开发不得跳过 Tool Gateway 和权限层，直接从对话 Prompt 开始拼装业务 Agent。
+后续开发不得跳过 Tool Gateway 和权限层，直接从对话 Prompt 开始拼装业务 Agent；RAG
+内容也不能替代预约、合同、课时和训练记录等 Java 业务事实。

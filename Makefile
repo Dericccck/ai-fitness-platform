@@ -4,7 +4,7 @@ AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-down observability-up agent-lock agent-sync agent-format agent-check agent-run agent-image gateway-check gateway-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-run agent-image gateway-check gateway-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
@@ -13,6 +13,7 @@ help:
 	@echo "  observability-up Start the local OpenTelemetry Collector"
 	@echo "  agent-lock   Resolve and update the Python dependency lock file"
 	@echo "  agent-sync   Install exact locked Python dependencies"
+	@echo "  agent-migrate Apply Agent PostgreSQL migrations"
 	@echo "  agent-format Format Python code"
 	@echo "  agent-check  Run Python lint, type checks, and tests"
 	@echo "  agent-run    Start the Agent API locally"
@@ -36,6 +37,9 @@ agent-lock:
 
 agent-sync:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --locked --all-extras --dev
+
+agent-migrate:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run alembic upgrade head
 
 agent-format:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run ruff format .

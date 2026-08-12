@@ -20,6 +20,8 @@ from app.infrastructure.database import CheckpointStore, Database
 from app.infrastructure.gateway_client import GatewayClient
 from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient
+from app.rag.repository import KnowledgeRepository
+from app.rag.service import RagService
 
 runtime_settings = get_settings()
 configure_logging(runtime_settings.log_level)
@@ -54,6 +56,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.models = ModelGateway(settings)
     app.state.reranker = RerankerClient(settings)
+    app.state.knowledge_repository = KnowledgeRepository(app.state.database)
+    app.state.rag_service = RagService(
+        app.state.knowledge_repository,
+        app.state.models,
+        app.state.reranker,
+        candidate_limit=settings.rag_candidate_limit,
+        top_k=settings.rag_top_k,
+        embedding_batch_size=settings.rag_embedding_batch_size,
+        embedding_dimensions=settings.embedding_dimensions,
+    )
     app.state.gateway = GatewayClient(settings)
     # Tool Registry 是 Agent 调用业务能力的唯一入口。它在启动期完成固定工具注册，
     # 让后续 Supervisor 只能看到有 Schema、角色元数据和审计边界的工具集合。
@@ -72,6 +84,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             max_tool_steps=settings.agent_max_tool_steps,
             checkpointer=app.state.checkpoint_store.saver,
             session_lock=app.state.session_lock,
+            rag_service=app.state.rag_service,
         )
         yield
     finally:

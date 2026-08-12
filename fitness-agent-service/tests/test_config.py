@@ -20,6 +20,8 @@ def test_provider_configuration_is_explicit() -> None:
     assert settings.llm_model == "fitness-chat-model"
     assert settings.otel_configured is False
     assert settings.gateway_configured is False
+    assert settings.rag_candidate_limit == 20
+    assert settings.rag_top_k == 5
 
 
 def test_deepseek_environment_names_are_supported(monkeypatch) -> None:

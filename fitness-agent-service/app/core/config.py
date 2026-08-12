@@ -82,11 +82,18 @@ class Settings(BaseSettings):
     embedding_base_url: str = "https://api.openai.com/v1"
     embedding_api_key: str = ""
     embedding_model: str = ""
+    embedding_dimensions: int = Field(default=1536, ge=1, le=4000)
 
     reranker_url: str = ""
     reranker_api_key: str = ""
     reranker_model: str = ""
     reranker_timeout_seconds: float = 15.0
+
+    # RAG limits are bounded at the service boundary. A chat request cannot
+    # increase database, reranker, or prompt costs by overriding these values.
+    rag_candidate_limit: int = Field(default=20, ge=1, le=100)
+    rag_top_k: int = Field(default=5, ge=1, le=20)
+    rag_embedding_batch_size: int = Field(default=32, ge=1, le=128)
 
     gateway_base_url: str = "http://127.0.0.1:8081"
     gateway_internal_service_token: str = ""

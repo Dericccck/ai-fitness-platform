@@ -14,6 +14,7 @@ from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 
+from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.cache import SessionLockManager, SessionLockUnavailable
 from app.infrastructure.gateway_client import GatewayRequestContext
 from app.infrastructure.model_gateway import (
@@ -22,6 +23,8 @@ from app.infrastructure.model_gateway import (
     ModelResponseError,
     ModelToolCall,
 )
+from app.rag.models import RetrievalScope
+from app.rag.service import RagSearchError, RagService
 
 from .tool_registry import ToolContext, ToolRegistry, ToolRegistryError
 
@@ -58,6 +61,7 @@ class SupervisorRequest:
     conversation_id: str
     thread_id: str | None = None
     locale: str = "zh-CN"
+    identity: AgentIdentity | None = None
 
 
 @dataclass(frozen=True)
@@ -94,12 +98,14 @@ class Supervisor:
         max_tool_steps: int = 4,
         checkpointer: Any | None = None,
         session_lock: SessionLockManager | None = None,
+        rag_service: RagService | None = None,
     ) -> None:
         self.models = models
         self.tools = tools
         self.max_tool_steps = max_tool_steps
         self._checkpointer = checkpointer
         self.session_lock = session_lock
+        self.rag_service = rag_service
         self._graph = self._build_graph()
 
     async def invoke(self, request: SupervisorRequest) -> SupervisorResponse:
@@ -109,11 +115,31 @@ class Supervisor:
         if route == "UNSUPPORTED_LEGACY":
             raise UnsupportedLegacyRequest("赛事、作品和活动运营不属于当前健身 Agent 的业务范围")
 
+        knowledge_context = ""
+        if route == "FITNESS_COACHING" and self.rag_service is not None and request.identity:
+            try:
+                rag_result = await self.rag_service.search(
+                    request.user_message,
+                    RetrievalScope(
+                        subject=request.identity.subject,
+                        organization_ids=request.identity.organization_ids,
+                        roles=request.identity.roles,
+                    ),
+                )
+                knowledge_context = rag_result.as_prompt_context()
+            except RagSearchError as exc:
+                # Retrieval failure must be visible to the caller. The model
+                # must not receive an unmarked or fabricated fallback context.
+                raise SupervisorRuntimeError("knowledge retrieval failed") from exc
+
+        system_prompt = _system_prompt(route, request.locale)
+        if knowledge_context:
+            system_prompt = f"{system_prompt}\n\n{knowledge_context}"
         initial: SupervisorState = {
             "request": request,
             "route": route,
             "messages": [
-                {"role": "system", "content": _system_prompt(route, request.locale)},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": request.user_message},
             ],
             "tool_steps": 0,

@@ -22,6 +22,8 @@
 - Tool Registry：版本化注册首批健身只读工具，校验输入 Schema、限制未知工具，并记录不含原始参数的调用审计。
 - Supervisor Runtime：基于 LangGraph 执行模型 Tool Calling、工具预算、真实结果回填和业务范围护栏。
 - 会话持久化：PostgreSQL 保存 LangGraph Checkpoint，Redis 负责会话互斥锁和短期状态。
+- RAG 基础：Alembic 管理版本化知识文档、切片、租户/角色权限字段和 pgvector HNSW 索引；
+  检索顺序固定为服务端权限过滤 → 向量候选召回 → 真实 Reranker → 带来源证据的 Agent 上下文。
 - Prometheus：低基数 HTTP 请求量、耗时、并发和构建信息指标。
 - OpenTelemetry：可选 OTLP/HTTP Trace 导出，默认关闭且不发送 Prompt 或用户档案。
 
@@ -32,6 +34,7 @@ cp .env.example .env
 cd ..
 make infra-up
 make agent-sync
+make agent-migrate
 make agent-run
 ```
 
@@ -87,6 +90,11 @@ Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry
 内的 `conversation_id` 会生成稳定的匿名 `thread_id`，不同身份即使使用相同会话 ID 也
 无法读取同一份状态；后续请求会读取最新 Checkpoint 并恢复历史消息；同一会话的并发请求会返回 409。PostgreSQL 是会话状态事实源，Redis
 只承担短租约互斥和短期状态，不作为长期会话数据的唯一存储。
+
+RAG 表结构通过 `make agent-migrate` 显式升级，不在服务启动时自动创建业务表。知识切片的
+`organization_id`、`visibility`、`owner_user_id`、`allowed_roles` 和生效时间由数据库查询
+过滤，模型不能传入或改变这些权限条件；如果候选存在但 Reranker 未配置，检索会失败，不会
+静默退回向量分数排序。
 
 ## 生产镜像
 
