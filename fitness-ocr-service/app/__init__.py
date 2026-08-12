@@ -1,1 +1,1 @@
-"""Independent OCR service for the fitness Agent knowledge pipeline."""
+"""健身 Agent 知识库流水线使用的独立 OCR 服务。"""

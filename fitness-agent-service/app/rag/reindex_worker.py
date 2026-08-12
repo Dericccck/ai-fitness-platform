@@ -1,4 +1,4 @@
-"""Polling worker for queued knowledge index rebuild batches."""
+"""轮询执行排队中的知识索引重建批次。"""
 
 from __future__ import annotations
 
@@ -10,14 +10,14 @@ from .reindex_service import KnowledgeReindexService
 
 @dataclass(frozen=True)
 class ReindexWorkerRunResult:
-    """Observable outcome of one bounded rebuild poll."""
+    """一次有界重建轮询的可观测结果。"""
 
     discovered: int
     attempted: int
 
 
 class KnowledgeReindexWorker:
-    """Process queued rebuild batches with database-backed duplicate protection."""
+    """处理排队的重建批次，并通过数据库防止重复执行。"""
 
     def __init__(
         self,
@@ -33,7 +33,7 @@ class KnowledgeReindexWorker:
         self.batch_size = batch_size
 
     async def run_once(self) -> ReindexWorkerRunResult:
-        """Claim and execute a bounded number of queued rebuild batches."""
+        """认领并执行数量受限的排队重建批次。"""
 
         job_ids = await self.jobs.list_queued_ids(limit=self.batch_size)
         for job_id in job_ids:

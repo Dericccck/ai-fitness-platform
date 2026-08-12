@@ -1,4 +1,4 @@
-"""Review-gated knowledge upload and indexing orchestration."""
+"""带审核门禁的知识上传与索引编排。"""
 
 from __future__ import annotations
 
@@ -26,11 +26,10 @@ _SAFE_TEXT = re.compile(r"^[^\r\n]{1,256}$")
 
 
 class KnowledgeAdminService:
-    """Coordinate authorization, staging, review transitions, and indexing tasks.
+    """协调授权、暂存、审核状态转换和索引任务。
 
-    This service deliberately does not let an LLM participate in document publishing.
-    A signed administrator identity submits/reviews the file, while the ingestion service
-    remains responsible for parsing, Embedding, parent-child construction, and publication.
+    该服务有意不让 LLM 参与文档发布。由签名管理员身份提交和审核文件，入库服务负责
+    解析、Embedding、父子节点构建和发布。
     """
 
     def __init__(
@@ -63,7 +62,7 @@ class KnowledgeAdminService:
         content: bytes,
         metadata: KnowledgeUploadMetadata,
     ) -> KnowledgeIngestionJob:
-        """Validate an admin upload, stage it privately, and create a review task."""
+        """校验管理员上传，私有暂存文件并创建审核任务。"""
 
         self.require_admin(identity)
         self._validate_metadata(identity, metadata)
@@ -72,8 +71,8 @@ class KnowledgeAdminService:
         if len(content) > self.max_source_bytes:
             raise ValueError("uploaded document exceeds the configured size limit")
         safety_result = self.safety_scanner.scan(file_name, content)
-        # Parse once at the trust boundary. The later worker reparses the immutable bytes,
-        # so a malformed file cannot sit indefinitely in the review queue unnoticed.
+        # 在信任边界处先解析一次。后续 Worker 会重新解析不可变字节，
+        # 避免损坏文件长期停留在审核队列中而无人发现。
         self.parser_registry.parse(content, file_name=file_name)
 
         current = await self.knowledge_repository.get_current_document(metadata.source_uri)
@@ -122,7 +121,7 @@ class KnowledgeAdminService:
     async def approve(
         self, identity: AgentIdentity, job_id: str, *, comment: str | None = None
     ) -> KnowledgeIngestionJob:
-        """Approve a pending task; the route schedules the actual worker after this call."""
+        """批准待审核任务；路由会在本次调用后调度实际 Worker。"""
 
         self.require_admin(identity)
         await self._get_scoped_job(identity, job_id)
@@ -131,7 +130,7 @@ class KnowledgeAdminService:
     async def reject(
         self, identity: AgentIdentity, job_id: str, *, comment: str
     ) -> KnowledgeIngestionJob:
-        """Reject a task while retaining evidence and the reviewer decision."""
+        """拒绝任务，同时保留证据和审核人决定。"""
 
         self.require_admin(identity)
         if not comment.strip():
@@ -140,14 +139,14 @@ class KnowledgeAdminService:
         return await self.jobs.reject(job_id, reviewer_id=identity.subject, comment=comment[:500])
 
     async def retry(self, identity: AgentIdentity, job_id: str) -> KnowledgeIngestionJob:
-        """Manually requeue a failed task within its bounded retry budget."""
+        """在有限重试预算内手动重新排队失败任务。"""
 
         self.require_admin(identity)
         await self._get_scoped_job(identity, job_id)
         return await self.jobs.retry(job_id, reviewer_id=identity.subject)
 
     async def get_job(self, identity: AgentIdentity, job_id: str) -> KnowledgeIngestionJob:
-        """Return task state only to administrators; content is never returned here."""
+        """只向管理员返回任务状态；这里绝不返回文档内容。"""
 
         self.require_admin(identity)
         return await self._get_scoped_job(identity, job_id)
@@ -155,7 +154,7 @@ class KnowledgeAdminService:
     async def list_jobs(
         self, identity: AgentIdentity, *, limit: int = 50
     ) -> list[KnowledgeIngestionJob]:
-        """Return bounded task summaries for an admin dashboard."""
+        """返回数量受限的任务摘要，供管理员看板使用。"""
 
         self.require_admin(identity)
         return await self.jobs.list_jobs(
@@ -165,7 +164,7 @@ class KnowledgeAdminService:
         )
 
     async def process_job(self, job_id: str) -> None:
-        """Run one queued task and persist success/failure without leaking raw document text."""
+        """执行一个排队任务并持久化成功/失败状态，不泄露原始文档文本。"""
 
         job = await self.jobs.claim(job_id)
         if job is None:
@@ -190,7 +189,7 @@ class KnowledgeAdminService:
                 content=content,
             )
             await self.jobs.complete(job_id, document_id=result.document_id)
-        except Exception as exc:  # noqa: BLE001 - worker must persist a stable failure state
+        except Exception as exc:  # noqa: BLE001 - Worker 必须持久化稳定的失败状态
             await self.jobs.fail(
                 job_id,
                 error_code=type(exc).__name__,
@@ -199,13 +198,13 @@ class KnowledgeAdminService:
 
     @staticmethod
     def require_admin(identity: AgentIdentity) -> None:
-        """Enforce admin roles from the signed context, never from multipart form data."""
+        """从签名上下文校验管理员角色，绝不信任 multipart 表单中的角色。"""
 
         if not ADMIN_ROLES.intersection(identity.roles):
             raise KnowledgeAdminForbidden("administrator role is required")
 
     async def _get_scoped_job(self, identity: AgentIdentity, job_id: str) -> KnowledgeIngestionJob:
-        """Apply task scope before returning or transitioning a job."""
+        """在返回或转换任务前应用任务范围校验。"""
 
         job = await self.jobs.get_job(job_id)
         if PLATFORM_ADMIN_ROLES.intersection(identity.roles):

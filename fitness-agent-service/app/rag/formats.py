@@ -1,4 +1,4 @@
-"""Multi-format document parsing into structure-preserving RAG blocks."""
+"""将多格式文档解析为保留结构的 RAG 内容块。"""
 
 from __future__ import annotations
 
@@ -14,16 +14,16 @@ BlockKind = Literal["TEXT", "TABLE"]
 
 
 class UnsupportedDocumentFormatError(ValueError):
-    """The ingestion registry has no safe parser for the source format."""
+    """入库解析器注册表没有适用于该来源格式的安全解析器。"""
 
 
 class DocumentParseError(ValueError):
-    """A supported file could not be parsed or contained no usable content."""
+    """支持的文件无法解析，或不包含可用内容。"""
 
 
 @dataclass(frozen=True)
 class ParsedBlock:
-    """Canonical text/table block with source coordinates preserved."""
+    """保留来源坐标的标准文本/表格内容块。"""
 
     kind: BlockKind
     content: str
@@ -38,7 +38,7 @@ class ParsedBlock:
 
 @dataclass(frozen=True)
 class ParsedDocument:
-    """Parser output before chunking and Embedding."""
+    """分块和 Embedding 前的解析器输出。"""
 
     blocks: tuple[ParsedBlock, ...]
     media_type: str
@@ -46,14 +46,14 @@ class ParsedDocument:
 
 
 class DocumentParser(Protocol):
-    """Parser contract implemented by each supported file format."""
+    """每种支持的文件格式都需要实现的解析器契约。"""
 
     def parse(self, content: bytes, *, file_name: str) -> ParsedDocument:
-        """Parse bytes without writing untrusted uploads to a local path."""
+        """解析字节内容，不将不可信上传文件写入本地路径。"""
 
 
 class PdfOcrProvider(Protocol):
-    """OCR boundary for scanned PDFs; implementation belongs to a dedicated service."""
+    """扫描型 PDF 的 OCR 边界，具体实现属于独立 OCR 服务。"""
 
     def parse(
         self,
@@ -62,11 +62,11 @@ class PdfOcrProvider(Protocol):
         file_name: str,
         pages: Sequence[int] = (),
     ) -> ParsedDocument:
-        """Return structure-preserving OCR blocks for selected PDF pages."""
+        """返回指定 PDF 页面中保留结构的 OCR 内容块。"""
 
 
 class DocumentParserRegistry:
-    """Select a parser by a normalized extension and enforce upload size limits."""
+    """根据标准化扩展名选择解析器，并执行上传大小限制。"""
 
     def __init__(
         self,
@@ -85,7 +85,7 @@ class DocumentParserRegistry:
         }
 
     def parse(self, content: bytes, *, file_name: str) -> ParsedDocument:
-        """Parse a supported extension and reject oversized/empty uploads early."""
+        """解析支持的扩展名，并尽早拒绝超大或空上传文件。"""
 
         if not content:
             raise DocumentParseError("document content must not be empty")
@@ -110,7 +110,7 @@ class DocumentParserRegistry:
 
 
 class MarkdownParser:
-    """Parse Markdown/text while keeping the existing heading-aware chunker path."""
+    """解析 Markdown/文本，同时保留现有的标题感知分块路径。"""
 
     def parse(self, content: bytes, *, file_name: str) -> ParsedDocument:
         try:
@@ -127,7 +127,7 @@ class MarkdownParser:
 
 
 class PdfParser:
-    """Extract PDF page text and layout-aware tables with source page metadata."""
+    """提取 PDF 页面文本和布局感知表格，并保留来源页码元数据。"""
 
     def __init__(self, *, ocr_provider: PdfOcrProvider | None = None) -> None:
         self.ocr_provider = ocr_provider
@@ -184,7 +184,7 @@ class PdfParser:
 
 
 class DocxParser:
-    """Read DOCX paragraphs and tables in document order with heading context."""
+    """按 DOCX 文档顺序读取段落和表格，并保留标题上下文。"""
 
     def parse(self, content: bytes, *, file_name: str) -> ParsedDocument:
         from docx import Document
@@ -233,7 +233,7 @@ class DocxParser:
 
 
 class XlsxParser:
-    """Convert non-empty worksheets into header-preserving table blocks."""
+    """将非空工作表转换为保留表头的表格内容块。"""
 
     def parse(self, content: bytes, *, file_name: str) -> ParsedDocument:
         from openpyxl import load_workbook  # type: ignore[import-untyped]
@@ -275,14 +275,14 @@ class XlsxParser:
 
 
 def _heading_level(style_name: str) -> int:
-    """Read a DOCX Heading 1..6 style, clamping unknown heading styles safely."""
+    """读取 DOCX Heading 1..6 样式，对未知标题样式进行安全限制。"""
 
     match = next((char for char in style_name if char.isdigit()), "1")
     return max(1, min(6, int(match)))
 
 
 def _table_to_markdown(rows: Sequence[Sequence[str | None]]) -> str:
-    """Render tables with a repeated header so row chunks remain self-describing."""
+    """渲染表格并重复表头，使按行切分的内容块仍能自描述。"""
 
     cleaned_rows = [
         ["" if cell is None else _escape_cell(str(cell)) for cell in row] for row in rows
@@ -300,6 +300,6 @@ def _table_to_markdown(rows: Sequence[Sequence[str | None]]) -> str:
 
 
 def _escape_cell(value: str) -> str:
-    """Keep pipe-delimited table structure intact when a cell contains ``|``."""
+    """单元格包含 ``|`` 时，仍保持管道分隔表格结构完整。"""
 
     return " ".join(value.replace("|", "\\|").split())

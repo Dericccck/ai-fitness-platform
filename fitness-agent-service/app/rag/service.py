@@ -1,4 +1,4 @@
-"""Embedding, permission-aware recall, and production Reranker orchestration."""
+"""Embedding、权限过滤召回和生产级 Reranker 编排。"""
 
 from __future__ import annotations
 
@@ -21,22 +21,22 @@ from .repository import KnowledgeRepository
 
 
 class RagSearchError(RuntimeError):
-    """RAG cannot safely return a result."""
+    """RAG 无法安全返回结果。"""
 
 
 @dataclass(frozen=True)
 class RagSearchResult:
-    """Final ranked evidence passed to an Agent prompt."""
+    """传递给 Agent Prompt 的最终排序证据。"""
 
     chunks: tuple[KnowledgeChunk, ...]
 
     def citations(self) -> tuple[KnowledgeCitation, ...]:
-        """Return stable source references without exposing parent context twice."""
+        """返回稳定来源引用，避免重复暴露父节点上下文。"""
 
         return tuple(_citation_from_chunk(chunk) for chunk in self.chunks)
 
     def as_prompt_context(self) -> str:
-        """Render parent-expanded evidence while avoiding repeated parent text."""
+        """渲染扩展了父节点的证据，同时避免重复父节点文本。"""
 
         if not self.chunks:
             return ""
@@ -96,7 +96,7 @@ class RagService:
         self,
         chunks: Sequence[KnowledgeChunkInput],
     ) -> None:
-        """Embed and atomically persist one document's chunk batch."""
+        """生成 Embedding，并原子化持久化一个文档的分块批次。"""
 
         if not chunks:
             return
@@ -110,7 +110,7 @@ class RagService:
         *,
         parents: Sequence[KnowledgeParentInput] = (),
     ) -> None:
-        """Embed and atomically replace a document version and its chunks."""
+        """生成 Embedding，并原子化替换文档版本及其分块。"""
 
         if not chunks:
             raise RagSearchError("knowledge document must contain chunks")
@@ -121,7 +121,7 @@ class RagService:
         self,
         chunks: Sequence[KnowledgeChunkInput],
     ) -> list[list[float]]:
-        """Generate and validate embeddings in bounded provider batches."""
+        """按供应商允许的批次大小生成并校验 Embedding。"""
 
         embeddings: list[list[float]] = []
         for start in range(0, len(chunks), self.embedding_batch_size):
@@ -134,7 +134,7 @@ class RagService:
         return embeddings
 
     async def search(self, query: str, scope: RetrievalScope) -> RagSearchResult:
-        """Return evidence after server-side ACL filtering and true reranking."""
+        """完成服务端 ACL 过滤和真实重排序后返回证据。"""
 
         if not query.strip():
             return RagSearchResult(())
@@ -161,9 +161,8 @@ class RagService:
         if not candidates:
             return RagSearchResult(())
 
-        # The Reranker is required once candidates exist. Falling back to vector
-        # similarity here would hide a production dependency failure and would
-        # make retrieval quality vary silently between environments.
+        # 存在候选结果后必须调用 Reranker。此处回退到向量相似度会掩盖生产依赖故障，
+        # 还会导致不同环境的检索质量静默发生变化。
         ranked = await self.reranker.rerank(
             query,
             [candidate.content for candidate in candidates],
@@ -178,7 +177,7 @@ def _select_ranked_chunks(
     ranked: Sequence[RerankResult],
     top_k: int,
 ) -> list[KnowledgeChunk]:
-    """Validate vendor indexes before mapping results back to authorized chunks."""
+    """校验服务商返回的索引，再将结果映射回已授权内容块。"""
 
     selected: list[KnowledgeChunk] = []
     seen: set[int] = set()
@@ -201,7 +200,7 @@ def _fuse_candidates(
     rrf_k: int,
     limit: int,
 ) -> list[KnowledgeChunk]:
-    """Fuse heterogeneous scores by rank so one provider cannot dominate by scale."""
+    """按排名融合不同来源的分数，避免某个服务商因分值尺度主导结果。"""
 
     by_id: dict[str, KnowledgeChunk] = {}
     fused_scores: dict[str, float] = {}
@@ -226,7 +225,7 @@ def _fuse_candidates(
 
 
 def _citation_from_chunk(chunk: KnowledgeChunk) -> KnowledgeCitation:
-    """Convert parser metadata into a bounded citation contract."""
+    """将解析器元数据转换为有界引用契约。"""
 
     metadata = chunk.metadata
     heading_path = metadata.get("heading_path", chunk.parent_section_path)
@@ -254,7 +253,7 @@ def _citation_from_chunk(chunk: KnowledgeChunk) -> KnowledgeCitation:
 
 
 def _citation_label(citation: KnowledgeCitation) -> str:
-    """Keep prompt provenance compact while retaining enough detail for an answer."""
+    """保持 Prompt 来源信息紧凑，同时保留回答所需的足够细节。"""
 
     location = " / ".join(citation.section_path) or "根文档"
     page = f"，页码：{citation.source_page}" if citation.source_page is not None else ""
@@ -279,7 +278,7 @@ def _validate_embedding_dimensions(
     embeddings: Sequence[Sequence[float]],
     expected_dimensions: int | None,
 ) -> None:
-    """Reject malformed or mixed-dimension provider responses before persistence."""
+    """在持久化前拒绝格式错误或维度混杂的服务商响应。"""
 
     if not embeddings or any(not embedding for embedding in embeddings):
         raise RagSearchError("embedding provider returned an empty vector")

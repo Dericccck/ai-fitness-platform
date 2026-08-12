@@ -1,4 +1,4 @@
-"""Environment-backed configuration for the OCR service."""
+"""OCR 服务的环境变量配置。"""
 
 from functools import lru_cache
 from typing import Literal
@@ -8,7 +8,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    """Runtime configuration shared by the OCR service and inference engine."""
+    """OCR 服务与推理引擎共享的运行时配置。"""
 
     model_config = SettingsConfigDict(
         env_file=".env",
@@ -41,6 +41,6 @@ class Settings(BaseSettings):
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
-    """Return the process-wide settings snapshot."""
+    """返回进程级配置快照。"""
 
     return Settings()

@@ -1,4 +1,4 @@
-"""Public OCR v1 request/response models."""
+"""OCR v1 对外请求/响应模型。"""
 
 from typing import Literal
 
@@ -6,7 +6,7 @@ from pydantic import BaseModel, ConfigDict, Field
 
 
 class OcrBlock(BaseModel):
-    """One structure-preserving block returned to Agent ingestion."""
+    """返回给 Agent 入库流程的结构化内容块。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -21,7 +21,7 @@ class OcrBlock(BaseModel):
 
 
 class OcrResponse(BaseModel):
-    """Stable response consumed by ``HttpPdfOcrProvider`` in the Agent."""
+    """供 Agent 的 ``HttpPdfOcrProvider`` 消费的稳定响应。"""
 
     model_config = ConfigDict(extra="forbid")
 

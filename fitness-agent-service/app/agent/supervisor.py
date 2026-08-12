@@ -128,8 +128,7 @@ class Supervisor:
                 )
                 knowledge_context = rag_result.as_prompt_context()
             except RagSearchError as exc:
-                # Retrieval failure must be visible to the caller. The model
-                # must not receive an unmarked or fabricated fallback context.
+                # 检索失败必须对调用方可见；模型不能收到未标记或伪造的回退上下文。
                 raise SupervisorRuntimeError("knowledge retrieval failed") from exc
 
         system_prompt = _system_prompt(route, request.locale)

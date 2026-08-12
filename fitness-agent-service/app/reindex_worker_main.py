@@ -1,4 +1,4 @@
-"""Long-running process entrypoint for knowledge index rebuild batches."""
+"""长期运行的知识索引重建批次进程入口。"""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from app.main import app, lifespan
 
 
 async def run() -> None:
-    """Reuse the API lifecycle wiring while polling only the rebuild worker."""
+    """复用 API 生命周期装配，但只轮询索引重建 Worker。"""
 
     async with lifespan(app):
         settings = app.state.settings

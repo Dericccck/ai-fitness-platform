@@ -1,1 +1,1 @@
-"""AI fitness agent service application package."""
+"""健身 Agent 服务应用包。"""

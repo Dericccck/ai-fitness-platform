@@ -1,4 +1,4 @@
-"""Administrator orchestration for reproducible knowledge index rebuilds."""
+"""管理员可复现知识索引重建编排。"""
 
 from __future__ import annotations
 
@@ -21,12 +21,10 @@ PLATFORM_ADMIN_ROLES = frozenset({"ADMIN", "SUPER_ADMIN"})
 
 
 class KnowledgeReindexService:
-    """Create, authorize, execute, and retry durable re-index batches.
+    """创建、授权、执行并重试持久化的索引重建批次。
 
-    Re-indexing deliberately calls the same parser, parent-child chunker and Embedding
-    path as normal ingestion. The only difference is ``force=True``: the existing
-    document version is replaced atomically so a model or chunking change does not
-    create fake document versions.
+    索引重建有意复用普通入库的解析器、父子分块器和 Embedding 路径。唯一差异是使用
+    ``force=True``：原有文档版本会被原子替换，模型或分块策略调整不会产生虚假的文档版本。
     """
 
     def __init__(
@@ -55,7 +53,7 @@ class KnowledgeReindexService:
         organization_id: str | None,
         document_id: str | None,
     ) -> KnowledgeReindexJob:
-        """Snapshot an authorized rebuild scope before enqueueing any work."""
+        """在加入队列前，对已授权的重建范围进行快照。"""
 
         self.require_admin(identity)
         platform_wide = bool(PLATFORM_ADMIN_ROLES.intersection(identity.roles))
@@ -114,7 +112,7 @@ class KnowledgeReindexService:
         return await self.jobs.retry(job_id)
 
     async def process_job(self, job_id: str) -> None:
-        """Process a claimed batch; each item has an independent durable outcome."""
+        """处理已认领批次；每个项目都有独立的持久化结果。"""
 
         job = await self.jobs.claim_job(job_id)
         if job is None:
@@ -147,7 +145,7 @@ class KnowledgeReindexService:
                     await self.jobs.complete_item(
                         item.id, skipped=result.status == "SKIPPED_UNCHANGED"
                     )
-                except Exception as exc:  # noqa: BLE001 - persist item-level failure
+                except Exception as exc:  # noqa: BLE001 - 必须持久化项目级失败状态
                     await self.jobs.fail_item(
                         item.id,
                         error_message=str(exc) or "re-index item failed",
@@ -156,7 +154,7 @@ class KnowledgeReindexService:
 
     @staticmethod
     def require_admin(identity: AgentIdentity) -> None:
-        """Use only signed roles; rebuild scope never comes from the model or file."""
+        """只使用签名上下文中的角色；重建范围绝不来自模型或上传文件。"""
 
         if not ADMIN_ROLES.intersection(identity.roles):
             raise KnowledgeAdminForbidden("administrator role is required")

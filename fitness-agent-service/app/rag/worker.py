@@ -1,4 +1,4 @@
-"""Recoverable polling worker entry point for knowledge indexing tasks."""
+"""可恢复知识索引任务轮询 Worker 的入口。"""
 
 from __future__ import annotations
 
@@ -10,18 +10,18 @@ from .admin_service import KnowledgeAdminService
 
 @dataclass(frozen=True)
 class WorkerRunResult:
-    """Observable outcome of one bounded worker poll."""
+    """一次有界 Worker 轮询的可观测结果。"""
 
     discovered: int
     attempted: int
 
 
 class KnowledgeIngestionWorker:
-    """Process queued jobs through the same atomic Claim path used by API background tasks.
+    """通过与 API 后台任务相同的原子认领路径处理排队任务。
 
-    This class is intentionally a separate boundary from FastAPI. It can be launched by a
-    Kubernetes CronJob, a long-running worker Deployment, or a future Redis/queue consumer;
-    duplicate workers are safe because PostgreSQL accepts only one ``QUEUED`` Claim.
+    这个类有意与 FastAPI 分离，可由 Kubernetes CronJob、长期运行的 Worker Deployment
+    或未来的 Redis/队列消费者启动。即使存在多个 Worker 也不会重复执行，因为 PostgreSQL
+    只允许一个 Worker 成功认领 ``QUEUED`` 任务。
     """
 
     def __init__(
@@ -38,7 +38,7 @@ class KnowledgeIngestionWorker:
         self.batch_size = batch_size
 
     async def run_once(self) -> WorkerRunResult:
-        """Poll a bounded batch and let each task persist its own success/failure state."""
+        """轮询一个有界批次，并让每个任务独立持久化成功或失败状态。"""
 
         job_ids = await self.jobs.list_queued_ids(limit=self.batch_size)
         for job_id in job_ids:

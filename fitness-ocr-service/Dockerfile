@@ -1,5 +1,5 @@
-# OCR model runtime targets Linux deployment nodes. The inference extra is kept
-# optional in local development because Paddle wheels are platform-specific.
+# OCR 模型运行环境面向 Linux 部署节点。由于 Paddle 安装包具有平台差异，
+# 本地开发默认不安装推理 extra。
 FROM python:3.11-slim-bookworm
 
 ENV PYTHONDONTWRITEBYTECODE=1 \

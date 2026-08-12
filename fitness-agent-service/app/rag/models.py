@@ -1,4 +1,4 @@
-"""Stable RAG domain objects independent of PostgreSQL or a vector vendor."""
+"""与 PostgreSQL 或具体向量厂商解耦的稳定 RAG 领域对象。"""
 
 from dataclasses import dataclass
 from datetime import datetime
@@ -7,10 +7,10 @@ from typing import Any
 
 @dataclass(frozen=True)
 class RetrievalScope:
-    """Verified identity scope used to build server-side retrieval filters.
+    """用于构建服务端检索过滤条件的已验证身份范围。
 
-    The model or HTTP request never supplies these values. The API derives them
-    from the signed AgentContext, and the repository turns them into SQL filters.
+    这些值绝不由模型或 HTTP 请求直接提供。API 从签名 AgentContext 中推导范围，
+    仓储层再将其转换为 SQL 过滤条件。
     """
 
     subject: str
@@ -20,7 +20,7 @@ class RetrievalScope:
 
 @dataclass(frozen=True)
 class KnowledgeChunk:
-    """A retrieved chunk with enough provenance for a user-visible citation."""
+    """包含足够来源信息、可生成用户可见引用的检索分块。"""
 
     id: str
     document_id: str
@@ -39,7 +39,7 @@ class KnowledgeChunk:
 
 @dataclass(frozen=True)
 class KnowledgeCitation:
-    """Stable user-visible citation assembled only from authorized chunk provenance."""
+    """仅根据已授权分块来源信息组装的稳定用户可见引用。"""
 
     citation_id: str
     title: str
@@ -59,7 +59,7 @@ class KnowledgeCitation:
 
 @dataclass(frozen=True)
 class KnowledgeDocumentInput:
-    """A publishable document version that owns one or more chunks."""
+    """拥有一个或多个分块、可发布的文档版本。"""
 
     id: str
     organization_id: str | None
@@ -77,7 +77,7 @@ class KnowledgeDocumentInput:
 
 @dataclass(frozen=True)
 class KnowledgeDocumentSnapshot:
-    """Current persisted version used to decide whether re-indexing is needed."""
+    """当前持久化版本，用于判断是否需要重新建立索引。"""
 
     id: str
     source_uri: str
@@ -88,7 +88,7 @@ class KnowledgeDocumentSnapshot:
 
 @dataclass(frozen=True)
 class KnowledgeParentInput:
-    """Context node stored without an embedding and expanded after child recall."""
+    """不单独生成向量、在子节点召回后展开的上下文父节点。"""
 
     id: str
     document_id: str
@@ -103,7 +103,7 @@ class KnowledgeParentInput:
 
 @dataclass(frozen=True)
 class KnowledgeChunkInput:
-    """Chunk input before persistence and embedding generation."""
+    """持久化和生成 Embedding 前的分块输入。"""
 
     id: str
     document_id: str

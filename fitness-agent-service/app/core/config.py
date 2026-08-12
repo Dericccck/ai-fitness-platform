@@ -89,8 +89,8 @@ class Settings(BaseSettings):
     reranker_model: str = ""
     reranker_timeout_seconds: float = 15.0
 
-    # RAG limits are bounded at the service boundary. A chat request cannot
-    # increase database, reranker, or prompt costs by overriding these values.
+    # RAG 限制在服务边界统一约束。对话请求不能通过覆盖这些值增加数据库、
+    # Reranker 或 Prompt 成本。
     rag_candidate_limit: int = Field(default=20, ge=1, le=100)
     rag_keyword_candidate_limit: int = Field(default=20, ge=1, le=100)
     rag_top_k: int = Field(default=5, ge=1, le=20)

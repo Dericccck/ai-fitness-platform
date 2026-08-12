@@ -1,4 +1,4 @@
-"""HTTP OCR adapter for scanned and partially scanned PDF knowledge sources."""
+"""面向扫描型和部分扫描型 PDF 知识源的 HTTP OCR 适配器。"""
 
 from __future__ import annotations
 
@@ -11,13 +11,13 @@ from .formats import DocumentParseError, ParsedBlock, ParsedDocument
 
 
 class OcrServiceUnavailable(DocumentParseError):
-    """The configured OCR service did not provide a response."""
+    """已配置的 OCR 服务没有提供有效响应。"""
 
 
 class HttpPdfOcrProvider:
-    """Call a dedicated OCR service with a versioned, structure-preserving contract.
+    """调用独立 OCR 服务，并使用版本化、保留结构的契约。
 
-    Expected response shape::
+    期望的响应结构：
 
         {
           "media_type": "application/pdf",
@@ -25,9 +25,8 @@ class HttpPdfOcrProvider:
           "blocks": [{"kind": "TEXT", "content": "...", "source_page": 1}]
         }
 
-    The OCR service is deliberately outside the Agent process. It can use a managed
-    OCR vendor or an internal GPU deployment without changing ingestion, parent-child
-    chunking, permissions, or citation code.
+    OCR 服务有意独立于 Agent 进程。它可以使用托管 OCR 厂商或内部 GPU 部署，
+    而不需要修改入库、父子分块、权限和引用代码。
     """
 
     def __init__(
@@ -54,7 +53,7 @@ class HttpPdfOcrProvider:
         file_name: str,
         pages: Sequence[int] = (),
     ) -> ParsedDocument:
-        """Submit the original PDF and request only missing pages when possible."""
+        """提交原始 PDF，并在条件允许时只请求缺失页面。"""
 
         headers = {"Authorization": f"Bearer {self.api_key}"} if self.api_key else {}
         data = {"pages": ",".join(str(page) for page in pages)} if pages else {}
@@ -80,7 +79,7 @@ class HttpPdfOcrProvider:
 
 
 def _parsed_document_from_payload(payload: Any) -> ParsedDocument:
-    """Validate provider output before it can enter chunking and Embedding."""
+    """在服务商输出进入分块和 Embedding 前进行校验。"""
 
     if not isinstance(payload, dict) or not isinstance(payload.get("blocks"), list):
         raise DocumentParseError("OCR response must contain a blocks array")

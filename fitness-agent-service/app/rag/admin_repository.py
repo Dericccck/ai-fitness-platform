@@ -1,4 +1,4 @@
-"""Persistence for knowledge upload review and indexing task state."""
+"""知识上传审核与索引任务状态的持久化。"""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from .admin_models import (
 
 
 class KnowledgeIngestionRepository:
-    """Keep review/task transitions atomic and explicit in PostgreSQL."""
+    """在 PostgreSQL 中保持审核/任务状态转换原子且明确。"""
 
     def __init__(self, database: Database) -> None:
         self._database = database
@@ -27,7 +27,7 @@ class KnowledgeIngestionRepository:
         *,
         job: KnowledgeIngestionJob,
     ) -> KnowledgeIngestionJob:
-        """Persist a pending review task and return the database-normalized row."""
+        """持久化待审核任务，并返回数据库标准化后的数据行。"""
 
         statement = text(
             """
@@ -54,7 +54,7 @@ class KnowledgeIngestionRepository:
         return job_from_row(row)
 
     async def get_job(self, job_id: str) -> KnowledgeIngestionJob:
-        """Return one task or a stable not-found domain error."""
+        """返回一个任务；不存在时抛出稳定的领域异常。"""
 
         statement = text("SELECT * FROM knowledge_ingestion_jobs WHERE id = :id")
         async with self._database.engine.connect() as connection:
@@ -70,7 +70,7 @@ class KnowledgeIngestionRepository:
         platform_wide: bool = False,
         limit: int = 50,
     ) -> list[KnowledgeIngestionJob]:
-        """List only the task scope allowed by the signed administrator identity."""
+        """只列出签名管理员身份被允许访问的任务范围。"""
 
         if limit < 1 or limit > 100:
             raise ValueError("job list limit must be between 1 and 100")
@@ -98,7 +98,7 @@ class KnowledgeIngestionRepository:
         return [job_from_row(row) for row in rows]
 
     async def list_queued_ids(self, *, limit: int = 10) -> list[str]:
-        """Return bounded queued IDs; each worker still claims atomically before processing."""
+        """返回数量受限的排队任务 ID；每个 Worker 处理前仍需原子认领。"""
 
         if limit < 1 or limit > 100:
             raise ValueError("worker batch size must be between 1 and 100")
@@ -118,7 +118,7 @@ class KnowledgeIngestionRepository:
     async def approve(
         self, job_id: str, *, reviewer_id: str, comment: str | None
     ) -> KnowledgeIngestionJob:
-        """Move a pending review task to the queue exactly once."""
+        """将待审核任务准确地转入队列一次。"""
 
         return await self._review_transition(
             job_id,
@@ -128,7 +128,7 @@ class KnowledgeIngestionRepository:
         )
 
     async def reject(self, job_id: str, *, reviewer_id: str, comment: str) -> KnowledgeIngestionJob:
-        """Reject a task without deleting its staged evidence or audit state."""
+        """拒绝任务，但不删除暂存证据或审计状态。"""
 
         return await self._review_transition(
             job_id,
@@ -138,7 +138,7 @@ class KnowledgeIngestionRepository:
         )
 
     async def claim(self, job_id: str) -> KnowledgeIngestionJob | None:
-        """Claim a queued task so two workers cannot embed the same job concurrently."""
+        """认领排队任务，避免两个 Worker 同时为同一任务生成 Embedding。"""
 
         statement = text(
             """
@@ -155,7 +155,7 @@ class KnowledgeIngestionRepository:
         return job_from_row(row) if row is not None else None
 
     async def complete(self, job_id: str, *, document_id: str) -> KnowledgeIngestionJob:
-        """Mark an indexing task successful only after document publication commits."""
+        """只有文档发布事务提交后，才将索引任务标记为成功。"""
 
         statement = text(
             """
@@ -177,7 +177,7 @@ class KnowledgeIngestionRepository:
         error_code: str,
         error_message: str,
     ) -> KnowledgeIngestionJob:
-        """Persist a bounded failure; retry is an explicit admin action."""
+        """持久化受限的失败信息；重试必须由管理员显式触发。"""
 
         statement = text(
             """
@@ -198,7 +198,7 @@ class KnowledgeIngestionRepository:
         )
 
     async def retry(self, job_id: str, *, reviewer_id: str) -> KnowledgeIngestionJob:
-        """Requeue a failed task only while its bounded retry budget remains."""
+        """只有在有限重试预算未耗尽时，才重新排队失败任务。"""
 
         statement = text(
             """
@@ -255,7 +255,7 @@ class KnowledgeIngestionRepository:
 
 
 def _job_params(job: KnowledgeIngestionJob) -> dict[str, Any]:
-    """Convert the immutable domain object into a driver-safe parameter mapping."""
+    """将不可变领域对象转换为数据库驱动可安全使用的参数映射。"""
 
     return {
         "id": job.id,

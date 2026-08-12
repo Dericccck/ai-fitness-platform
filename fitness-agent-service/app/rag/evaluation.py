@@ -1,4 +1,4 @@
-"""Offline retrieval evaluation primitives independent of model providers."""
+"""与模型供应商解耦的离线检索评测基础能力。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class RetrievalEvalCase:
-    """One labeled query with expected authorized document or chunk IDs."""
+    """一条带标注的查询，以及期望命中的已授权文档或分块 ID。"""
 
     case_id: str
     query: str
@@ -20,7 +20,7 @@ class RetrievalEvalCase:
 
 @dataclass(frozen=True)
 class RetrievalEvalResult:
-    """Metrics for one evaluation case."""
+    """一条评测用例的指标结果。"""
 
     case_id: str
     recall_at_k: float
@@ -34,7 +34,7 @@ def evaluate_case(
     *,
     k: int,
 ) -> RetrievalEvalResult:
-    """Compute recall@k and MRR from stable IDs, not model-generated explanations."""
+    """根据稳定 ID 计算 Recall@K 和 MRR，而不是依赖模型生成的解释。"""
 
     if k < 1:
         raise ValueError("evaluation k must be positive")
@@ -55,7 +55,7 @@ def evaluate_case(
 
 
 def aggregate_results(results: Sequence[RetrievalEvalResult]) -> dict[str, float]:
-    """Aggregate case-level metrics for CI thresholds and experiment comparison."""
+    """汇总用例级指标，供 CI 阈值检查和实验结果对比使用。"""
 
     if not results:
         return {"recall_at_k": 0.0, "mrr": 0.0, "case_count": 0.0}
@@ -69,14 +69,14 @@ def aggregate_results(results: Sequence[RetrievalEvalResult]) -> dict[str, float
 
 @dataclass(frozen=True)
 class RetrievalEvalThresholds:
-    """Minimum quality and zero-tolerance security gates used by CI."""
+    """CI 使用的最低质量门槛和零容忍安全门禁。"""
 
     min_recall_at_k: float
     min_mrr: float
     max_forbidden_hits: int = 0
 
     def validate(self, metrics: dict[str, float]) -> list[str]:
-        """Return actionable failures instead of silently accepting regressions."""
+        """返回可执行的失败原因，不静默接受质量回退。"""
 
         failures: list[str] = []
         if metrics["recall_at_k"] < self.min_recall_at_k:
@@ -91,7 +91,7 @@ class RetrievalEvalThresholds:
 
 
 def case_from_mapping(data: dict[str, Any]) -> RetrievalEvalCase:
-    """Load a JSON regression case with explicit authorized and forbidden IDs."""
+    """加载明确声明已授权 ID 和禁止 ID 的 JSON 回归用例。"""
 
     return RetrievalEvalCase(
         case_id=str(data["case_id"]),

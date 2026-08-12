@@ -1,1 +1,1 @@
-"""Retrieval-augmented generation primitives for the fitness Agent service."""
+"""健身 Agent 服务的检索增强生成基础能力。"""

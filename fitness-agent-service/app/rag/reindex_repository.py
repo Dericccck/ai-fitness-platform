@@ -1,4 +1,4 @@
-"""Persistence for reproducible knowledge index rebuild batches."""
+"""可复现知识索引重建批次的持久化仓储。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from .admin_models import (
 
 
 class KnowledgeReindexRepository:
-    """Keep batch and document-level rebuild transitions atomic in PostgreSQL."""
+    """在 PostgreSQL 中保证批次级和文档级重建状态转换的原子性。"""
 
     def __init__(self, database: Database) -> None:
         self._database = database
@@ -32,7 +32,7 @@ class KnowledgeReindexRepository:
         organization_id: str | None = None,
         document_id: str | None = None,
     ) -> list[KnowledgeReindexSource]:
-        """Snapshot published documents together with their immutable staged source."""
+        """为已发布文档创建快照，并关联不可变的暂存源文件。"""
 
         statement = text(
             """
@@ -68,7 +68,7 @@ class KnowledgeReindexRepository:
         sources: Sequence[KnowledgeReindexSource],
         item_ids: Sequence[str],
     ) -> KnowledgeReindexJob:
-        """Persist the batch and its source snapshot in one transaction."""
+        """在一个事务中持久化重建批次及其来源快照。"""
 
         if len(sources) != len(item_ids) or not sources:
             raise ValueError("a re-index job must contain one item per source")
@@ -260,7 +260,7 @@ class KnowledgeReindexRepository:
         )
 
     async def finalize_job(self, job_id: str) -> KnowledgeReindexJob:
-        """Calculate counters from item state and close only when all items finish."""
+        """根据项目状态计算计数器，只有全部项目结束后才关闭批次。"""
 
         statement = text(
             """
@@ -305,7 +305,7 @@ class KnowledgeReindexRepository:
         return reindex_job_from_row(row)
 
     async def retry(self, job_id: str) -> KnowledgeReindexJob:
-        """Requeue only failed items that still have retry budget."""
+        """只重新排队仍有重试额度的失败项目。"""
 
         item_statement = text(
             """

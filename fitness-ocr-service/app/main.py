@@ -1,4 +1,4 @@
-"""FastAPI entrypoint for the independent OCR service."""
+"""独立 OCR 服务的 FastAPI 入口。"""
 
 from __future__ import annotations
 
@@ -30,7 +30,7 @@ def create_app(
     settings: Settings | None = None,
     engine: DocumentEngine | None = None,
 ) -> FastAPI:
-    """Create the app explicitly so contract tests can inject a fake engine."""
+    """显式创建应用，方便契约测试注入模拟引擎。"""
 
     resolved_settings = settings or get_settings()
     resolved_engine = engine or PaddleStructureEngine(resolved_settings)
@@ -90,11 +90,10 @@ def create_app(
 
 
 async def _run_inference(state: AppState, content: bytes, pages: str | None) -> OcrResponse:
-    """Run OCR without releasing the concurrency slot while a timed-out thread drains.
+    """运行 OCR；超时线程完成前不释放并发槽。
 
-    Python threads cannot be safely killed. If the HTTP deadline expires, the request
-    returns 504 but the worker continues in the background; the semaphore is released
-    only after that worker finishes, preventing overlapping GPU inference.
+    Python 线程无法被安全强制终止。如果 HTTP 超时，请求会返回 504，但后台任务继续执行；
+    只有后台任务完成后才释放信号量，从而避免 GPU 推理重叠。
     """
 
     await state.semaphore.acquire()
@@ -119,7 +118,7 @@ async def _run_inference(state: AppState, content: bytes, pages: str | None) -> 
 
 
 async def _drain_worker(worker: asyncio.Task[OcrResponse], semaphore: asyncio.Semaphore) -> None:
-    """Drain a detached inference task and release its slot exactly once."""
+    """等待脱离请求的推理任务完成，并准确释放一次并发槽。"""
 
     try:
         await worker

@@ -1,4 +1,4 @@
-"""PaddleOCR adapter and canonical result conversion."""
+"""PaddleOCR 适配器与标准结果转换。"""
 
 from __future__ import annotations
 
@@ -14,26 +14,26 @@ from .models import OcrBlock
 
 
 class OcrEngineUnavailable(RuntimeError):
-    """The inference runtime or model cannot be loaded."""
+    """推理运行时或模型无法加载。"""
 
 
 class OcrEngineError(RuntimeError):
-    """The inference engine returned an unusable result."""
+    """推理引擎返回了不可使用的结果。"""
 
 
 class DocumentEngine(Protocol):
-    """Minimal engine boundary used by the service and its tests."""
+    """服务和测试使用的最小推理引擎边界。"""
 
     def status(self) -> EngineStatus:
-        """Return whether the underlying model runtime is ready."""
+        """返回底层模型运行时是否已就绪。"""
 
     def predict(self, input_path: str) -> Iterable[Any]:
-        """Yield one Paddle-style result for each processed page."""
+        """为每个已处理页面返回一个 Paddle 风格的结果。"""
 
 
 @dataclass(frozen=True)
 class EngineStatus:
-    """Readiness state exposed without leaking model internals."""
+    """对外暴露的就绪状态，不泄露模型内部细节。"""
 
     ready: bool
     engine_name: str
@@ -41,11 +41,10 @@ class EngineStatus:
 
 
 class PaddleStructureEngine:
-    """Run PaddleOCR PP-StructureV3 and expose only sanitized page results.
+    """运行 PaddleOCR PP-StructureV3，只暴露经过清洗的页面结果。
 
-    The import and model construction happen once, on first readiness check. This
-    keeps contract tests usable on machines without Paddle while production readiness
-    still fails until the real model is available.
+    首次检查就绪状态时才执行导入和模型构建。这样没有安装 Paddle 的机器仍可运行契约测试，
+    同时生产环境在真实模型可用前会保持未就绪。
     """
 
     name = "paddleocr-pp-structurev3"
@@ -56,7 +55,7 @@ class PaddleStructureEngine:
         self._load_error: str | None = None
 
     def status(self) -> EngineStatus:
-        """Load the model once and return a safe readiness summary."""
+        """只加载一次模型，并返回安全的就绪状态摘要。"""
 
         if self._pipeline is not None:
             return EngineStatus(True, self.name)
@@ -65,8 +64,8 @@ class PaddleStructureEngine:
         try:
             from paddleocr import PPStructureV3  # type: ignore[import-not-found]
 
-            # Keep model construction centralized so a future PaddleOCR-VL or cloud
-            # adapter can replace this class without changing the HTTP contract.
+            # 集中管理模型构建，后续可以替换为 PaddleOCR-VL 或云端适配器，
+            # 不需要修改 HTTP 契约。
             self._pipeline = PPStructureV3(
                 lang=self.settings.language,
                 device=self.settings.device,
@@ -77,13 +76,13 @@ class PaddleStructureEngine:
                 use_formula_recognition=self.settings.use_formula_recognition,
                 format_block_content=self.settings.format_block_content,
             )
-        except Exception as exc:  # noqa: BLE001 - model runtimes expose heterogeneous errors.
+        except Exception as exc:  # noqa: BLE001 - 不同模型运行时可能抛出不同异常。
             self._load_error = f"PaddleOCR engine is unavailable: {exc}"
             return EngineStatus(False, self.name, self._load_error)
         return EngineStatus(True, self.name)
 
     def predict(self, input_path: str) -> Iterator[Any]:
-        """Yield raw Paddle results after enforcing model readiness."""
+        """确认模型就绪后返回原始 Paddle 结果。"""
 
         status = self.status()
         if not status.ready or self._pipeline is None:
@@ -95,7 +94,7 @@ class PaddleStructureEngine:
 
 
 def result_to_mapping(result: Any) -> Mapping[str, Any]:
-    """Convert a Paddle result object into a JSON-like mapping."""
+    """将 Paddle 结果对象转换为类似 JSON 的映射。"""
 
     payload = getattr(result, "json", result)
     if callable(payload):
@@ -111,7 +110,7 @@ def blocks_from_page_result(
     source_page: int,
     table_index_start: int,
 ) -> tuple[list[OcrBlock], int]:
-    """Convert one Paddle page into contract blocks with source coordinates."""
+    """将一个 Paddle 页面转换为带来源坐标的契约内容块。"""
 
     payload = result_to_mapping(result)
     raw_blocks = payload.get("parsing_res_list", [])
@@ -167,7 +166,7 @@ def _safe_text(value: Any, default: str) -> str:
 
 
 class _TableParser(HTMLParser):
-    """Small dependency-free HTML table reader for Paddle table blocks."""
+    """用于读取 Paddle 表格内容块的轻量级无依赖 HTML 表格解析器。"""
 
     def __init__(self) -> None:
         super().__init__(convert_charrefs=True)
@@ -197,7 +196,7 @@ class _TableParser(HTMLParser):
 
 
 def html_table_to_markdown(content: str) -> str:
-    """Keep Markdown unchanged, otherwise convert Paddle HTML table output."""
+    """Markdown 内容保持不变，其他内容转换为 Paddle HTML 表格输出。"""
 
     if "<table" not in content.lower():
         return re.sub(r"\s+", " ", content).strip()

@@ -1,4 +1,4 @@
-"""PostgreSQL repository for permission-aware vector retrieval."""
+"""支持权限过滤向量检索的 PostgreSQL 仓储。"""
 
 from __future__ import annotations
 
@@ -21,7 +21,7 @@ from .models import (
 
 
 class KnowledgeRepository:
-    """Persist and search Agent knowledge without exposing a raw DB to Agents.
+    """持久化并检索 Agent 知识，不向 Agent 暴露原始数据库。
 
     PostgreSQL remains the source of truth for indexed knowledge metadata. The
     vector column is only a retrieval accelerator; every search applies tenant,
@@ -33,7 +33,7 @@ class KnowledgeRepository:
         self._database = database
 
     async def get_current_document(self, source_uri: str) -> KnowledgeDocumentSnapshot | None:
-        """Return the currently published version for an immutable source URI."""
+        """返回不可变来源 URI 当前发布的版本。"""
 
         statement = text(
             """
@@ -63,7 +63,7 @@ class KnowledgeRepository:
         chunks: Sequence[KnowledgeChunkInput],
         embeddings: Sequence[Sequence[float]],
     ) -> None:
-        """Insert embedded chunks in one transaction.
+        """在一个事务中插入已生成 Embedding 的内容块。
 
         The caller is responsible for publishing the document version before
         exposing it to retrieval. ``executemany`` keeps one document batch
@@ -102,7 +102,7 @@ class KnowledgeRepository:
         *,
         parents: Sequence[KnowledgeParentInput] = (),
     ) -> None:
-        """Upsert one document version and replace its chunks atomically.
+        """写入或更新一个文档版本，并原子替换其内容块。
 
         Re-indexing is intentionally a single database transaction. Until the
         transaction commits, the published document still exposes its previous
@@ -194,9 +194,8 @@ class KnowledgeRepository:
             "effective_to": document.effective_to,
         }
         async with self._database.engine.begin() as connection:
-            # Only one version of a source is searchable at a time. This is
-            # part of the same transaction as the new version, so a failed
-            # embedding write cannot hide the previously published version.
+            # 同一来源同时只能有一个版本可检索。该操作与新版本写入处于同一事务，
+            # 因此 Embedding 写入失败不会隐藏此前已发布的版本。
             await connection.execute(
                 archive_statement,
                 {"source_uri": document.source_uri, "document_id": document.id},
@@ -215,7 +214,7 @@ class KnowledgeRepository:
         *,
         limit: int,
     ) -> list[KnowledgeChunk]:
-        """Recall authorized candidates using pgvector cosine distance."""
+        """使用 pgvector 余弦距离召回已授权候选。"""
 
         if not scope.organization_ids or not scope.roles:
             return []
@@ -283,7 +282,7 @@ class KnowledgeRepository:
         *,
         limit: int,
     ) -> list[KnowledgeChunk]:
-        """Recall authorized lexical candidates using FTS plus pg_trgm similarity."""
+        """使用全文检索和 pg_trgm 相似度召回已授权词法候选。"""
 
         if not query.strip() or not scope.organization_ids or not scope.roles:
             return []
@@ -344,7 +343,7 @@ class KnowledgeRepository:
 
 
 def _vector_literal(values: Sequence[float]) -> str:
-    """Serialize a vector for an explicit PostgreSQL cast.
+    """为显式 PostgreSQL 类型转换序列化向量。
 
     The explicit cast keeps the repository independent of SQLAlchemy ORM model
     state and makes the query type visible. Values are validated as finite
@@ -357,7 +356,7 @@ def _vector_literal(values: Sequence[float]) -> str:
 
 
 def _rows_to_chunks(rows: Sequence[Any]) -> list[KnowledgeChunk]:
-    """Map both vector and lexical query rows to the same provenance model."""
+    """将向量和词法查询结果行映射为统一来源模型。"""
 
     return [
         KnowledgeChunk(
@@ -383,7 +382,7 @@ def _chunk_params(
     chunks: Sequence[KnowledgeChunkInput],
     embeddings: Sequence[Sequence[float]],
 ) -> list[dict[str, Any]]:
-    """Build one consistent parameter shape for insert and replace operations."""
+    """为插入和替换操作构建一致的参数结构。"""
 
     return [
         {
@@ -408,7 +407,7 @@ def _chunk_params(
 
 
 def _parent_params(parents: Sequence[KnowledgeParentInput]) -> list[dict[str, Any]]:
-    """Serialize parent context rows for one document transaction."""
+    """为一个文档事务序列化父节点上下文数据行。"""
 
     return [
         {

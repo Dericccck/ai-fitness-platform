@@ -1,4 +1,4 @@
-"""Permission-aware RAG search and citation API."""
+"""带权限控制的 RAG 检索与引用 API。"""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/api/v1/agent/knowledge", tags=["knowledge"])
 
 
 class KnowledgeSearchRequest(BaseModel):
-    """Search input; identity and ACL filters are deliberately absent."""
+    """检索输入；身份和 ACL 过滤字段会被有意排除。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -23,7 +23,7 @@ class KnowledgeSearchRequest(BaseModel):
 
 
 class KnowledgeCitationResponse(BaseModel):
-    """Citation payload for UI rendering and answer traceability."""
+    """供 UI 渲染和答案追溯使用的引用载荷。"""
 
     citation_id: str
     title: str
@@ -51,7 +51,7 @@ async def search_knowledge(
     request: Request,
     x_agent_context: str | None = Header(default=None),
 ) -> KnowledgeSearchResponse:
-    """Return only citations produced after server-side permission filtering."""
+    """只返回经过服务端权限过滤后生成的引用。"""
 
     identity = _verify_identity(request, x_agent_context)
     try:

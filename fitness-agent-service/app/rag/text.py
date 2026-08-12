@@ -1,4 +1,4 @@
-"""Shared text normalization primitives used by every document parser."""
+"""所有文档解析器共用的文本规范化基础能力。"""
 
 from __future__ import annotations
 
@@ -9,7 +9,7 @@ _FRONT_MATTER = re.compile(r"\A---\s*\n.*?\n---\s*(?:\n|\Z)", re.DOTALL)
 
 
 def clean_markdown(raw_content: str) -> str:
-    """Normalize text while preserving headings, bullets, tables, and paragraphs."""
+    """规范化文本，同时保留标题、项目符号、表格和段落结构。"""
 
     normalized = unicodedata.normalize("NFKC", raw_content).replace("\r\n", "\n")
     normalized = normalized.replace("\r", "\n").lstrip("\ufeff")

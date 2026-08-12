@@ -1,1 +1,1 @@
-"""OCR service tests."""
+"""OCR 服务测试。"""

@@ -1,1 +1,1 @@
-"""Infrastructure adapters used by the agent runtime."""
+"""Agent 运行时使用的基础设施适配器。"""

@@ -1,4 +1,4 @@
-"""Live local security smoke test for the configured ClamAV adapter."""
+"""针对已配置 ClamAV 适配器的本地实时安全冒烟测试。"""
 
 from __future__ import annotations
 
@@ -12,11 +12,11 @@ EICAR_TEST_STRING = r"X5O!P%@AP[4\PZX54(P^)7CC)7}$EICAR-STANDARD-ANTIVIRUS-TEST-
 
 
 def main() -> int:
-    """Verify clean and EICAR rejection against a real ClamAV daemon."""
+    """连接真实 ClamAV 守护进程，验证正常文件通过、EICAR 测试串被拒绝。"""
 
     settings = get_settings()
     if settings.rag_malware_scanner_backend != "clamav":
-        print("AGENT_RAG_MALWARE_SCANNER_BACKEND must be clamav")
+        print("AGENT_RAG_MALWARE_SCANNER_BACKEND 必须配置为 clamav")
         return 2
     scanner = ClamAvScanner(
         settings.rag_clamav_host,
@@ -25,18 +25,18 @@ def main() -> int:
     )
     clean = scanner.scan("security-check.txt", b"fitness-agent security check")
     if clean.status != "CLEAN":
-        print(f"unexpected clean verdict: {clean.status}")
+        print(f"正常文件返回了异常 verdict：{clean.status}")
         return 1
     try:
         scanner.scan("eicar.com", EICAR_TEST_STRING.encode("ascii"))
     except DocumentSafetyError as exc:
         if "malware detected" not in str(exc):
-            print(f"unexpected EICAR failure: {exc}")
+            print(f"EICAR 测试串返回了异常错误：{exc}")
             return 1
     else:
-        print("ClamAV did not reject the EICAR test signature")
+        print("ClamAV 没有拒绝 EICAR 测试签名")
         return 1
-    print("ClamAV live security check passed: clean accepted, EICAR rejected")
+    print("ClamAV 实时安全检查通过：正常文件已接受，EICAR 测试串已拒绝")
     return 0
 
 

@@ -1,4 +1,4 @@
-"""Administrator APIs for reviewable knowledge uploads and indexing tasks."""
+"""支持审核的知识上传与索引任务管理员 API。"""
 
 from __future__ import annotations
 
@@ -35,7 +35,7 @@ router = APIRouter(prefix="/api/v1/admin/knowledge", tags=["admin-knowledge"])
 
 
 class KnowledgeJobResponse(BaseModel):
-    """Task state exposed to admins without returning staged document content."""
+    """向管理员暴露任务状态，但不返回暂存文档内容。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -73,7 +73,7 @@ class KnowledgeJobResponse(BaseModel):
 
 
 class RejectRequest(BaseModel):
-    """A rejection must explain the governance decision for later audit."""
+    """拒绝操作必须说明治理决定，供后续审计。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -81,7 +81,7 @@ class RejectRequest(BaseModel):
 
 
 class ReviewRequest(BaseModel):
-    """Optional approval comment retained with the task transition."""
+    """可选的审批备注，并随任务状态转换一同保留。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -89,7 +89,7 @@ class ReviewRequest(BaseModel):
 
 
 class ReindexCreateRequest(BaseModel):
-    """Define a rebuild scope; authorization is resolved from the signed context."""
+    """定义重建范围；权限从签名上下文中解析。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -98,7 +98,7 @@ class ReindexCreateRequest(BaseModel):
 
 
 class ReindexJobResponse(BaseModel):
-    """Progress counters exposed to an administrator dashboard."""
+    """向管理员看板暴露的进度计数器。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -138,7 +138,7 @@ async def upload_document(
     effective_to: datetime | None = Form(default=None),  # noqa: B008
     x_agent_context: str | None = Header(default=None),
 ) -> KnowledgeJobResponse:
-    """Stage one file and put it into the pending-review state."""
+    """暂存一个文件，并将其置于待审核状态。"""
 
     identity = _verify_identity(request, x_agent_context)
     content = await _read_upload(file, request.app.state.settings.rag_max_source_bytes)
@@ -185,7 +185,7 @@ async def list_jobs(
     limit: int = 50,
     x_agent_context: str | None = Header(default=None),
 ) -> list[KnowledgeJobResponse]:
-    """List bounded task summaries for the admin console."""
+    """为管理员控制台返回数量受限的任务摘要。"""
 
     identity = _verify_identity(request, x_agent_context)
     try:
@@ -201,7 +201,7 @@ async def get_job(
     request: Request,
     x_agent_context: str | None = Header(default=None),
 ) -> KnowledgeJobResponse:
-    """Read one task state without exposing the staged source bytes."""
+    """读取单个任务状态，但不暴露暂存源文件字节。"""
 
     identity = _verify_identity(request, x_agent_context)
     try:
@@ -220,7 +220,7 @@ async def approve_job(
     payload: ReviewRequest | None = None,
     x_agent_context: str | None = Header(default=None),
 ) -> KnowledgeJobResponse:
-    """Approve and enqueue a task; indexing runs after the HTTP response."""
+    """批准并排队任务；索引会在 HTTP 响应返回后执行。"""
 
     identity = _verify_identity(request, x_agent_context)
     try:
@@ -244,7 +244,7 @@ async def reject_job(
     request: Request,
     x_agent_context: str | None = Header(default=None),
 ) -> KnowledgeJobResponse:
-    """Reject a task and retain the reason in the audit record."""
+    """拒绝任务，并将原因保留在审计记录中。"""
 
     identity = _verify_identity(request, x_agent_context)
     try:
@@ -267,7 +267,7 @@ async def retry_job(
     background_tasks: BackgroundTasks,
     x_agent_context: str | None = Header(default=None),
 ) -> KnowledgeJobResponse:
-    """Requeue a failed task only while its configured retry budget remains."""
+    """只有在配置的重试额度未耗尽时，才重新排队失败任务。"""
 
     identity = _verify_identity(request, x_agent_context)
     try:
@@ -293,7 +293,7 @@ async def create_reindex_job(
     payload: ReindexCreateRequest,
     x_agent_context: str | None = Header(default=None),
 ) -> ReindexJobResponse:
-    """Snapshot and enqueue a rebuild of one document, one organization, or all knowledge."""
+    """创建快照并排队重建单个文档、单个组织或全部知识。"""
 
     identity = _verify_identity(request, x_agent_context)
     try:
@@ -320,7 +320,7 @@ async def list_reindex_jobs(
     limit: int = 50,
     x_agent_context: str | None = Header(default=None),
 ) -> list[ReindexJobResponse]:
-    """List only rebuild batches visible to the signed administrator."""
+    """只列出签名管理员有权限查看的重建批次。"""
 
     identity = _verify_identity(request, x_agent_context)
     try:
@@ -336,7 +336,7 @@ async def get_reindex_job(
     request: Request,
     x_agent_context: str | None = Header(default=None),
 ) -> ReindexJobResponse:
-    """Read counters and final status without exposing document content."""
+    """读取计数器和最终状态，但不暴露文档内容。"""
 
     identity = _verify_identity(request, x_agent_context)
     try:
@@ -355,7 +355,7 @@ async def retry_reindex_job(
     background_tasks: BackgroundTasks,
     x_agent_context: str | None = Header(default=None),
 ) -> ReindexJobResponse:
-    """Requeue failed document items while their bounded retry budgets remain."""
+    """在失败文档项目仍有有限重试额度时重新排队。"""
 
     identity = _verify_identity(request, x_agent_context)
     try:
@@ -384,7 +384,7 @@ def _verify_identity(request: Request, token: str | None) -> AgentIdentity:
 
 
 async def _read_upload(file: UploadFile, max_bytes: int) -> bytes:
-    """Read in bounded chunks so Content-Length cannot bypass the upload limit."""
+    """按有界分块读取，避免通过伪造 Content-Length 绕过上传限制。"""
 
     parts: list[bytes] = []
     total = 0

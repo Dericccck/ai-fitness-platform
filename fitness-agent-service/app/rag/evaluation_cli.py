@@ -1,4 +1,4 @@
-"""Command-line quality gate for deterministic RAG retrieval regression cases."""
+"""确定性 RAG 检索回归用例的命令行质量门禁。"""
 
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from .evaluation import (
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Evaluate the checked-in golden results and return a CI-compatible exit code."""
+    """评测仓库中的基准结果，并返回兼容 CI 的退出码。"""
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", type=Path, required=True)

@@ -1,4 +1,4 @@
-"""Structural safety checks before a document enters review or object storage."""
+"""文档进入审核或对象存储前的结构安全检查。"""
 
 from __future__ import annotations
 
@@ -13,16 +13,16 @@ from typing import Protocol
 
 
 class DocumentSafetyError(ValueError):
-    """The upload is malformed, unsafe, or violates archive expansion limits."""
+    """上传文件格式错误、不安全或超过压缩包展开限制。"""
 
 
 class DocumentSecurityUnavailable(DocumentSafetyError):
-    """The configured external malware service cannot provide a safe verdict."""
+    """已配置的外部恶意软件服务无法提供安全 verdict。"""
 
 
 @dataclass(frozen=True)
 class SafetyScanResult:
-    """Auditable result of deterministic checks performed before staging."""
+    """文件进入暂存区前执行确定性检查后形成的可审计结果。"""
 
     sha256: str
     status: str
@@ -35,7 +35,7 @@ class SafetyScanResult:
 
 @dataclass(frozen=True)
 class MalwareScanResult:
-    """External malware verdict stored separately from deterministic structure checks."""
+    """与确定性结构检查分开保存的外部恶意软件 verdict。"""
 
     status: str
     scanner_name: str
@@ -44,24 +44,24 @@ class MalwareScanResult:
 
 
 class DocumentScanner(Protocol):
-    """Combined upload safety scanner contract used by the admin workflow."""
+    """管理员上传流程使用的组合式文件安全扫描契约。"""
 
     def scan(self, file_name: str, content: bytes) -> SafetyScanResult:
-        """Return auditable structural and malware results."""
+        """返回可审计的结构检查和恶意软件扫描结果。"""
 
 
 class MalwareScanner(Protocol):
-    """Synchronous malware scanning boundary called before object storage."""
+    """对象存储前调用的同步恶意软件扫描边界。"""
 
     def scan(self, file_name: str, content: bytes) -> MalwareScanResult:
-        """Return a clean verdict or raise a fail-closed safety error."""
+        """返回 clean verdict；扫描异常时执行 fail-closed 安全策略。"""
 
 
 class StructuralDocumentScanner:
-    """Reject obvious malformed files and ZIP bombs before parser or storage work.
+    """在解析或存储前拒绝明显损坏的文件和 ZIP 炸弹。
 
-    This is not an antivirus engine. Production deployments should decorate this scanner
-    with ClamAV or a cloud malware service and persist that external verdict separately.
+    该扫描器不是杀毒引擎。生产环境应在它外层接入 ClamAV 或云端恶意软件服务，
+    并单独持久化外部扫描 verdict。
     """
 
     def __init__(self, *, max_uncompressed_bytes: int = 100 * 1024 * 1024) -> None:
@@ -121,12 +121,10 @@ class StructuralDocumentScanner:
 
 
 class ClamAvScanner:
-    """Scan bytes through ClamAV's daemon ``INSTREAM`` protocol.
+    """通过 ClamAV 守护进程的 ``INSTREAM`` 协议扫描字节内容。
 
-    The adapter does not write uploads to a temporary path. It streams bounded chunks
-    over a private TCP connection and fails closed when ClamAV is unavailable, so a
-    production deployment cannot silently turn off malware protection because the
-    scanning service is unhealthy.
+    适配器不会把上传文件写入临时路径，而是通过私有 TCP 连接分块传输。
+    ClamAV 不可用时执行 fail-closed，避免生产环境因扫描服务异常而静默关闭恶意软件防护。
     """
 
     def __init__(
@@ -143,7 +141,7 @@ class ClamAvScanner:
         self.chunk_size = chunk_size
 
     def scan(self, file_name: str, content: bytes) -> MalwareScanResult:
-        """Send one in-memory upload to ClamAV and parse its stable stream response."""
+        """将一次内存中的上传内容发送给 ClamAV，并解析稳定的流式响应。"""
 
         try:
             with socket.create_connection(
@@ -180,7 +178,7 @@ class ClamAvScanner:
 
 
 class CompositeDocumentScanner:
-    """Run deterministic checks and an external malware scanner in sequence."""
+    """依次执行确定性检查和外部恶意软件扫描。"""
 
     def __init__(
         self,
@@ -191,7 +189,7 @@ class CompositeDocumentScanner:
         self.malware_scanner = malware_scanner
 
     def scan(self, file_name: str, content: bytes) -> SafetyScanResult:
-        """Preserve the structural identity while adding the external security verdict."""
+        """保留结构检查身份，同时附加外部安全 verdict。"""
 
         structural = self.structural_scanner.scan(file_name, content)
         if self.malware_scanner is None:

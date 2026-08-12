@@ -1,4 +1,4 @@
-"""PDF request orchestration for the OCR HTTP service."""
+"""OCR HTTP 服务的 PDF 请求编排。"""
 
 from __future__ import annotations
 
@@ -15,18 +15,18 @@ from .models import OcrBlock, OcrResponse
 
 
 class OcrInputError(ValueError):
-    """The caller supplied an invalid or unsupported PDF request."""
+    """调用方提交了无效或不支持的 PDF 请求。"""
 
 
 class PdfOcrService:
-    """Validate, optionally subset, and structure one PDF OCR request."""
+    """校验一个 PDF OCR 请求，可选裁剪页面并结构化结果。"""
 
     def __init__(self, settings: Settings, engine: DocumentEngine) -> None:
         self.settings = settings
         self.engine = engine
 
     def parse(self, content: bytes, *, pages: str | None) -> OcrResponse:
-        """Parse selected pages while preserving original 1-based page numbers."""
+        """解析指定页面，同时保留原始的从 1 开始的页码。"""
 
         if not content:
             raise OcrInputError("file must not be empty")
@@ -93,7 +93,7 @@ def _parse_pages(value: str | None, total_pages: int) -> list[int]:
 
 
 class _temporary_pdf:
-    """Context manager creating a private PDF subset and deleting it afterwards."""
+    """创建临时 PDF 页面子集并在使用后删除的上下文管理器。"""
 
     def __init__(self, reader: PdfReader, pages: Sequence[int]) -> None:
         self.reader = reader

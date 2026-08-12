@@ -1,1 +1,1 @@
-"""Core configuration and runtime concerns."""
+"""核心配置与运行时能力。"""

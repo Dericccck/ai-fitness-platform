@@ -1,4 +1,4 @@
-"""Knowledge-base administration domain objects and lifecycle states."""
+"""知识库管理领域对象和生命周期状态。"""
 
 from __future__ import annotations
 
@@ -22,7 +22,7 @@ ReindexItemStatus = Literal["PENDING", "INDEXING", "SUCCEEDED", "SKIPPED", "FAIL
 
 @dataclass(frozen=True)
 class KnowledgeIngestionJob:
-    """A durable upload/indexing task, separate from the searchable document version."""
+    """持久化的上传/索引任务，与可检索文档版本分离。"""
 
     id: str
     source_uri: str
@@ -64,7 +64,7 @@ class KnowledgeIngestionJob:
 
 @dataclass(frozen=True)
 class KnowledgeUploadMetadata:
-    """Validated metadata supplied alongside an uploaded document."""
+    """随上传文档一同提交并经过校验的元数据。"""
 
     source_uri: str
     title: str
@@ -78,7 +78,7 @@ class KnowledgeUploadMetadata:
 
 @dataclass(frozen=True)
 class KnowledgeReindexSource:
-    """Immutable source snapshot used by one re-index item.
+    """一个索引重建项目使用的不可变来源快照。
 
     The searchable document table intentionally stores normalized knowledge, not the
     original binary. Re-indexing therefore snapshots the staged object key at task
@@ -104,7 +104,7 @@ class KnowledgeReindexSource:
 
 @dataclass(frozen=True)
 class KnowledgeReindexJob:
-    """Durable batch task for rebuilding already published knowledge documents."""
+    """用于重建已发布知识文档的持久化批次任务。"""
 
     id: str
     requested_by: str
@@ -127,7 +127,7 @@ class KnowledgeReindexJob:
 
 @dataclass(frozen=True)
 class KnowledgeReindexItem:
-    """One document-level unit inside a re-index batch."""
+    """索引重建批次中的一个文档级项目。"""
 
     id: str
     job_id: str
@@ -152,27 +152,27 @@ class KnowledgeReindexItem:
 
 
 class KnowledgeAdminError(RuntimeError):
-    """Stable business error for admin workflow transitions."""
+    """管理员工作流状态转换使用的稳定业务异常。"""
 
 
 class KnowledgeJobNotFound(KnowledgeAdminError):
-    """The requested task does not exist."""
+    """请求的任务不存在。"""
 
 
 class KnowledgeJobTransitionError(KnowledgeAdminError):
-    """The requested transition is not valid for the current task state."""
+    """请求的状态转换不符合当前任务状态。"""
 
 
 class KnowledgeAdminForbidden(KnowledgeAdminError):
-    """The signed identity is not allowed to manage the knowledge base."""
+    """签名身份没有管理知识库的权限。"""
 
 
 class KnowledgeReindexNotFound(KnowledgeAdminError):
-    """No published document is available for the requested rebuild scope."""
+    """请求的重建范围内没有可用的已发布文档。"""
 
 
 def job_from_row(row: Any) -> KnowledgeIngestionJob:
-    """Convert a database mapping into a typed task without exposing SQL rows upstream."""
+    """将数据库映射转换为类型化任务，不向上层暴露 SQL 行。"""
 
     return KnowledgeIngestionJob(
         id=str(row["id"]),
@@ -215,7 +215,7 @@ def job_from_row(row: Any) -> KnowledgeIngestionJob:
 
 
 def reindex_job_from_row(row: Any) -> KnowledgeReindexJob:
-    """Convert a re-index batch row into a stable domain object."""
+    """将索引重建批次数据行转换为稳定领域对象。"""
 
     return KnowledgeReindexJob(
         id=str(row["id"]),
@@ -239,7 +239,7 @@ def reindex_job_from_row(row: Any) -> KnowledgeReindexJob:
 
 
 def reindex_item_from_row(row: Any) -> KnowledgeReindexItem:
-    """Convert a document-level re-index row without leaking SQL mappings upstream."""
+    """将文档级索引重建数据行转换为对象，不向上层泄露 SQL 映射。"""
 
     return KnowledgeReindexItem(
         id=str(row["id"]),

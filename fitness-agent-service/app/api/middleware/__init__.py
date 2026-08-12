@@ -1,1 +1,1 @@
-"""Cross-cutting HTTP middleware for the Agent API."""
+"""Agent API 使用的通用 HTTP 中间件。"""

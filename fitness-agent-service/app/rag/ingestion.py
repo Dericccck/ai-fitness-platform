@@ -1,4 +1,4 @@
-"""Document cleaning, semantic chunking, and incremental RAG indexing."""
+"""文档清洗、语义分块和增量 RAG 索引。"""
 
 from __future__ import annotations
 
@@ -25,12 +25,12 @@ _SENTENCE_END = re.compile(r"(?<=[。！？.!?])\s+")
 
 
 class IngestionConflictError(RuntimeError):
-    """The source version would move backwards or reuse a conflicting version."""
+    """来源版本将回退，或复用了冲突的版本号。"""
 
 
 @dataclass(frozen=True)
 class IngestionRequest:
-    """Trusted document metadata supplied by an admin workflow or source connector."""
+    """管理员工作流或来源连接器提供的可信文档元数据。"""
 
     source_uri: str
     title: str
@@ -48,7 +48,7 @@ class IngestionRequest:
 
 @dataclass(frozen=True)
 class ChunkDraft:
-    """Child content plus the parent context that contains its full section."""
+    """子节点内容，以及包含完整章节的父节点上下文。"""
 
     content: str
     heading_path: tuple[str, ...]
@@ -63,7 +63,7 @@ class ChunkDraft:
 
 @dataclass(frozen=True)
 class IngestionResult:
-    """Stable result for an indexing job or an admin audit record."""
+    """索引任务或管理员审计记录使用的稳定结果。"""
 
     status: Literal["INDEXED", "SKIPPED_UNCHANGED"]
     document_id: str
@@ -73,7 +73,7 @@ class IngestionResult:
 
 
 class DocumentIngestionService:
-    """Turn trusted document text into an incrementally indexed knowledge version.
+    """将可信文档文本转换为增量索引的知识版本。
 
     Parsing and chunking happen before Embedding. The checksum is calculated from
     normalized content, so whitespace-only edits do not consume model quota or
@@ -99,7 +99,7 @@ class DocumentIngestionService:
         self.parser_registry = parser_registry or DocumentParserRegistry()
 
     async def ingest(self, request: IngestionRequest, *, force: bool = False) -> IngestionResult:
-        """Clean, chunk, deduplicate, embed, and atomically publish a document."""
+        """清洗、分块、去重、生成 Embedding，并原子发布文档。"""
 
         cleaned = clean_markdown(request.raw_content)
         drafts = chunk_markdown(
@@ -119,7 +119,7 @@ class DocumentIngestionService:
         content: bytes,
         force: bool = False,
     ) -> IngestionResult:
-        """Parse a binary source, preserve coordinates, then use the same publish path."""
+        """解析二进制来源、保留坐标，再复用相同的发布路径。"""
 
         parsed = self.parser_registry.parse(content, file_name=file_name)
         drafts = chunk_parsed_blocks(
@@ -160,7 +160,7 @@ class DocumentIngestionService:
         drafts: Sequence[ChunkDraft],
         force: bool = False,
     ) -> IngestionResult:
-        """Check versioning and atomically publish normalized child/parent nodes."""
+        """校验版本，并原子发布标准化的子节点/父节点。"""
 
         current = await self.repository.get_current_document(request.source_uri)
         if current is not None:
@@ -260,7 +260,7 @@ def chunk_parsed_blocks(
     max_chunk_chars: int,
     overlap_chars: int,
 ) -> list[ChunkDraft]:
-    """Chunk parser output while copying page/sheet/table provenance to each child."""
+    """切分解析器输出，并将页码/工作表/表格来源信息复制到每个子节点。"""
 
     drafts: list[ChunkDraft] = []
     for block in blocks:
@@ -289,7 +289,7 @@ def chunk_parsed_blocks(
 
 
 def _source_metadata(draft: ChunkDraft) -> dict[str, Any]:
-    """Build auditable metadata without putting authorization decisions in JSON."""
+    """构建可审计元数据，但不把授权决定放入 JSON。"""
 
     metadata: dict[str, Any] = {
         "heading_path": list(draft.heading_path),
@@ -315,7 +315,7 @@ def chunk_markdown(
     max_chunk_chars: int,
     overlap_chars: int,
 ) -> list[ChunkDraft]:
-    """Split Markdown at headings/paragraphs, then split oversized blocks by sentences."""
+    """按标题/段落切分 Markdown，再按句子切分过大的内容块。"""
 
     if max_chunk_chars <= 0 or overlap_chars < 0 or overlap_chars >= max_chunk_chars:
         raise ValueError("invalid chunking limits")
@@ -369,7 +369,7 @@ def _split_block(
     overlap_chars: int,
     table_index: int | None,
 ) -> list[ChunkDraft]:
-    """Keep short blocks intact and split long prose without cutting every word."""
+    """保持短内容块完整，并切分长文本，避免逐词截断。"""
 
     prefix = f"{' / '.join(heading_path)}\n" if heading_path else ""
     parent_content = prefix + body
@@ -426,7 +426,7 @@ def _split_table_block(
     table_index: int,
     max_chunk_chars: int,
 ) -> list[ChunkDraft]:
-    """Split a Markdown table by row groups while repeating its header."""
+    """按行组切分 Markdown 表格，并重复表头。"""
 
     lines = [line.strip() for line in body.split("\n") if line.strip()]
     separator_index = next(
@@ -484,14 +484,14 @@ def _split_table_block(
 
 
 def _is_markdown_table(body: str) -> bool:
-    """Detect a Markdown table without interpreting arbitrary pipe-delimited prose."""
+    """识别 Markdown 表格，不把任意管道分隔文本误判为表格。"""
 
     lines = [line.strip() for line in body.split("\n") if line.strip()]
     return len(lines) >= 2 and any(_is_table_separator(line) for line in lines)
 
 
 def _is_table_separator(line: str) -> bool:
-    """Recognize the Markdown delimiter row used below a table header."""
+    """识别表头下方使用的 Markdown 分隔行。"""
 
     cells = [cell.strip() for cell in line.strip("|").split("|")]
     return bool(cells) and all(bool(re.fullmatch(r":?-{3,}:?", cell)) for cell in cells)
@@ -507,7 +507,7 @@ def _split_long_text(
     parent_content: str,
     table_index: int | None = None,
 ) -> list[ChunkDraft]:
-    """Bound pathological paragraphs such as copied tables or long URLs."""
+    """限制复制表格、超长 URL 等异常段落的长度。"""
 
     result: list[ChunkDraft] = []
     start = 0
@@ -530,7 +530,7 @@ def _split_long_text(
 
 
 def _overlap_tail(text: str, overlap_chars: int) -> str:
-    """Use a bounded tail as context for the next chunk without exceeding limits."""
+    """使用有界尾部作为下一个内容块的上下文，同时不超过长度限制。"""
 
     if overlap_chars == 0:
         return ""
@@ -538,19 +538,19 @@ def _overlap_tail(text: str, overlap_chars: int) -> str:
 
 
 def content_checksum(content: str) -> str:
-    """Return a stable SHA-256 checksum for deduplication and audit records."""
+    """返回稳定的 SHA-256 校验和，用于去重和审计记录。"""
 
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
 def versioned_document_id(source_uri: str, version: int) -> str:
-    """Generate an opaque ID so source URLs never become database identifiers."""
+    """生成不透明 ID，避免来源 URL 直接成为数据库标识。"""
 
     return hashlib.sha256(f"{source_uri}\n{version}".encode()).hexdigest()
 
 
 def chunk_id(document_id: str, index: int, content: str) -> str:
-    """Generate a deterministic ID for retry-safe chunk upserts."""
+    """生成确定性 ID，保证重试时内容块写入安全。"""
 
     return hashlib.sha256(
         f"{document_id}\n{index}\n{content_checksum(content)}".encode()
@@ -558,7 +558,7 @@ def chunk_id(document_id: str, index: int, content: str) -> str:
 
 
 def parent_node_id(document_id: str, index: int, content: str) -> str:
-    """Generate a stable ID for the context node expanded after child recall."""
+    """为子节点召回后扩展的上下文节点生成稳定 ID。"""
 
     return hashlib.sha256(
         f"parent\n{document_id}\n{index}\n{content_checksum(content)}".encode()

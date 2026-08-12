@@ -143,7 +143,7 @@ async def test_worker_uses_immutable_staged_bytes(tmp_path: Path) -> None:
         metadata=metadata(),
     )
 
-    # The fake job repository does not implement claim/complete, so this assertion
-    # focuses the unit test on the trust boundary: the staged object is opaque and safe.
+    # 模拟任务仓储没有实现 claim/complete，因此本断言聚焦信任边界：
+    # 暂存对象保持不透明且安全。
     assert job.storage_key.startswith(job.id)
     assert "/" not in job.storage_key

@@ -175,7 +175,7 @@ app.include_router(health_router)
 
 
 def _build_document_storage(settings: Settings) -> DocumentStorage:
-    """Select storage from configuration without leaking vendor details into the service."""
+    """根据配置选择存储实现，不让厂商细节泄露到服务业务层。"""
 
     if settings.rag_storage_backend == "local":
         return LocalDocumentStorage(settings.rag_staging_dir)
@@ -189,7 +189,7 @@ def _build_document_storage(settings: Settings) -> DocumentStorage:
 
 
 def _build_ocr_provider(settings: Settings) -> PdfOcrProvider | None:
-    """Build the configured OCR boundary and fail startup on incomplete production config."""
+    """构建配置中的 OCR 边界；生产配置不完整时让服务启动失败。"""
 
     if settings.rag_ocr_backend == "disabled":
         return None
@@ -202,7 +202,7 @@ def _build_ocr_provider(settings: Settings) -> PdfOcrProvider | None:
 
 
 def _build_document_scanner(settings: Settings) -> CompositeDocumentScanner:
-    """Compose deterministic checks with the selected fail-closed malware service."""
+    """将确定性检查与选定的 fail-closed 恶意软件服务组合起来。"""
 
     malware_scanner = None
     if settings.rag_malware_scanner_backend == "clamav":
