@@ -4,6 +4,7 @@ import com.shuyiwa.fitness.gateway.api.ToolViews;
 import com.shuyiwa.fitness.gateway.repository.FitnessReadRepository;
 import com.shuyiwa.fitness.gateway.security.AgentContext;
 import com.shuyiwa.fitness.gateway.security.GatewayForbiddenException;
+import com.shuyiwa.fitness.gateway.security.GatewayResourceNotFoundException;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -33,13 +34,13 @@ public class FitnessToolService {
 
     public ToolViews.UserView currentUser(AgentContext context) {
         return repository.findUser(context.getSubjectUserId())
-                .orElseThrow(() -> new IllegalArgumentException("user not found"));
+                .orElseThrow(() -> new GatewayResourceNotFoundException("user not found"));
     }
 
     public ToolViews.OrganizationView organization(AgentContext context, String organizationId) {
         requireOrganization(context, organizationId);
         return repository.findOrganization(organizationId)
-                .orElseThrow(() -> new IllegalArgumentException("organization not found"));
+                .orElseThrow(() -> new GatewayResourceNotFoundException("organization not found"));
     }
 
     public List<ToolViews.CourseView> courses(AgentContext context, String organizationId, Integer limit) {

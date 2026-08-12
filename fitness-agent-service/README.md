@@ -8,6 +8,8 @@
 - Java 后端：用户认证、RBAC、组织数据权限、预约/合同/课时等业务事务、审计和对外业务接口。
 - Agent 服务：意图识别、Supervisor 编排、RAG/Memory、模型调用和受控 Tool Calling。
 - Agent 不直接写健身业务库；后续所有业务动作必须经过 Java Tool Gateway 的授权、幂等和审计。
+- Agent 通过 `app.infrastructure.gateway_client.GatewayClient` 调用 Java 健身核心 Gateway；
+  Client 只透传认证服务签发的 `AgentContext`，不允许根据模型输出自行生成用户身份。
 
 ## 当前基础设施
 
@@ -16,6 +18,7 @@
 - LLM：OpenAI-compatible Chat Completions 接口。
 - Embedding：OpenAI-compatible Embeddings 接口，可与 LLM 使用不同服务商。
 - Reranker：可配置的 HTTP 服务，不提供本地 mock 或静默降级。
+- Fitness Core Gateway：Java 只读业务 Tool 服务，查询用户、机构、课程、合同、课时和预约。
 - Prometheus：低基数 HTTP 请求量、耗时、并发和构建信息指标。
 - OpenTelemetry：可选 OTLP/HTTP Trace 导出，默认关闭且不发送 Prompt 或用户档案。
 
@@ -56,6 +59,13 @@ Python 版本固定为 3.11，`uv.lock` 是依赖事实源；CI 和本地均使�
 - HTTP 指标只使用路由模板，不使用用户 ID、原始 URL、Prompt 或 Tool 参数作为标签。
 
 环境分层和 Secret 管理规则见 `deployment/environments/README.md`。
+
+## Java Gateway 调用
+
+配置 `AGENT_GATEWAY_BASE_URL`、`AGENT_GATEWAY_INTERNAL_SERVICE_TOKEN` 以及超时和重试参数。
+每次业务请求还必须由认证服务提供签名的 `GatewayRequestContext`；Client 对 408、429、5xx
+和连接超时做有限指数退避，对 401、403、404 和参数错误不重试。完整 HTTP 契约见
+`docs/contracts/fitness-core-gateway-v1.md`。
 
 ## 生产镜像
 

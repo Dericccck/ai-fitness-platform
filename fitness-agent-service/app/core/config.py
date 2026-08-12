@@ -55,7 +55,11 @@ class Settings(BaseSettings):
     reranker_model: str = ""
     reranker_timeout_seconds: float = 15.0
 
-    internal_service_token: str = ""
+    gateway_base_url: str = "http://127.0.0.1:8081"
+    gateway_internal_service_token: str = ""
+    gateway_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
+    gateway_max_retries: int = Field(default=2, ge=0, le=5)
+    gateway_retry_backoff_seconds: float = Field(default=0.1, ge=0, le=5)
 
     @property
     def embedding_effective_api_key(self) -> str:
@@ -90,6 +94,12 @@ class Settings(BaseSettings):
         """只有显式启用并提供端点时才向外部可观测平台发送 Trace。"""
 
         return bool(self.otel_enabled and self.otel_exporter_otlp_traces_endpoint)
+
+    @property
+    def gateway_configured(self) -> bool:
+        """判断 Agent 是否具备调用 Java 健身核心 Gateway 的最小配置。"""
+
+        return bool(self.gateway_base_url and self.gateway_internal_service_token)
 
 
 @lru_cache

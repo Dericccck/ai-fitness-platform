@@ -33,6 +33,7 @@ async def ready(request: Request, response: Response) -> dict[str, object]:
         "llm": settings.llm_configured,
         "embedding": settings.embedding_configured,
         "reranker": settings.reranker_configured,
+        "fitness_gateway": settings.gateway_configured,
     }
 
     try:
@@ -54,6 +55,7 @@ async def ready(request: Request, response: Response) -> dict[str, object]:
         and checks["llm"] is True
         and checks["embedding"] is True
         and checks["reranker"] is True
+        and checks["fitness_gateway"] is True
     )
     body: dict[str, object] = {
         "status": "ready" if ready_state else "not_ready",

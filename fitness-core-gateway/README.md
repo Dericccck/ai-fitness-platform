@@ -37,6 +37,19 @@ cd /Users/a1-6/Desktop/fitness-backend
 
 生产环境的密钥必须由 Secret Manager 注入，不能写入 `application.yml` 或提交到 Git。
 
+真实数据库集成测试默认关闭。连接到专门的测试库并提供有效机构 ID 后显式执行：
+
+```bash
+GATEWAY_IT_ENABLED=true \
+GATEWAY_IT_DB_URL='jdbc:mysql://127.0.0.1:3307/fitness' \
+GATEWAY_IT_DB_USERNAME='fitness_readonly' \
+GATEWAY_IT_DB_PASSWORD='通过 Secret Manager 注入' \
+GATEWAY_IT_ORGANIZATION_ID='真实测试机构 ID' \
+./mvnw --batch-mode -f fitness-core-gateway/pom.xml test
+```
+
+测试库必须使用最小权限账号，禁止把生产数据库凭证用于本地或 CI 集成测试。
+
 根目录统一质量门禁也会执行本模块：
 
 ```bash

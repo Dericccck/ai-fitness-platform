@@ -1,6 +1,7 @@
 package com.shuyiwa.fitness.gateway.api;
 
 import com.shuyiwa.fitness.gateway.security.GatewayForbiddenException;
+import com.shuyiwa.fitness.gateway.security.GatewayResourceNotFoundException;
 import com.shuyiwa.fitness.gateway.security.GatewaySecurityException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
@@ -21,6 +22,12 @@ public class GatewayExceptionHandler {
     @ResponseStatus(HttpStatus.FORBIDDEN)
     public ErrorView forbidden() {
         return new ErrorView("FORBIDDEN", "resource is outside the authorized scope");
+    }
+
+    @ExceptionHandler(GatewayResourceNotFoundException.class)
+    @ResponseStatus(HttpStatus.NOT_FOUND)
+    public ErrorView notFound() {
+        return new ErrorView("NOT_FOUND", "fitness resource was not found");
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

@@ -15,3 +15,4 @@ def test_provider_configuration_is_explicit() -> None:
     assert settings.embedding_configured is True
     assert settings.reranker_configured is True
     assert settings.otel_configured is False
+    assert settings.gateway_configured is False

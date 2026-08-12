@@ -13,6 +13,7 @@ from app.core.metrics import HttpMetrics, MetricsMiddleware
 from app.core.telemetry import configure_tracing
 from app.infrastructure.cache import Cache
 from app.infrastructure.database import Database
+from app.infrastructure.gateway_client import GatewayClient
 from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient
 
@@ -44,11 +45,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.cache = Cache(settings.redis_url)
     app.state.models = ModelGateway(settings)
     app.state.reranker = RerankerClient(settings)
+    app.state.gateway = GatewayClient(settings)
     try:
         yield
     finally:
         # 即使请求处理出现异常，FastAPI 仍会进入 finally，确保连接被关闭。
         await app.state.models.close()
+        await app.state.gateway.close()
         await app.state.cache.close()
         await app.state.database.close()
         if app.state.trace_provider is not None:

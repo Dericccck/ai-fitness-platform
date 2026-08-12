@@ -16,7 +16,7 @@ Agent 服务使用同一份镜像在不同环境运行，环境差异只能通�
 
 - 普通配置：服务名、端口、日志级别、模型名称、采样率，可放入部署清单。
 - 敏感配置：数据库密码、Redis 密码、LLM/Embedding/Reranker Key、OTLP 鉴权 Header、
-  服务间 Token，只能由 Secret Manager 注入。
+  Gateway 服务间 Token、Gateway 数据库密码，只能由 Secret Manager 注入。
 - 动态业务配置：提醒频率、Agent 策略、组织开关等，后续进入配置中心并保留版本与审计，
   不通过环境变量频繁修改。
 
