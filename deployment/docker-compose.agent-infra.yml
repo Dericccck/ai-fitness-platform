@@ -69,6 +69,8 @@ services:
     build:
       context: ../fitness-ocr-service
       dockerfile: Dockerfile
+      args:
+        DEBIAN_MIRROR: ${DEBIAN_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn}
     image: fitness-ocr-service:local
     container_name: fitness-agent-ocr
     restart: unless-stopped
