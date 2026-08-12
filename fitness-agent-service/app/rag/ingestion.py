@@ -75,10 +75,9 @@ class IngestionResult:
 class DocumentIngestionService:
     """将可信文档文本转换为增量索引的知识版本。
 
-    Parsing and chunking happen before Embedding. The checksum is calculated from
-    normalized content, so whitespace-only edits do not consume model quota or
-    create an unnecessary new version. The repository then archives the prior
-    published source version in the same transaction as the replacement.
+    Embedding 之前先完成解析和分块。校验和基于规范化内容计算，因此只有空白变化
+    不会消耗模型额度，也不会产生没有必要的新版本。仓储层会在同一个事务中归档
+    之前已发布的来源版本，并发布替换版本。
     """
 
     def __init__(

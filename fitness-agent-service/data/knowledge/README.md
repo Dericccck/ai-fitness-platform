@@ -20,3 +20,16 @@
 
 索引时保留原始文件的 SHA-256，用于增量更新、版本追踪和审计；RAG 只检索通过安全扫描、解析和
 审核的版本。
+
+## 本地校验命令
+
+在项目根目录执行以下命令，重新生成清单并验证当前解析器对每份资料的读取结果：
+
+```bash
+make knowledge-manifest
+make knowledge-validate
+```
+
+`manifest.json` 只保存路径、哈希、来源和审核元数据，不保存原始文件内容。PDF 和 DOCX 会进入
+解析验证；PPTX 当前标记为 `REFERENCE_ONLY`，不会误进入索引。验证结果中的
+`PASS_WITH_WARNINGS` 通常表示 PDF 存在无法提取文本的页面，需要后续接入真实 OCR 后复核。
