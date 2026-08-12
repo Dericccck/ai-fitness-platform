@@ -116,6 +116,12 @@ class Settings(BaseSettings):
     rag_ingestion_worker_batch_size: int = Field(default=10, ge=1, le=100)
     rag_reindex_worker_batch_size: int = Field(default=2, ge=1, le=20)
     rag_reindex_worker_poll_seconds: float = Field(default=2.0, ge=0.1, le=60)
+    # 页面路由阈值由部署配置统一控制，上传者和 LLM 无权覆盖。默认值偏保守，
+    # 用于把可能承载健身动作、姿态或风险信息的图片密集页送入专业审核。
+    rag_pdf_min_image_area_ratio: float = Field(default=0.45, ge=0, le=1)
+    rag_pdf_max_image_page_text_chars: int = Field(default=600, ge=0, le=20_000)
+    rag_pdf_max_image_page_text_area_ratio: float = Field(default=0.25, ge=0, le=1)
+    rag_pdf_min_ocr_text_chars: int = Field(default=12, ge=0, le=1_000)
     rag_ocr_backend: Literal["disabled", "http"] = "disabled"
     rag_ocr_endpoint_url: str = ""
     rag_ocr_api_key: str = ""

@@ -4,5 +4,6 @@
   "max_duplicate_rate": 0.02,
   "min_parent_integrity": 1.0,
   "min_table_integrity": 1.0,
-  "max_missing_pages": 0
+  "max_missing_pages": 0,
+  "max_ocr_required_pages": 0
 }

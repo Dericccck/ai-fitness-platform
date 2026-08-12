@@ -3,11 +3,17 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
-from typing import Any
+from typing import Any, cast
 
 import httpx
 
-from .formats import DocumentParseError, ParsedBlock, ParsedDocument
+from .formats import (
+    DocumentParseError,
+    ParsedBlock,
+    ParsedDocument,
+    PdfPageProfile,
+    PdfPageRoute,
+)
 
 
 class OcrServiceUnavailable(DocumentParseError):
@@ -122,7 +128,70 @@ def _parsed_document_from_payload(payload: Any) -> ParsedDocument:
     media_type = payload.get("media_type", "application/pdf")
     if not isinstance(media_type, str):
         raise DocumentParseError("OCR media_type must be a string")
-    return ParsedDocument(tuple(blocks), media_type, tuple(warnings))
+    page_profiles = _page_profiles_from_payload(payload.get("page_profiles", []))
+    return ParsedDocument(tuple(blocks), media_type, tuple(warnings), page_profiles)
+
+
+def _page_profiles_from_payload(payload: Any) -> tuple[PdfPageProfile, ...]:
+    """校验可选 OCR 页面画像，拒绝服务商伪造未知路由或越界比例。"""
+
+    if not isinstance(payload, list):
+        raise DocumentParseError("OCR page_profiles must be an array")
+    profiles: list[PdfPageProfile] = []
+    allowed_routes = {
+        "NORMAL",
+        "OCR_REQUIRED",
+        "VISUAL_REVIEW_REQUIRED",
+        "OCR_AND_VISUAL_REVIEW_REQUIRED",
+    }
+    for raw in payload:
+        if not isinstance(raw, dict):
+            raise DocumentParseError("OCR page profile must be an object")
+        raw_route = raw.get("route", "NORMAL")
+        if not isinstance(raw_route, str) or raw_route not in allowed_routes:
+            raise DocumentParseError("OCR page profile has invalid route")
+        route = cast(PdfPageRoute, raw_route)
+        image_area_ratio = _bounded_ratio(raw.get("image_area_ratio", 0))
+        text_area_ratio = _bounded_ratio(raw.get("text_area_ratio", 0))
+        reasons = raw.get("reasons", [])
+        if not isinstance(reasons, list) or not all(isinstance(item, str) for item in reasons):
+            raise DocumentParseError("OCR page profile reasons must be a string array")
+        profiles.append(
+            PdfPageProfile(
+                page_number=_required_positive_int(raw.get("page_number")),
+                image_count=_non_negative_int(raw.get("image_count", 0)),
+                image_area_ratio=image_area_ratio,
+                native_text_chars=_non_negative_int(raw.get("native_text_chars", 0)),
+                text_area_ratio=text_area_ratio,
+                table_count=_non_negative_int(raw.get("table_count", 0)),
+                caption_count=_non_negative_int(raw.get("caption_count", 0)),
+                route=route,
+                reasons=tuple(reason[:128] for reason in reasons),
+            )
+        )
+    return tuple(profiles)
+
+
+def _bounded_ratio(value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise DocumentParseError("OCR page profile ratio must be numeric")
+    ratio = float(value)
+    if not 0 <= ratio <= 1:
+        raise DocumentParseError("OCR page profile ratio must be between 0 and 1")
+    return ratio
+
+
+def _required_positive_int(value: Any) -> int:
+    parsed = _non_negative_int(value)
+    if parsed < 1:
+        raise DocumentParseError("OCR page number must be positive")
+    return parsed
+
+
+def _non_negative_int(value: Any) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+        raise DocumentParseError("OCR page profile count must be a non-negative integer")
+    return int(value)
 
 
 def _optional_int(value: Any) -> int | None:

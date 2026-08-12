@@ -178,6 +178,11 @@ OCR 服务需要返回 `media_type`、`warnings` 和 `blocks` 数组；每个 bl
 当前仓库的自建 OCR 服务位于 `../fitness-ocr-service`，默认使用 PaddleOCR PP-StructureV3；完整
 协议文档见 `docs/contracts/ocr-service-v1.md`，Agent 侧适配代码见 `app/rag/ocr.py`。
 
+即使本地未启用 OCR，PDF 解析器也会生成页面级图片/文字画像，并按 `NORMAL`、`OCR_REQUIRED`、
+`VISUAL_REVIEW_REQUIRED` 或 `OCR_AND_VISUAL_REVIEW_REQUIRED` 路由。图片密集页可能承载健身动作、
+姿态、禁忌或风险信息，因此待 OCR/专业视觉审核页面会在 Embedding 前 fail-closed；阈值通过
+`AGENT_RAG_PDF_*` 环境变量由部署侧统一管理，上传者和 LLM 不能覆盖。
+
 索引重建任务只读取已审核文件，复用当前解析、清洗、父子分块、Embedding 和原子替换流程，
 用于 Embedding 模型升级、切分策略调整或索引修复，不会直接修改 Java 健身业务事实。
 本地可通过 `make agent-reindex-worker` 启动独立轮询进程；生产环境应将它部署为独立 Worker，

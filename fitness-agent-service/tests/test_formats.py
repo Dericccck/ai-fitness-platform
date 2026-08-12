@@ -5,10 +5,13 @@ import pytest
 from app.rag.formats import (
     DocumentParseError,
     DocumentParserRegistry,
+    PdfPageRoutingPolicy,
     UnsupportedDocumentFormatError,
     _clean_pdf_lines,
     _is_pdf_layout_noise_table,
     _join_pdf_lines,
+    _profile_pdf_page,
+    _rectangle_union_area,
     _repeated_pdf_lines,
     _split_pdf_text_blocks,
 )
@@ -79,7 +82,7 @@ def test_xlsx_parser_keeps_worksheet_as_a_header_preserving_table() -> None:
     assert "| Squat | 4 | 12 |" in block.content
 
 
-def test_pdf_parser_reports_ocr_requirement_for_scanned_pdf() -> None:
+def test_pdf_parser_preserves_ocr_route_for_scanned_pdf_without_linux_service() -> None:
     from pypdf import PdfWriter
 
     writer = PdfWriter()
@@ -87,8 +90,11 @@ def test_pdf_parser_reports_ocr_requirement_for_scanned_pdf() -> None:
     payload = BytesIO()
     writer.write(payload)
 
-    with pytest.raises(DocumentParseError, match="OCR"):
-        DocumentParserRegistry().parse(payload.getvalue(), file_name="scan.pdf")
+    parsed = DocumentParserRegistry().parse(payload.getvalue(), file_name="scan.pdf")
+
+    assert parsed.blocks == ()
+    assert parsed.page_profiles[0].route == "OCR_REQUIRED"
+    assert "requires OCR" in parsed.warnings[0]
 
 
 def test_pdf_cleaning_normalizes_font_mapping_and_removes_web_templates() -> None:
@@ -167,3 +173,92 @@ def test_pdf_text_blocks_do_not_split_chinese_sentence_fragments_by_length() -> 
         "第二段标题",
         "第二段正文。",
     ]
+
+
+class FakePdfPage:
+    """只暴露页面画像所需坐标，避免单元测试依赖 OCR 或操作系统。"""
+
+    width = 100
+    height = 100
+
+    def __init__(self, *, images: list[dict[str, int]], chars: list[dict[str, int]]) -> None:
+        self.images = images
+        self.chars = chars
+
+
+def _rect(x0: int, top: int, x1: int, bottom: int) -> dict[str, int]:
+    return {"x0": x0, "top": top, "x1": x1, "bottom": bottom}
+
+
+def test_pdf_page_profile_routes_image_heavy_fitness_page_to_professional_review() -> None:
+    page = FakePdfPage(
+        images=[_rect(5, 5, 95, 80)],
+        chars=[_rect(10, 82, 12, 85), _rect(13, 82, 15, 85)],
+    )
+
+    profile = _profile_pdf_page(
+        page,
+        page_number=3,
+        raw_text="图3 深蹲动作示意，保持膝盖与脚尖方向一致。",
+        tables=(),
+        policy=PdfPageRoutingPolicy(),
+    )
+
+    assert profile.route == "VISUAL_REVIEW_REQUIRED"
+    assert profile.image_area_ratio == pytest.approx(0.675)
+    assert profile.caption_count == 1
+    assert "IMAGE_AREA_HIGH" in profile.reasons
+
+
+def test_pdf_page_profile_routes_low_text_page_to_ocr_without_linux_service() -> None:
+    page = FakePdfPage(images=[_rect(0, 0, 100, 100)], chars=[])
+
+    profile = _profile_pdf_page(
+        page,
+        page_number=1,
+        raw_text="",
+        tables=(),
+        policy=PdfPageRoutingPolicy(),
+    )
+
+    assert profile.route == "OCR_REQUIRED"
+    assert profile.reasons == ("NATIVE_TEXT_INSUFFICIENT", "PAGE_CONTAINS_IMAGES")
+
+
+def test_pdf_page_profile_keeps_combined_route_for_short_action_caption() -> None:
+    page = FakePdfPage(
+        images=[_rect(0, 0, 100, 90)],
+        chars=[_rect(10, 92, 15, 95)],
+    )
+
+    profile = _profile_pdf_page(
+        page,
+        page_number=4,
+        raw_text="图4 深蹲",
+        tables=(),
+        policy=PdfPageRoutingPolicy(),
+    )
+
+    assert profile.route == "OCR_AND_VISUAL_REVIEW_REQUIRED"
+    assert "NATIVE_TEXT_INSUFFICIENT" in profile.reasons
+    assert "IMAGE_AREA_HIGH" in profile.reasons
+
+
+def test_pdf_page_profile_keeps_text_sufficient_page_on_native_path() -> None:
+    page = FakePdfPage(images=[_rect(5, 5, 25, 25)], chars=[_rect(10, 30, 90, 80)])
+
+    profile = _profile_pdf_page(
+        page,
+        page_number=2,
+        raw_text="训练前应完成充分热身。" * 80,
+        tables=(),
+        policy=PdfPageRoutingPolicy(),
+    )
+
+    assert profile.route == "NORMAL"
+
+
+def test_pdf_rectangle_union_does_not_double_count_overlapping_images() -> None:
+    area = _rectangle_union_area([(0, 0, 80, 80), (20, 20, 100, 100)])
+
+    assert area == pytest.approx(9_200)

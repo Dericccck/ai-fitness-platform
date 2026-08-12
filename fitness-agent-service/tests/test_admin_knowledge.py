@@ -147,3 +147,30 @@ async def test_worker_uses_immutable_staged_bytes(tmp_path: Path) -> None:
     # 暂存对象保持不透明且安全。
     assert job.storage_key.startswith(job.id)
     assert "/" not in job.storage_key
+
+
+async def test_scanned_pdf_can_enter_review_queue_without_becoming_publishable(
+    tmp_path: Path,
+) -> None:
+    from io import BytesIO
+
+    from pypdf import PdfWriter
+
+    writer = PdfWriter()
+    writer.add_blank_page(width=300, height=300)
+    payload = BytesIO()
+    writer.write(payload)
+    service, _ = build_service(tmp_path)
+
+    job = await service.submit_upload(
+        identity("SUPER_ADMIN"),
+        file_name="scanned-guide.pdf",
+        content_type="application/pdf",
+        content=payload.getvalue(),
+        metadata=metadata(source_uri="knowledge://fitness/scanned-guide.pdf"),
+    )
+
+    # 没有 Linux OCR 时仍保留原件和页面路由证据供审核，但真正的索引服务会在
+    # Embedding 前因 OCR_REQUIRED fail-closed。
+    assert job.status == "PENDING_REVIEW"
+    assert job.original_filename == "scanned-guide.pdf"

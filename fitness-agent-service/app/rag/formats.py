@@ -6,7 +6,7 @@ import re
 import unicodedata
 from collections import Counter
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from io import BytesIO
 from pathlib import PurePosixPath
 from typing import Literal, Protocol
@@ -14,6 +14,12 @@ from typing import Literal, Protocol
 from .text import clean_markdown
 
 BlockKind = Literal["TEXT", "TABLE"]
+PdfPageRoute = Literal[
+    "NORMAL",
+    "OCR_REQUIRED",
+    "VISUAL_REVIEW_REQUIRED",
+    "OCR_AND_VISUAL_REVIEW_REQUIRED",
+]
 
 
 class UnsupportedDocumentFormatError(ValueError):
@@ -40,12 +46,73 @@ class ParsedBlock:
 
 
 @dataclass(frozen=True)
+class PdfPageProfile:
+    """PDF 单页在进入 OCR、人工审核和 Embedding 前的可审计画像。
+
+    画像只使用 PDF 自身的对象坐标和原生文字层，不调用视觉模型，也不尝试判断
+    健身动作是否标准。图片密集页只会被安全地路由到专业审核，避免模型在没有
+    教练或医疗人员确认时生成动作、伤病或禁忌结论。
+    """
+
+    page_number: int
+    image_count: int
+    image_area_ratio: float
+    native_text_chars: int
+    text_area_ratio: float
+    table_count: int
+    caption_count: int
+    route: PdfPageRoute
+    reasons: tuple[str, ...] = ()
+
+    def as_dict(self) -> dict[str, object]:
+        """输出稳定审计结构，供离线报告和后续审核 API 复用。"""
+
+        return {
+            "page_number": self.page_number,
+            "image_count": self.image_count,
+            "image_area_ratio": round(self.image_area_ratio, 6),
+            "native_text_chars": self.native_text_chars,
+            "text_area_ratio": round(self.text_area_ratio, 6),
+            "table_count": self.table_count,
+            "caption_count": self.caption_count,
+            "route": self.route,
+            "reasons": list(self.reasons),
+        }
+
+
+@dataclass(frozen=True)
 class ParsedDocument:
-    """分块和 Embedding 前的解析器输出。"""
+    """分块和 Embedding 前的解析器输出及页面级处理证据。"""
 
     blocks: tuple[ParsedBlock, ...]
     media_type: str
     warnings: tuple[str, ...] = ()
+    page_profiles: tuple[PdfPageProfile, ...] = ()
+
+
+@dataclass(frozen=True)
+class PdfPageRoutingPolicy:
+    """企业部署可调整的 PDF 页面路由阈值。
+
+    默认值偏保守：只要大面积图片可能承载动作示范，而原生文字层不足以完整解释
+    页面，就要求人工视觉审核。阈值必须由真实健身资料评测后再调整，不能由上传者
+    或 LLM 在请求中覆盖。
+    """
+
+    min_image_area_ratio: float = 0.45
+    max_image_page_text_chars: int = 600
+    max_image_page_text_area_ratio: float = 0.25
+    min_ocr_text_chars: int = 12
+
+    def __post_init__(self) -> None:
+        if not 0 <= self.min_image_area_ratio <= 1:
+            raise ValueError("min_image_area_ratio must be between 0 and 1")
+        if self.max_image_page_text_chars < 0:
+            raise ValueError("max_image_page_text_chars must not be negative")
+        if not 0 <= self.max_image_page_text_area_ratio <= 1:
+            raise ValueError("max_image_page_text_area_ratio must be between 0 and 1")
+        if self.min_ocr_text_chars < 0:
+            raise ValueError("min_ocr_text_chars must not be negative")
 
 
 class DocumentParser(Protocol):
@@ -76,13 +143,17 @@ class DocumentParserRegistry:
         *,
         max_source_bytes: int = 20 * 1024 * 1024,
         pdf_ocr_provider: PdfOcrProvider | None = None,
+        pdf_page_routing_policy: PdfPageRoutingPolicy | None = None,
     ) -> None:
         self.max_source_bytes = max_source_bytes
         self._parsers: dict[str, DocumentParser] = {
             ".md": MarkdownParser(),
             ".markdown": MarkdownParser(),
             ".txt": MarkdownParser(),
-            ".pdf": PdfParser(ocr_provider=pdf_ocr_provider),
+            ".pdf": PdfParser(
+                ocr_provider=pdf_ocr_provider,
+                routing_policy=pdf_page_routing_policy,
+            ),
             ".docx": DocxParser(),
             ".xlsx": XlsxParser(),
         }
@@ -107,7 +178,12 @@ class DocumentParserRegistry:
             raise
         except Exception as exc:
             raise DocumentParseError(f"failed to parse {file_name}") from exc
-        if not parsed.blocks:
+        # 待 OCR/视觉审核的 PDF 即使暂时没有可索引正文，也必须保留页面画像供
+        # 质量报告和人工审核使用。真正发布时由入库门禁 fail-closed；其他格式
+        # 仍然要求至少产生一个内容块，避免空文档进入任务队列。
+        if not parsed.blocks and not any(
+            profile.route != "NORMAL" for profile in parsed.page_profiles
+        ):
             raise DocumentParseError(f"document {file_name} contains no indexable content")
         return parsed
 
@@ -138,8 +214,14 @@ class PdfParser:
     本地资料目录保留，清洗规则变化后可以重新解析。
     """
 
-    def __init__(self, *, ocr_provider: PdfOcrProvider | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        ocr_provider: PdfOcrProvider | None = None,
+        routing_policy: PdfPageRoutingPolicy | None = None,
+    ) -> None:
         self.ocr_provider = ocr_provider
+        self.routing_policy = routing_policy or PdfPageRoutingPolicy()
 
     def parse(self, content: bytes, *, file_name: str) -> ParsedDocument:
         import pdfplumber
@@ -147,26 +229,49 @@ class PdfParser:
         blocks: list[ParsedBlock] = []
         warnings: list[str] = []
         missing_pages: list[int] = []
+        page_profiles: list[PdfPageProfile] = []
         with pdfplumber.open(BytesIO(content)) as document:
-            page_records: list[tuple[int, list[str], list[list[list[str | None]]]]] = []
+            page_records: list[
+                tuple[int, list[str], list[list[list[str | None]]], PdfPageProfile]
+            ] = []
             for page_number, page in enumerate(document.pages, start=1):
                 tables = _extract_pdf_tables(page)
                 raw_text = _extract_pdf_text_outside_tables(page, tables)
                 raw_lines = [line for line in raw_text.splitlines() if line.strip()]
-                page_records.append((page_number, raw_lines, tables))
+                profile = _profile_pdf_page(
+                    page,
+                    page_number=page_number,
+                    raw_text=raw_text,
+                    tables=tables,
+                    policy=self.routing_policy,
+                )
+                page_records.append((page_number, raw_lines, tables, profile))
+                page_profiles.append(profile)
 
-            repeated_lines = _repeated_pdf_lines([raw_lines for _, raw_lines, _ in page_records])
-            for page_number, raw_lines, tables in page_records:
+            repeated_lines = _repeated_pdf_lines(
+                [raw_lines for _, raw_lines, _, _ in page_records]
+            )
+            for page_number, raw_lines, tables, profile in page_records:
                 cleaned_lines = _clean_pdf_lines(raw_lines, repeated_lines=repeated_lines)
                 if _is_pdf_toc_page(cleaned_lines):
                     cleaned_lines = []
+                page_metadata: dict[str, str | int | bool] = {
+                    "parser": "pdfplumber",
+                    "cleaned": True,
+                    "page_route": profile.route,
+                    "image_count": profile.image_count,
+                    "image_area_basis_points": round(profile.image_area_ratio * 10_000),
+                    "native_text_chars": profile.native_text_chars,
+                    "text_area_basis_points": round(profile.text_area_ratio * 10_000),
+                    "caption_count": profile.caption_count,
+                }
                 for text_block in _split_pdf_text_blocks(cleaned_lines):
                     blocks.append(
                         ParsedBlock(
                             kind="TEXT",
                             content=text_block,
                             source_page=page_number,
-                            metadata={"parser": "pdfplumber", "cleaned": True},
+                            metadata=page_metadata,
                         )
                     )
                 for table_index, table in enumerate(tables):
@@ -181,15 +286,13 @@ class PdfParser:
                                 row_start=1,
                                 row_end=len(table),
                                 metadata={
-                                    "parser": "pdfplumber",
-                                    "cleaned": True,
+                                    **page_metadata,
                                     "table_header_repeated": True,
                                 },
                             )
                         )
-                if not raw_lines and not tables:
+                if profile.route in {"OCR_REQUIRED", "OCR_AND_VISUAL_REVIEW_REQUIRED"}:
                     missing_pages.append(page_number)
-                    warnings.append(f"page {page_number} has no extractable text or table")
         if missing_pages and self.ocr_provider is not None:
             ocr_document = self.ocr_provider.parse(
                 content,
@@ -198,13 +301,57 @@ class PdfParser:
             )
             blocks.extend(ocr_document.blocks)
             warnings.extend(ocr_document.warnings)
-        if not blocks:
-            if self.ocr_provider is not None:
-                return self.ocr_provider.parse(content, file_name=file_name)
-            raise DocumentParseError(
-                "PDF contains no extractable text; scanned PDFs require an approved OCR pipeline"
-            )
-        return ParsedDocument(tuple(blocks), "application/pdf", tuple(warnings))
+            resolved_pages = {
+                block.source_page
+                for block in ocr_document.blocks
+                if block.source_page is not None and block.content.strip()
+            }
+            # OCR 必须逐页返回来源页码；只有确实返回了可用内容的页面才解除阻断。
+            # 未返回、返回空块或缺少页码的页面继续保持 OCR_REQUIRED，防止静默漏页。
+            resolved_profiles: list[PdfPageProfile] = []
+            for profile in page_profiles:
+                if profile.page_number not in resolved_pages:
+                    resolved_profiles.append(profile)
+                elif profile.route == "OCR_REQUIRED":
+                    resolved_profiles.append(
+                        replace(
+                            profile,
+                            route="NORMAL",
+                            reasons=profile.reasons + ("OCR_COMPLETED",),
+                        )
+                    )
+                elif profile.route == "OCR_AND_VISUAL_REVIEW_REQUIRED":
+                    # OCR 只补齐图片中的文字，不能证明健身动作、姿态和风险已经由
+                    # 教练或医疗专业人员审核，因此组合状态只解除 OCR 部分。
+                    resolved_profiles.append(
+                        replace(
+                            profile,
+                            route="VISUAL_REVIEW_REQUIRED",
+                            reasons=profile.reasons + ("OCR_COMPLETED",),
+                        )
+                    )
+                else:
+                    resolved_profiles.append(profile)
+            page_profiles = resolved_profiles
+        # 只根据 OCR 调用后的最终路由生成警告，避免 OCR 已成功的页面继续携带
+        # “requires OCR”旧警告。OCR 服务自身的低置信度等警告仍然完整保留。
+        for profile in page_profiles:
+            if profile.route == "OCR_REQUIRED":
+                warnings.append(f"page {profile.page_number} requires OCR before publication")
+            elif profile.route == "VISUAL_REVIEW_REQUIRED":
+                warnings.append(
+                    f"page {profile.page_number} is image-heavy and requires professional visual review"
+                )
+            elif profile.route == "OCR_AND_VISUAL_REVIEW_REQUIRED":
+                warnings.append(
+                    f"page {profile.page_number} requires OCR and professional visual review"
+                )
+        return ParsedDocument(
+            tuple(blocks),
+            "application/pdf",
+            tuple(warnings),
+            tuple(page_profiles),
+        )
 
 
 _PDF_TOC_MARKERS = ("table of contents", "目录")
@@ -224,6 +371,183 @@ _CJK = re.compile(r"[\u3400-\u9fff]")
 _PDF_ENGLISH_HEADING_WORDS = frozenset(
     ["and", "or", "the", "of", "for", "to", "in", "on", "with", "from", "among"]
 )
+_PDF_CAPTION = re.compile(
+    r"^(?:图\s*\d+(?:[-–.]\d+)*|figure\s*\d+(?:[-–.]\d+)*|fig\.\s*\d+)",
+    re.IGNORECASE,
+)
+
+
+def _profile_pdf_page(
+    page: object,
+    *,
+    page_number: int,
+    raw_text: str,
+    tables: Sequence[Sequence[Sequence[str | None]]],
+    policy: PdfPageRoutingPolicy,
+) -> PdfPageProfile:
+    """根据页面原生对象生成确定性画像，不依赖 Linux OCR 或外部模型。
+
+    图片面积和文字面积使用矩形并集，而不是简单累加。PDF 常把一张图拆成多个重叠
+    对象；直接累加会让比例超过 100%，并把普通页误判成图片密集页。坐标异常的对象
+    被忽略，最终比例始终限制在 ``0..1``。
+    """
+
+    width = _positive_number(getattr(page, "width", 0.0))
+    height = _positive_number(getattr(page, "height", 0.0))
+    page_area = width * height
+    image_rectangles = _pdf_object_rectangles(getattr(page, "images", ()), width, height)
+    text_rectangles = _pdf_object_rectangles(getattr(page, "chars", ()), width, height)
+    image_area_ratio = _area_ratio(_rectangle_union_area(image_rectangles), page_area)
+    text_area_ratio = _area_ratio(_rectangle_union_area(text_rectangles), page_area)
+    native_text_chars = len(re.sub(r"\s+", "", raw_text))
+    caption_count = sum(
+        bool(_PDF_CAPTION.match(_normalize_pdf_line(line))) for line in raw_text.splitlines()
+    )
+
+    reasons: list[str] = []
+    ocr_required = native_text_chars < policy.min_ocr_text_chars and not tables
+    # “图片多、文字少”要求字符数和文字覆盖面积同时偏低。仅使用 OR 会把带整页
+    # 扫描底图、但已有完整 OCR 文字层的普通医学指南误判成动作图片。
+    # 完全没有原生文字的页面只能先证明需要 OCR；OCR/版面识别完成后才能判断图片
+    # 是否还承载姿态或动作信息。存在少量原生说明时则保守保留组合审核状态。
+    visual_review_required = (
+        image_area_ratio >= policy.min_image_area_ratio
+        and native_text_chars <= policy.max_image_page_text_chars
+        and text_area_ratio <= policy.max_image_page_text_area_ratio
+        and (not ocr_required or native_text_chars > 0)
+    )
+    if ocr_required:
+        reasons.append("NATIVE_TEXT_INSUFFICIENT")
+        if image_rectangles:
+            reasons.append("PAGE_CONTAINS_IMAGES")
+    if visual_review_required:
+        reasons.append("IMAGE_AREA_HIGH")
+        if native_text_chars <= policy.max_image_page_text_chars:
+            reasons.append("TEXT_DENSITY_LOW")
+        if caption_count:
+            reasons.append("IMAGE_CAPTION_PRESENT")
+
+    if ocr_required and visual_review_required:
+        route: PdfPageRoute = "OCR_AND_VISUAL_REVIEW_REQUIRED"
+    elif ocr_required:
+        route = "OCR_REQUIRED"
+    elif visual_review_required:
+        route = "VISUAL_REVIEW_REQUIRED"
+    else:
+        route = "NORMAL"
+
+    return PdfPageProfile(
+        page_number=page_number,
+        image_count=len(image_rectangles),
+        image_area_ratio=image_area_ratio,
+        native_text_chars=native_text_chars,
+        text_area_ratio=text_area_ratio,
+        table_count=len(tables),
+        caption_count=caption_count,
+        route=route,
+        reasons=tuple(reasons),
+    )
+
+
+def _pdf_object_rectangles(
+    objects: object,
+    page_width: float,
+    page_height: float,
+) -> list[tuple[float, float, float, float]]:
+    """读取 pdfplumber 图片/字符坐标并裁剪到页面范围。"""
+
+    if not isinstance(objects, Sequence):
+        return []
+    rectangles: list[tuple[float, float, float, float]] = []
+    for item in objects:
+        if not isinstance(item, dict):
+            continue
+        x0 = _number(item.get("x0"))
+        x1 = _number(item.get("x1"))
+        top = _number(item.get("top"))
+        bottom = _number(item.get("bottom"))
+        if None in (x0, x1, top, bottom):
+            continue
+        assert x0 is not None and x1 is not None and top is not None and bottom is not None
+        left = min(max(min(x0, x1), 0.0), page_width)
+        right = min(max(max(x0, x1), 0.0), page_width)
+        upper = min(max(min(top, bottom), 0.0), page_height)
+        lower = min(max(max(top, bottom), 0.0), page_height)
+        if right > left and lower > upper:
+            rectangles.append((left, upper, right, lower))
+    return rectangles
+
+
+def _rectangle_union_area(rectangles: Sequence[tuple[float, float, float, float]]) -> float:
+    """通过扫描线计算矩形并集面积，避免重叠对象重复计数。
+
+    事件只维护当前横向切片内的纵向区间。相比“每个 x 区间重新扫描全部字符”，
+    该实现不会在长 PDF 的数千文字对象上产生明显的平方级开销。
+    """
+
+    events: list[tuple[float, int, float, float]] = []
+    for left, upper, right, lower in rectangles:
+        events.append((left, 1, upper, lower))
+        events.append((right, -1, upper, lower))
+    events.sort()
+    active: Counter[tuple[float, float]] = Counter()
+    area = 0.0
+    previous_x: float | None = None
+    index = 0
+    while index < len(events):
+        current_x = events[index][0]
+        if previous_x is not None and current_x > previous_x:
+            area += (current_x - previous_x) * _merged_interval_length(active)
+        while index < len(events) and events[index][0] == current_x:
+            _, change, upper, lower = events[index]
+            interval = (upper, lower)
+            active[interval] += change
+            if active[interval] <= 0:
+                del active[interval]
+            index += 1
+        previous_x = current_x
+    return area
+
+
+def _merged_interval_length(intervals: Counter[tuple[float, float]]) -> float:
+    """合并扫描线当前活跃的纵向区间，并返回覆盖总长度。"""
+
+    if not intervals:
+        return 0.0
+    covered_height = 0.0
+    current_upper: float | None = None
+    current_lower: float | None = None
+    for (upper, lower), count in sorted(intervals.items()):
+        if count <= 0:
+            continue
+        if current_upper is None:
+            current_upper, current_lower = upper, lower
+        elif current_lower is not None and upper <= current_lower:
+            current_lower = max(current_lower, lower)
+        else:
+            assert current_lower is not None
+            covered_height += current_lower - current_upper
+            current_upper, current_lower = upper, lower
+    if current_upper is not None and current_lower is not None:
+        covered_height += current_lower - current_upper
+    return covered_height
+
+
+def _number(value: object) -> float | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return float(value)
+
+
+def _positive_number(value: object) -> float:
+    number = _number(value)
+    return number if number is not None and number > 0 else 0.0
+
+
+def _area_ratio(area: float, page_area: float) -> float:
+    if page_area <= 0:
+        return 0.0
+    return min(max(area / page_area, 0.0), 1.0)
 
 
 def _normalize_pdf_line(line: str) -> str:

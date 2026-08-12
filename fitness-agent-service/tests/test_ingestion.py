@@ -3,9 +3,10 @@ from typing import Any
 
 import pytest
 
-from app.rag.formats import ParsedBlock
+from app.rag.formats import ParsedBlock, ParsedDocument, PdfPageProfile
 from app.rag.ingestion import (
     DocumentIngestionService,
+    DocumentPublicationBlocked,
     IngestionConflictError,
     IngestionRequest,
     chunk_markdown,
@@ -206,3 +207,48 @@ async def test_ingest_file_indexes_xlsx_with_source_metadata() -> None:
     assert chunks[0].metadata["source_sheet"] == "Week 1"
     assert chunks[0].metadata["parser"] == "openpyxl"
     assert parents[0].metadata["source_sheet"] == "Week 1"
+
+
+class RoutedParserRegistry:
+    def __init__(self, route: str) -> None:
+        self.route = route
+
+    def parse(self, content: bytes, *, file_name: str) -> ParsedDocument:
+        return ParsedDocument(
+            blocks=(ParsedBlock(kind="TEXT", content="深蹲动作说明。", source_page=1),),
+            media_type="application/pdf",
+            page_profiles=(
+                PdfPageProfile(
+                    1,
+                    1,
+                    0.8,
+                    8,
+                    0.04,
+                    0,
+                    1,
+                    self.route,  # type: ignore[arg-type]
+                ),
+            ),
+        )
+
+
+@pytest.mark.parametrize(
+    "route",
+    ["OCR_REQUIRED", "VISUAL_REVIEW_REQUIRED", "OCR_AND_VISUAL_REVIEW_REQUIRED"],
+)
+async def test_ingest_file_blocks_unresolved_pdf_pages_before_embedding(route: str) -> None:
+    rag = FakeRagService()
+    service = DocumentIngestionService(
+        FakeRepository(),
+        rag,
+        parser_registry=RoutedParserRegistry(route),  # type: ignore[arg-type]
+    )
+
+    with pytest.raises(DocumentPublicationBlocked, match=route):
+        await service.ingest_file(
+            request("", version=1),
+            file_name="exercise.pdf",
+            content=b"pdf",
+        )
+
+    assert rag.calls == []

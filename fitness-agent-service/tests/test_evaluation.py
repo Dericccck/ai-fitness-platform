@@ -65,6 +65,29 @@ def test_document_quality_ignores_repeated_titles_and_cross_page_guidance() -> N
     assert metrics.duplicate_block_count == 0
 
 
+def test_document_quality_reports_ocr_and_visual_review_pages() -> None:
+    from app.rag.document_quality import DocumentQualityThresholds, measure_document_quality
+    from app.rag.formats import ParsedBlock, PdfPageProfile
+
+    blocks = [ParsedBlock(kind="TEXT", content="动作说明。", source_page=2)]
+    profiles = [
+        PdfPageProfile(1, 1, 1.0, 0, 0.0, 0, 0, "OCR_REQUIRED"),
+        PdfPageProfile(2, 1, 0.7, 20, 0.05, 0, 1, "VISUAL_REVIEW_REQUIRED"),
+    ]
+
+    metrics = measure_document_quality(
+        blocks,
+        [],
+        total_pages=2,
+        page_profiles=profiles,
+    )
+
+    assert metrics.ocr_required_pages == (1,)
+    assert metrics.visual_review_required_pages == (2,)
+    assert metrics.max_image_area_ratio == 1.0
+    assert "ocr_required_pages" in " ".join(DocumentQualityThresholds().validate(metrics))
+
+
 def test_retrieval_evaluation_calculates_recall_and_mrr() -> None:
     case = RetrievalEvalCase("case-1", "热身", frozenset({"doc-a", "doc-b"}))
 

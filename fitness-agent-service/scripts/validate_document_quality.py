@@ -76,18 +76,24 @@ def _validate_entry(
             parsed.blocks,
             drafts,
             total_pages=_total_pdf_pages(path),
+            page_profiles=parsed.page_profiles,
         )
         failures = thresholds.validate(metrics)
         result.update(
             {
                 "metrics": metrics.as_dict(),
+                "page_profiles": [profile.as_dict() for profile in parsed.page_profiles],
                 "failures": failures,
                 "warnings": list(parsed.warnings),
             }
         )
         if failures:
             result["status"] = "BLOCKED"
-        elif parsed.warnings or entry.get("requires_human_review"):
+        elif (
+            parsed.warnings
+            or metrics.visual_review_required_pages
+            or entry.get("requires_human_review")
+        ):
             result["status"] = "REVIEW_REQUIRED"
         else:
             result["status"] = "PASS"

@@ -8,7 +8,7 @@ from collections import Counter
 from dataclasses import dataclass
 from typing import Any
 
-from .formats import ParsedBlock
+from .formats import ParsedBlock, PdfPageProfile
 from .ingestion import ChunkDraft
 
 _NOISE_MARKERS = (
@@ -39,6 +39,9 @@ class DocumentQualityMetrics:
     total_pages: int | None
     extracted_pages: int
     missing_pages: tuple[int, ...]
+    ocr_required_pages: tuple[int, ...] = ()
+    visual_review_required_pages: tuple[int, ...] = ()
+    max_image_area_ratio: float = 0.0
 
     @property
     def noise_rate(self) -> float:
@@ -100,6 +103,9 @@ class DocumentQualityMetrics:
             "extracted_pages": self.extracted_pages,
             "missing_pages": list(self.missing_pages),
             "page_coverage": None if self.page_coverage is None else round(self.page_coverage, 6),
+            "ocr_required_pages": list(self.ocr_required_pages),
+            "visual_review_required_pages": list(self.visual_review_required_pages),
+            "max_image_area_ratio": round(self.max_image_area_ratio, 6),
         }
 
 
@@ -113,6 +119,7 @@ class DocumentQualityThresholds:
     min_parent_integrity: float = 1.0
     min_table_integrity: float = 1.0
     max_missing_pages: int = 0
+    max_ocr_required_pages: int = 0
 
     @classmethod
     def from_mapping(cls, data: dict[str, Any]) -> DocumentQualityThresholds:
@@ -125,6 +132,9 @@ class DocumentQualityThresholds:
             min_parent_integrity=float(data.get("min_parent_integrity", cls.min_parent_integrity)),
             min_table_integrity=float(data.get("min_table_integrity", cls.min_table_integrity)),
             max_missing_pages=int(data.get("max_missing_pages", cls.max_missing_pages)),
+            max_ocr_required_pages=int(
+                data.get("max_ocr_required_pages", cls.max_ocr_required_pages)
+            ),
         )
         if not 0 <= threshold.max_noise_rate <= 1:
             raise ValueError("max_noise_rate must be between 0 and 1")
@@ -138,6 +148,8 @@ class DocumentQualityThresholds:
             raise ValueError("min_table_integrity must be between 0 and 1")
         if threshold.max_missing_pages < 0:
             raise ValueError("max_missing_pages must not be negative")
+        if threshold.max_ocr_required_pages < 0:
+            raise ValueError("max_ocr_required_pages must not be negative")
         return threshold
 
     def validate(self, metrics: DocumentQualityMetrics) -> list[str]:
@@ -166,6 +178,11 @@ class DocumentQualityThresholds:
             failures.append(
                 f"missing_pages {len(metrics.missing_pages)} > {self.max_missing_pages}"
             )
+        if len(metrics.ocr_required_pages) > self.max_ocr_required_pages:
+            failures.append(
+                "ocr_required_pages "
+                f"{len(metrics.ocr_required_pages)} > {self.max_ocr_required_pages}"
+            )
         return failures
 
 
@@ -174,6 +191,7 @@ def measure_document_quality(
     drafts: list[ChunkDraft],
     *,
     total_pages: int | None = None,
+    page_profiles: tuple[PdfPageProfile, ...] | list[PdfPageProfile] = (),
     short_block_chars: int = 80,
 ) -> DocumentQualityMetrics:
     """从解析块和父子切分草稿计算质量指标，不访问数据库。"""
@@ -199,6 +217,20 @@ def measure_document_quality(
         if total_pages is not None
         else ()
     )
+    ocr_required_pages = tuple(
+        profile.page_number
+        for profile in page_profiles
+        if profile.route in {"OCR_REQUIRED", "OCR_AND_VISUAL_REVIEW_REQUIRED"}
+    )
+    visual_review_required_pages = tuple(
+        profile.page_number
+        for profile in page_profiles
+        if profile.route in {"VISUAL_REVIEW_REQUIRED", "OCR_AND_VISUAL_REVIEW_REQUIRED"}
+    )
+    max_image_area_ratio = max(
+        (profile.image_area_ratio for profile in page_profiles),
+        default=0.0,
+    )
     return DocumentQualityMetrics(
         block_count=len(blocks),
         noise_block_count=noise_count,
@@ -211,6 +243,9 @@ def measure_document_quality(
         total_pages=total_pages,
         extracted_pages=extracted_pages,
         missing_pages=missing_pages,
+        ocr_required_pages=ocr_required_pages,
+        visual_review_required_pages=visual_review_required_pages,
+        max_image_area_ratio=max_image_area_ratio,
     )
 
 

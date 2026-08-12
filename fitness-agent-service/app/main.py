@@ -24,7 +24,7 @@ from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient
 from app.rag.admin_repository import KnowledgeIngestionRepository
 from app.rag.admin_service import KnowledgeAdminService
-from app.rag.formats import DocumentParserRegistry, PdfOcrProvider
+from app.rag.formats import DocumentParserRegistry, PdfOcrProvider, PdfPageRoutingPolicy
 from app.rag.ingestion import DocumentIngestionService
 from app.rag.ocr import HttpPdfOcrProvider
 from app.rag.reindex_repository import KnowledgeReindexRepository
@@ -73,6 +73,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     parser_registry = DocumentParserRegistry(
         max_source_bytes=settings.rag_max_source_bytes,
         pdf_ocr_provider=_build_ocr_provider(settings),
+        pdf_page_routing_policy=PdfPageRoutingPolicy(
+            min_image_area_ratio=settings.rag_pdf_min_image_area_ratio,
+            max_image_page_text_chars=settings.rag_pdf_max_image_page_text_chars,
+            max_image_page_text_area_ratio=settings.rag_pdf_max_image_page_text_area_ratio,
+            min_ocr_text_chars=settings.rag_pdf_min_ocr_text_chars,
+        ),
     )
     app.state.rag_service = RagService(
         app.state.knowledge_repository,
