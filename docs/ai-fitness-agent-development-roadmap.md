@@ -320,10 +320,10 @@ LangGraph Checkpoint 和业务确认单职责不同：Checkpoint 只负责保存
 PENDING_REVIEW -> APPROVED/REJECTED ->
 PUBLISHED` 状态机长期保存，不使用一个可能等待数天的 LangGraph interrupt 代替业务审批流。
 
-实施前必须先修复当前 Checkpoint 边界：`SupervisorState` 目前保存整个 `SupervisorRequest`，其中包含
-签名 AgentContext；后续若继续沿用还可能持久化确认凭证。改造后 State 只能保存可恢复的业务状态、
-消息、待确认动作摘要和确认 ID；最新签名上下文、请求级 Token 和连接对象通过非持久化运行上下文
-注入，并在每次恢复 API 调用时重新验证。现有历史 Checkpoint 需要定义兼容读取和安全失效策略。
+已完成的前置改造：`SupervisorState` 不再保存 `SupervisorRequest`、签名 AgentContext 或请求级 Token；
+State 只保存可恢复的业务状态和消息，Gateway 上下文通过 LangGraph 运行期 `context` 注入。恢复前会
+先检查原始 Checkpoint，发现旧版 `request` 敏感字段就 fail-closed，不让 LangGraph 静默丢弃后继续执行；
+这类历史会话必须重新发起。后续确认单和 interrupt 恢复仍需沿用这一安全边界。
 
 确认交互 API 采用可恢复协议，而不是在原 `/chat` 请求中阻塞等待：
 
@@ -632,15 +632,17 @@ API、角色意图评测和 Prompt 版本管理待继续建设。
 - 已接入 PostgreSQL LangGraph Checkpoint、启动期官方表迁移、Redis 会话锁和按签名身份隔离的匿名 thread_id。
 - 已实现同一会话后续请求读取最新 Checkpoint 并恢复历史消息；会话锁包围“读取历史→执行图→写入新 Checkpoint”完整临界区。
 - 已增加会话并发冲突返回 409 的协议；SSE 流式响应和断线恢复 API 待基于 Checkpoint 契约接入。
-- 按 7.4 节完成 Checkpoint 敏感上下文剥离、持久化确认单、LangGraph interrupt、确认/拒绝和恢复 API、
-  确认凭证服务端换取、断线恢复及完整安全测试；该项完成前不继续增加新的业务写工具。
+- 已完成 Checkpoint 敏感上下文剥离和旧状态 fail-closed；仍需按 7.4 节完成持久化确认单、LangGraph
+  interrupt、确认/拒绝和恢复 API、确认凭证服务端换取、断线恢复及完整安全测试；该项完成前不继续
+  增加新的业务写工具。
 - 建立角色路由、意图分类、任务状态和失败恢复。
 - 接入 PostgreSQL/Redis Checkpoint。
 - 统一模型超时、重试、限流、Token 预算和结构化输出。
 - 建立 Prompt 版本管理和基础 Agent 评测集。
 
-完成标准：管理员、教练和学员请求能稳定路由；会话及待确认动作可恢复；凭证和签名上下文不进入
-Checkpoint；工具失败或确认拒绝不会被描述成成功；模型请求和确认决定可追踪。
+完成标准：管理员、教练和学员请求能稳定路由；会话可恢复且旧敏感状态 fail-closed；凭证和签名上下文
+不进入 Checkpoint；待确认动作、确认决定和恢复能力完成后，工具失败或确认拒绝不会被描述成成功；
+模型请求和确认决定可追踪。
 
 ### 阶段 4：企业级 RAG
 

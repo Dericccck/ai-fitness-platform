@@ -137,7 +137,9 @@ Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry 已包�
 当前版本已接入 PostgreSQL LangGraph Checkpoint 和 Redis 会话锁：同一用户/组织/角色范围
 内的 `conversation_id` 会生成稳定的匿名 `thread_id`，不同身份即使使用相同会话 ID 也
 无法读取同一份状态；后续请求会读取最新 Checkpoint 并恢复历史消息；同一会话的并发请求会返回 409。PostgreSQL 是会话状态事实源，Redis
-只承担短租约互斥和短期状态，不作为长期会话数据的唯一存储。
+只承担短租约互斥和短期状态，不作为长期会话数据的唯一存储。Supervisor State 不保存签名
+AgentContext 或请求级 Token；它们通过 LangGraph 运行期 context 注入。检测到历史版本把 `request`
+敏感对象写入 Checkpoint 时会拒绝恢复并要求重新建立会话。
 
 RAG 表结构通过 `make agent-migrate` 显式升级，不在服务启动时自动创建业务表。知识切片的
 `organization_id`、`visibility`、`owner_user_id`、`allowed_roles` 和生效时间由数据库查询

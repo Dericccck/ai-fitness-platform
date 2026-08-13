@@ -1,11 +1,13 @@
 from typing import Any, cast
 
 import pytest
+from langgraph.checkpoint.base import CheckpointTuple, empty_checkpoint
 from langgraph.checkpoint.memory import InMemorySaver
 from pydantic import BaseModel, ConfigDict
 
 from app.agent.supervisor import (
     Supervisor,
+    SupervisorCheckpointIncompatible,
     SupervisorRequest,
     SupervisorRuntimeError,
     UnsupportedLegacyRequest,
@@ -140,6 +142,42 @@ async def test_supervisor_restores_previous_conversation_messages() -> None:
     contents = [message["content"] for message in state.values["messages"]]
     assert contents.count("我想减脂") == 1
     assert contents.count("继续安排训练") == 1
+
+
+async def test_supervisor_rejects_legacy_checkpoint_with_sensitive_request() -> None:
+    models = FakeModels([ModelTurn(content="不应执行", tool_calls=())])
+    checkpointer = LegacyCheckpointSaver()
+    supervisor = Supervisor(
+        cast(ModelGateway, models),
+        build_registry([]),
+        checkpointer=checkpointer,
+    )
+
+    with pytest.raises(SupervisorCheckpointIncompatible):
+        await supervisor.invoke(request("继续安排训练"))
+
+    assert models.tools_seen == []
+
+
+class LegacyCheckpointSaver(InMemorySaver):
+    """只返回旧版敏感 State 的最小 Checkpoint 测试桩。"""
+
+    async def aget_tuple(self, config: dict[str, Any]) -> CheckpointTuple:
+        checkpoint = empty_checkpoint()
+        checkpoint["v"] = 4
+        checkpoint["channel_values"] = {
+            "request": {
+                "user_message": "历史请求",
+                "gateway_context": {"signed_context": "secret-context"},
+            }
+        }
+        return CheckpointTuple(
+            config=config,
+            checkpoint=checkpoint,
+            metadata={"step": -1},
+            parent_config=None,
+            pending_writes=[],
+        )
 
 
 async def test_supervisor_wraps_unknown_model_tool_as_runtime_failure() -> None:

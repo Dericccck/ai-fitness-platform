@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
+from langgraph.runtime import Runtime
 
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.cache import SessionLockManager, SessionLockUnavailable
@@ -44,6 +45,10 @@ class SupervisorSessionBusy(SupervisorRuntimeError):
     """同一会话正在执行另一个请求。"""
 
 
+class SupervisorCheckpointIncompatible(SupervisorRuntimeError):
+    """Checkpoint 仍包含旧版敏感运行上下文，必须重新建立会话。"""
+
+
 class ToolStepLimitExceeded(SupervisorRuntimeError):
     """模型连续请求工具超过预算，防止循环调用消耗失控。"""
 
@@ -54,7 +59,7 @@ class UnsupportedLegacyRequest(SupervisorRuntimeError):
 
 @dataclass(frozen=True)
 class SupervisorRequest:
-    """一次 Agent 请求的受信任运行上下文。"""
+    """一次 Agent 请求的入口参数和非持久化运行上下文。"""
 
     user_message: str
     gateway_context: GatewayRequestContext
@@ -62,6 +67,18 @@ class SupervisorRequest:
     thread_id: str | None = None
     locale: str = "zh-CN"
     identity: AgentIdentity | None = None
+
+
+@dataclass(frozen=True)
+class SupervisorRuntimeContext:
+    """只在本次图执行期间存在的敏感上下文。
+
+    <p>LangGraph 的 State 会写入 PostgreSQL Checkpoint，不能把签名 AgentContext、确认
+    Token 或 Gateway 请求对象放进去。节点通过 LangGraph 的 ``context`` 接收本对象，图
+    暂停、恢复或服务重启时必须由新的 HTTP 请求重新验证并注入。</p>
+    """
+
+    gateway_context: GatewayRequestContext
 
 
 @dataclass(frozen=True)
@@ -76,7 +93,6 @@ class SupervisorResponse:
 
 
 class SupervisorState(TypedDict, total=False):
-    request: SupervisorRequest
     messages: list[dict[str, Any]]
     route: SupervisorRoute
     tool_steps: int
@@ -135,7 +151,6 @@ class Supervisor:
         if knowledge_context:
             system_prompt = f"{system_prompt}\n\n{knowledge_context}"
         initial: SupervisorState = {
-            "request": request,
             "route": route,
             "messages": [
                 {"role": "system", "content": system_prompt},
@@ -154,8 +169,24 @@ class Supervisor:
             # 确保跨 HTTP 请求的多轮对话真正连续，同时避免重复写入 system prompt。
             previous_values: dict[str, Any] = {}
             if self._checkpointer is not None:
+                # 先读取原始 Checkpoint，再让 LangGraph 按当前 Schema 映射 values。旧版
+                # 的 ``request`` 不是当前 State 字段，若只检查 values 会被框架静默丢弃，
+                # 这会掩盖历史签名上下文已经落盘的事实。
+                raw_checkpoint = await self._checkpointer.aget_tuple(config)
+                if raw_checkpoint is not None and "request" in raw_checkpoint.checkpoint.get(
+                    "channel_values", {}
+                ):
+                    raise SupervisorCheckpointIncompatible(
+                        "checkpoint uses an incompatible sensitive runtime state"
+                    )
                 previous = await self._graph.aget_state(config)
                 previous_values = previous.values if previous else {}
+            if "request" in previous_values:
+                # 旧版本把签名上下文和潜在确认凭证放进 State。不能继续反序列化或
+                # 自动迁移这类状态，避免敏感对象在恢复链路中继续传播；调用方应重建会话。
+                raise SupervisorCheckpointIncompatible(
+                    "checkpoint uses an incompatible sensitive runtime state"
+                )
             previous_messages = previous_values.get("messages", [])
             if previous_messages:
                 initial["messages"] = [
@@ -164,7 +195,11 @@ class Supervisor:
                 ]
                 initial["input_tokens"] = previous_values.get("input_tokens", 0)
                 initial["output_tokens"] = previous_values.get("output_tokens", 0)
-            return await self._graph.ainvoke(initial, config=config)
+            return await self._graph.ainvoke(
+                initial,
+                config=config,
+                context=SupervisorRuntimeContext(gateway_context=request.gateway_context),
+            )
 
         try:
             if self.session_lock is None:
@@ -189,7 +224,7 @@ class Supervisor:
         )
 
     def _build_graph(self) -> Any:
-        graph = StateGraph(SupervisorState)
+        graph = StateGraph(SupervisorState, context_schema=SupervisorRuntimeContext)
         graph.add_node("model", self._model_node)
         graph.add_node("tools", self._tool_node)
         graph.add_edge(START, "model")
@@ -234,9 +269,12 @@ class Supervisor:
             "output_tokens": state.get("output_tokens", 0) + (turn.output_tokens or 0),
         }
 
-    async def _tool_node(self, state: SupervisorState) -> dict[str, Any]:
-        request = state["request"]
-        context = ToolContext(gateway_context=request.gateway_context)
+    async def _tool_node(
+        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        if runtime.context is None:
+            raise SupervisorRuntimeError("supervisor runtime context is missing")
+        context = ToolContext(gateway_context=runtime.context.gateway_context)
         tool_messages: list[dict[str, Any]] = []
         calls = state.get("model_tool_calls", [])
         for call in calls:
