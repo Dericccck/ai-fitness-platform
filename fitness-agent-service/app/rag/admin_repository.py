@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from sqlalchemy import bindparam, text
@@ -12,8 +13,11 @@ from .admin_models import (
     KnowledgeIngestionJob,
     KnowledgeJobNotFound,
     KnowledgeJobTransitionError,
+    KnowledgeReviewReportNotFound,
     job_from_row,
 )
+from .formats import PdfPageProfile
+from .review import KnowledgeReviewFinding, KnowledgeReviewReport
 
 
 class KnowledgeIngestionRepository:
@@ -26,8 +30,16 @@ class KnowledgeIngestionRepository:
         self,
         *,
         job: KnowledgeIngestionJob,
+        review_report: KnowledgeReviewReport,
     ) -> KnowledgeIngestionJob:
-        """持久化待审核任务，并返回数据库标准化后的数据行。"""
+        """在同一事务中持久化待审核任务和不可变的首版解析报告。"""
+
+        if review_report.job_id != job.id:
+            raise ValueError("review report must be bound to the created ingestion job")
+        if review_report.document_sha256 != job.content_sha256:
+            raise ValueError("review report hash must match the staged document hash")
+        if review_report.report_version != 1:
+            raise ValueError("the first review report version must be 1")
 
         statement = text(
             """
@@ -48,10 +60,48 @@ class KnowledgeIngestionRepository:
             RETURNING *
             """
         )
+        review_statement = text(
+            """
+            INSERT INTO knowledge_review_reports (
+                id, job_id, report_version, document_sha256, parser_name, parser_version,
+                parser_pipeline_version, review_policy_version, media_type,
+                declared_risk_level, source_requires_human_review,
+                status,
+                quality_metrics, page_profiles, warnings, findings, required_review_domains,
+                recommended_reviewer_roles, required_qualifications
+            ) VALUES (
+                :id, :job_id, :report_version, :document_sha256, :parser_name, :parser_version,
+                :parser_pipeline_version, :review_policy_version, :media_type,
+                :declared_risk_level, :source_requires_human_review, :status,
+                CAST(:quality_metrics AS JSONB), CAST(:page_profiles AS JSONB), :warnings,
+                CAST(:findings AS JSONB), :required_review_domains,
+                :recommended_reviewer_roles, :required_qualifications
+            )
+            """
+        )
         params = _job_params(job)
         async with self._database.engine.begin() as connection:
             row = (await connection.execute(statement, params)).mappings().one()
+            await connection.execute(review_statement, _review_report_params(review_report))
         return job_from_row(row)
+
+    async def get_latest_review_report(self, job_id: str) -> KnowledgeReviewReport:
+        """返回任务最新的追加式审核报告，不允许调用方按任意文件哈希查询。"""
+
+        statement = text(
+            """
+            SELECT *
+            FROM knowledge_review_reports
+            WHERE job_id = :job_id
+            ORDER BY report_version DESC
+            LIMIT 1
+            """
+        )
+        async with self._database.engine.connect() as connection:
+            row = (await connection.execute(statement, {"job_id": job_id})).mappings().first()
+        if row is None:
+            raise KnowledgeReviewReportNotFound("knowledge review report was not found")
+        return _review_report_from_row(row)
 
     async def get_job(self, job_id: str) -> KnowledgeIngestionJob:
         """返回一个任务；不存在时抛出稳定的领域异常。"""
@@ -304,3 +354,85 @@ def _job_params(job: KnowledgeIngestionJob) -> dict[str, Any]:
         "malware_signature": job.malware_signature,
         "malware_scanned_at": job.malware_scanned_at,
     }
+
+
+def _review_report_params(report: KnowledgeReviewReport) -> dict[str, Any]:
+    """显式序列化 JSONB 证据，避免数据库驱动隐式改变列表和小数结构。"""
+
+    return {
+        "id": report.id,
+        "job_id": report.job_id,
+        "report_version": report.report_version,
+        "document_sha256": report.document_sha256,
+        "parser_name": report.parser_name,
+        "parser_version": report.parser_version,
+        "parser_pipeline_version": report.parser_pipeline_version,
+        "review_policy_version": report.review_policy_version,
+        "media_type": report.media_type,
+        "declared_risk_level": report.declared_risk_level,
+        "source_requires_human_review": report.source_requires_human_review,
+        "status": report.status,
+        "quality_metrics": json.dumps(report.quality_metrics, ensure_ascii=False),
+        "page_profiles": json.dumps(
+            [profile.as_dict() for profile in report.page_profiles], ensure_ascii=False
+        ),
+        "warnings": list(report.warnings),
+        "findings": json.dumps(
+            [finding.as_dict() for finding in report.findings], ensure_ascii=False
+        ),
+        "required_review_domains": list(report.required_review_domains),
+        "recommended_reviewer_roles": list(report.recommended_reviewer_roles),
+        "required_qualifications": list(report.required_qualifications),
+    }
+
+
+def _review_report_from_row(row: Any) -> KnowledgeReviewReport:
+    """恢复类型化报告；数据库 JSONB 中只读取本服务写入的稳定字段。"""
+
+    page_profiles = tuple(
+        PdfPageProfile(
+            page_number=int(item["page_number"]),
+            image_count=int(item["image_count"]),
+            image_area_ratio=float(item["image_area_ratio"]),
+            native_text_chars=int(item["native_text_chars"]),
+            text_area_ratio=float(item["text_area_ratio"]),
+            table_count=int(item["table_count"]),
+            caption_count=int(item["caption_count"]),
+            route=item["route"],
+            reasons=tuple(str(reason) for reason in item.get("reasons", ())),
+        )
+        for item in row["page_profiles"] or ()
+    )
+    findings = tuple(
+        KnowledgeReviewFinding(
+            code=str(item["code"]),
+            severity=item["severity"],
+            message=str(item["message"]),
+            pages=tuple(int(page) for page in item.get("pages", ())),
+        )
+        for item in row["findings"] or ()
+    )
+    return KnowledgeReviewReport(
+        id=str(row["id"]),
+        job_id=str(row["job_id"]),
+        report_version=int(row["report_version"]),
+        document_sha256=str(row["document_sha256"]),
+        parser_name=str(row["parser_name"]),
+        parser_version=str(row["parser_version"]),
+        parser_pipeline_version=str(row["parser_pipeline_version"]),
+        review_policy_version=str(row["review_policy_version"]),
+        media_type=str(row["media_type"]),
+        declared_risk_level=str(row["declared_risk_level"]),
+        source_requires_human_review=bool(row["source_requires_human_review"]),
+        status=row["status"],
+        quality_metrics=dict(row["quality_metrics"] or {}),
+        page_profiles=page_profiles,
+        warnings=tuple(str(item) for item in row["warnings"] or ()),
+        findings=findings,
+        required_review_domains=tuple(str(item) for item in row["required_review_domains"] or ()),
+        recommended_reviewer_roles=tuple(
+            str(item) for item in row["recommended_reviewer_roles"] or ()
+        ),
+        required_qualifications=tuple(str(item) for item in row["required_qualifications"] or ()),
+        created_at=row["created_at"],
+    )

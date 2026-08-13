@@ -13,6 +13,7 @@ from app.rag.admin_models import (
 from app.rag.admin_service import KnowledgeAdminService
 from app.rag.formats import DocumentParserRegistry
 from app.rag.ingestion import IngestionResult
+from app.rag.review import KnowledgeReviewReport, KnowledgeReviewReportBuilder
 from app.rag.storage import LocalDocumentStorage
 
 
@@ -49,13 +50,23 @@ class FakeKnowledgeRepository:
 class FakeJobs:
     def __init__(self) -> None:
         self.created: list[KnowledgeIngestionJob] = []
+        self.reports: dict[str, KnowledgeReviewReport] = {}
 
-    async def create_job(self, *, job: KnowledgeIngestionJob) -> KnowledgeIngestionJob:
+    async def create_job(
+        self,
+        *,
+        job: KnowledgeIngestionJob,
+        review_report: KnowledgeReviewReport,
+    ) -> KnowledgeIngestionJob:
         self.created.append(job)
+        self.reports[job.id] = review_report
         return job
 
     async def get_job(self, job_id: str) -> KnowledgeIngestionJob:
         return next(job for job in self.created if job.id == job_id)
+
+    async def get_latest_review_report(self, job_id: str) -> KnowledgeReviewReport:
+        return self.reports[job_id]
 
 
 class FakeIngestion:
@@ -71,6 +82,7 @@ def build_service(tmp_path: Path) -> tuple[KnowledgeAdminService, FakeJobs]:
         FakeIngestion(),
         LocalDocumentStorage(str(tmp_path)),
         DocumentParserRegistry(),
+        KnowledgeReviewReportBuilder(max_chunk_chars=1200, overlap_chars=120),
         max_source_bytes=1000,
     )
     return service, jobs
@@ -100,6 +112,22 @@ async def test_upload_requires_admin_and_stages_before_review(tmp_path: Path) ->
     assert job.requested_version == 1
     assert jobs.created[0].storage_key.endswith(".md")
     assert (tmp_path / jobs.created[0].storage_key).read_text() == "# Warmup\n\nPrepare the hips."
+    assert jobs.reports[job.id].status == "PASS"
+    assert jobs.reports[job.id].document_sha256 == job.content_sha256
+
+
+async def test_gateway_system_admin_role_can_submit_global_knowledge(tmp_path: Path) -> None:
+    service, _ = build_service(tmp_path)
+
+    job = await service.submit_upload(
+        identity("SYSTEM_ADMIN"),
+        file_name="mobility.md",
+        content_type="text/markdown",
+        content=b"# Mobility\n\nMove within a comfortable range.",
+        metadata=metadata(source_uri="knowledge://fitness/mobility.md"),
+    )
+
+    assert job.status == "PENDING_REVIEW"
 
 
 async def test_organization_scope_defaults_to_signed_single_organization(tmp_path: Path) -> None:
@@ -174,3 +202,60 @@ async def test_scanned_pdf_can_enter_review_queue_without_becoming_publishable(
     # Embedding 前因 OCR_REQUIRED fail-closed。
     assert job.status == "PENDING_REVIEW"
     assert job.original_filename == "scanned-guide.pdf"
+    report = await service.get_review_report(identity("SUPER_ADMIN"), job.id)
+    assert report.status == "BLOCKED"
+    assert report.quality_metrics["ocr_required_pages"] == [1]
+    assert report.can_admin_approve is False
+
+
+async def test_exercise_safety_document_requires_coach_review_before_admin_approval(
+    tmp_path: Path,
+) -> None:
+    service, jobs = build_service(tmp_path)
+    job = await service.submit_upload(
+        identity("SUPER_ADMIN"),
+        file_name="squat.md",
+        content_type="text/markdown",
+        content=b"# Squat\n\nKeep the knees aligned during the movement.",
+        metadata=metadata(
+            source_uri="knowledge://fitness/squat.md",
+            document_type="EXERCISE_SAFETY",
+        ),
+    )
+
+    report = jobs.reports[job.id]
+    assert report.status == "REVIEW_REQUIRED"
+    assert report.required_review_domains == ("FITNESS_COACHING_SAFETY",)
+    assert report.recommended_reviewer_roles == ("COACH",)
+
+    from app.rag.admin_models import KnowledgeJobTransitionError
+
+    with pytest.raises(KnowledgeJobTransitionError, match="REVIEW_REQUIRED"):
+        await service.approve(identity("SUPER_ADMIN"), job.id)
+
+
+async def test_medical_document_records_missing_verified_professional_role(
+    tmp_path: Path,
+) -> None:
+    service, jobs = build_service(tmp_path)
+    job = await service.submit_upload(
+        identity("SUPER_ADMIN"),
+        file_name="hypertension.md",
+        content_type="text/markdown",
+        content=b"# Hypertension\n\nExercise advice requires individualized risk review.",
+        metadata=metadata(
+            source_uri="knowledge://fitness/hypertension.md",
+            document_type="EXERCISE_SAFETY",
+            risk_level="MEDICAL",
+            requires_human_review=True,
+        ),
+    )
+
+    report = jobs.reports[job.id]
+    assert report.status == "REVIEW_REQUIRED"
+    assert report.required_review_domains == (
+        "CLINICAL_EXERCISE_SAFETY",
+        "FITNESS_COACHING_SAFETY",
+    )
+    assert report.recommended_reviewer_roles == ("COACH",)
+    assert report.required_qualifications == ("VERIFIED_HEALTH_PROFESSIONAL",)

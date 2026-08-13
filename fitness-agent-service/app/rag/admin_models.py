@@ -74,6 +74,8 @@ class KnowledgeUploadMetadata:
     allowed_roles: tuple[str, ...]
     effective_from: datetime
     effective_to: datetime | None
+    risk_level: str = "NORMAL"
+    requires_human_review: bool = False
 
 
 @dataclass(frozen=True)
@@ -169,6 +171,10 @@ class KnowledgeAdminForbidden(KnowledgeAdminError):
 
 class KnowledgeReindexNotFound(KnowledgeAdminError):
     """请求的重建范围内没有可用的已发布文档。"""
+
+
+class KnowledgeReviewReportNotFound(KnowledgeAdminError):
+    """上传任务尚未生成可审计的解析审核报告。"""
 
 
 def job_from_row(row: Any) -> KnowledgeIngestionJob:

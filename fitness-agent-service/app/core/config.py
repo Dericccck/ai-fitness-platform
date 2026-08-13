@@ -122,6 +122,15 @@ class Settings(BaseSettings):
     rag_pdf_max_image_page_text_chars: int = Field(default=600, ge=0, le=20_000)
     rag_pdf_max_image_page_text_area_ratio: float = Field(default=0.25, ge=0, le=1)
     rag_pdf_min_ocr_text_chars: int = Field(default=12, ge=0, le=1_000)
+    # 离线评测和线上上传审核必须使用同一类指标。生产值应由真实健身资料回归后
+    # 固化到部署配置，不能让 API 请求或 LLM 临时放宽门禁。
+    rag_quality_max_noise_rate: float = Field(default=0.0, ge=0, le=1)
+    rag_quality_max_fragment_rate: float = Field(default=0.35, ge=0, le=1)
+    rag_quality_max_duplicate_rate: float = Field(default=0.02, ge=0, le=1)
+    rag_quality_min_parent_integrity: float = Field(default=1.0, ge=0, le=1)
+    rag_quality_min_table_integrity: float = Field(default=1.0, ge=0, le=1)
+    rag_quality_max_missing_pages: int = Field(default=0, ge=0, le=10_000)
+    rag_quality_max_ocr_required_pages: int = Field(default=0, ge=0, le=10_000)
     rag_ocr_backend: Literal["disabled", "http"] = "disabled"
     rag_ocr_endpoint_url: str = ""
     rag_ocr_api_key: str = ""

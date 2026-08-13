@@ -16,8 +16,8 @@ from .ingestion import DocumentIngestionService, IngestionRequest
 from .reindex_repository import KnowledgeReindexRepository
 from .storage import DocumentStorage
 
-ADMIN_ROLES = frozenset({"ADMIN", "ORG_ADMIN", "SUPER_ADMIN"})
-PLATFORM_ADMIN_ROLES = frozenset({"ADMIN", "SUPER_ADMIN"})
+ADMIN_ROLES = frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "ADMIN", "ORG_ADMIN", "SUPER_ADMIN"})
+PLATFORM_ADMIN_ROLES = frozenset({"SYSTEM_ADMIN", "ADMIN", "SUPER_ADMIN"})
 
 
 class KnowledgeReindexService:

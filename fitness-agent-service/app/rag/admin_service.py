@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import re
 from secrets import token_hex
 
@@ -11,17 +12,22 @@ from app.infrastructure.agent_context import AgentIdentity
 from .admin_models import (
     KnowledgeAdminForbidden,
     KnowledgeIngestionJob,
+    KnowledgeJobTransitionError,
+    KnowledgeReviewReportNotFound,
     KnowledgeUploadMetadata,
 )
 from .admin_repository import KnowledgeIngestionRepository
 from .formats import DocumentParserRegistry
 from .ingestion import DocumentIngestionService, IngestionRequest
 from .repository import KnowledgeRepository
+from .review import KnowledgeReviewReport, KnowledgeReviewReportBuilder
 from .safety import DocumentScanner, StructuralDocumentScanner
 from .storage import DocumentStorage
 
-ADMIN_ROLES = frozenset({"ADMIN", "ORG_ADMIN", "SUPER_ADMIN"})
-PLATFORM_ADMIN_ROLES = frozenset({"ADMIN", "SUPER_ADMIN"})
+# 前两个名称来自 Java Tool Gateway 的正式 AgentContext；后三个是早期 Agent
+# 服务和本地脚本使用的兼容别名。保留别名避免旧任务工具中断，但新集成应只签发正式角色。
+ADMIN_ROLES = frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "ADMIN", "ORG_ADMIN", "SUPER_ADMIN"})
+PLATFORM_ADMIN_ROLES = frozenset({"SYSTEM_ADMIN", "ADMIN", "SUPER_ADMIN"})
 _SAFE_TEXT = re.compile(r"^[^\r\n]{1,256}$")
 
 
@@ -39,6 +45,7 @@ class KnowledgeAdminService:
         ingestion: DocumentIngestionService,
         storage: DocumentStorage,
         parser_registry: DocumentParserRegistry,
+        review_report_builder: KnowledgeReviewReportBuilder,
         safety_scanner: DocumentScanner | None = None,
         *,
         max_source_bytes: int,
@@ -49,6 +56,7 @@ class KnowledgeAdminService:
         self.ingestion = ingestion
         self.storage = storage
         self.parser_registry = parser_registry
+        self.review_report_builder = review_report_builder
         self.safety_scanner = safety_scanner or StructuralDocumentScanner()
         self.max_source_bytes = max_source_bytes
         self.max_attempts = max_attempts
@@ -73,7 +81,7 @@ class KnowledgeAdminService:
         safety_result = self.safety_scanner.scan(file_name, content)
         # 在信任边界处先解析一次。后续 Worker 会重新解析不可变字节，
         # 避免损坏文件长期停留在审核队列中而无人发现。
-        self.parser_registry.parse(content, file_name=file_name)
+        parsed = self.parser_registry.parse(content, file_name=file_name)
 
         current = await self.knowledge_repository.get_current_document(metadata.source_uri)
         requested_version = 1 if current is None else current.version + 1
@@ -81,6 +89,15 @@ class KnowledgeAdminService:
         if metadata.visibility == "ORGANIZATION" and organization_id is None:
             organization_id = next(iter(identity.organization_ids))
         job_id = token_hex(16)
+        report = self.review_report_builder.build(
+            report_id=token_hex(16),
+            job_id=job_id,
+            document_sha256=safety_result.sha256,
+            document_type=metadata.document_type,
+            risk_level=metadata.risk_level,
+            requires_human_review=metadata.requires_human_review,
+            parsed=parsed,
+        )
         storage_key = await asyncio.to_thread(
             self.storage.store,
             job_id,
@@ -116,7 +133,7 @@ class KnowledgeAdminService:
             malware_signature=safety_result.malware_signature,
             malware_scanned_at=safety_result.malware_scanned_at,
         )
-        return await self.jobs.create_job(job=job)
+        return await self.jobs.create_job(job=job, review_report=report)
 
     async def approve(
         self, identity: AgentIdentity, job_id: str, *, comment: str | None = None
@@ -124,7 +141,24 @@ class KnowledgeAdminService:
         """批准待审核任务；路由会在本次调用后调度实际 Worker。"""
 
         self.require_admin(identity)
-        await self._get_scoped_job(identity, job_id)
+        job = await self._get_scoped_job(identity, job_id)
+        try:
+            report = await self.jobs.get_latest_review_report(job_id)
+        except KnowledgeReviewReportNotFound as exc:
+            raise KnowledgeJobTransitionError(
+                "knowledge review report is missing; re-analysis is required"
+            ) from exc
+        if not report.can_admin_approve:
+            # 这里故意不接受 force/override 参数。BLOCKED 需要重新解析或 OCR，
+            # REVIEW_REQUIRED 需要后续专业审核决策；普通管理员备注不能代替二者。
+            raise KnowledgeJobTransitionError(
+                "knowledge review report does not allow administrator approval: "
+                f"status={report.status}, required_domains={list(report.required_review_domains)}"
+            )
+        if report.document_sha256 != job.content_sha256:
+            raise KnowledgeJobTransitionError(
+                "knowledge review report is not bound to the staged document hash"
+            )
         return await self.jobs.approve(job_id, reviewer_id=identity.subject, comment=comment)
 
     async def reject(
@@ -151,6 +185,15 @@ class KnowledgeAdminService:
         self.require_admin(identity)
         return await self._get_scoped_job(identity, job_id)
 
+    async def get_review_report(
+        self, identity: AgentIdentity, job_id: str
+    ) -> KnowledgeReviewReport:
+        """在任务范围校验后返回报告，避免跨组织枚举页码和审核要求。"""
+
+        self.require_admin(identity)
+        await self._get_scoped_job(identity, job_id)
+        return await self.jobs.get_latest_review_report(job_id)
+
     async def list_jobs(
         self, identity: AgentIdentity, *, limit: int = 50
     ) -> list[KnowledgeIngestionJob]:
@@ -171,6 +214,18 @@ class KnowledgeAdminService:
             return
         try:
             content = await asyncio.to_thread(self.storage.read, job.storage_key)
+            report = await self.jobs.get_latest_review_report(job.id)
+            actual_sha256 = hashlib.sha256(content).hexdigest()
+            if (
+                not report.can_admin_approve
+                or report.document_sha256 != job.content_sha256
+                or actual_sha256 != job.content_sha256
+            ):
+                # 审批到执行之间可能发生部署升级或对象篡改。Worker 必须再次校验
+                # 报告版本和内容身份，不能因为任务已经排队就默认信任旧决定。
+                raise KnowledgeJobTransitionError(
+                    "review report is stale or staged document hash verification failed"
+                )
             result = await self.ingestion.ingest_file(
                 IngestionRequest(
                     source_uri=job.source_uri,
@@ -227,6 +282,8 @@ class KnowledgeAdminService:
             raise ValueError("title is invalid")
         if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,63}", metadata.document_type):
             raise ValueError("document_type must be uppercase and bounded")
+        if metadata.risk_level not in {"NORMAL", "CAUTION", "MEDICAL"}:
+            raise ValueError("risk_level must be NORMAL, CAUTION, or MEDICAL")
         if metadata.visibility == "GLOBAL" and metadata.organization_id is not None:
             raise ValueError("global documents cannot carry an organization scope")
         if metadata.visibility == "GLOBAL" and not PLATFORM_ADMIN_ROLES.intersection(

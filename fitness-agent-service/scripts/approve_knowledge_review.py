@@ -7,14 +7,18 @@ import asyncio
 import json
 from datetime import UTC, datetime
 
-from submit_knowledge_review import MANIFEST_PATH, _source_uri
+from submit_knowledge_review import (
+    MANIFEST_PATH,
+    _build_review_report_builder,
+    _source_uri,
+)
 
 from app.core.config import Settings
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.database import Database
 from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient
-from app.rag.admin_models import KnowledgeIngestionJob
+from app.rag.admin_models import KnowledgeIngestionJob, KnowledgeReviewReportNotFound
 from app.rag.admin_repository import KnowledgeIngestionRepository
 from app.rag.admin_service import KnowledgeAdminService
 from app.rag.formats import DocumentParserRegistry, PdfOcrProvider
@@ -109,6 +113,7 @@ async def _run(args: argparse.Namespace) -> int:
         ingestion,
         LocalDocumentStorage(settings.rag_staging_dir),
         parser,
+        _build_review_report_builder(settings),
         _build_scanner(settings),
         max_source_bytes=settings.rag_max_source_bytes,
         max_attempts=settings.rag_ingestion_max_attempts,
@@ -139,6 +144,18 @@ async def _process_job(
 
     if job.source_uri not in safe_sources or job.status != "PENDING_REVIEW":
         return None
+    try:
+        review_report = await admin.get_review_report(identity, job.id)
+    except KnowledgeReviewReportNotFound:
+        # 0011 迁移之前创建的历史任务没有绑定解析证据，不能因清单看似安全就自动放行。
+        return {"job_id": job.id, "title": job.title, "status": "REANALYSIS_REQUIRED"}
+    if not review_report.can_admin_approve:
+        return {
+            "job_id": job.id,
+            "title": job.title,
+            "status": review_report.status,
+            "required_review_domains": list(review_report.required_review_domains),
+        }
     if args.dry_run:
         return {"job_id": job.id, "title": job.title, "status": "READY_TO_APPROVE"}
     approved = await admin.approve(

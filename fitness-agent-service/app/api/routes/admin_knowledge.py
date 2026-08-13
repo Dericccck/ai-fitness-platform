@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from fastapi import (
     APIRouter,
@@ -26,9 +26,11 @@ from app.rag.admin_models import (
     KnowledgeJobTransitionError,
     KnowledgeReindexJob,
     KnowledgeReindexNotFound,
+    KnowledgeReviewReportNotFound,
     KnowledgeUploadMetadata,
 )
 from app.rag.ocr import OcrServiceUnavailable
+from app.rag.review import KnowledgeReviewReport
 from app.rag.safety import DocumentSecurityUnavailable
 
 router = APIRouter(prefix="/api/v1/admin/knowledge", tags=["admin-knowledge"])
@@ -88,6 +90,61 @@ class ReviewRequest(BaseModel):
     comment: str | None = Field(default=None, max_length=500)
 
 
+class PdfPageProfileResponse(BaseModel):
+    """审核控制台展示的 PDF 页级证据，不包含原始正文。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    page_number: int
+    image_count: int
+    image_area_ratio: float
+    native_text_chars: int
+    text_area_ratio: float
+    table_count: int
+    caption_count: int
+    route: str
+    reasons: tuple[str, ...]
+
+
+class ReviewFindingResponse(BaseModel):
+    """机器可聚合、人工可理解的审核报告结论。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    code: str
+    severity: str
+    message: str
+    pages: tuple[int, ...]
+
+
+class KnowledgeReviewReportResponse(BaseModel):
+    """版本化解析审核报告；审批接口必须依据该报告执行 fail-closed。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    job_id: str
+    report_version: int
+    document_sha256: str
+    parser_name: str
+    parser_version: str
+    parser_pipeline_version: str
+    review_policy_version: str
+    media_type: str
+    declared_risk_level: str
+    source_requires_human_review: bool
+    status: str
+    can_admin_approve: bool
+    quality_metrics: dict[str, Any]
+    page_profiles: tuple[PdfPageProfileResponse, ...]
+    warnings: tuple[str, ...]
+    findings: tuple[ReviewFindingResponse, ...]
+    required_review_domains: tuple[str, ...]
+    recommended_reviewer_roles: tuple[str, ...]
+    required_qualifications: tuple[str, ...]
+    created_at: datetime | None
+
+
 class ReindexCreateRequest(BaseModel):
     """定义重建范围；权限从签名上下文中解析。"""
 
@@ -131,6 +188,8 @@ async def upload_document(
     source_uri: str = Form(..., min_length=13, max_length=256),
     title: str = Form(..., min_length=1, max_length=256),
     document_type: str = Form(..., min_length=2, max_length=64),
+    risk_level: Literal["NORMAL", "CAUTION", "MEDICAL"] = Form(default="NORMAL"),
+    requires_human_review: bool = Form(default=False),
     visibility: Literal["GLOBAL", "ORGANIZATION", "PRIVATE"] = Form(default="GLOBAL"),
     organization_id: str | None = Form(default=None, max_length=128),
     allowed_roles: str = Form(default="", max_length=512),
@@ -151,6 +210,8 @@ async def upload_document(
         allowed_roles=_parse_roles(allowed_roles),
         effective_from=effective_from,
         effective_to=effective_to,
+        risk_level=risk_level,
+        requires_human_review=requires_human_review,
     )
     try:
         job = await request.app.state.knowledge_admin.submit_upload(
@@ -210,6 +271,27 @@ async def get_job(
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except KnowledgeJobNotFound as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+
+
+@router.get(
+    "/jobs/{job_id}/review-report",
+    response_model=KnowledgeReviewReportResponse,
+)
+async def get_review_report(
+    job_id: str,
+    request: Request,
+    x_agent_context: str | None = Header(default=None),
+) -> KnowledgeReviewReportResponse:
+    """读取上传时生成的解析质量和专业审核路由证据。"""
+
+    identity = _verify_identity(request, x_agent_context)
+    try:
+        report = await request.app.state.knowledge_admin.get_review_report(identity, job_id)
+    except KnowledgeAdminForbidden as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
+    except (KnowledgeJobNotFound, KnowledgeReviewReportNotFound) as exc:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
+    return _to_review_report_response(report)
 
 
 @router.post("/jobs/{job_id}/approve", response_model=KnowledgeJobResponse)
@@ -463,4 +545,55 @@ def _to_reindex_response(job: KnowledgeReindexJob) -> ReindexJobResponse:
         updated_at=job.updated_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
+    )
+
+
+def _to_review_report_response(
+    report: KnowledgeReviewReport,
+) -> KnowledgeReviewReportResponse:
+    """将内部领域对象转换为不含正文和存储键的管理员 API 结构。"""
+
+    return KnowledgeReviewReportResponse(
+        id=report.id,
+        job_id=report.job_id,
+        report_version=report.report_version,
+        document_sha256=report.document_sha256,
+        parser_name=report.parser_name,
+        parser_version=report.parser_version,
+        parser_pipeline_version=report.parser_pipeline_version,
+        review_policy_version=report.review_policy_version,
+        media_type=report.media_type,
+        declared_risk_level=report.declared_risk_level,
+        source_requires_human_review=report.source_requires_human_review,
+        status=report.status,
+        can_admin_approve=report.can_admin_approve,
+        quality_metrics=report.quality_metrics,
+        page_profiles=tuple(
+            PdfPageProfileResponse(
+                page_number=profile.page_number,
+                image_count=profile.image_count,
+                image_area_ratio=profile.image_area_ratio,
+                native_text_chars=profile.native_text_chars,
+                text_area_ratio=profile.text_area_ratio,
+                table_count=profile.table_count,
+                caption_count=profile.caption_count,
+                route=profile.route,
+                reasons=profile.reasons,
+            )
+            for profile in report.page_profiles
+        ),
+        warnings=report.warnings,
+        findings=tuple(
+            ReviewFindingResponse(
+                code=finding.code,
+                severity=finding.severity,
+                message=finding.message,
+                pages=finding.pages,
+            )
+            for finding in report.findings
+        ),
+        required_review_domains=report.required_review_domains,
+        recommended_reviewer_roles=report.recommended_reviewer_roles,
+        required_qualifications=report.required_qualifications,
+        created_at=report.created_at,
     )

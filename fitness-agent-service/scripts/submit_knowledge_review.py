@@ -17,10 +17,12 @@ from app.infrastructure.reranker import RerankerClient
 from app.rag.admin_models import KnowledgeUploadMetadata
 from app.rag.admin_repository import KnowledgeIngestionRepository
 from app.rag.admin_service import KnowledgeAdminService
+from app.rag.document_quality import DocumentQualityThresholds
 from app.rag.formats import DocumentParserRegistry, PdfOcrProvider
 from app.rag.ingestion import DocumentIngestionService
 from app.rag.ocr import HttpPdfOcrProvider
 from app.rag.repository import KnowledgeRepository
+from app.rag.review import KnowledgeReviewReportBuilder
 from app.rag.safety import ClamAvScanner, CompositeDocumentScanner, StructuralDocumentScanner
 from app.rag.service import RagService
 from app.rag.storage import LocalDocumentStorage
@@ -86,6 +88,24 @@ def _build_scanner(settings: Settings) -> CompositeDocumentScanner:
     return CompositeDocumentScanner(StructuralDocumentScanner(), malware)
 
 
+def _build_review_report_builder(settings: Settings) -> KnowledgeReviewReportBuilder:
+    """构建与线上 API 相同的质量阈值，避免 CLI 使用另一套审批标准。"""
+
+    return KnowledgeReviewReportBuilder(
+        max_chunk_chars=settings.rag_chunk_max_chars,
+        overlap_chars=settings.rag_chunk_overlap_chars,
+        thresholds=DocumentQualityThresholds(
+            max_noise_rate=settings.rag_quality_max_noise_rate,
+            max_fragment_rate=settings.rag_quality_max_fragment_rate,
+            max_duplicate_rate=settings.rag_quality_max_duplicate_rate,
+            min_parent_integrity=settings.rag_quality_min_parent_integrity,
+            min_table_integrity=settings.rag_quality_min_table_integrity,
+            max_missing_pages=settings.rag_quality_max_missing_pages,
+            max_ocr_required_pages=settings.rag_quality_max_ocr_required_pages,
+        ),
+    )
+
+
 async def _run(args: argparse.Namespace) -> int:
     settings = Settings()
     parser = _build_parser(settings)
@@ -125,6 +145,7 @@ async def _run(args: argparse.Namespace) -> int:
         ingestion,
         LocalDocumentStorage(settings.rag_staging_dir),
         parser,
+        _build_review_report_builder(settings),
         _build_scanner(settings),
         max_source_bytes=settings.rag_max_source_bytes,
         max_attempts=settings.rag_ingestion_max_attempts,
@@ -198,14 +219,10 @@ async def _submit_entry(
         item.update(status="BLOCKED", reason="HASH_MISMATCH")
         return item
     try:
-        parsed = parser.parse(path.read_bytes(), file_name=path.name)
+        parser.parse(path.read_bytes(), file_name=path.name)
     except Exception as exc:  # noqa: BLE001 - 报告单份资料错误，继续处理其他来源
         item.update(status="BLOCKED", reason="PARSE_FAILED", detail=str(exc)[:300])
         return item
-    if parsed.warnings:
-        item.update(status="BLOCKED", reason="OCR_OR_MANUAL_REVIEW", warnings=list(parsed.warnings))
-        return item
-
     source_uri = _source_uri(entry)
     existing = await jobs.get_active_job_by_source(source_uri)
     if existing is not None:
@@ -220,6 +237,8 @@ async def _submit_entry(
         allowed_roles=tuple(str(role) for role in entry["allowed_roles"]),
         effective_from=datetime.now(UTC),
         effective_to=None,
+        risk_level=str(entry["risk_level"]),
+        requires_human_review=bool(entry["requires_human_review"]),
     )
     if args.dry_run:
         item.update(status="READY_FOR_REVIEW", source_uri=source_uri)

@@ -182,6 +182,12 @@ OCR 服务需要返回 `media_type`、`warnings` 和 `blocks` 数组；每个 bl
 `VISUAL_REVIEW_REQUIRED` 或 `OCR_AND_VISUAL_REVIEW_REQUIRED` 路由。图片密集页可能承载健身动作、
 姿态、禁忌或风险信息，因此待 OCR/专业视觉审核页面会在 Embedding 前 fail-closed；阈值通过
 `AGENT_RAG_PDF_*` 环境变量由部署侧统一管理，上传者和 LLM 不能覆盖。
+`AGENT_RAG_QUALITY_*` 统一控制线上上传审核使用的噪声、碎片、重复、父节点、表格、缺页和 OCR
+阈值；它们应与离线真实资料评测保持一致。上传完成后可通过
+`GET /api/v1/admin/knowledge/jobs/{job_id}/review-report` 查看版本化质量报告。只有报告为 `PASS`
+时现有管理员审批接口才会排队索引；`BLOCKED` 必须重新解析/OCR，`REVIEW_REQUIRED` 必须等待
+后续按审核领域和页码生成专业审核决策，接口不提供强制跳过参数。审批与 Worker 执行时还会复核
+文件哈希、解析器依赖版本、管线版本和审核策略版本；部署升级使报告过期时必须重新解析。
 
 索引重建任务只读取已审核文件，复用当前解析、清洗、父子分块、Embedding 和原子替换流程，
 用于 Embedding 模型升级、切分策略调整或索引修复，不会直接修改 Java 健身业务事实。

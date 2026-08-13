@@ -24,6 +24,9 @@ def test_provider_configuration_is_explicit() -> None:
     assert settings.rag_top_k == 5
     assert settings.rag_chunk_max_chars == 1200
     assert settings.rag_chunk_overlap_chars == 120
+    assert settings.rag_quality_max_fragment_rate == 0.35
+    assert settings.rag_quality_min_parent_integrity == 1.0
+    assert settings.rag_quality_max_missing_pages == 0
 
 
 def test_deepseek_environment_names_are_supported(monkeypatch) -> None:

@@ -24,6 +24,7 @@ from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient
 from app.rag.admin_repository import KnowledgeIngestionRepository
 from app.rag.admin_service import KnowledgeAdminService
+from app.rag.document_quality import DocumentQualityThresholds
 from app.rag.formats import DocumentParserRegistry, PdfOcrProvider, PdfPageRoutingPolicy
 from app.rag.ingestion import DocumentIngestionService
 from app.rag.ocr import HttpPdfOcrProvider
@@ -31,6 +32,7 @@ from app.rag.reindex_repository import KnowledgeReindexRepository
 from app.rag.reindex_service import KnowledgeReindexService
 from app.rag.reindex_worker import KnowledgeReindexWorker
 from app.rag.repository import KnowledgeRepository
+from app.rag.review import KnowledgeReviewReportBuilder
 from app.rag.safety import ClamAvScanner, CompositeDocumentScanner, StructuralDocumentScanner
 from app.rag.service import RagService
 from app.rag.storage import DocumentStorage, LocalDocumentStorage, S3DocumentStorage
@@ -108,6 +110,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.document_ingestion,
         document_storage,
         parser_registry,
+        KnowledgeReviewReportBuilder(
+            max_chunk_chars=settings.rag_chunk_max_chars,
+            overlap_chars=settings.rag_chunk_overlap_chars,
+            thresholds=DocumentQualityThresholds(
+                max_noise_rate=settings.rag_quality_max_noise_rate,
+                max_fragment_rate=settings.rag_quality_max_fragment_rate,
+                max_duplicate_rate=settings.rag_quality_max_duplicate_rate,
+                min_parent_integrity=settings.rag_quality_min_parent_integrity,
+                min_table_integrity=settings.rag_quality_min_table_integrity,
+                max_missing_pages=settings.rag_quality_max_missing_pages,
+                max_ocr_required_pages=settings.rag_quality_max_ocr_required_pages,
+            ),
+        ),
         _build_document_scanner(settings),
         max_source_bytes=settings.rag_max_source_bytes,
         max_attempts=settings.rag_ingestion_max_attempts,

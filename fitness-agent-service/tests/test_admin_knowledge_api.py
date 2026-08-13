@@ -8,6 +8,7 @@ from app.api.middleware.request_context import RequestContextMiddleware
 from app.api.routes.admin_knowledge import router
 from app.infrastructure.agent_context import AgentIdentity
 from app.rag.admin_models import KnowledgeAdminForbidden, KnowledgeIngestionJob
+from app.rag.review import KnowledgeReviewFinding, KnowledgeReviewReport
 
 
 def _job(status: str = "PENDING_REVIEW") -> KnowledgeIngestionJob:
@@ -55,6 +56,39 @@ class FakeAdminService:
             raise KnowledgeAdminForbidden("administrator role is required")
         self.uploads.append(kwargs)
         return _job()
+
+    async def get_review_report(
+        self, identity: AgentIdentity, job_id: str
+    ) -> KnowledgeReviewReport:
+        if not {"ADMIN", "ORG_ADMIN", "SUPER_ADMIN"}.intersection(identity.roles):
+            raise KnowledgeAdminForbidden("administrator role is required")
+        return KnowledgeReviewReport(
+            id="report-1",
+            job_id=job_id,
+            report_version=1,
+            document_sha256="a" * 64,
+            parser_name="fitness-markdown-parser",
+            parser_version="2026.08.13.1",
+            parser_pipeline_version="2026.08.13.1",
+            review_policy_version="fitness-knowledge-review-2026.08.13.1",
+            media_type="text/markdown",
+            declared_risk_level="NORMAL",
+            source_requires_human_review=False,
+            status="REVIEW_REQUIRED",
+            quality_metrics={"noise_rate": 0.0},
+            page_profiles=(),
+            warnings=(),
+            findings=(
+                KnowledgeReviewFinding(
+                    "FITNESS_COACH_REVIEW_REQUIRED",
+                    "REVIEW_REQUIRED",
+                    "需要教练审核。",
+                ),
+            ),
+            required_review_domains=("FITNESS_COACHING_SAFETY",),
+            recommended_reviewer_roles=("COACH",),
+            required_qualifications=(),
+        )
 
 
 def build_app(roles: frozenset[str]) -> tuple[FastAPI, FakeAdminService]:
@@ -107,3 +141,21 @@ async def test_admin_upload_returns_pending_review_task() -> None:
     assert response.status_code == 202
     assert response.json()["status"] == "PENDING_REVIEW"
     assert admin.uploads[0]["file_name"] == "warmup.md"
+
+
+async def test_admin_can_read_versioned_review_report_without_document_content() -> None:
+    app, _ = build_app(frozenset({"ORG_ADMIN"}))
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/admin/knowledge/jobs/job-1/review-report",
+            headers={"X-Agent-Context": "signed-context"},
+        )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == "REVIEW_REQUIRED"
+    assert payload["can_admin_approve"] is False
+    assert payload["required_review_domains"] == ["FITNESS_COACHING_SAFETY"]
+    assert payload["recommended_reviewer_roles"] == ["COACH"]
+    assert "content" not in payload

@@ -248,9 +248,7 @@ class PdfParser:
                 page_records.append((page_number, raw_lines, tables, profile))
                 page_profiles.append(profile)
 
-            repeated_lines = _repeated_pdf_lines(
-                [raw_lines for _, raw_lines, _, _ in page_records]
-            )
+            repeated_lines = _repeated_pdf_lines([raw_lines for _, raw_lines, _, _ in page_records])
             for page_number, raw_lines, tables, profile in page_records:
                 cleaned_lines = _clean_pdf_lines(raw_lines, repeated_lines=repeated_lines)
                 if _is_pdf_toc_page(cleaned_lines):
