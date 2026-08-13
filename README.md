@@ -10,6 +10,8 @@
 
 - 历史 Java 8 + Spring Boot 源码：作为用户、机构、教练、课程、合同和预约规则的业务参考。
 - `fitness-core-gateway`：独立、可复现构建的健身核心 Tool Gateway，提供受权限保护的只读业务查询。
+- `fitness-training-service`：独立结构化训练业务服务，保存训练计划、审核发布状态和不可变审计；
+  后续由 Gateway 以写工具方式受控暴露给 Agent。
 - `fitness-agent-service`：承载 Agent 编排、模型网关、RAG、Memory 和 Tool 调用。
 - `fitness-ocr-service`：独立 OCR/文档结构化服务，默认适配 PaddleOCR PP-StructureV3，按 HTTP
   契约向 Agent 返回带页码的文本与表格 block。
@@ -43,6 +45,10 @@ make help
 
 `fitness-core-gateway` 是当前阶段新增的 Java 构建边界，可使用 `make gateway-check` 验证。
 它只访问健身核心表，不恢复赛事、作品和活动代码。
+
+训练业务不直接放入旧 Java 主工程：该工程是缺失赛事类型的历史源码快照，干净构建本身失败；
+也不把写入逻辑放入只读 Gateway。新的训练服务只复用现有 MySQL 的用户、机构和教练关系，
+通过版本化 SQL 保存新的训练事实。
 
 ## Java 本地启动
 

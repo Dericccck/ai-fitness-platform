@@ -1,0 +1,24 @@
+server:
+  address: 0.0.0.0
+  port: ${TRAINING_SERVER_PORT:8082}
+
+spring:
+  application:
+    name: fitness-training-service
+  datasource:
+    url: ${TRAINING_DB_URL:jdbc:mysql://127.0.0.1:3307/fitness?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia%2FShanghai}
+    username: ${TRAINING_DB_USERNAME:}
+    password: ${TRAINING_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${TRAINING_DB_MAX_POOL_SIZE:10}
+      connection-timeout: ${TRAINING_DB_CONNECTION_TIMEOUT_MS:3000}
+
+training:
+  # 只允许 Gateway 调用训练服务。生产环境必须通过 Secret Manager 注入。
+  internal-service-token: ${TRAINING_INTERNAL_SERVICE_TOKEN:}
+  # 本地首次启动可自动执行幂等迁移；生产环境建议由独立迁移 Job 执行同一份 SQL 后关闭。
+  schema-init-enabled: ${TRAINING_SCHEMA_INIT_ENABLED:true}
+
+logging:
+  level:
+    com.shuyiwa.fitness.training: INFO
