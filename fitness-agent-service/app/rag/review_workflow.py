@@ -15,12 +15,17 @@ from .admin_models import (
 )
 from .review import KnowledgeReviewReport
 
+# 审核领域决定“谁有资格审核”：健身教练安全、健身内容、临床运动安全。
 ReviewDomain = Literal[
     "FITNESS_COACHING_SAFETY",
     "FITNESS_CONTENT_REVIEW",
     "CLINICAL_EXERCISE_SAFETY",
 ]
+
+# 专业审核决定：APPROVED 解除对应审核范围；REJECTED 保留拒绝原因且不能生成发布凭证。
 ReviewDecisionValue = Literal["APPROVED", "REJECTED"]
+
+# DOCUMENT 表示覆盖整份文档；PAGES 表示只覆盖报告明确列出的页码和区域。
 ReviewScopeType = Literal["DOCUMENT", "PAGES"]
 
 FITNESS_REVIEW_CAPABILITY = "KNOWLEDGE_REVIEW_FITNESS"

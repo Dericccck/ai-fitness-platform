@@ -46,12 +46,15 @@ class ReviewDecisionRequest(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # 审核领域决定资质要求：普通健身内容由教练/内容审核人处理，临床安全必须有核验资质。
     review_domain: Literal[
         "FITNESS_COACHING_SAFETY",
         "FITNESS_CONTENT_REVIEW",
         "CLINICAL_EXERCISE_SAFETY",
     ]
+    # APPROVED 仅解除本领域、指定页或指定文档范围；REJECTED 必须保留原因且不能发布。
     decision: Literal["APPROVED", "REJECTED"]
+    # DOCUMENT 覆盖整份文档；PAGES 只覆盖机器报告要求的具体页码。
     scope_type: Literal["DOCUMENT", "PAGES"]
     page_numbers: tuple[int, ...] = Field(default=(), max_length=2000)
     regions: tuple[ReviewRegionRequest, ...] = Field(default=(), max_length=5000)

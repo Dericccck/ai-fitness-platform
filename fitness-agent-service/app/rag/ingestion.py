@@ -32,6 +32,11 @@ class DocumentPublicationBlocked(RuntimeError):
     """解析结果仍需要 OCR 或专业视觉审核，禁止生成生产 Embedding。"""
 
 
+# INDEXED 表示已完成清洗、切片、Embedding 和原子发布；SKIPPED_UNCHANGED 表示 checksum
+# 未变化而复用已有版本，不能误报为重新索引成功。
+IngestionResultStatus = Literal["INDEXED", "SKIPPED_UNCHANGED"]
+
+
 @dataclass(frozen=True)
 class IngestionRequest:
     """管理员工作流或来源连接器提供的可信文档元数据。"""
@@ -69,7 +74,7 @@ class ChunkDraft:
 class IngestionResult:
     """索引任务或管理员审计记录使用的稳定结果。"""
 
-    status: Literal["INDEXED", "SKIPPED_UNCHANGED"]
+    status: IngestionResultStatus
     document_id: str
     checksum: str
     version: int

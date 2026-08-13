@@ -19,6 +19,7 @@ from .models import (
     AuthorizationStatus,
     ConfirmationAction,
     ConfirmationEvent,
+    ConfirmationEventType,
     ConfirmationRecord,
     ConfirmationStateError,
     ExecutionStatus,
@@ -280,7 +281,7 @@ class ConfirmationRepository:
             record = _record_from_row(row)
             if success:
                 finished = record.finish_success(now)
-                event_type = "EXECUTION_SUCCEEDED"
+                event_type: ConfirmationEventType = "EXECUTION_SUCCEEDED"
             else:
                 if not error_code:
                     raise ConfirmationStateError("error code is required for failed execution")
@@ -516,7 +517,7 @@ def _record_from_row(row: Any) -> ConfirmationRecord:
 
 def _event_for(
     record: ConfirmationRecord,
-    event_type: str,
+    event_type: ConfirmationEventType,
     action: ConfirmationAction | None,
     *,
     trace_id: str | None = None,

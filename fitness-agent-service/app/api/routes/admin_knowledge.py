@@ -188,8 +188,11 @@ async def upload_document(
     source_uri: str = Form(..., min_length=13, max_length=256),
     title: str = Form(..., min_length=1, max_length=256),
     document_type: str = Form(..., min_length=2, max_length=64),
+    # NORMAL 普通健身内容；CAUTION 含明显安全提示；MEDICAL 涉及临床/疾病/体重管理，
+    # 会触发更严格的专业审核，而不是只靠管理员勾选放行。
     risk_level: Literal["NORMAL", "CAUTION", "MEDICAL"] = Form(default="NORMAL"),
     requires_human_review: bool = Form(default=False),
+    # GLOBAL 全平台；ORGANIZATION 机构内；PRIVATE 仅提交者/所有者。该值决定 SQL ACL 范围。
     visibility: Literal["GLOBAL", "ORGANIZATION", "PRIVATE"] = Form(default="GLOBAL"),
     organization_id: str | None = Form(default=None, max_length=128),
     allowed_roles: str = Form(default="", max_length=512),

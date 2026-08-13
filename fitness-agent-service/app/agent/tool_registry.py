@@ -23,6 +23,10 @@ from app.infrastructure.gateway_client import GatewayClientError, GatewayRequest
 ToolHandler = Callable[[BaseModel, "ToolContext"], Awaitable[Any]]
 _TOOL_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]+\.v[0-9]+$")
 
+# 工具审计状态只描述一次调用的结果：started 已开始；succeeded 真实执行成功；
+# failed 真实执行失败。它不能用来替代确认授权状态或 Java 业务资源状态。
+ToolAuditStatus = Literal["started", "succeeded", "failed"]
+
 
 class ToolRegistryError(RuntimeError):
     """工具注册或调用边界错误的稳定基类。"""
@@ -74,7 +78,7 @@ class ToolAuditEvent:
     """
 
     tool_id: str
-    status: Literal["started", "succeeded", "failed"]
+    status: ToolAuditStatus
     request_id: str | None
     trace_id: str | None
     duration_ms: float | None = None

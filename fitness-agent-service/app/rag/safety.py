@@ -9,7 +9,11 @@ import zipfile
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import PurePosixPath
-from typing import Protocol
+from typing import Literal, Protocol
+
+StructuralSafetyStatus = Literal["STRUCTURAL_VALIDATED", "CLEAN"]
+# NOT_CONFIGURED 表示未接入外部杀毒服务，不能被解释为安全；CLEAN 才是外部扫描通过。
+MalwareStatus = Literal["NOT_CONFIGURED", "CLEAN"]
 
 
 class DocumentSafetyError(ValueError):
@@ -25,9 +29,9 @@ class SafetyScanResult:
     """文件进入暂存区前执行确定性检查后形成的可审计结果。"""
 
     sha256: str
-    status: str
+    status: StructuralSafetyStatus
     scanner_name: str
-    malware_status: str = "NOT_CONFIGURED"
+    malware_status: MalwareStatus = "NOT_CONFIGURED"
     malware_scanner: str = "not-configured"
     malware_signature: str | None = None
     malware_scanned_at: datetime | None = None
@@ -37,7 +41,7 @@ class SafetyScanResult:
 class MalwareScanResult:
     """与确定性结构检查分开保存的外部恶意软件 verdict。"""
 
-    status: str
+    status: MalwareStatus
     scanner_name: str
     signature: str | None = None
     scanned_at: datetime | None = None

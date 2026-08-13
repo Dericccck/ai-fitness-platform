@@ -15,7 +15,11 @@ from .document_quality import (
 from .formats import ParsedDocument, PdfPageProfile
 from .ingestion import chunk_parsed_blocks
 
+# 解析质量报告状态：PASS 可直接进入管理员批准；REVIEW_REQUIRED 需要指定领域审核；
+# BLOCKED 被质量门禁拦截，必须重新解析、OCR 或修复源文件，不能靠普通备注放行。
 ReviewReportStatus = Literal["PASS", "REVIEW_REQUIRED", "BLOCKED"]
+
+# 结论严重级别：WARNING 仅提示；REVIEW_REQUIRED 需要人工/专业审核；BLOCKING 直接阻断发布。
 ReviewFindingSeverity = Literal["WARNING", "REVIEW_REQUIRED", "BLOCKING"]
 
 # 版本号是审核证据的一部分。解析或路由规则改变后必须递增，不能覆盖旧报告，

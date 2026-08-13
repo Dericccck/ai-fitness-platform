@@ -29,6 +29,8 @@ from app.rag.service import RagSearchError, RagService
 
 from .tool_registry import ToolContext, ToolRegistry, ToolRegistryError
 
+# SupervisorRoute 是意图路由，不是业务执行状态：FITNESS_COACHING 健身指导；BOOKING 预约；
+# OPERATIONS 经营分析；UNSUPPORTED_LEGACY 明确拒绝赛事、作品和活动运营遗留范围。
 SupervisorRoute = Literal[
     "FITNESS_COACHING",
     "BOOKING",

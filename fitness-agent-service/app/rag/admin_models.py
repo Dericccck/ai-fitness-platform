@@ -6,17 +6,20 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
-JobStatus = Literal[
-    "PENDING_REVIEW",
-    "QUEUED",
-    "INDEXING",
-    "SUCCEEDED",
-    "FAILED",
-    "REJECTED",
-]
+# 知识上传任务状态：PENDING_REVIEW 待审核；QUEUED 已批准、等待 Worker；
+# INDEXING Worker 正在解析/Embedding/发布；SUCCEEDED 已完成；FAILED 处理失败；
+# REJECTED 被管理员或专业审核拒绝。FAILED 只有在重试预算内才能回到 QUEUED。
+JobStatus = Literal["PENDING_REVIEW", "QUEUED", "INDEXING", "SUCCEEDED", "FAILED", "REJECTED"]
+
+# 可见范围不是流程状态，而是每次 SQL 检索必须使用的权限维度：GLOBAL 全局、
+# ORGANIZATION 机构内、PRIVATE 仅文档所有者。
 Visibility = Literal["GLOBAL", "ORGANIZATION", "PRIVATE"]
 
+# 重建批次：QUEUED 排队；INDEXING 执行中；SUCCEEDED 全部完成；FAILED 批次失败。
 ReindexJobStatus = Literal["QUEUED", "INDEXING", "SUCCEEDED", "FAILED"]
+
+# 重建明细：PENDING 待领取；INDEXING 已领取；SUCCEEDED 成功；SKIPPED 内容未变化而跳过；
+# FAILED 该文档处理失败。批次可以成功，但必须保留失败明细供人工处理。
 ReindexItemStatus = Literal["PENDING", "INDEXING", "SUCCEEDED", "SKIPPED", "FAILED"]
 
 

@@ -13,7 +13,12 @@ from typing import Literal, Protocol
 
 from .text import clean_markdown
 
+# 标准解析块类型：TEXT 普通文本；TABLE 保留表头和行范围的结构化表格文本。
 BlockKind = Literal["TEXT", "TABLE"]
+
+# PDF 页面路由：NORMAL 正常解析；OCR_REQUIRED 缺少文字层、必须 OCR；
+# VISUAL_REVIEW_REQUIRED 图片承载动作/姿态信息、必须人工视觉审核；
+# OCR_AND_VISUAL_REVIEW_REQUIRED 两项都不能绕过，人工审核也不能替代 OCR。
 PdfPageRoute = Literal[
     "NORMAL",
     "OCR_REQUIRED",

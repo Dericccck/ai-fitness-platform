@@ -13,20 +13,31 @@ from dataclasses import dataclass
 from datetime import datetime
 from typing import Any, Literal
 
-AuthorizationStatus = Literal[
-    "PENDING",
-    "APPROVED",
-    "REJECTED",
-    "EXPIRED",
-    "CANCELLED",
-]
+# 授权状态描述“用户是否允许这次动作继续”，不能用来表示 Java 业务是否已经成功。
+# PENDING 待确认；APPROVED 已批准；REJECTED 已拒绝；EXPIRED 已过期；CANCELLED 已撤销。
+AuthorizationStatus = Literal["PENDING", "APPROVED", "REJECTED", "EXPIRED", "CANCELLED"]
+
+# 决定值是 API 输入，不是确认单最终状态；服务端会把它转换成 APPROVED 或 REJECTED。
 ConfirmationDecision = Literal["APPROVE", "REJECT"]
-ExecutionStatus = Literal[
-    "NOT_STARTED",
-    "RUNNING",
-    "SUCCEEDED",
-    "FAILED_RETRYABLE",
-    "FAILED_FINAL",
+
+# 执行状态描述“已批准动作实际执行到哪一步”。批准不会自动变成执行成功。
+# NOT_STARTED 未领取执行权；RUNNING 执行中；SUCCEEDED 成功；
+# FAILED_RETRYABLE 可重试失败；FAILED_FINAL 不可自动重试的最终失败。
+ExecutionStatus = Literal["NOT_STARTED", "RUNNING", "SUCCEEDED", "FAILED_RETRYABLE", "FAILED_FINAL"]
+
+# 不可变事件用于审计时间线；事件不是可编辑的当前状态，顺序由数据库时间和自增 ID 确定。
+ConfirmationEventType = Literal[
+    "CREATED",  # 已创建待确认单
+    "APPROVED",  # 用户批准授权
+    "REJECTED",  # 用户拒绝授权
+    "EXPIRED",  # 超过 TTL，动作不再允许执行
+    "CANCELLED",  # 在执行领取前主动撤销
+    "ISSUED",  # 服务端绑定一次性凭证 JTI
+    "CLAIMED",  # 某个恢复请求领取执行权
+    "CONSUMED",  # 一次性凭证已经消费
+    "REQUEUED",  # 可重试失败重新排队，旧 JTI 已失效
+    "EXECUTION_SUCCEEDED",  # 业务工具真实执行成功
+    "EXECUTION_FAILED",  # 业务工具真实执行失败
 ]
 
 
@@ -236,7 +247,7 @@ class ConfirmationEvent:
 
     id: int | None
     confirmation_id: str
-    event_type: str
+    event_type: ConfirmationEventType
     actor_user_id: str | None
     request_id: str | None
     decision_request_id: str | None

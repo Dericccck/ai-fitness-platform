@@ -152,7 +152,10 @@ class GatewayTrainingPlan(_GatewayModel):
     coach_id: str = Field(alias="coachId")
     title: str
     goal_type: str = Field(alias="goalType")
+    # 来源只说明计划由 Agent 草拟还是教练直接创建，不代表审核结果。
     source: Literal["AGENT", "COACH"]
+    # Java 训练计划状态：DRAFT 草案；PENDING_REVIEW 待教练审核；APPROVED 已审核；
+    # REJECTED 已驳回；PUBLISHED 已发布。学员只能读取和执行 PUBLISHED 计划。
     status: Literal["DRAFT", "PENDING_REVIEW", "APPROVED", "REJECTED", "PUBLISHED"]
     version: int
     created_by: str = Field(alias="createdBy")

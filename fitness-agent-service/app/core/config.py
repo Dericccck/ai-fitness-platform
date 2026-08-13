@@ -23,6 +23,7 @@ class Settings(BaseSettings):
         populate_by_name=True,
     )
 
+    # 部署环境：local 本地开发；test 自动化测试；staging 预发布；production 生产。
     environment: Literal["local", "test", "staging", "production"] = "local"
     host: str = "0.0.0.0"
     port: int = 8090
@@ -79,6 +80,7 @@ class Settings(BaseSettings):
     agent_max_tool_steps: int = Field(default=4, ge=1, le=8)
     llm_thinking_enabled: bool = False
 
+    # Embedding 后端：openai 走远程 API；local 加载本地模型文件。切换后必须重建向量索引。
     embedding_backend: Literal["openai", "local"] = "openai"
     embedding_base_url: str = "https://api.openai.com/v1"
     embedding_api_key: str = ""
@@ -86,6 +88,7 @@ class Settings(BaseSettings):
     embedding_model_path: str = ""
     embedding_dimensions: int = Field(default=1024, ge=1, le=4000)
 
+    # Reranker 后端：http 调用独立服务；local 在 Agent 进程内加载模型。
     reranker_backend: Literal["http", "local"] = "http"
     reranker_url: str = ""
     reranker_api_key: str = ""
@@ -106,6 +109,7 @@ class Settings(BaseSettings):
     rag_rrf_k: int = Field(default=60, ge=1, le=200)
     rag_max_source_bytes: int = Field(default=20 * 1024 * 1024, ge=1, le=100 * 1024 * 1024)
     rag_staging_dir: str = "./var/rag-staging"
+    # 知识原文件存储：local 仅适合本地；s3 对接对象存储并承担生命周期和访问控制。
     rag_storage_backend: Literal["local", "s3"] = "local"
     rag_s3_endpoint_url: str = ""
     rag_s3_region: str = "us-east-1"
@@ -131,11 +135,13 @@ class Settings(BaseSettings):
     rag_quality_min_table_integrity: float = Field(default=1.0, ge=0, le=1)
     rag_quality_max_missing_pages: int = Field(default=0, ge=0, le=10_000)
     rag_quality_max_ocr_required_pages: int = Field(default=0, ge=0, le=10_000)
+    # OCR 后端：disabled 表示扫描型/低文字页会被门禁拦截；http 调用独立 OCR 服务。
     rag_ocr_backend: Literal["disabled", "http"] = "disabled"
     rag_ocr_endpoint_url: str = ""
     rag_ocr_api_key: str = ""
     rag_ocr_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
     rag_ocr_max_response_bytes: int = Field(default=20 * 1024 * 1024, ge=1, le=100 * 1024 * 1024)
+    # 杀毒后端：structural 只有格式/压缩包结构检查，不代表无病毒；clamav 才提供外部病毒 verdict。
     rag_malware_scanner_backend: Literal["structural", "clamav"] = "structural"
     rag_clamav_host: str = "127.0.0.1"
     rag_clamav_port: int = Field(default=3310, ge=1, le=65535)
