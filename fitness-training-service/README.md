@@ -29,7 +29,7 @@ TRAINING_DB_PASSWORD
 TRAINING_INTERNAL_SERVICE_TOKEN
 ```
 
-本地首次启动会使用 `db/migration/` 中的幂等 SQL 初始化训练表，并通过版本表避免重复执行；
+本地首次启动会按顺序执行 `db/migration/` 中的版本化 SQL，并通过版本表避免重复执行；
 生产环境应由独立迁移 Job 执行同一份 SQL 后设置 `TRAINING_SCHEMA_INIT_ENABLED=false`。
 当前环境无法下载 Flyway 依赖，因此暂时使用版本化 SQL 加版本表；后续统一迁移平台接入时不得
 修改业务表结构和迁移语义。

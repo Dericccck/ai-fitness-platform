@@ -2,7 +2,7 @@ import asyncio
 import uuid
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any, TypeVar
+from typing import Any, Literal, TypeVar
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -39,6 +39,10 @@ class GatewayBadRequestError(GatewayClientError):
     """Gateway 拒绝了不符合契约的查询参数。"""
 
 
+class GatewayConflictError(GatewayClientError):
+    """Gateway 检测到版本冲突或重复请求无法安全复用。"""
+
+
 class GatewayNotFoundError(GatewayClientError):
     """Gateway 找不到请求的健身业务资源。"""
 
@@ -62,6 +66,8 @@ class GatewayRequestContext:
     signed_context: str
     request_id: str | None = None
     trace_id: str | None = None
+    # 仅由上游确认流程注入，模型输出和工具参数都不能生成确认凭证。
+    confirmation_token: str | None = None
 
 
 class _GatewayModel(BaseModel):
@@ -119,12 +125,53 @@ class GatewayAppointment(_GatewayModel):
     contract_id: str | None = Field(default=None, alias="contractId")
 
 
+class GatewayTrainingItem(_GatewayModel):
+    id: str
+    exercise_name: str = Field(alias="exerciseName")
+    sort_order: int = Field(alias="sortOrder")
+    sets: int
+    reps: str
+    rest_seconds: int | None = Field(default=None, alias="restSeconds")
+    target_weight_kg: float | None = Field(default=None, alias="targetWeightKg")
+    target_rpe: float | None = Field(default=None, alias="targetRpe")
+    notes: str | None = None
+
+
+class GatewayTrainingDay(_GatewayModel):
+    id: str
+    day_number: int = Field(alias="dayNumber")
+    title: str
+    scheduled_date: str | None = Field(default=None, alias="scheduledDate")
+    items: list[GatewayTrainingItem]
+
+
+class GatewayTrainingPlan(_GatewayModel):
+    id: str
+    organization_id: str = Field(alias="organizationId")
+    student_id: str = Field(alias="studentId")
+    coach_id: str = Field(alias="coachId")
+    title: str
+    goal_type: str = Field(alias="goalType")
+    source: Literal["AGENT", "COACH"]
+    status: Literal["DRAFT", "PENDING_REVIEW", "APPROVED", "REJECTED", "PUBLISHED"]
+    version: int
+    created_by: str = Field(alias="createdBy")
+    reviewed_by: str | None = Field(default=None, alias="reviewedBy")
+    published_by: str | None = Field(default=None, alias="publishedBy")
+    review_comment: str | None = Field(default=None, alias="reviewComment")
+    created_at: datetime | None = Field(default=None, alias="createdAt")
+    updated_at: datetime | None = Field(default=None, alias="updatedAt")
+    reviewed_at: datetime | None = Field(default=None, alias="reviewedAt")
+    published_at: datetime | None = Field(default=None, alias="publishedAt")
+    days: list[GatewayTrainingDay]
+
+
 class GatewayClient:
     """调用 Java 健身核心 Gateway 的异步客户端。
 
-    只对 GET 查询的连接异常、超时、429 和 5xx 做有限重试；401/403/400 等确定性
-    错误不会重试，避免把权限问题放大成请求风暴。客户端复用一个 HTTP 连接池，关闭
-    由 FastAPI lifespan 负责。响应先通过 Pydantic 校验，再交给 Agent Runtime。
+    对 GET 查询以及具备请求 ID 幂等保障的训练计划写操作，在连接异常、超时、429 和
+    5xx 时做有限重试；401/403/400 等确定性错误不会重试。客户端复用一个 HTTP 连接池，
+    关闭由 FastAPI lifespan 负责。响应先通过 Pydantic 校验，再交给 Agent Runtime。
     """
 
     def __init__(self, settings: Settings, client: httpx.AsyncClient | None = None) -> None:
@@ -202,10 +249,67 @@ class GatewayClient:
             GatewayAppointment,
         )
 
+    async def get_training_plan(
+        self, context: GatewayRequestContext, plan_id: str
+    ) -> GatewayTrainingPlan:
+        return await self._get(
+            f"/internal/agent-tools/v1/training/plans/{plan_id}", context, {}, GatewayTrainingPlan
+        )
+
+    async def create_training_draft(
+        self, context: GatewayRequestContext, payload: dict[str, Any]
+    ) -> GatewayTrainingPlan:
+        return await self._post(
+            "/internal/agent-tools/v1/training/plans/drafts", context, payload, GatewayTrainingPlan
+        )
+
+    async def submit_training_review(
+        self, context: GatewayRequestContext, plan_id: str
+    ) -> GatewayTrainingPlan:
+        return await self._post(
+            f"/internal/agent-tools/v1/training/plans/{plan_id}/submit-review",
+            context,
+            {},
+            GatewayTrainingPlan,
+        )
+
+    async def review_training_plan(
+        self, context: GatewayRequestContext, plan_id: str, payload: dict[str, Any]
+    ) -> GatewayTrainingPlan:
+        return await self._post(
+            f"/internal/agent-tools/v1/training/plans/{plan_id}/review",
+            context,
+            payload,
+            GatewayTrainingPlan,
+        )
+
+    async def publish_training_plan(
+        self, context: GatewayRequestContext, plan_id: str
+    ) -> GatewayTrainingPlan:
+        return await self._post(
+            f"/internal/agent-tools/v1/training/plans/{plan_id}/publish",
+            context,
+            {},
+            GatewayTrainingPlan,
+        )
+
     async def _get(
         self, path: str, context: GatewayRequestContext, params: dict[str, Any], model: type[T]
     ) -> T:
-        response_json = await self._request(path, context, params)
+        response_json = await self._request(path, context, params, method="GET")
+        try:
+            return model.model_validate(response_json)
+        except ValidationError as exc:
+            raise GatewayProtocolError("gateway response does not match tool contract") from exc
+
+    async def _post(
+        self,
+        path: str,
+        context: GatewayRequestContext,
+        payload: dict[str, Any],
+        model: type[T],
+    ) -> T:
+        response_json = await self._request(path, context, {}, method="POST", json_body=payload)
         try:
             return model.model_validate(response_json)
         except ValidationError as exc:
@@ -218,7 +322,7 @@ class GatewayClient:
         params: dict[str, Any],
         model: type[T],
     ) -> list[T]:
-        response_json = await self._request(path, context, params)
+        response_json = await self._request(path, context, params, method="GET")
         if not isinstance(response_json, list):
             raise GatewayProtocolError("gateway list response does not match tool contract")
         try:
@@ -233,6 +337,9 @@ class GatewayClient:
         path: str,
         context: GatewayRequestContext,
         params: dict[str, Any],
+        *,
+        method: str,
+        json_body: dict[str, Any] | None = None,
     ) -> Any:
         if not self.settings.gateway_configured:
             raise GatewayConfigurationError("fitness core gateway is not configured")
@@ -246,12 +353,16 @@ class GatewayClient:
         }
         if context.trace_id:
             headers["X-Trace-ID"] = context.trace_id
+        if context.confirmation_token:
+            headers["X-Confirmation-Token"] = context.confirmation_token
         clean_params = {key: value for key, value in params.items() if value is not None}
         last_error: Exception | None = None
 
         for attempt in range(self.settings.gateway_max_retries + 1):
             try:
-                response = await self._client.get(path, params=clean_params, headers=headers)
+                response = await self._client.request(
+                    method, path, params=clean_params, headers=headers, json=json_body
+                )
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 last_error = exc
                 if attempt < self.settings.gateway_max_retries:
@@ -275,6 +386,10 @@ class GatewayClient:
                 )
             if response.status_code == 404:
                 raise GatewayNotFoundError("fitness resource was not found", status_code=404)
+            if response.status_code == 409:
+                raise GatewayConflictError(
+                    "gateway detected a concurrent fitness plan change", status_code=409
+                )
             if response.status_code >= 400:
                 raise GatewayBadRequestError(
                     "gateway rejected the tool request", status_code=response.status_code

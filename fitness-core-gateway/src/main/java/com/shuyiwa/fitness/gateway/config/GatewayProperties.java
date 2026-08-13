@@ -15,6 +15,7 @@ public class GatewayProperties {
     private String internalServiceToken = "";
     private String contextSigningSecret = "";
     private long maxContextTtlSeconds = 300L;
+    private String confirmationSigningSecret = "";
 
     public String getInternalServiceToken() {
         return internalServiceToken;
@@ -38,5 +39,13 @@ public class GatewayProperties {
 
     public void setMaxContextTtlSeconds(long maxContextTtlSeconds) {
         this.maxContextTtlSeconds = maxContextTtlSeconds;
+    }
+
+    public String getConfirmationSigningSecret() {
+        return confirmationSigningSecret;
+    }
+
+    public void setConfirmationSigningSecret(String confirmationSigningSecret) {
+        this.confirmationSigningSecret = confirmationSigningSecret;
     }
 }

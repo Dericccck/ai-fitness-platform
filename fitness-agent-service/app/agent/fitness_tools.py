@@ -56,6 +56,50 @@ class AppointmentListToolInput(ContractListToolInput):
         return self
 
 
+class TrainingItemInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    exercise_name: str = Field(min_length=1, max_length=128)
+    sort_order: int = Field(ge=1, le=100)
+    sets: int = Field(ge=1, le=100)
+    reps: str = Field(min_length=1, max_length=64)
+    rest_seconds: int | None = Field(default=None, ge=0, le=3600)
+    target_weight_kg: float | None = Field(default=None, ge=0, le=1000)
+    target_rpe: float | None = Field(default=None, ge=0, le=10)
+    notes: str | None = Field(default=None, max_length=1000)
+
+
+class TrainingDayInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    day_number: int = Field(ge=1, le=31)
+    title: str = Field(min_length=1, max_length=128)
+    scheduled_date: str | None = None
+    items: list[TrainingItemInput] = Field(min_length=1, max_length=100)
+
+
+class CreateTrainingDraftToolInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    organization_id: str = _ID_FIELD
+    student_id: str = _ID_FIELD
+    coach_id: str = _ID_FIELD
+    title: str = Field(min_length=1, max_length=128)
+    goal_type: str = Field(min_length=1, max_length=32)
+    days: list[TrainingDayInput] = Field(min_length=1, max_length=31)
+
+
+class TrainingPlanToolInput(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    plan_id: str = _ID_FIELD
+
+
+class ReviewTrainingPlanToolInput(TrainingPlanToolInput):
+    decision: str = Field(pattern=r"^(APPROVE|REJECT)$")
+    comment: str | None = Field(default=None, max_length=1000)
+
+
 def build_fitness_tool_registry(gateway: GatewayClient) -> ToolRegistry:
     """创建进程级健身工具注册表。
 
@@ -101,6 +145,34 @@ def build_fitness_tool_registry(gateway: GatewayClient) -> ToolRegistry:
             limit=data.limit,
         )
 
+    async def get_training_plan(raw: BaseModel, context: ToolContext) -> object:
+        data = cast(TrainingPlanToolInput, raw)
+        return await gateway.get_training_plan(context.gateway_context, data.plan_id)
+
+    async def create_training_draft(raw: BaseModel, context: ToolContext) -> object:
+        data = cast(CreateTrainingDraftToolInput, raw)
+        # confirmation_token 位于请求上下文，不会被模型写入业务 payload。
+        return await gateway.create_training_draft(
+            context.gateway_context,
+            data.model_dump(mode="json", by_alias=True),
+        )
+
+    async def submit_training_review(raw: BaseModel, context: ToolContext) -> object:
+        data = cast(TrainingPlanToolInput, raw)
+        return await gateway.submit_training_review(context.gateway_context, data.plan_id)
+
+    async def review_training_plan(raw: BaseModel, context: ToolContext) -> object:
+        data = cast(ReviewTrainingPlanToolInput, raw)
+        return await gateway.review_training_plan(
+            context.gateway_context,
+            data.plan_id,
+            {"decision": data.decision, "comment": data.comment},
+        )
+
+    async def publish_training_plan(raw: BaseModel, context: ToolContext) -> object:
+        data = cast(TrainingPlanToolInput, raw)
+        return await gateway.publish_training_plan(context.gateway_context, data.plan_id)
+
     definitions = (
         ToolDefinition(
             tool_id="fitness.user.get_current.v1",
@@ -110,6 +182,51 @@ def build_fitness_tool_registry(gateway: GatewayClient) -> ToolRegistry:
             allowed_roles=_READ_ROLES,
             read_only=True,
             requires_confirmation=False,
+        ),
+        ToolDefinition(
+            tool_id="fitness.training.plan.get.v1",
+            description="按权限查询结构化训练计划及其训练日和动作明细。",
+            input_model=TrainingPlanToolInput,
+            handler=get_training_plan,
+            allowed_roles=_READ_ROLES,
+            read_only=True,
+            requires_confirmation=False,
+        ),
+        ToolDefinition(
+            tool_id="fitness.training.plan.create_draft.v1",
+            description="创建结构化训练计划草案；草案不能直接发布，必须经过教练审核。",
+            input_model=CreateTrainingDraftToolInput,
+            handler=create_training_draft,
+            allowed_roles=_READ_ROLES,
+            read_only=False,
+            requires_confirmation=True,
+        ),
+        ToolDefinition(
+            tool_id="fitness.training.plan.submit_review.v1",
+            description="提交训练计划审核；只有负责教练或机构管理员可以完成该状态转换。",
+            input_model=TrainingPlanToolInput,
+            handler=submit_training_review,
+            allowed_roles=frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH"}),
+            read_only=False,
+            requires_confirmation=True,
+        ),
+        ToolDefinition(
+            tool_id="fitness.training.plan.review.v1",
+            description="审核或驳回训练计划；驳回必须填写原因。",
+            input_model=ReviewTrainingPlanToolInput,
+            handler=review_training_plan,
+            allowed_roles=frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH"}),
+            read_only=False,
+            requires_confirmation=True,
+        ),
+        ToolDefinition(
+            tool_id="fitness.training.plan.publish.v1",
+            description="发布已审核通过的训练计划，发布后学员才可以执行。",
+            input_model=TrainingPlanToolInput,
+            handler=publish_training_plan,
+            allowed_roles=frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH"}),
+            read_only=False,
+            requires_confirmation=True,
         ),
         ToolDefinition(
             tool_id="fitness.organization.get.v1",

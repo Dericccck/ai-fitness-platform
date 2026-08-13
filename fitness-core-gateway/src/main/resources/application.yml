@@ -20,6 +20,11 @@ gateway:
     internal-service-token: ${GATEWAY_INTERNAL_SERVICE_TOKEN:}
     context-signing-secret: ${GATEWAY_CONTEXT_SIGNING_SECRET:}
     max-context-ttl-seconds: ${GATEWAY_MAX_CONTEXT_TTL_SECONDS:300}
+    confirmation-signing-secret: ${GATEWAY_CONFIRMATION_SIGNING_SECRET:}
+  training-service:
+    base-url: ${GATEWAY_TRAINING_SERVICE_BASE_URL:http://127.0.0.1:8082}
+    internal-service-token: ${GATEWAY_TRAINING_SERVICE_TOKEN:}
+    timeout-milliseconds: ${GATEWAY_TRAINING_SERVICE_TIMEOUT_MS:5000}
 
 logging:
   level:

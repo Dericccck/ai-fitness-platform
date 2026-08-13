@@ -28,6 +28,7 @@ public class AgentContextInterceptor implements HandlerInterceptor {
         internalTokenVerifier.verify(request.getHeader(INTERNAL_TOKEN_HEADER));
         AgentContext context = contextVerifier.verify(request.getHeader(AGENT_CONTEXT_HEADER));
         request.setAttribute(CONTEXT_REQUEST_ATTRIBUTE, context);
+        request.setAttribute("fitness.gateway.requestId", request.getHeader("X-Request-ID"));
         return true;
     }
 }

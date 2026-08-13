@@ -10,7 +10,8 @@
 - Gateway 使用数据库只读账号和显式 SQL，返回稳定的 Tool View，不暴露旧 Entity 图、密码或无关字段。
 - 每个请求同时需要 `X-Internal-Service-Token` 和签名的 `X-Agent-Context`。
 - `AgentContext` 包含用户主体、机构范围、角色、签发时间、过期时间和 nonce；Gateway 每次调用都会再次校验资源权限。
-- 当前只实现读工具，创建预约、改约、取消预约等写工具必须在后续加入确认凭证、幂等键、事务和审计后才能开放。
+- 当前已增加结构化训练计划 Tool；创建预约、改约、取消预约仍未开放。所有训练写工具必须具备确认凭证、
+  幂等键、事务和审计。
 
 ## 本地配置
 
@@ -64,4 +65,9 @@ GET /internal/agent-tools/v1/organizations/{organizationId}
 GET /internal/agent-tools/v1/courses?organizationId=...
 GET /internal/agent-tools/v1/contracts?organizationId=...&userId=...
 GET /internal/agent-tools/v1/appointments?organizationId=...&userId=...&from=...&to=...
+GET /internal/agent-tools/v1/training/plans/{planId}
+POST /internal/agent-tools/v1/training/plans/drafts
+POST /internal/agent-tools/v1/training/plans/{planId}/submit-review
+POST /internal/agent-tools/v1/training/plans/{planId}/review
+POST /internal/agent-tools/v1/training/plans/{planId}/publish
 ```

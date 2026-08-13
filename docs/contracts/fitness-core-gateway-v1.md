@@ -11,6 +11,7 @@ X-Internal-Service-Token: <Agent 服务凭证>
 X-Agent-Context: <base64url(payload)>.<base64url(HMAC-SHA256(payload))>
 X-Request-ID: <跨服务请求 ID>
 X-Trace-ID: <可选链路 ID>
+X-Confirmation-Token: <写工具必需；由上游确认服务签发>
 ```
 
 `X-Internal-Service-Token` 只证明请求来自受信任的 Agent 服务，不包含用户身份。`X-Agent-Context` 由认证服务签发，payload 至少包含：
@@ -68,7 +69,21 @@ claim。Agent 服务会 fail-closed，因此这一外部依赖未落地时专业
 | 404 | `NOT_FOUND` | 说明资源不存在，不泄露 SQL 细节 |
 | 408/429/5xx | 无固定 code 要求 | 有限指数退避，耗尽后转为不可用 |
 
-当前契约只开放读操作。创建预约、改约、取消预约必须新增确认凭证、幂等键、事务和审计字段后才允许加入。
+训练计划写工具已按独立契约开放，但必须同时具备确认凭证、幂等请求 ID、事务和审计；预约、改约、
+取消预约仍未开放，不能因为训练工具已接入而放宽预约写权限。
+
+训练计划工具路径：
+
+```text
+GET  /internal/agent-tools/v1/training/plans/{planId}
+POST /internal/agent-tools/v1/training/plans/drafts
+POST /internal/agent-tools/v1/training/plans/{planId}/submit-review
+POST /internal/agent-tools/v1/training/plans/{planId}/review
+POST /internal/agent-tools/v1/training/plans/{planId}/publish
+```
+
+写工具的 `X-Confirmation-Token` 会在 Gateway 侧绑定签名主体、动作、资源、请求 ID 和过期时间；
+模型不能在工具参数中传入或伪造它。Agent Registry 也会在发起 HTTP 请求前拦截缺少确认凭证的写调用。
 
 ## Python Tool Registry v1
 

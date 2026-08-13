@@ -33,13 +33,22 @@ public class TrainingPlanRepository {
     }
 
     @Transactional
-    public TrainingPlan insertDraft(TrainingPlan plan) {
-        jdbc.update("INSERT INTO training_plan "
+    public TrainingPlan insertDraft(TrainingPlan plan, String requestId) {
+        Optional<TrainingPlan> existing = findByCreateRequestId(requestId);
+        if (existing.isPresent()) {
+            return existing.get();
+        }
+        int inserted = jdbc.update("INSERT IGNORE INTO training_plan "
                         + "(id, organization_id, student_id, coach_id, title, goal_type, source, status, "
-                        + "version, created_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?)",
+                        + "version, created_by, create_request_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?)",
                 plan.getId(), plan.getOrganizationId(), plan.getStudentId(), plan.getCoachId(),
                 plan.getTitle(), plan.getGoalType(), plan.getSource(), plan.getStatus().name(),
-                plan.getCreatedBy());
+                plan.getCreatedBy(), requestId);
+        if (inserted == 0) {
+            // 并发请求在第一次查询后抢先插入时，由唯一键保证最终只保留一份草案。
+            return findByCreateRequestId(requestId).orElseThrow(
+                    () -> new IllegalStateException("创建请求幂等记录不存在"));
+        }
         for (TrainingDay day : plan.getDays()) {
             jdbc.update("INSERT INTO training_plan_day "
                             + "(id, plan_id, day_number, title, scheduled_date) VALUES (?, ?, ?, ?, ?)",
@@ -55,6 +64,12 @@ public class TrainingPlanRepository {
             }
         }
         return plan;
+    }
+
+    private Optional<TrainingPlan> findByCreateRequestId(String requestId) {
+        List<String> ids = jdbc.query("SELECT id FROM training_plan WHERE create_request_id = ?",
+                new Object[]{requestId}, (rs, rowNum) -> rs.getString("id"));
+        return ids.isEmpty() ? Optional.empty() : findById(ids.get(0));
     }
 
     public Optional<TrainingPlan> findById(String planId) {
@@ -144,6 +159,13 @@ public class TrainingPlanRepository {
                 plan.getId(), action, actorId,
                 requestId, plan.getStatus().name(), target.name(), comment);
         return true;
+    }
+
+    public boolean wasRequestApplied(String planId, String requestId) {
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(1) FROM training_plan_audit WHERE plan_id = ? AND request_id = ?",
+                new Object[]{planId, requestId}, Integer.class);
+        return count != null && count > 0;
     }
 
     private Optional<String> findPlanIdByRequest(String requestId) {

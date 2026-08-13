@@ -3,6 +3,7 @@ package com.shuyiwa.fitness.gateway.api;
 import com.shuyiwa.fitness.gateway.security.GatewayForbiddenException;
 import com.shuyiwa.fitness.gateway.security.GatewayResourceNotFoundException;
 import com.shuyiwa.fitness.gateway.security.GatewaySecurityException;
+import com.shuyiwa.fitness.gateway.security.GatewayConflictException;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.ResponseStatus;
@@ -28,6 +29,12 @@ public class GatewayExceptionHandler {
     @ResponseStatus(HttpStatus.NOT_FOUND)
     public ErrorView notFound() {
         return new ErrorView("NOT_FOUND", "fitness resource was not found");
+    }
+
+    @ExceptionHandler(GatewayConflictException.class)
+    @ResponseStatus(HttpStatus.CONFLICT)
+    public ErrorView conflict() {
+        return new ErrorView("CONFLICT", "fitness resource was changed by another request");
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

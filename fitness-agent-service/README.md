@@ -126,7 +126,8 @@ Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry
 只包含只读工具，预约写操作要等确认凭证、幂等键和 Java 事务审计完成后再加入。
 
 当前对话接口为 `POST /api/v1/agent/chat`。调用方必须传入认证服务签发的
-`X-Agent-Context`，以及 `conversation_id`、`message` 和可选 `locale`；接口拒绝额外的
+`X-Agent-Context`，以及 `conversation_id`、`message` 和可选 `locale`；写工具还需要由上游
+确认流程签发的 `X-Confirmation-Token`，接口拒绝额外的
 用户/组织/角色字段。当前先提供非流式稳定协议，SSE、Checkpoint 和断线恢复将在会话持久化
 边界进一步验证后接入。
 

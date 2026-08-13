@@ -177,4 +177,108 @@ public final class ToolViews {
         public Integer getStatus() { return status; }
         public String getContractId() { return contractId; }
     }
+
+    /** 结构化训练计划的稳定 Tool View，不把训练服务内部 DTO 直接暴露给 Agent。 */
+    public static final class TrainingPlanView {
+        private final String id;
+        private final String organizationId;
+        private final String studentId;
+        private final String coachId;
+        private final String title;
+        private final String goalType;
+        private final String source;
+        private final String status;
+        private final int version;
+        private final String createdBy;
+        private final String reviewedBy;
+        private final String publishedBy;
+        private final String reviewComment;
+        private final Instant createdAt;
+        private final Instant updatedAt;
+        private final Instant reviewedAt;
+        private final Instant publishedAt;
+        private final java.util.List<TrainingDayView> days;
+
+        public TrainingPlanView(String id, String organizationId, String studentId, String coachId,
+                                String title, String goalType, String source, String status, int version,
+                                String createdBy, String reviewedBy, String publishedBy, String reviewComment,
+                                Instant createdAt, Instant updatedAt, Instant reviewedAt, Instant publishedAt,
+                                java.util.List<TrainingDayView> days) {
+            this.id = id; this.organizationId = organizationId; this.studentId = studentId; this.coachId = coachId;
+            this.title = title; this.goalType = goalType; this.source = source; this.status = status;
+            this.version = version; this.createdBy = createdBy; this.reviewedBy = reviewedBy;
+            this.publishedBy = publishedBy; this.reviewComment = reviewComment; this.createdAt = createdAt;
+            this.updatedAt = updatedAt; this.reviewedAt = reviewedAt; this.publishedAt = publishedAt;
+            this.days = days;
+        }
+
+        public String getId() { return id; }
+        public String getOrganizationId() { return organizationId; }
+        public String getStudentId() { return studentId; }
+        public String getCoachId() { return coachId; }
+        public String getTitle() { return title; }
+        public String getGoalType() { return goalType; }
+        public String getSource() { return source; }
+        public String getStatus() { return status; }
+        public int getVersion() { return version; }
+        public String getCreatedBy() { return createdBy; }
+        public String getReviewedBy() { return reviewedBy; }
+        public String getPublishedBy() { return publishedBy; }
+        public String getReviewComment() { return reviewComment; }
+        public Instant getCreatedAt() { return createdAt; }
+        public Instant getUpdatedAt() { return updatedAt; }
+        public Instant getReviewedAt() { return reviewedAt; }
+        public Instant getPublishedAt() { return publishedAt; }
+        public java.util.List<TrainingDayView> getDays() { return days; }
+    }
+
+    public static final class TrainingDayView {
+        private final String id;
+        private final Integer dayNumber;
+        private final String title;
+        private final java.time.LocalDate scheduledDate;
+        private final java.util.List<TrainingItemView> items;
+
+        public TrainingDayView(String id, Integer dayNumber, String title, java.time.LocalDate scheduledDate,
+                               java.util.List<TrainingItemView> items) {
+            this.id = id; this.dayNumber = dayNumber; this.title = title; this.scheduledDate = scheduledDate;
+            this.items = items;
+        }
+
+        public String getId() { return id; }
+        public Integer getDayNumber() { return dayNumber; }
+        public String getTitle() { return title; }
+        public java.time.LocalDate getScheduledDate() { return scheduledDate; }
+        public java.util.List<TrainingItemView> getItems() { return items; }
+    }
+
+    public static final class TrainingItemView {
+        private final String id;
+        private final String exerciseName;
+        private final Integer sortOrder;
+        private final Integer sets;
+        private final String reps;
+        private final Integer restSeconds;
+        private final java.math.BigDecimal targetWeightKg;
+        private final java.math.BigDecimal targetRpe;
+        private final String notes;
+
+        public TrainingItemView(String id, String exerciseName, Integer sortOrder, Integer sets, String reps,
+                                Integer restSeconds, java.math.BigDecimal targetWeightKg,
+                                java.math.BigDecimal targetRpe, String notes) {
+            this.id = id; this.exerciseName = exerciseName; this.sortOrder = sortOrder; this.sets = sets;
+            this.reps = reps; this.restSeconds = restSeconds; this.targetWeightKg = targetWeightKg;
+            this.targetRpe = targetRpe; this.notes = notes;
+        }
+
+        public String getId() { return id; }
+        public String getExerciseName() { return exerciseName; }
+        public Integer getSortOrder() { return sortOrder; }
+        public Integer getSets() { return sets; }
+        public String getReps() { return reps; }
+        public Integer getRestSeconds() { return restSeconds; }
+        public java.math.BigDecimal getTargetWeightKg() { return targetWeightKg; }
+        public java.math.BigDecimal getTargetRpe() { return targetRpe; }
+        public String getNotes() { return notes; }
+    }
 }

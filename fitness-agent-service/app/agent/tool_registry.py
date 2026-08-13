@@ -3,7 +3,8 @@
 Tool Registry 是模型和业务系统之间的唯一工具入口。模型只能选择已经注册的
 工具；工具输入必须先通过 Pydantic Schema 校验；工具执行失败也必须回传真实失败，
 不能被 Supervisor 或模型包装成“已经成功”。这里暂时只放基础设施和只读工具，后续
-写工具必须继续遵守确认凭证、幂等键和 Java Gateway 权限校验。
+写工具必须继续遵守确认凭证、幂等键和 Java Gateway 权限校验。确认凭证来自上游确认流程，
+不进入模型的工具参数 Schema。
 """
 
 from __future__ import annotations
@@ -45,6 +46,10 @@ class ToolInputValidationError(ToolRegistryError):
 
 class ToolExecutionError(ToolRegistryError):
     """工具内部出现未分类异常，避免把底层异常暴露给模型。"""
+
+
+class ToolConfirmationRequiredError(ToolRegistryError):
+    """写工具缺少上游签发的确认凭证。"""
 
 
 @dataclass(frozen=True)
@@ -191,6 +196,14 @@ class ToolRegistry:
         request_id = context.gateway_context.request_id
         trace_id = context.gateway_context.trace_id
         self._audit_sink.record(ToolAuditEvent(tool_id, "started", request_id, trace_id))
+
+        if not definition.read_only and not context.gateway_context.confirmation_token:
+            self._record_failure(
+                definition.tool_id, request_id, trace_id, "CONFIRMATION_REQUIRED", started_at
+            )
+            raise ToolConfirmationRequiredError(
+                f"confirmation is required for tool: {definition.tool_id}"
+            )
 
         try:
             validated_input = definition.input_model.model_validate(dict(raw_input))

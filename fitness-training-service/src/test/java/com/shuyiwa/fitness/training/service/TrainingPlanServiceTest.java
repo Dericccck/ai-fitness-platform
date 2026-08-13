@@ -26,6 +26,8 @@ public class TrainingPlanServiceTest {
         TrainingPlanService service = new TrainingPlanService(repository);
         when(repository.isOrganizationMember("org-1", "student-1")).thenReturn(true);
         when(repository.isCoachForStudent("org-1", "coach-1", "student-1")).thenReturn(true);
+        when(repository.insertDraft(any(TrainingPlan.class), org.mockito.ArgumentMatchers.eq("req-1")))
+                .thenAnswer(invocation -> invocation.getArgument(0));
         when(repository.findById(any(String.class))).thenAnswer(invocation -> {
             TrainingPlan saved = new TrainingPlan();
             saved.setId(invocation.getArgument(0));
@@ -54,6 +56,6 @@ public class TrainingPlanServiceTest {
                 Collections.singleton(TrainingActor.STUDENT), Collections.singleton("org-1"), "req-1");
         assertEquals(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.DRAFT,
                 service.createAgentDraft(actor, request).getStatus());
-        verify(repository).insertDraft(any(TrainingPlan.class));
+        verify(repository).insertDraft(any(TrainingPlan.class), org.mockito.ArgumentMatchers.eq("req-1"));
     }
 }

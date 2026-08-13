@@ -57,6 +57,7 @@ async def chat(
     x_agent_context: str | None = Header(default=None),
     x_request_id: str | None = Header(default=None),
     x_trace_id: str | None = Header(default=None),
+    x_confirmation_token: str | None = Header(default=None),
 ) -> AgentChatResponse:
     """处理一次健身 Agent 对话请求。"""
 
@@ -85,6 +86,7 @@ async def chat(
                     signed_context=x_agent_context,
                     request_id=request_id,
                     trace_id=trace_id,
+                    confirmation_token=x_confirmation_token,
                 ),
                 conversation_id=payload.conversation_id,
                 thread_id=conversation_thread_id(payload.conversation_id, identity),

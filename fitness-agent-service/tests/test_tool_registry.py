@@ -8,6 +8,7 @@ from app.agent.tool_registry import (
     DuplicateToolError,
     InvalidToolDefinitionError,
     ToolAuditEvent,
+    ToolConfirmationRequiredError,
     ToolContext,
     ToolDefinition,
     ToolInputValidationError,
@@ -78,6 +79,31 @@ class FakeGateway:
     ) -> list[dict[str, str]]:
         return [{"id": "appointment-1"}]
 
+    async def get_training_plan(
+        self, context: GatewayRequestContext, plan_id: str
+    ) -> dict[str, Any]:
+        return {"id": plan_id}
+
+    async def create_training_draft(
+        self, context: GatewayRequestContext, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        return {"id": "plan-1"}
+
+    async def submit_training_review(
+        self, context: GatewayRequestContext, plan_id: str
+    ) -> dict[str, Any]:
+        return {"id": plan_id}
+
+    async def review_training_plan(
+        self, context: GatewayRequestContext, plan_id: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        return {"id": plan_id}
+
+    async def publish_training_plan(
+        self, context: GatewayRequestContext, plan_id: str
+    ) -> dict[str, Any]:
+        return {"id": plan_id}
+
 
 def tool_context() -> ToolContext:
     return ToolContext(
@@ -99,10 +125,15 @@ def test_fitness_registry_exposes_only_versioned_specs() -> None:
         "fitness.contract.list.v1",
         "fitness.course.list.v1",
         "fitness.organization.get.v1",
+        "fitness.training.plan.create_draft.v1",
+        "fitness.training.plan.get.v1",
+        "fitness.training.plan.publish.v1",
+        "fitness.training.plan.review.v1",
+        "fitness.training.plan.submit_review.v1",
         "fitness.user.get_current.v1",
     ]
-    assert all(spec["read_only"] is True for spec in specs)
-    assert all(spec["requires_confirmation"] is False for spec in specs)
+    assert sum(spec["read_only"] is False for spec in specs) == 4
+    assert sum(spec["requires_confirmation"] is True for spec in specs) == 4
 
 
 async def test_registry_validates_input_calls_fixed_gateway_adapter_and_serializes_result() -> None:
@@ -145,6 +176,38 @@ async def test_registry_rejects_extra_input_and_records_safe_failure() -> None:
     assert gateway.course_calls == []
     assert [event.status for event in sink.events] == ["started", "failed"]
     assert sink.events[-1].error_code == "INVALID_INPUT"
+
+
+async def test_write_training_tool_requires_confirmation_before_gateway_call() -> None:
+    gateway = FakeGateway()
+    registry = build_fitness_tool_registry(cast(GatewayClient, gateway))
+
+    with pytest.raises(ToolConfirmationRequiredError):
+        await registry.invoke(
+            "fitness.training.plan.create_draft.v1",
+            {
+                "organization_id": "org-1",
+                "student_id": "student-1",
+                "coach_id": "coach-1",
+                "title": "基础力量",
+                "goal_type": "力量",
+                "days": [
+                    {
+                        "day_number": 1,
+                        "title": "下肢",
+                        "items": [
+                            {
+                                "exercise_name": "深蹲",
+                                "sort_order": 1,
+                                "sets": 3,
+                                "reps": "8-10",
+                            }
+                        ],
+                    }
+                ],
+            },
+            tool_context(),
+        )
 
 
 async def test_registry_rejects_unknown_tool_without_invoking_gateway() -> None:

@@ -62,8 +62,8 @@ public class TrainingPlanService {
         plan.setVersion(0);
         plan.setCreatedBy(actor.getUserId());
         plan.setDays(withGeneratedIds(request.getDays()));
-        repository.insertDraft(plan);
-        return view(repository.findById(plan.getId()).orElseThrow(() -> notFound("训练计划不存在")));
+        TrainingPlan persisted = repository.insertDraft(plan, actor.getRequestId());
+        return view(repository.findById(persisted.getId()).orElseThrow(() -> notFound("训练计划不存在")));
     }
 
     @Transactional
@@ -116,6 +116,10 @@ public class TrainingPlanService {
 
     private void transition(TrainingPlan plan, TrainingPlanStatus target, TrainingActor actor,
                              String action, String comment) {
+        if (repository.wasRequestApplied(plan.getId(), actor.getRequestId())) {
+            // 客户端超时后重试时，第一次可能已经提交成功；幂等重试直接返回当前事实。
+            return;
+        }
         if (!plan.getStatus().canTransitionTo(target)) {
             throw invalid("当前状态不能执行该操作: " + plan.getStatus());
         }
