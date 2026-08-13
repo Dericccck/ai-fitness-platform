@@ -82,9 +82,12 @@ POST /internal/agent-tools/v1/training/plans/{planId}/review
 POST /internal/agent-tools/v1/training/plans/{planId}/publish
 ```
 
-写工具的 `X-Confirmation-Token` 当前由 Agent 服务端使用共享 HMAC 密钥签发，Gateway v1 会绑定
-签名主体、动作、资源、请求 ID 和过期时间；Token 额外携带的确认 ID、工具 ID、机构、参数哈希和
-JTI 是 v2 验签/消费升级的预留字段。模型不能在工具参数中传入或伪造它，浏览器也不应持有它。
+写工具的 `X-Confirmation-Token` 当前由 Agent 服务端使用共享 HMAC 密钥签发，Gateway 会绑定并校验
+签名主体、工具 ID、动作、机构、资源、请求 ID、参数哈希、JTI 和过期时间。Gateway 不把原始 Token
+继续传给训练服务，而是只转发已验签的声明 Header：`X-Confirmation-Id`、`X-Confirmation-JTI`、
+`X-Confirmation-Tool-ID`、`X-Confirmation-Action`、`X-Confirmation-Organization-ID`、
+`X-Confirmation-Resource` 和 `X-Confirmation-Payload-Hash`。训练服务必须在自己的业务事务中
+消费 JTI；模型不能在工具参数中传入或伪造它，浏览器也不应持有它。
 Agent Registry 会在发起 HTTP 请求前拦截缺少确认凭证的写调用。
 
 ## Python Tool Registry v1

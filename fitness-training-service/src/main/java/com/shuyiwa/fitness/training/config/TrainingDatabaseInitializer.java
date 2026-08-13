@@ -37,6 +37,7 @@ public class TrainingDatabaseInitializer {
         }
         applyIfNeeded("V20260813_001", "db/migration/V20260813_001__create_training_plan.sql");
         applyIfNeeded("V20260813_002", "db/migration/V20260813_002__add_create_request_id.sql");
+        applyIfNeeded("V20260813_003", "db/migration/V20260813_003__add_confirmation_consumption.sql");
     }
 
     private void applyIfNeeded(String version, String resourcePath) {

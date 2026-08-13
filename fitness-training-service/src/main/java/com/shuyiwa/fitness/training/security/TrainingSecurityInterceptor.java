@@ -55,8 +55,32 @@ public class TrainingSecurityInterceptor implements HandlerInterceptor {
         if (organizationIds.isEmpty()) {
             throw new TrainingSecurityException("业务主体没有有效机构范围");
         }
-        request.setAttribute(ACTOR_ATTRIBUTE, new TrainingActor(actorId, roles, organizationIds, requestId));
+        TrainingConfirmation confirmation = parseConfirmation(request);
+        request.setAttribute(ACTOR_ATTRIBUTE,
+                new TrainingActor(actorId, roles, organizationIds, requestId, confirmation));
         return true;
+    }
+
+    private TrainingConfirmation parseConfirmation(HttpServletRequest request) {
+        String confirmationId = trim(request.getHeader("X-Confirmation-Id"));
+        String jti = trim(request.getHeader("X-Confirmation-JTI"));
+        String toolId = trim(request.getHeader("X-Confirmation-Tool-ID"));
+        String action = trim(request.getHeader("X-Confirmation-Action"));
+        String organizationId = trim(request.getHeader("X-Confirmation-Organization-ID"));
+        String resource = trim(request.getHeader("X-Confirmation-Resource"));
+        String payloadHash = trim(request.getHeader("X-Confirmation-Payload-Hash"));
+        boolean anyPresent = !confirmationId.isEmpty() || !jti.isEmpty() || !toolId.isEmpty()
+                || !action.isEmpty() || !organizationId.isEmpty() || !resource.isEmpty()
+                || !payloadHash.isEmpty();
+        boolean allPresent = !confirmationId.isEmpty() && !jti.isEmpty() && !toolId.isEmpty()
+                && !action.isEmpty() && !organizationId.isEmpty() && !resource.isEmpty()
+                && payloadHash.matches("[0-9a-fA-F]{64}");
+        if (anyPresent && !allPresent) {
+            throw new TrainingSecurityException("确认声明不完整");
+        }
+        return allPresent ? new TrainingConfirmation(
+                confirmationId, jti, toolId, action, organizationId, resource, payloadHash
+        ) : null;
     }
 
     private static String trim(String value) {

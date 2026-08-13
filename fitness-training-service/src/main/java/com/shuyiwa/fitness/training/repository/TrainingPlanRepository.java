@@ -4,7 +4,11 @@ import com.shuyiwa.fitness.training.domain.TrainingDay;
 import com.shuyiwa.fitness.training.domain.TrainingItem;
 import com.shuyiwa.fitness.training.domain.TrainingPlan;
 import com.shuyiwa.fitness.training.domain.TrainingPlanStatus;
+import com.shuyiwa.fitness.training.api.TrainingApiException;
+import com.shuyiwa.fitness.training.security.TrainingConfirmation;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.EmptyResultDataAccessException;
+import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
@@ -33,7 +37,7 @@ public class TrainingPlanRepository {
     }
 
     @Transactional
-    public TrainingPlan insertDraft(TrainingPlan plan, String requestId) {
+    public TrainingPlan insertDraft(TrainingPlan plan, String requestId, TrainingConfirmation confirmation) {
         Optional<TrainingPlan> existing = findByCreateRequestId(requestId);
         if (existing.isPresent()) {
             return existing.get();
@@ -49,6 +53,9 @@ public class TrainingPlanRepository {
             return findByCreateRequestId(requestId).orElseThrow(
                     () -> new IllegalStateException("创建请求幂等记录不存在"));
         }
+        // 只有确认本次请求确实抢到业务写入资格后才消费 JTI。若消费失败，当前事务会回滚草案，
+        // 从而避免“业务没有落库，但确认凭证已经被使用”的不一致状态。
+        consumeConfirmation(confirmation, requestId);
         for (TrainingDay day : plan.getDays()) {
             jdbc.update("INSERT INTO training_plan_day "
                             + "(id, plan_id, day_number, title, scheduled_date) VALUES (?, ?, ?, ?, ?)",
@@ -135,7 +142,7 @@ public class TrainingPlanRepository {
     /** 状态转换使用版本号条件，两个并发审核请求只能有一个成功。 */
     @Transactional
     public boolean transition(TrainingPlan plan, TrainingPlanStatus target, String action, String actorId,
-                              String requestId, String comment) {
+                              String requestId, String comment, TrainingConfirmation confirmation) {
         Optional<String> appliedPlan = findPlanIdByRequest(requestId);
         if (appliedPlan.isPresent()) {
             // 网络重试不能再次写审计，也不能把同一请求误认为新的状态转换。
@@ -153,12 +160,40 @@ public class TrainingPlanRepository {
         if (changed != 1) {
             return false;
         }
+        // 乐观锁更新成功后再消费凭证；如果凭证已被重放，抛出异常会回滚刚才的状态更新。
+        consumeConfirmation(confirmation, requestId);
         jdbc.update("INSERT INTO training_plan_audit "
                         + "(plan_id, action, actor_id, request_id, from_status, to_status, comment) "
                         + "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 plan.getId(), action, actorId,
                 requestId, plan.getStatus().name(), target.name(), comment);
         return true;
+    }
+
+    /**
+     * 在训练业务事务中消费一次性 JTI。
+     *
+     * <p>该表使用 JTI 主键。第一次写入成功后，后续重放即使通过了 Gateway 验签，也会因
+     * 唯一键冲突被拒绝；如果后续训练计划更新失败，事务回滚会同时撤销这次消费。</p>
+     */
+    private void consumeConfirmation(TrainingConfirmation confirmation, String requestId) {
+        if (confirmation == null) {
+            throw new TrainingApiException(HttpStatus.UNAUTHORIZED, "缺少确认凭证");
+        }
+        int inserted;
+        try {
+            inserted = jdbc.update("INSERT INTO training_confirmation_consumption "
+                            + "(jti, confirmation_id, tool_id, action, organization_id, resource, "
+                            + "request_id, payload_hash) VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    confirmation.getJti(), confirmation.getConfirmationId(), confirmation.getToolId(),
+                    confirmation.getAction(), confirmation.getOrganizationId(), confirmation.getResource(),
+                    requestId, confirmation.getPayloadHash());
+        } catch (DuplicateKeyException exception) {
+            throw new TrainingApiException(HttpStatus.CONFLICT, "确认凭证已经被消费");
+        }
+        if (inserted != 1) {
+            throw new TrainingApiException(HttpStatus.CONFLICT, "确认凭证消费失败");
+        }
     }
 
     public boolean wasRequestApplied(String planId, String requestId) {

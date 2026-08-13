@@ -10,6 +10,7 @@ import com.shuyiwa.fitness.training.domain.TrainingPlan;
 import com.shuyiwa.fitness.training.domain.TrainingPlanStatus;
 import com.shuyiwa.fitness.training.repository.TrainingPlanRepository;
 import com.shuyiwa.fitness.training.security.TrainingActor;
+import com.shuyiwa.fitness.training.security.TrainingConfirmation;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -62,7 +63,10 @@ public class TrainingPlanService {
         plan.setVersion(0);
         plan.setCreatedBy(actor.getUserId());
         plan.setDays(withGeneratedIds(request.getDays()));
-        TrainingPlan persisted = repository.insertDraft(plan, actor.getRequestId());
+        TrainingConfirmation confirmation = requireConfirmation(actor,
+                "fitness.training.plan.create_draft.v1", "CREATE_TRAINING_DRAFT",
+                request.getOrganizationId(), request.getOrganizationId() + ":" + request.getStudentId());
+        TrainingPlan persisted = repository.insertDraft(plan, actor.getRequestId(), confirmation);
         return view(repository.findById(persisted.getId()).orElseThrow(() -> notFound("训练计划不存在")));
     }
 
@@ -70,7 +74,8 @@ public class TrainingPlanService {
     public TrainingPlanView submitForReview(TrainingActor actor, String planId) {
         TrainingPlan plan = loadVisiblePlan(actor, planId, false);
         requireCanOperatePlan(actor, plan);
-        transition(plan, TrainingPlanStatus.PENDING_REVIEW, actor, "SUBMIT_REVIEW", null);
+        transition(plan, TrainingPlanStatus.PENDING_REVIEW, actor, "SUBMIT_REVIEW", null,
+                "fitness.training.plan.submit_review.v1", "SUBMIT_TRAINING_REVIEW");
         return reload(plan.getId());
     }
 
@@ -95,7 +100,8 @@ public class TrainingPlanService {
         if (target == TrainingPlanStatus.REJECTED && isBlank(request.getComment())) {
             throw invalid("驳回时必须填写原因");
         }
-        transition(plan, target, actor, "REVIEW", request.getComment());
+        transition(plan, target, actor, "REVIEW", request.getComment(),
+                "fitness.training.plan.review.v1", "REVIEW_TRAINING_PLAN");
         return reload(plan.getId());
     }
 
@@ -106,7 +112,8 @@ public class TrainingPlanService {
                 || !actor.getUserId().equals(plan.getCoachId()))) {
             throw forbidden("只有负责教练或机构管理员可以发布训练计划");
         }
-        transition(plan, TrainingPlanStatus.PUBLISHED, actor, "PUBLISH", null);
+        transition(plan, TrainingPlanStatus.PUBLISHED, actor, "PUBLISH", null,
+                "fitness.training.plan.publish.v1", "PUBLISH_TRAINING_PLAN");
         return reload(plan.getId());
     }
 
@@ -115,7 +122,7 @@ public class TrainingPlanService {
     }
 
     private void transition(TrainingPlan plan, TrainingPlanStatus target, TrainingActor actor,
-                             String action, String comment) {
+                             String action, String comment, String toolId, String confirmationAction) {
         if (repository.wasRequestApplied(plan.getId(), actor.getRequestId())) {
             // 客户端超时后重试时，第一次可能已经提交成功；幂等重试直接返回当前事实。
             return;
@@ -123,9 +130,31 @@ public class TrainingPlanService {
         if (!plan.getStatus().canTransitionTo(target)) {
             throw invalid("当前状态不能执行该操作: " + plan.getStatus());
         }
-        if (!repository.transition(plan, target, action, actor.getUserId(), actor.getRequestId(), comment)) {
+        TrainingConfirmation confirmation = requireConfirmation(
+                actor, toolId, confirmationAction, plan.getOrganizationId(), plan.getId()
+        );
+        if (!repository.transition(plan, target, action, actor.getUserId(), actor.getRequestId(), comment,
+                confirmation)) {
             throw new TrainingApiException(HttpStatus.CONFLICT, "训练计划已被其他请求修改，请重新读取后操作");
         }
+    }
+
+    private TrainingConfirmation requireConfirmation(TrainingActor actor, String toolId,
+                                                      String action, String expectedOrganizationId,
+                                                      String resource) {
+        TrainingConfirmation confirmation = actor.getConfirmation();
+        if (confirmation == null) {
+            throw new TrainingApiException(HttpStatus.UNAUTHORIZED, "缺少确认凭证");
+        }
+        if (!toolId.equals(confirmation.getToolId())
+                || !action.equals(confirmation.getAction())
+                || !expectedOrganizationId.equals(confirmation.getOrganizationId())
+                || !resource.equals(confirmation.getResource())
+                || !actor.canAccessOrganization(confirmation.getOrganizationId())
+                || !confirmation.getPayloadHash().matches("[0-9a-fA-F]{64}")) {
+            throw new TrainingApiException(HttpStatus.FORBIDDEN, "确认凭证范围与训练操作不匹配");
+        }
+        return confirmation;
     }
 
     private TrainingPlan loadVisiblePlan(TrainingActor actor, String planId, boolean allowStudentPublishedOnly) {

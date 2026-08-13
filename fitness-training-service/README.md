@@ -11,6 +11,10 @@
 - `DRAFT -> PENDING_REVIEW -> APPROVED -> PUBLISHED` 状态机，驳回后可以重新提交审核。
 - 只有负责教练或机构管理员可以审核和发布；学员只能查看已发布计划。
 - MySQL 版本化 SQL、计划版本号并发控制、请求 ID 幂等、不可变状态审计。
+- Gateway 已验签的 `confirmation_id/tool_id/action/organization/resource/payload_hash/jti` 会通过
+  内部 Header 传入；本服务在训练计划业务事务中写入确认消费记录，JTI 重放会被唯一键拒绝。
+- 确认消费和训练计划写入处于同一个 MySQL 事务：业务失败会一起回滚，网络重试仍由原始请求 ID
+  幂等收敛，不能产生第二份训练计划或第二次状态审计。
 - 独立 Maven 构建，不依赖不完整的旧 Java 赛事代码。
 
 ## 启动与配置
@@ -43,6 +47,13 @@ TRAINING_INTERNAL_SERVICE_TOKEN
 - `X-Actor-Roles`
 - `X-Actor-Organization-Ids`
 - `X-Request-ID`
+- `X-Confirmation-Id`
+- `X-Confirmation-JTI`
+- `X-Confirmation-Tool-ID`
+- `X-Confirmation-Action`
+- `X-Confirmation-Organization-ID`
+- `X-Confirmation-Resource`
+- `X-Confirmation-Payload-Hash`
 
 这些 Header 只能由已验证的 Gateway 注入，Python Agent 不得直接调用训练服务，也不得自行构造
-用户身份和角色。
+用户身份、角色或确认声明。JTI 消费与训练计划写入使用同一个事务边界。

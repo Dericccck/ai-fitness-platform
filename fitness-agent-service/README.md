@@ -56,8 +56,8 @@
 - 写操作确认：训练计划写工具会先生成确定性确认摘要和加密参数，写入 PostgreSQL 确认单后通过
   LangGraph `interrupt()` 暂停；批准接口会在服务端持久化决定后使用同一 `thread_id` 调用
   `Command(resume=...)`，从加密参数恢复并通过短时确认凭证调用 Java Gateway。当前凭证仍是与
-  Java Gateway v1 兼容的 HMAC 过渡版本；一次性 JTI 已在 Agent 确认单中领取和审计，Gateway
-  v2 的完整 JTI 消费和非对称验签仍在后续迭代中。
+  Java Gateway v1 兼容的 HMAC 过渡版本；一次性 JTI 已在 Agent 确认单中领取、由 Gateway
+  校验并在训练服务事务中消费。后续仍需把签名算法升级为可轮换的非对称验签。
 
 ## 本地启动
 

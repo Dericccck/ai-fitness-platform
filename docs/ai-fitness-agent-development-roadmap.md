@@ -279,12 +279,13 @@ Java 后端统一提供 `/internal/agent-tools/**` 内部接口，并采用服�
 
 ### 7.4 LangGraph 人机确认与恢复协议
 
-当前实现边界（2026-08-13）：训练计划写工具已经具备 `requires_confirmation` 元数据、Python
-前置拒绝、Java Gateway v1 确认凭证验签、请求 ID 幂等、事务和审计；Agent 已接入确认单持久化、
+当前实现边界（2026-08-14）：训练计划写工具已经具备 `requires_confirmation` 元数据、Python
+前置拒绝、Java Gateway v1 完整确认声明验签、训练服务 JTI 一次性消费、请求 ID 幂等、事务和审计；Agent 已接入确认单持久化、
 AES-GCM 参数保护、LangGraph `interrupt()` 暂停、确认详情查询、批准/拒绝和服务端恢复执行。
 批准接口会先持久化决定，再用同一 `thread_id` 执行 `Command(resume=...)`；确认参数只在服务端
 内存中解密，Token 只注入工具上下文。当前 HMAC v1 已用于内部联调，一次性 JTI 在 Agent 确认单
-中领取和审计；Gateway v2 的完整 JTI 消费、非对称验签和训练服务审计透传仍未完成。
+中领取和审计；Gateway 已校验完整声明并将脱离 Token 的声明交给训练服务，训练服务在业务事务中
+消费 JTI。当前 HMAC 仍是 v1 过渡算法，后续仍需非对称验签、密钥轮换和完整故障演练。
 
 该缺口属于所有写 Agent 的公共安全基础，必须在训练执行记录和 Booking Agent 写操作继续扩展前完成。
 最终链路固定为：
@@ -309,9 +310,9 @@ AES-GCM 参数保护、LangGraph `interrupt()` 暂停、确认详情查询、批
 8. Agent 使用相同 `thread_id` 通过 `Command(resume=...)` 恢复，重新读取确认事实并把确认凭证作为
    本次运行的临时上下文注入 Tool Registry；确认凭证不得写入 LangGraph State、Checkpoint、消息、
    Prompt、日志或 Trace。
-9. Gateway v1 当前验证凭证签名及 `sub`、动作、资源、`request_id`、`exp`，再由业务服务重新执行
-   角色、资源、状态机和并发校验；v2 必须继续增加 `confirmation_id`、`tool_id/action`、机构、
-   `payload_hash` 和唯一凭证 ID 的验签与消费。
+9. Gateway 当前验证凭证签名及 `sub`、`confirmation_id`、`tool_id/action`、机构、资源、
+   `payload_hash`、`request_id`、`exp` 和唯一凭证 ID，再把脱离原始 Token 的声明转发给训练服务；
+   业务服务在自己的事务中消费 JTI，并重新执行角色、资源、状态机和并发校验。
 10. 业务服务在事务内执行并写入请求 ID/确认 ID/操作者审计。HTTP 超时后的重试必须继续使用同一个
     请求 ID；同一批准决定不得生成第二个不同业务动作。
 11. 拒绝、过期、身份变化、组织范围变化、资源状态变化或参数摘要不匹配时一律 fail-closed；图恢复后
@@ -437,12 +438,11 @@ PostgreSQL 迁移至少建立以下逻辑结构，具体字段名在实现时固
    AgentContext 重新认证，使用同一 thread 会话锁通过 `Command(resume=...)` 恢复，并从加密确认单
    恢复原始工具参数后调用 Gateway。API 返回授权/执行双状态，前端可以稳定渲染完成、待确认、拒绝、
    过期、执行中和执行失败；服务端不会把 thread、参数或 Token 交给前端。
-6. **凭证 v2 与消费闭环**：确认凭证新增 `confirmation_id/tool_id/organization_id/payload_hash/jti`；
-   同时绑定 issuer、audience、签发/过期时间和预期资源版本。生产采用 ES256 等非对称 JWS：Agent
-   授权模块只持有私钥，Gateway 只持有按 `kid` 轮换的公钥，避免验证方同时具备任意签发能力。Gateway
-   v2 验签后将确认 ID、JTI 和 payload hash 透传到训练服务审计，训练计划创建与状态审计分别增加唯一
-   确认 ID/JTI，形成一次性消费闭环。当前 HMAC 且仅绑定 `sub/action/resource/request_id/exp` 的 v1
-   凭证属于过渡实现，v2 联调完成后按配置关闭 v1，不能永久兼容弱范围凭证。
+6. **凭证 v2 与消费闭环（字段和 JTI 消费已完成，算法升级待完成）**：确认凭证已新增并校验
+   `confirmation_id/tool_id/organization_id/payload_hash/jti`，Gateway 将已验签声明透传到训练服务，
+   训练计划写入与 JTI 消费在同一事务内完成。后续生产采用 ES256 等非对称 JWS：Agent 授权模块只
+   持有私钥，Gateway 只持有按 `kid` 轮换的公钥，避免验证方同时具备任意签发能力；当前 HMAC v1
+   属于过渡实现，算法升级完成后按配置关闭 v1，不能永久兼容弱范围凭证。
 7. **训练计划四工具联调**：覆盖创建草案、提交审核、批准/驳回和发布的摘要、角色、资源状态及幂等；
    教练业务审核页面和 Agent 即时确认分别保留，不合并成一个状态。
 8. **可观测性与清理**：增加待确认数、确认延迟、拒绝率、过期率、恢复失败和重复消费指标；日志只记
@@ -1062,7 +1062,8 @@ OCR 适配器、独立 OCR 服务骨架、离线评测门禁和真实 ClamAV 联
 - Agent 写操作确认基础：完成 0013 确认单与不可变事件迁移、确认授权/执行双状态领域模型、数据库
   幂等创建、决定幂等、行锁并发控制、一次性 JTI 领取边界和可重试失败重新签发 JTI；已完成确认动作
   规范化、AES-GCM 参数加密、LangGraph `interrupt()` 暂停、Checkpoint 脱敏、确认 API、服务端恢复
-  和真实 Gateway 执行；尚未完成凭证 v2 和 Gateway 一次性消费闭环。
+  和真实 Gateway 执行；已完成 Gateway 完整字段校验和训练服务 JTI 一次性消费，尚未完成非对称签名、
+  密钥轮换和生产故障演练。
 
 路线调整后的下一步按顺序执行：
 
@@ -1071,7 +1072,8 @@ OCR 适配器、独立 OCR 服务骨架、离线评测门禁和真实 ClamAV 联
    只代表安全执行边界已经完成，不能等同于前端可交互的人机确认闭环。
 2. **通用写操作 Human-in-the-loop 闭环（训练计划 v1 已完成）**：确认单、参数加密、Checkpoint 脱敏、
    `interrupt()` 暂停、确认详情/决定、`Command(resume=...)` 恢复和真实 Gateway 执行已完成，第一批覆盖
-   训练计划四个写工具；完成 v2 凭证消费闭环和断线/重启故障演练后，再供 Booking、Memory 等复用。
+   训练计划四个写工具；Gateway 完整字段校验和训练服务 JTI 消费已完成，完成非对称密钥轮换、断线/重启
+   故障演练后，再供 Booking、Memory 等复用。
    Java Gateway 继续负责独立验签和最终业务权限复核。
 3. **最小训练执行闭环**：增加训练日级完成或跳过、完成时间和可选简短备注；不建设逐组实绩、身体
    测量、疼痛/疲劳量表、阶段调整和自动调参。最终提交保持权限、幂等和审计。

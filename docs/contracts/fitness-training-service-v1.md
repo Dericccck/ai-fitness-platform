@@ -3,6 +3,24 @@
 该服务是训练计划的业务事实源，和只读 `fitness-core-gateway` 分离。赛事、作品和活动运营不在
 契约范围内。
 
+## 内部确认声明
+
+Gateway 验证 Agent 的 `X-Confirmation-Token` 后，不转发原始 Token，而是转发以下内部声明：
+
+```text
+X-Confirmation-Id
+X-Confirmation-JTI
+X-Confirmation-Tool-ID
+X-Confirmation-Action
+X-Confirmation-Organization-ID
+X-Confirmation-Resource
+X-Confirmation-Payload-Hash
+```
+
+训练服务只接受由正确的 `X-Internal-Service-Token` 保护的完整声明，并再次把工具、动作、机构和
+资源绑定到当前业务请求。JTI 在训练服务的 MySQL 事务中消费，和训练计划写入、状态审计使用同一
+事务边界；同一 JTI 的重复消费返回冲突。
+
 ## 角色规则
 
 | 角色 | 允许能力 |

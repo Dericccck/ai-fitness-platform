@@ -1,8 +1,8 @@
 """服务端确认凭证签发器。
 
-当前 Java Gateway 使用的是 HMAC v1 校验协议，因此这里先生成与该协议兼容的短时凭证；
-同时把 confirmation_id、tool_id、机构、参数哈希和一次性 JTI 放进载荷，为后续 Gateway
-v2 验签升级保留完整绑定字段。Token 只在服务端运行上下文中存在，不通过 HTTP 响应返回。
+当前 Java Gateway 使用的是 HMAC v1 签名算法，但已经校验完整的 confirmation_id、tool_id、
+机构、参数哈希和一次性 JTI 绑定字段；后续 v2 主要升级为可轮换的非对称 JWS。Token 只在
+服务端运行上下文中存在，不通过 HTTP 响应返回。
 """
 
 from __future__ import annotations
@@ -60,7 +60,7 @@ class ConfirmationTokenIssuer:
             "resource": resource,
             "request_id": record.request_id,
             "exp": expires_at,
-            # 这些字段当前由 Java v1 忽略，但会被 v2 验签和 Agent 审计使用。
+            # Gateway 会校验这些字段并转发脱离原始 Token 的声明；JTI 最终在训练服务事务中消费。
             "confirmation_id": record.id,
             "tool_id": record.tool_id,
             "organization_id": record.organization_id,

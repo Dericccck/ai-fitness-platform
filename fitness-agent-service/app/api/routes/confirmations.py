@@ -16,7 +16,6 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.agent.supervisor import SupervisorRuntimeError, SupervisorSessionBusy
 from app.confirmation.models import ConfirmationRecord, ConfirmationStateError
 from app.confirmation.repository import ConfirmationNotFound
-from app.confirmation.service import ConfirmationDecision
 from app.infrastructure.agent_context import AgentContextVerificationError, AgentIdentity
 from app.infrastructure.gateway_client import GatewayRequestContext
 
@@ -100,7 +99,7 @@ async def decide_confirmation(
         record = await request.app.state.confirmation_service.decide(
             confirmation_id,
             identity=identity,
-            decision=cast(ConfirmationDecision, payload.decision),
+            decision=payload.decision,
             decision_request_id=payload.decision_request_id,
             trace_id=x_trace_id,
         )

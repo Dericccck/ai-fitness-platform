@@ -21,12 +21,19 @@ public final class TrainingActor {
     private final Set<String> roles;
     private final Set<String> organizationIds;
     private final String requestId;
+    private final TrainingConfirmation confirmation;
 
     public TrainingActor(String userId, Set<String> roles, Set<String> organizationIds, String requestId) {
+        this(userId, roles, organizationIds, requestId, null);
+    }
+
+    public TrainingActor(String userId, Set<String> roles, Set<String> organizationIds, String requestId,
+                         TrainingConfirmation confirmation) {
         this.userId = userId;
         this.roles = Collections.unmodifiableSet(new HashSet<>(roles));
         this.organizationIds = Collections.unmodifiableSet(new HashSet<>(organizationIds));
         this.requestId = requestId;
+        this.confirmation = confirmation;
     }
 
     public String getUserId() {
@@ -47,6 +54,10 @@ public final class TrainingActor {
 
     public String getRequestId() {
         return requestId;
+    }
+
+    public TrainingConfirmation getConfirmation() {
+        return confirmation;
     }
 
     public boolean hasRole(String role) {

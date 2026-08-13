@@ -6,6 +6,7 @@ import com.shuyiwa.fitness.training.domain.TrainingItem;
 import com.shuyiwa.fitness.training.domain.TrainingPlan;
 import com.shuyiwa.fitness.training.repository.TrainingPlanRepository;
 import com.shuyiwa.fitness.training.security.TrainingActor;
+import com.shuyiwa.fitness.training.security.TrainingConfirmation;
 import org.junit.Test;
 
 import java.util.Collections;
@@ -14,6 +15,7 @@ import java.util.HashSet;
 import static org.junit.Assert.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
 
@@ -26,7 +28,8 @@ public class TrainingPlanServiceTest {
         TrainingPlanService service = new TrainingPlanService(repository);
         when(repository.isOrganizationMember("org-1", "student-1")).thenReturn(true);
         when(repository.isCoachForStudent("org-1", "coach-1", "student-1")).thenReturn(true);
-        when(repository.insertDraft(any(TrainingPlan.class), org.mockito.ArgumentMatchers.eq("req-1")))
+        when(repository.insertDraft(any(TrainingPlan.class), org.mockito.ArgumentMatchers.eq("req-1"),
+                any(TrainingConfirmation.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
         when(repository.findById(any(String.class))).thenAnswer(invocation -> {
             TrainingPlan saved = new TrainingPlan();
@@ -35,6 +38,43 @@ public class TrainingPlanServiceTest {
             return java.util.Optional.of(saved);
         });
 
+        TrainingPlanRequest request = validDraftRequest();
+
+        TrainingConfirmation confirmation = new TrainingConfirmation(
+                "confirmation-1", "jti-1", "fitness.training.plan.create_draft.v1",
+                "CREATE_TRAINING_DRAFT", "org-1", "org-1:student-1",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        TrainingActor actor = new TrainingActor("student-1",
+                Collections.singleton(TrainingActor.STUDENT), Collections.singleton("org-1"), "req-1",
+                confirmation);
+        assertEquals(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.DRAFT,
+                service.createAgentDraft(actor, request).getStatus());
+        verify(repository).insertDraft(any(TrainingPlan.class), org.mockito.ArgumentMatchers.eq("req-1"),
+                any(TrainingConfirmation.class));
+    }
+
+    @Test
+    public void creatingDraftWithoutConfirmationIsRejectedBeforeRepositoryWrite() {
+        TrainingPlanRepository repository = mock(TrainingPlanRepository.class);
+        TrainingPlanService service = new TrainingPlanService(repository);
+        when(repository.isOrganizationMember("org-1", "student-1")).thenReturn(true);
+        when(repository.isCoachForStudent("org-1", "coach-1", "student-1")).thenReturn(true);
+
+        try {
+            service.createAgentDraft(new TrainingActor("student-1",
+                    Collections.singleton(TrainingActor.STUDENT), Collections.singleton("org-1"), "req-1"),
+                    validDraftRequest());
+        } catch (com.shuyiwa.fitness.training.api.TrainingApiException exception) {
+            assertEquals(org.springframework.http.HttpStatus.UNAUTHORIZED, exception.getStatus());
+            verify(repository, never()).insertDraft(any(TrainingPlan.class),
+                    org.mockito.ArgumentMatchers.eq("req-1"), any(TrainingConfirmation.class));
+            return;
+        }
+        throw new AssertionError("缺少确认凭证时必须拒绝创建草案");
+    }
+
+    private TrainingPlanRequest validDraftRequest() {
         TrainingPlanRequest request = new TrainingPlanRequest();
         request.setOrganizationId("org-1");
         request.setStudentId("student-1");
@@ -51,11 +91,6 @@ public class TrainingPlanServiceTest {
         item.setReps("8-10");
         day.setItems(Collections.singletonList(item));
         request.setDays(Collections.singletonList(day));
-
-        TrainingActor actor = new TrainingActor("student-1",
-                Collections.singleton(TrainingActor.STUDENT), Collections.singleton("org-1"), "req-1");
-        assertEquals(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.DRAFT,
-                service.createAgentDraft(actor, request).getStatus());
-        verify(repository).insertDraft(any(TrainingPlan.class), org.mockito.ArgumentMatchers.eq("req-1"));
+        return request;
     }
 }

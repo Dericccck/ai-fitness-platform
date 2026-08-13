@@ -3,6 +3,7 @@ package com.shuyiwa.fitness.gateway.config;
 import com.shuyiwa.fitness.gateway.api.ToolViews;
 import com.shuyiwa.fitness.gateway.api.TrainingToolInputs;
 import com.shuyiwa.fitness.gateway.security.AgentContext;
+import com.shuyiwa.fitness.gateway.security.ConfirmationTokenClaims;
 import com.shuyiwa.fitness.gateway.security.ConfirmationTokenVerifier;
 import com.shuyiwa.fitness.gateway.security.GatewayConflictException;
 import com.shuyiwa.fitness.gateway.security.GatewayForbiddenException;
@@ -45,36 +46,46 @@ public class TrainingServiceClient {
     public ToolViews.TrainingPlanView createDraft(AgentContext context, String requestId,
                                                   String confirmationToken,
                                                   TrainingToolInputs.DraftInput input) {
-        confirmationTokenVerifier.verify(confirmationToken, context, "CREATE_TRAINING_DRAFT",
-                input.getOrganizationId() + ":" + input.getStudentId(), requestId);
+        ConfirmationTokenClaims claims = confirmationTokenVerifier.verify(
+                confirmationToken, context, "fitness.training.plan.create_draft.v1",
+                "CREATE_TRAINING_DRAFT", input.getOrganizationId() + ":" + input.getStudentId(), requestId);
+        if (!input.getOrganizationId().equals(claims.getOrganizationId())) {
+            throw new GatewayForbiddenException("confirmation organization does not match request");
+        }
         requireOrganization(context, input.getOrganizationId());
-        return exchange(context, requestId, confirmationToken, HttpMethod.POST,
+        return exchange(context, requestId, claims, HttpMethod.POST,
                 "/internal/training/v1/plans/drafts", input).toToolView();
     }
 
     public ToolViews.TrainingPlanView submitReview(AgentContext context, String planId,
                                                    String requestId, String confirmationToken) {
-        confirmationTokenVerifier.verify(confirmationToken, context, "SUBMIT_TRAINING_REVIEW", planId, requestId);
-        return exchange(context, requestId, confirmationToken, HttpMethod.POST,
+        ConfirmationTokenClaims claims = confirmationTokenVerifier.verify(
+                confirmationToken, context, "fitness.training.plan.submit_review.v1",
+                "SUBMIT_TRAINING_REVIEW", planId, requestId);
+        return exchange(context, requestId, claims, HttpMethod.POST,
                 "/internal/training/v1/plans/" + planId + "/submit-review", null).toToolView();
     }
 
     public ToolViews.TrainingPlanView review(AgentContext context, String planId, String requestId,
                                              String confirmationToken, TrainingToolInputs.ReviewInput input) {
-        confirmationTokenVerifier.verify(confirmationToken, context, "REVIEW_TRAINING_PLAN", planId, requestId);
-        return exchange(context, requestId, confirmationToken, HttpMethod.POST,
+        ConfirmationTokenClaims claims = confirmationTokenVerifier.verify(
+                confirmationToken, context, "fitness.training.plan.review.v1",
+                "REVIEW_TRAINING_PLAN", planId, requestId);
+        return exchange(context, requestId, claims, HttpMethod.POST,
                 "/internal/training/v1/plans/" + planId + "/review", input).toToolView();
     }
 
     public ToolViews.TrainingPlanView publish(AgentContext context, String planId,
                                               String requestId, String confirmationToken) {
-        confirmationTokenVerifier.verify(confirmationToken, context, "PUBLISH_TRAINING_PLAN", planId, requestId);
-        return exchange(context, requestId, confirmationToken, HttpMethod.POST,
+        ConfirmationTokenClaims claims = confirmationTokenVerifier.verify(
+                confirmationToken, context, "fitness.training.plan.publish.v1",
+                "PUBLISH_TRAINING_PLAN", planId, requestId);
+        return exchange(context, requestId, claims, HttpMethod.POST,
                 "/internal/training/v1/plans/" + planId + "/publish", null).toToolView();
     }
 
     private TrainingServiceViews.Plan exchange(AgentContext context, String requestId,
-                                                String confirmationToken, HttpMethod method,
+                                                ConfirmationTokenClaims confirmationClaims, HttpMethod method,
                                                 String path, Object body) {
         if (properties.getInternalServiceToken().trim().isEmpty()) {
             throw new IllegalStateException("training service internal token is not configured");
@@ -85,8 +96,16 @@ public class TrainingServiceClient {
         headers.set("X-Actor-Roles", String.join(",", context.getRoles()));
         headers.set("X-Actor-Organization-Ids", String.join(",", context.getOrganizationIds()));
         headers.set("X-Request-ID", requestId);
-        if (confirmationToken != null && !confirmationToken.trim().isEmpty()) {
-            headers.set("X-Confirmation-Token", confirmationToken);
+        if (confirmationClaims != null) {
+            // 不把原始 Token 继续传给训练服务，只传 Gateway 已验签的声明；JTI 的真正消费
+            // 由训练服务和业务写入放在同一事务中完成。
+            headers.set("X-Confirmation-Id", confirmationClaims.getConfirmationId());
+            headers.set("X-Confirmation-JTI", confirmationClaims.getJti());
+            headers.set("X-Confirmation-Tool-ID", confirmationClaims.getToolId());
+            headers.set("X-Confirmation-Action", confirmationClaims.getAction());
+            headers.set("X-Confirmation-Organization-ID", confirmationClaims.getOrganizationId());
+            headers.set("X-Confirmation-Resource", confirmationClaims.getResource());
+            headers.set("X-Confirmation-Payload-Hash", confirmationClaims.getPayloadHash());
         }
         try {
             ResponseEntity<TrainingServiceViews.Plan> response = restTemplate.exchange(

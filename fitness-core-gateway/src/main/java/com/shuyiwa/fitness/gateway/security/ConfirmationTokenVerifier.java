@@ -14,8 +14,9 @@ import java.util.Map;
 /**
  * 验证高风险写操作的确认凭证。
  *
- * <p>确认凭证由受信任的确认服务签发，绑定用户、动作、资源和过期时间。它不是普通
- * Header 字符串，也不能由模型临时生成；Gateway 验证失败时直接拒绝写操作。</p>
+ * <p>确认凭证由受信任的确认服务签发，绑定用户、动作、工具、机构、资源、参数哈希、
+ * 一次性 JTI 和过期时间。它不是普通 Header 字符串，也不能由模型临时生成；Gateway
+ * 验证失败时直接拒绝写操作。</p>
  */
 @Component
 public class ConfirmationTokenVerifier {
@@ -28,7 +29,8 @@ public class ConfirmationTokenVerifier {
         this.properties = properties;
     }
 
-    public void verify(String token, AgentContext context, String action, String resource, String requestId) {
+    public ConfirmationTokenClaims verify(String token, AgentContext context, String toolId,
+                                          String action, String resource, String requestId) {
         if (token == null || token.trim().isEmpty()
                 || properties.getConfirmationSigningSecret().trim().isEmpty()) {
             throw new GatewaySecurityException("confirmation token is required");
@@ -46,16 +48,32 @@ public class ConfirmationTokenVerifier {
             }
             @SuppressWarnings("unchecked")
             Map<String, Object> payload = objectMapper.readValue(payloadBytes, Map.class);
-            if (!context.getSubjectUserId().equals(string(payload, "sub"))
-                    || !action.equals(string(payload, "action"))
-                    || !resource.equals(string(payload, "resource"))
-                    || !requestId.equals(string(payload, "request_id"))) {
+            String subjectUserId = string(payload, "sub");
+            String tokenAction = string(payload, "action");
+            String tokenResource = string(payload, "resource");
+            String tokenRequestId = string(payload, "request_id");
+            String tokenToolId = string(payload, "tool_id");
+            String organizationId = string(payload, "organization_id");
+            String confirmationId = string(payload, "confirmation_id");
+            String payloadHash = string(payload, "payload_hash");
+            String jti = string(payload, "jti");
+            if (!context.getSubjectUserId().equals(subjectUserId)
+                    || !toolId.equals(tokenToolId)
+                    || !action.equals(tokenAction)
+                    || !resource.equals(tokenResource)
+                    || !requestId.equals(tokenRequestId)
+                    || !context.canAccessOrganization(organizationId)
+                    || !payloadHash.matches("[0-9a-fA-F]{64}")) {
                 throw new GatewaySecurityException("confirmation token scope mismatch");
             }
             long exp = Long.parseLong(string(payload, "exp"));
             if (exp <= Instant.now().getEpochSecond()) {
                 throw new GatewaySecurityException("confirmation token expired");
             }
+            return new ConfirmationTokenClaims(
+                    confirmationId, tokenToolId, tokenAction, subjectUserId, organizationId,
+                    tokenResource, tokenRequestId, payloadHash, jti, exp
+            );
         } catch (GatewaySecurityException exception) {
             throw exception;
         } catch (Exception exception) {
