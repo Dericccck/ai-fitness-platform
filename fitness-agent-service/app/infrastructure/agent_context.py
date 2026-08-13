@@ -27,6 +27,10 @@ class AgentIdentity:
     roles: frozenset[str]
     issued_at: int
     expires_at: int
+    # 审核能力和专业资质只能由 Java 认证端写入签名载荷。它们采用可选 claim，
+    # 让历史 Token 仍能用于普通对话；但缺失时绝不允许执行专业审核。
+    capabilities: frozenset[str] = frozenset()
+    qualifications: frozenset[str] = frozenset()
 
 
 class AgentContextVerifier:
@@ -56,6 +60,8 @@ class AgentContextVerifier:
             subject = _required_text(claims, "sub")
             organizations = _required_string_set(claims, "orgs")
             roles = _required_string_set(claims, "roles")
+            capabilities = _optional_string_set(claims, "capabilities")
+            qualifications = _optional_string_set(claims, "qualifications")
             issued_at = _required_int(claims, "iat")
             expires_at = _required_int(claims, "exp")
             _required_text(claims, "nonce")
@@ -70,7 +76,15 @@ class AgentContextVerifier:
             or expires_at <= now
         ):
             raise AgentContextVerificationError("expired or invalid agent context")
-        return AgentIdentity(subject, organizations, roles, issued_at, expires_at)
+        return AgentIdentity(
+            subject,
+            organizations,
+            roles,
+            issued_at,
+            expires_at,
+            capabilities,
+            qualifications,
+        )
 
 
 def conversation_thread_id(conversation_id: str, identity: AgentIdentity) -> str:
@@ -105,6 +119,15 @@ def _required_string_set(claims: Any, key: str) -> frozenset[str]:
         or not value
         or not all(isinstance(item, str) and item for item in value)
     ):
+        raise ValueError(key)
+    return frozenset(value)
+
+
+def _optional_string_set(claims: Any, key: str) -> frozenset[str]:
+    """读取签名的可选集合；字段存在但结构异常时仍按篡改处理。"""
+
+    value = claims.get(key, [])
+    if not isinstance(value, list) or not all(isinstance(item, str) and item for item in value):
         raise ValueError(key)
     return frozenset(value)
 

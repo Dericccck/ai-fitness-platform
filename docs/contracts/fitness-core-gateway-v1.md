@@ -20,13 +20,27 @@ X-Trace-ID: <可选链路 ID>
   "sub": "user-id",
   "orgs": ["organization-id"],
   "roles": ["STUDENT"],
+  "capabilities": [],
+  "qualifications": [],
   "iat": 1786492800,
   "exp": 1786492980,
   "nonce": "single-context-id"
 }
 ```
 
-Gateway 默认只接受 5 分钟以内的上下文。Agent 不得根据用户自然语言、模型输出或 URL 参数自行生成 `sub`、`orgs` 或 `roles`。
+Gateway 默认只接受 5 分钟以内的上下文。Agent 不得根据用户自然语言、模型输出、URL 参数或
+审核表单自行生成 `sub`、`orgs`、`roles`、`capabilities` 或 `qualifications`。
+
+`capabilities` 和 `qualifications` 是可选的签名数组，缺省等同空集合，只用于窄范围高风险能力。
+当前健身知识审核定义：
+
+- `KNOWLEDGE_REVIEW_FITNESS`：被指定为健身知识审核员；仅有 `COACH` 角色不自动获得。
+- `KNOWLEDGE_REVIEW_CLINICAL`：被指定为临床运动知识审核员。
+- `KNOWLEDGE_REVIEW_GLOBAL`：允许审核平台全局知识；组织审核能力不能扩大到全局资料。
+- `VERIFIED_HEALTH_PROFESSIONAL`：认证事实源已核验的健康专业人员资质。
+
+Java 认证事实源尚未完成审核员配置和资质核验适配前，不得给测试账号或管理员默认签发这些
+claim。Agent 服务会 fail-closed，因此这一外部依赖未落地时专业审核接口会返回 403。
 
 ## 只读工具
 

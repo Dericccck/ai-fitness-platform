@@ -121,11 +121,12 @@ class DocumentIngestionService:
         file_name: str,
         content: bytes,
         force: bool = False,
+        reviewed_visual_pages: tuple[int, ...] = (),
     ) -> IngestionResult:
         """解析二进制来源、保留坐标，再复用相同的发布路径。"""
 
         parsed = self.parser_registry.parse(content, file_name=file_name)
-        _require_publishable_document(parsed)
+        _require_publishable_document(parsed, reviewed_visual_pages=reviewed_visual_pages)
         drafts = chunk_parsed_blocks(
             parsed.blocks,
             max_chunk_chars=self.max_chunk_chars,
@@ -547,16 +548,21 @@ def content_checksum(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
 
 
-def _require_publishable_document(parsed: ParsedDocument) -> None:
+def _require_publishable_document(
+    parsed: ParsedDocument, *, reviewed_visual_pages: tuple[int, ...] = ()
+) -> None:
     """在模型调用前执行 fail-closed 页面路由门禁。
 
-    当前版本还没有持久化“某一页已经由教练/专业人员审核”的证明，因此图片密集页
-    和待 OCR 页都不得发布。后续引入审核报告时，将由不可变审核记录解除对应页面的
-    路由状态，而不是靠调用方传一个布尔值绕过门禁。
+    ``reviewed_visual_pages`` 只由已核验数据库发布凭证传入，可解除纯视觉人工审核。
+    OCR_REQUIRED 和 OCR_AND_VISUAL_REVIEW_REQUIRED 仍然阻断，人工审核不能补造缺失正文。
     """
 
     route_pages: dict[str, list[int]] = {}
     for profile in parsed.page_profiles:
+        if profile.route == "VISUAL_REVIEW_REQUIRED" and profile.page_number in set(
+            reviewed_visual_pages
+        ):
+            continue
         if profile.route != "NORMAL":
             route_pages.setdefault(profile.route, []).append(profile.page_number)
     # 保留原始组合状态，而不是拆成两个模糊错误。审核报告和告警可以据此区分

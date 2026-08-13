@@ -148,7 +148,9 @@ class KnowledgeAdminService:
             raise KnowledgeJobTransitionError(
                 "knowledge review report is missing; re-analysis is required"
             ) from exc
-        if not report.can_admin_approve:
+        credential = await self.jobs.get_publication_credential(job.id)
+        professionally_approved = credential is not None and credential.validates(report, job)
+        if not report.can_admin_approve and not professionally_approved:
             # 这里故意不接受 force/override 参数。BLOCKED 需要重新解析或 OCR，
             # REVIEW_REQUIRED 需要后续专业审核决策；普通管理员备注不能代替二者。
             raise KnowledgeJobTransitionError(
@@ -194,6 +196,19 @@ class KnowledgeAdminService:
         await self._get_scoped_job(identity, job_id)
         return await self.jobs.get_latest_review_report(job_id)
 
+    async def get_review_report_status(
+        self, identity: AgentIdentity, job_id: str
+    ) -> tuple[KnowledgeReviewReport, bool]:
+        """返回报告和实时发布就绪状态，避免 API 在专业审核后仍显示不可批准。"""
+
+        job = await self._get_scoped_job(identity, job_id)
+        report = await self.jobs.get_latest_review_report(job_id)
+        credential = await self.jobs.get_publication_credential(job_id)
+        approval_ready = report.can_admin_approve or (
+            credential is not None and credential.validates(report, job)
+        )
+        return report, approval_ready
+
     async def list_jobs(
         self, identity: AgentIdentity, *, limit: int = 50
     ) -> list[KnowledgeIngestionJob]:
@@ -216,8 +231,10 @@ class KnowledgeAdminService:
             content = await asyncio.to_thread(self.storage.read, job.storage_key)
             report = await self.jobs.get_latest_review_report(job.id)
             actual_sha256 = hashlib.sha256(content).hexdigest()
+            credential = await self.jobs.get_publication_credential(job.id)
+            professionally_approved = credential is not None and credential.validates(report, job)
             if (
-                not report.can_admin_approve
+                (not report.can_admin_approve and not professionally_approved)
                 or report.document_sha256 != job.content_sha256
                 or actual_sha256 != job.content_sha256
             ):
@@ -226,23 +243,32 @@ class KnowledgeAdminService:
                 raise KnowledgeJobTransitionError(
                     "review report is stale or staged document hash verification failed"
                 )
-            result = await self.ingestion.ingest_file(
-                IngestionRequest(
-                    source_uri=job.source_uri,
-                    title=job.title,
-                    document_type=job.document_type,
-                    raw_content="",
-                    organization_id=job.organization_id,
-                    owner_user_id=job.owner_user_id,
-                    visibility=job.visibility,
-                    allowed_roles=job.allowed_roles,
-                    version=job.requested_version,
-                    effective_from=job.effective_from,
-                    effective_to=job.effective_to,
-                ),
-                file_name=job.original_filename,
-                content=content,
+            ingestion_request = IngestionRequest(
+                source_uri=job.source_uri,
+                title=job.title,
+                document_type=job.document_type,
+                raw_content="",
+                organization_id=job.organization_id,
+                owner_user_id=job.owner_user_id,
+                visibility=job.visibility,
+                allowed_roles=job.allowed_roles,
+                version=job.requested_version,
+                effective_from=job.effective_from,
+                effective_to=job.effective_to,
             )
+            if professionally_approved and credential is not None:
+                result = await self.ingestion.ingest_file(
+                    ingestion_request,
+                    file_name=job.original_filename,
+                    content=content,
+                    reviewed_visual_pages=credential.approved_visual_pages,
+                )
+            else:
+                result = await self.ingestion.ingest_file(
+                    ingestion_request,
+                    file_name=job.original_filename,
+                    content=content,
+                )
             await self.jobs.complete(job_id, document_id=result.document_id)
         except Exception as exc:  # noqa: BLE001 - Worker 必须持久化稳定的失败状态
             await self.jobs.fail(

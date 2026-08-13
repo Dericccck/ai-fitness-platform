@@ -82,10 +82,8 @@ class KnowledgeUploadMetadata:
 class KnowledgeReindexSource:
     """一个索引重建项目使用的不可变来源快照。
 
-    The searchable document table intentionally stores normalized knowledge, not the
-    original binary. Re-indexing therefore snapshots the staged object key at task
-    creation time so a long-running rebuild is reproducible and is not affected by a
-    later upload replacing the same source URI.
+    可检索文档表只保存规范化知识，不保存原始二进制。创建重建任务时必须快照暂存
+    对象键和原发布视觉审核页，使长任务可复现，且不受同一来源后续上传版本影响。
     """
 
     document_id: str
@@ -102,6 +100,7 @@ class KnowledgeReindexSource:
     storage_key: str
     original_filename: str
     content_type: str
+    approved_visual_pages: tuple[int, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -150,6 +149,7 @@ class KnowledgeReindexItem:
     status: ReindexItemStatus
     attempt_count: int
     max_attempts: int
+    approved_visual_pages: tuple[int, ...] = ()
     error_message: str | None = None
 
 
@@ -267,5 +267,6 @@ def reindex_item_from_row(row: Any) -> KnowledgeReindexItem:
         status=row["status"],
         attempt_count=int(row["attempt_count"]),
         max_attempts=int(row["max_attempts"]),
+        approved_visual_pages=tuple(int(page) for page in row["approved_visual_pages"] or ()),
         error_message=str(row["error_message"]) if row["error_message"] else None,
     )

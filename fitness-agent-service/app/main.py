@@ -11,6 +11,7 @@ from app.api.middleware.request_context import RequestContextMiddleware
 from app.api.routes.admin_knowledge import router as admin_knowledge_router
 from app.api.routes.agent import router as agent_router
 from app.api.routes.health import router as health_router
+from app.api.routes.knowledge_review import router as knowledge_review_router
 from app.api.routes.rag import router as rag_router
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
@@ -33,6 +34,7 @@ from app.rag.reindex_service import KnowledgeReindexService
 from app.rag.reindex_worker import KnowledgeReindexWorker
 from app.rag.repository import KnowledgeRepository
 from app.rag.review import KnowledgeReviewReportBuilder
+from app.rag.review_service import KnowledgeReviewService
 from app.rag.safety import ClamAvScanner, CompositeDocumentScanner, StructuralDocumentScanner
 from app.rag.service import RagService
 from app.rag.storage import DocumentStorage, LocalDocumentStorage, S3DocumentStorage
@@ -127,6 +129,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         max_source_bytes=settings.rag_max_source_bytes,
         max_attempts=settings.rag_ingestion_max_attempts,
     )
+    app.state.knowledge_review = KnowledgeReviewService(
+        app.state.knowledge_jobs,
+        document_storage,
+    )
     app.state.knowledge_worker = KnowledgeIngestionWorker(
         app.state.knowledge_jobs,
         app.state.knowledge_admin,
@@ -191,6 +197,7 @@ if runtime_settings.metrics_enabled:
 app.add_middleware(RequestContextMiddleware, service_name=runtime_settings.service_name)
 app.include_router(agent_router)
 app.include_router(admin_knowledge_router)
+app.include_router(knowledge_review_router)
 app.include_router(rag_router)
 app.include_router(health_router)
 

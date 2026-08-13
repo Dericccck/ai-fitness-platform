@@ -72,6 +72,10 @@ public class AgentContextVerifier {
             String nonce = requiredText(root, "nonce");
             Set<String> organizationIds = requiredStringSet(root, "orgs");
             Set<String> roles = requiredStringSet(root, "roles");
+            // 为兼容尚未承担专业审核的旧客户端，这两个签名 claim 可以缺省；
+            // 缺省只代表空集合，绝不会赋予任何审核能力或资质。
+            Set<String> capabilities = optionalStringSet(root, "capabilities");
+            Set<String> qualifications = optionalStringSet(root, "qualifications");
             Instant issuedAt = epochSeconds(root, "iat");
             Instant expiresAt = epochSeconds(root, "exp");
             Instant now = clock.instant();
@@ -82,7 +86,10 @@ public class AgentContextVerifier {
                     || !expiresAt.isAfter(now)) {
                 throw new GatewaySecurityException("expired or invalid agent context");
             }
-            return new AgentContext(subject, organizationIds, roles, issuedAt, expiresAt, nonce);
+            return new AgentContext(
+                    subject, organizationIds, roles, capabilities, qualifications,
+                    issuedAt, expiresAt, nonce
+            );
         } catch (GatewaySecurityException exception) {
             throw exception;
         } catch (Exception exception) {
@@ -116,6 +123,26 @@ public class AgentContextVerifier {
         JsonNode values = root.get(field);
         if (values == null || !values.isArray() || values.size() == 0) {
             throw new GatewaySecurityException("missing agent context field: " + field);
+        }
+        Set<String> result = new HashSet<>();
+        Iterator<JsonNode> iterator = values.elements();
+        while (iterator.hasNext()) {
+            JsonNode value = iterator.next();
+            if (!value.isTextual() || value.asText().isEmpty()) {
+                throw new GatewaySecurityException("invalid agent context field: " + field);
+            }
+            result.add(value.asText());
+        }
+        return result;
+    }
+
+    private static Set<String> optionalStringSet(JsonNode root, String field) {
+        JsonNode values = root.get(field);
+        if (values == null) {
+            return new HashSet<>();
+        }
+        if (!values.isArray()) {
+            throw new GatewaySecurityException("invalid agent context field: " + field);
         }
         Set<String> result = new HashSet<>();
         Iterator<JsonNode> iterator = values.elements();

@@ -14,6 +14,7 @@ from app.rag.admin_models import KnowledgeIngestionJob
 from app.rag.admin_repository import KnowledgeIngestionRepository
 from app.rag.formats import PdfPageProfile
 from app.rag.review import KnowledgeReviewFinding, KnowledgeReviewReport
+from app.rag.review_workflow import KnowledgeReviewDecision
 
 pytestmark = pytest.mark.skipif(
     os.getenv("AGENT_RUN_POSTGRES_TESTS") != "1",
@@ -89,6 +90,31 @@ async def test_job_and_review_report_are_committed_and_read_together() -> None:
         assert restored.page_profiles[0].page_number == 1
         assert restored.findings[0].pages == (1,)
         assert restored.required_review_domains == ("FITNESS_COACHING_SAFETY",)
+
+        decision = KnowledgeReviewDecision(
+            id=f"postgres-decision-{suffix}",
+            report_id=report.id,
+            job_id=job.id,
+            review_domain="FITNESS_COACHING_SAFETY",
+            decision="APPROVED",
+            scope_type="PAGES",
+            page_numbers=(1,),
+            regions=(),
+            finding_codes=("FITNESS_VISUAL_REVIEW_REQUIRED",),
+            reviewer_id="coach-contract-test",
+            reviewer_roles=("COACH",),
+            reviewer_capabilities=("KNOWLEDGE_REVIEW_FITNESS", "KNOWLEDGE_REVIEW_GLOBAL"),
+            reviewer_qualifications=(),
+            reviewer_organization_ids=(),
+            comment="已核对测试页的动作信息和风险提示。",
+        )
+        outcome = await repository.record_review_decision(decision, restored)
+        credential = await repository.get_publication_credential(job.id)
+
+        assert outcome.publication_credential is not None
+        assert credential is not None
+        assert credential.decision_ids == (decision.id,)
+        assert credential.approved_visual_pages == (1,)
     finally:
         async with database.engine.begin() as connection:
             await connection.execute(

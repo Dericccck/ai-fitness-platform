@@ -141,6 +141,7 @@ class KnowledgeReindexService:
                         file_name=item.original_filename,
                         content=content,
                         force=True,
+                        reviewed_visual_pages=item.approved_visual_pages,
                     )
                     await self.jobs.complete_item(
                         item.id, skipped=result.status == "SKIPPED_UNCHANGED"

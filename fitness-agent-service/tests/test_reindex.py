@@ -145,11 +145,19 @@ class FakeJobs:
 class FakeIngestion:
     def __init__(self) -> None:
         self.force_values: list[bool] = []
+        self.reviewed_pages: list[tuple[int, ...]] = []
 
     async def ingest_file(
-        self, request: Any, *, file_name: str, content: bytes, force: bool = False
+        self,
+        request: Any,
+        *,
+        file_name: str,
+        content: bytes,
+        force: bool = False,
+        reviewed_visual_pages: tuple[int, ...] = (),
     ) -> IngestionResult:
         self.force_values.append(force)
+        self.reviewed_pages.append(reviewed_visual_pages)
         return IngestionResult("INDEXED", "doc-1", "checksum", request.version, 2)
 
 
@@ -185,4 +193,5 @@ async def test_reindex_worker_reuses_ingestion_with_force_flag(tmp_path: Path) -
     await service.process_job("reindex-1")
 
     assert ingestion.force_values == [True]
+    assert ingestion.reviewed_pages == [()]
     assert jobs.completed == [False]

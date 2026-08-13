@@ -72,17 +72,21 @@ class KnowledgeReviewReport:
     created_at: datetime | None = None
 
     @property
-    def can_admin_approve(self) -> bool:
-        """只有报告通过且仍匹配当前解析运行时，管理员才能排队索引。"""
-
+    def is_current(self) -> bool:
+        """报告是否仍匹配当前解析器和审核策略版本。"""
         current_parser_name, current_parser_version = _parser_identity(self.media_type)
         return (
-            self.status == "PASS"
-            and self.parser_name == current_parser_name
+            self.parser_name == current_parser_name
             and self.parser_version == current_parser_version
             and self.parser_pipeline_version == PARSER_PIPELINE_VERSION
             and self.review_policy_version == REVIEW_POLICY_VERSION
         )
+
+    @property
+    def can_admin_approve(self) -> bool:
+        """无需专业审核的报告通过且未过期时，管理员可直接排队索引。"""
+
+        return self.status == "PASS" and self.is_current
 
 
 class KnowledgeReviewReportBuilder:
@@ -276,7 +280,7 @@ def _review_requirements(
     if document_type in _CLINICAL_REVIEW_DOCUMENT_TYPES or risk_level == "MEDICAL":
         domains.add("CLINICAL_EXERCISE_SAFETY")
         qualifications.add("VERIFIED_HEALTH_PROFESSIONAL")
-    elif requires_human_review:
+    if requires_human_review:
         domains.add("FITNESS_CONTENT_REVIEW")
         roles.add("COACH")
     return tuple(sorted(domains)), tuple(sorted(roles)), tuple(sorted(qualifications))

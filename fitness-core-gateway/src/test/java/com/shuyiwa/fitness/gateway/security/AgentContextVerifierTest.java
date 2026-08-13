@@ -32,6 +32,8 @@ public class AgentContextVerifierTest {
         assertEquals("user-1", context.getSubjectUserId());
         assertEquals("org-1", context.getOrganizationIds().iterator().next());
         assertEquals("STUDENT", context.getRoles().iterator().next());
+        assertEquals("KNOWLEDGE_REVIEW_FITNESS", context.getCapabilities().iterator().next());
+        assertEquals("COACH_CERTIFIED", context.getQualifications().iterator().next());
     }
 
     @Test(expected = GatewaySecurityException.class)
@@ -71,6 +73,8 @@ public class AgentContextVerifierTest {
         payload.put("sub", "user-1");
         payload.put("orgs", new String[]{"org-1"});
         payload.put("roles", new String[]{"STUDENT"});
+        payload.put("capabilities", new String[]{"KNOWLEDGE_REVIEW_FITNESS"});
+        payload.put("qualifications", new String[]{"COACH_CERTIFIED"});
         payload.put("iat", issuedAt.getEpochSecond());
         payload.put("exp", expiresAt.getEpochSecond());
         payload.put("nonce", "nonce-1");

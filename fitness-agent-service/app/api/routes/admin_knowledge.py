@@ -286,12 +286,14 @@ async def get_review_report(
 
     identity = _verify_identity(request, x_agent_context)
     try:
-        report = await request.app.state.knowledge_admin.get_review_report(identity, job_id)
+        report, approval_ready = await request.app.state.knowledge_admin.get_review_report_status(
+            identity, job_id
+        )
     except KnowledgeAdminForbidden as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
     except (KnowledgeJobNotFound, KnowledgeReviewReportNotFound) as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc)) from exc
-    return _to_review_report_response(report)
+    return _to_review_report_response(report, approval_ready=approval_ready)
 
 
 @router.post("/jobs/{job_id}/approve", response_model=KnowledgeJobResponse)
@@ -550,6 +552,8 @@ def _to_reindex_response(job: KnowledgeReindexJob) -> ReindexJobResponse:
 
 def _to_review_report_response(
     report: KnowledgeReviewReport,
+    *,
+    approval_ready: bool | None = None,
 ) -> KnowledgeReviewReportResponse:
     """将内部领域对象转换为不含正文和存储键的管理员 API 结构。"""
 
@@ -566,7 +570,7 @@ def _to_review_report_response(
         declared_risk_level=report.declared_risk_level,
         source_requires_human_review=report.source_requires_human_review,
         status=report.status,
-        can_admin_approve=report.can_admin_approve,
+        can_admin_approve=(report.can_admin_approve if approval_ready is None else approval_ready),
         quality_metrics=report.quality_metrics,
         page_profiles=tuple(
             PdfPageProfileResponse(

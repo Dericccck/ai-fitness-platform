@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+from secrets import token_hex
 from typing import Any
 
 from sqlalchemy import bindparam, text
+from sqlalchemy.exc import IntegrityError
 
 from app.infrastructure.database import Database
 
@@ -18,6 +20,13 @@ from .admin_models import (
 )
 from .formats import PdfPageProfile
 from .review import KnowledgeReviewFinding, KnowledgeReviewReport
+from .review_workflow import (
+    KnowledgePublicationCredential,
+    KnowledgeReviewDecision,
+    KnowledgeReviewOutcome,
+    KnowledgeReviewRegion,
+    approved_visual_pages,
+)
 
 
 class KnowledgeIngestionRepository:
@@ -102,6 +111,162 @@ class KnowledgeIngestionRepository:
         if row is None:
             raise KnowledgeReviewReportNotFound("knowledge review report was not found")
         return _review_report_from_row(row)
+
+    async def list_review_decisions(self, report_id: str) -> list[KnowledgeReviewDecision]:
+        """按创建顺序返回报告的不可变专业审核决定。"""
+
+        statement = text(
+            """
+            SELECT * FROM knowledge_review_decisions
+            WHERE report_id = :report_id
+            ORDER BY created_at, id
+            """
+        )
+        async with self._database.engine.connect() as connection:
+            rows = (await connection.execute(statement, {"report_id": report_id})).mappings().all()
+        return [_review_decision_from_row(row) for row in rows]
+
+    async def record_review_decision(
+        self,
+        decision: KnowledgeReviewDecision,
+        report: KnowledgeReviewReport,
+    ) -> KnowledgeReviewOutcome:
+        """原子保存一个领域决定，并在全部领域通过后只签发一次发布凭证。
+
+        同一报告和领域只有一个终局决定。审核拒绝后必须修订源文档并重新上传，
+        不能通过覆盖旧记录消除不利证据。
+        """
+
+        if decision.report_id != report.id or decision.job_id != report.job_id:
+            raise ValueError("review decision must be bound to the report and job")
+        insert_decision = text(
+            """
+            INSERT INTO knowledge_review_decisions (
+                id, report_id, job_id, review_domain, decision, scope_type, page_numbers,
+                regions, finding_codes, reviewer_id, reviewer_roles, reviewer_capabilities,
+                reviewer_qualifications, reviewer_organization_ids, comment
+            ) VALUES (
+                :id, :report_id, :job_id, :review_domain, :decision, :scope_type,
+                :page_numbers, CAST(:regions AS JSONB), :finding_codes, :reviewer_id,
+                :reviewer_roles, :reviewer_capabilities, :reviewer_qualifications,
+                :reviewer_organization_ids, :comment
+            )
+            RETURNING *
+            """
+        )
+        list_decisions = text(
+            """
+            SELECT * FROM knowledge_review_decisions
+            WHERE report_id = :report_id
+            ORDER BY created_at, id
+            """
+        )
+        insert_credential = text(
+            """
+            INSERT INTO knowledge_publication_credentials (
+                id, job_id, report_id, report_version, document_sha256,
+                parser_pipeline_version, review_policy_version, decision_ids,
+                approved_visual_pages
+            ) VALUES (
+                :id, :job_id, :report_id, :report_version, :document_sha256,
+                :parser_pipeline_version, :review_policy_version, :decision_ids,
+                :approved_visual_pages
+            )
+            ON CONFLICT (report_id) DO NOTHING
+            RETURNING *
+            """
+        )
+        select_credential = text(
+            "SELECT * FROM knowledge_publication_credentials WHERE report_id = :report_id"
+        )
+        reject_job = text(
+            """
+            UPDATE knowledge_ingestion_jobs
+            SET status = 'REJECTED', reviewer_id = :reviewer_id,
+                review_comment = :comment, reviewed_at = CURRENT_TIMESTAMP,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :job_id AND status = 'PENDING_REVIEW'
+            RETURNING id
+            """
+        )
+        try:
+            async with self._database.engine.begin() as connection:
+                row = (
+                    (await connection.execute(insert_decision, _review_decision_params(decision)))
+                    .mappings()
+                    .one()
+                )
+                restored = _review_decision_from_row(row)
+                if decision.decision == "REJECTED":
+                    rejected = (
+                        await connection.execute(
+                            reject_job,
+                            {
+                                "job_id": decision.job_id,
+                                "reviewer_id": decision.reviewer_id,
+                                "comment": decision.comment[:500],
+                            },
+                        )
+                    ).first()
+                    if rejected is None:
+                        raise KnowledgeJobTransitionError(
+                            "knowledge review rejection was not applicable to the current job"
+                        )
+                    return KnowledgeReviewOutcome(restored, None)
+
+                rows = (
+                    (await connection.execute(list_decisions, {"report_id": report.id}))
+                    .mappings()
+                    .all()
+                )
+                decisions = [_review_decision_from_row(item) for item in rows]
+                approved_domains = {
+                    item.review_domain for item in decisions if item.decision == "APPROVED"
+                }
+                credential: KnowledgePublicationCredential | None = None
+                if approved_domains == set(report.required_review_domains):
+                    credential_row = (
+                        (
+                            await connection.execute(
+                                insert_credential,
+                                {
+                                    "id": token_hex(16),
+                                    "job_id": report.job_id,
+                                    "report_id": report.id,
+                                    "report_version": report.report_version,
+                                    "document_sha256": report.document_sha256,
+                                    "parser_pipeline_version": report.parser_pipeline_version,
+                                    "review_policy_version": report.review_policy_version,
+                                    "decision_ids": [item.id for item in decisions],
+                                    "approved_visual_pages": list(approved_visual_pages(report)),
+                                },
+                            )
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if credential_row is None:
+                        credential_row = (
+                            (await connection.execute(select_credential, {"report_id": report.id}))
+                            .mappings()
+                            .one()
+                        )
+                    credential = _publication_credential_from_row(credential_row)
+                return KnowledgeReviewOutcome(restored, credential)
+        except IntegrityError as exc:
+            raise KnowledgeJobTransitionError(
+                "this review domain already has a final decision"
+            ) from exc
+
+    async def get_publication_credential(
+        self, job_id: str
+    ) -> KnowledgePublicationCredential | None:
+        """读取任务唯一且未必仍有效的发布凭证；有效性由业务层绑定报告复核。"""
+
+        statement = text("SELECT * FROM knowledge_publication_credentials WHERE job_id = :job_id")
+        async with self._database.engine.connect() as connection:
+            row = (await connection.execute(statement, {"job_id": job_id})).mappings().first()
+        return _publication_credential_from_row(row) if row is not None else None
 
     async def get_job(self, job_id: str) -> KnowledgeIngestionJob:
         """返回一个任务；不存在时抛出稳定的领域异常。"""
@@ -435,4 +600,89 @@ def _review_report_from_row(row: Any) -> KnowledgeReviewReport:
         ),
         required_qualifications=tuple(str(item) for item in row["required_qualifications"] or ()),
         created_at=row["created_at"],
+    )
+
+
+def _review_decision_params(decision: KnowledgeReviewDecision) -> dict[str, Any]:
+    """序列化审核范围和签名授权快照，不从请求体补充任何权限字段。"""
+
+    return {
+        "id": decision.id,
+        "report_id": decision.report_id,
+        "job_id": decision.job_id,
+        "review_domain": decision.review_domain,
+        "decision": decision.decision,
+        "scope_type": decision.scope_type,
+        "page_numbers": list(decision.page_numbers),
+        "regions": json.dumps(
+            [
+                {
+                    "page_number": region.page_number,
+                    "x": region.x,
+                    "y": region.y,
+                    "width": region.width,
+                    "height": region.height,
+                    "label": region.label,
+                }
+                for region in decision.regions
+            ],
+            ensure_ascii=False,
+        ),
+        "finding_codes": list(decision.finding_codes),
+        "reviewer_id": decision.reviewer_id,
+        "reviewer_roles": list(decision.reviewer_roles),
+        "reviewer_capabilities": list(decision.reviewer_capabilities),
+        "reviewer_qualifications": list(decision.reviewer_qualifications),
+        "reviewer_organization_ids": list(decision.reviewer_organization_ids),
+        "comment": decision.comment,
+    }
+
+
+def _review_decision_from_row(row: Any) -> KnowledgeReviewDecision:
+    regions = tuple(
+        KnowledgeReviewRegion(
+            page_number=int(item["page_number"]),
+            x=float(item["x"]),
+            y=float(item["y"]),
+            width=float(item["width"]),
+            height=float(item["height"]),
+            label=str(item["label"]) if item.get("label") else None,
+        )
+        for item in row["regions"] or ()
+    )
+    return KnowledgeReviewDecision(
+        id=str(row["id"]),
+        report_id=str(row["report_id"]),
+        job_id=str(row["job_id"]),
+        review_domain=row["review_domain"],
+        decision=row["decision"],
+        scope_type=row["scope_type"],
+        page_numbers=tuple(int(page) for page in row["page_numbers"] or ()),
+        regions=regions,
+        finding_codes=tuple(str(code) for code in row["finding_codes"] or ()),
+        reviewer_id=str(row["reviewer_id"]),
+        reviewer_roles=tuple(str(role) for role in row["reviewer_roles"] or ()),
+        reviewer_capabilities=tuple(str(value) for value in row["reviewer_capabilities"] or ()),
+        reviewer_qualifications=tuple(str(value) for value in row["reviewer_qualifications"] or ()),
+        reviewer_organization_ids=tuple(
+            str(value) for value in row["reviewer_organization_ids"] or ()
+        ),
+        comment=str(row["comment"]),
+        created_at=row["created_at"],
+    )
+
+
+def _publication_credential_from_row(row: Any) -> KnowledgePublicationCredential:
+    return KnowledgePublicationCredential(
+        id=str(row["id"]),
+        job_id=str(row["job_id"]),
+        report_id=str(row["report_id"]),
+        report_version=int(row["report_version"]),
+        document_sha256=str(row["document_sha256"]),
+        parser_pipeline_version=str(row["parser_pipeline_version"]),
+        review_policy_version=str(row["review_policy_version"]),
+        decision_ids=tuple(str(value) for value in row["decision_ids"] or ()),
+        approved_visual_pages=tuple(int(page) for page in row["approved_visual_pages"] or ()),
+        issued_at=row["issued_at"],
+        revoked_at=row["revoked_at"],
     )

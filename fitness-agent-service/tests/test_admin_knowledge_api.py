@@ -57,12 +57,12 @@ class FakeAdminService:
         self.uploads.append(kwargs)
         return _job()
 
-    async def get_review_report(
+    async def get_review_report_status(
         self, identity: AgentIdentity, job_id: str
-    ) -> KnowledgeReviewReport:
+    ) -> tuple[KnowledgeReviewReport, bool]:
         if not {"ADMIN", "ORG_ADMIN", "SUPER_ADMIN"}.intersection(identity.roles):
             raise KnowledgeAdminForbidden("administrator role is required")
-        return KnowledgeReviewReport(
+        report = KnowledgeReviewReport(
             id="report-1",
             job_id=job_id,
             report_version=1,
@@ -89,6 +89,7 @@ class FakeAdminService:
             recommended_reviewer_roles=("COACH",),
             required_qualifications=(),
         )
+        return report, False
 
 
 def build_app(roles: frozenset[str]) -> tuple[FastAPI, FakeAdminService]:

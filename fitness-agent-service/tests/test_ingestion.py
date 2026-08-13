@@ -252,3 +252,34 @@ async def test_ingest_file_blocks_unresolved_pdf_pages_before_embedding(route: s
         )
 
     assert rag.calls == []
+
+
+async def test_publication_credential_only_releases_pure_visual_review() -> None:
+    visual_rag = FakeRagService()
+    visual_service = DocumentIngestionService(
+        FakeRepository(),
+        visual_rag,
+        parser_registry=RoutedParserRegistry("VISUAL_REVIEW_REQUIRED"),  # type: ignore[arg-type]
+    )
+
+    result = await visual_service.ingest_file(
+        request("", version=1),
+        file_name="exercise.pdf",
+        content=b"pdf",
+        reviewed_visual_pages=(1,),
+    )
+    assert result.status == "INDEXED"
+
+    # OCR_AND_VISUAL 仍缺少可索引文字，专业审核只能确认动作风险，不能替代 OCR。
+    ocr_service = DocumentIngestionService(
+        FakeRepository(),
+        FakeRagService(),
+        parser_registry=RoutedParserRegistry("OCR_AND_VISUAL_REVIEW_REQUIRED"),  # type: ignore[arg-type]
+    )
+    with pytest.raises(DocumentPublicationBlocked, match="OCR_AND_VISUAL"):
+        await ocr_service.ingest_file(
+            request("", version=1),
+            file_name="exercise.pdf",
+            content=b"pdf",
+            reviewed_visual_pages=(1,),
+        )

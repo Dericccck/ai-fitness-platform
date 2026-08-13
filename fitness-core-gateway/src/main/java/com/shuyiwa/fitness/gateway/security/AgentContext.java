@@ -22,6 +22,8 @@ public final class AgentContext {
     private final String subjectUserId;
     private final Set<String> organizationIds;
     private final Set<String> roles;
+    private final Set<String> capabilities;
+    private final Set<String> qualifications;
     private final Instant issuedAt;
     private final Instant expiresAt;
     private final String nonce;
@@ -34,9 +36,29 @@ public final class AgentContext {
             Instant expiresAt,
             String nonce
     ) {
+        this(subjectUserId, organizationIds, roles, Collections.emptySet(),
+                Collections.emptySet(), issuedAt, expiresAt, nonce);
+    }
+
+    /**
+     * 完整签名上下文。capabilities 表示被授予的窄范围业务能力，qualifications 表示
+     * 已由认证端核验的专业资质；两者都不能从 Agent 请求体或前端表单中补写。
+     */
+    public AgentContext(
+            String subjectUserId,
+            Set<String> organizationIds,
+            Set<String> roles,
+            Set<String> capabilities,
+            Set<String> qualifications,
+            Instant issuedAt,
+            Instant expiresAt,
+            String nonce
+    ) {
         this.subjectUserId = subjectUserId;
         this.organizationIds = immutableCopy(organizationIds);
         this.roles = immutableCopy(roles);
+        this.capabilities = immutableCopy(capabilities);
+        this.qualifications = immutableCopy(qualifications);
         this.issuedAt = issuedAt;
         this.expiresAt = expiresAt;
         this.nonce = nonce;
@@ -56,6 +78,14 @@ public final class AgentContext {
 
     public Set<String> getRoles() {
         return roles;
+    }
+
+    public Set<String> getCapabilities() {
+        return capabilities;
+    }
+
+    public Set<String> getQualifications() {
+        return qualifications;
     }
 
     public Instant getIssuedAt() {

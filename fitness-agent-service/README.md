@@ -184,12 +184,21 @@ OCR 服务需要返回 `media_type`、`warnings` 和 `blocks` 数组；每个 bl
 `AGENT_RAG_PDF_*` 环境变量由部署侧统一管理，上传者和 LLM 不能覆盖。
 `AGENT_RAG_QUALITY_*` 统一控制线上上传审核使用的噪声、碎片、重复、父节点、表格、缺页和 OCR
 阈值；它们应与离线真实资料评测保持一致。上传完成后可通过
-`GET /api/v1/admin/knowledge/jobs/{job_id}/review-report` 查看版本化质量报告。只有报告为 `PASS`
-时现有管理员审批接口才会排队索引；`BLOCKED` 必须重新解析/OCR，`REVIEW_REQUIRED` 必须等待
-后续按审核领域和页码生成专业审核决策，接口不提供强制跳过参数。审批与 Worker 执行时还会复核
-文件哈希、解析器依赖版本、管线版本和审核策略版本；部署升级使报告过期时必须重新解析。
+`GET /api/v1/admin/knowledge/jobs/{job_id}/review-report` 查看版本化质量报告。报告为 `PASS` 时
+管理员可以直接排队；`BLOCKED` 必须重新解析/OCR；`REVIEW_REQUIRED` 必须由具备签名审核能力的
+教练或专业人员处理，接口不提供强制跳过参数。专业审核工作台接口为：
 
-索引重建任务只读取已审核文件，复用当前解析、清洗、父子分块、Embedding 和原子替换流程，
+- `GET /api/v1/knowledge-review/jobs/{job_id}`：读取准确领域、页码和已有决定。
+- `GET /api/v1/knowledge-review/jobs/{job_id}/source`：读取 SHA-256 绑定的不可变暂存原件。
+- `POST /api/v1/knowledge-review/jobs/{job_id}/decisions`：提交文档级或精确页级终局决定。
+
+上传者不能审核自己的知识版本；普通 `COACH` 角色不自动拥有审核能力；全局资料需要
+`KNOWLEDGE_REVIEW_GLOBAL`，医疗类还需要 `KNOWLEDGE_REVIEW_CLINICAL` 与已核验的
+`VERIFIED_HEALTH_PROFESSIONAL`。全部必需领域通过后，数据库事务自动签发与任务、报告版本、
+文件哈希、解析管线、审核策略和决定 ID 绑定的发布凭证。管理员审批和 Worker 执行时再次复核
+该凭证；凭证只解除已审核的纯视觉页，不能绕过 OCR 缺失正文。部署升级使报告过期时必须重新解析。
+
+索引重建任务只读取已审核文件，并快照原发布凭证允许的视觉页，复用当前解析、清洗、父子分块、Embedding 和原子替换流程，
 用于 Embedding 模型升级、切分策略调整或索引修复，不会直接修改 Java 健身业务事实。
 本地可通过 `make agent-reindex-worker` 启动独立轮询进程；生产环境应将它部署为独立 Worker，
 与 API 进程分开扩缩容。

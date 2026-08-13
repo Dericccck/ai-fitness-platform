@@ -46,7 +46,25 @@ def test_agent_context_verifier_matches_java_contract(monkeypatch: pytest.Monkey
         roles=frozenset({"STUDENT"}),
         issued_at=1_799_999_990,
         expires_at=1_800_000_120,
+        capabilities=frozenset(),
+        qualifications=frozenset(),
     )
+
+
+def test_agent_context_reads_signed_review_authorization(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.infrastructure.agent_context.time.time", lambda: 1_800_000_000)
+    identity = AgentContextVerifier("context-secret").verify(
+        signed_context(
+            "context-secret",
+            capabilities=["KNOWLEDGE_REVIEW_FITNESS"],
+            qualifications=["VERIFIED_HEALTH_PROFESSIONAL"],
+        )
+    )
+
+    assert identity.capabilities == frozenset({"KNOWLEDGE_REVIEW_FITNESS"})
+    assert identity.qualifications == frozenset({"VERIFIED_HEALTH_PROFESSIONAL"})
 
 
 def test_agent_context_verifier_rejects_tampering_and_expiry(

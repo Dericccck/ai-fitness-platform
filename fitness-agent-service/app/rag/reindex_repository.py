@@ -40,12 +40,16 @@ class KnowledgeReindexRepository:
                 d.id AS document_id, d.source_uri, d.title, d.document_type,
                 d.organization_id, c.owner_user_id, d.visibility,
                 d.applicable_roles, d.effective_from, d.effective_to, d.version,
-                c.storage_key, c.original_filename, c.content_type
+                c.storage_key, c.original_filename, c.content_type,
+                c.approved_visual_pages
             FROM knowledge_documents d
             JOIN LATERAL (
                 SELECT j.storage_key, j.original_filename, j.content_type,
-                       j.owner_user_id
+                       j.owner_user_id, COALESCE(pc.approved_visual_pages, '{}')
+                           AS approved_visual_pages
                 FROM knowledge_ingestion_jobs j
+                LEFT JOIN knowledge_publication_credentials pc
+                  ON pc.job_id = j.id AND pc.revoked_at IS NULL
                 WHERE j.document_id = d.id AND j.status = 'SUCCEEDED'
                 ORDER BY j.finished_at DESC NULLS LAST, j.created_at DESC
                 LIMIT 1
@@ -90,12 +94,12 @@ class KnowledgeReindexRepository:
                 id, job_id, document_id, source_uri, title, document_type,
                 organization_id, owner_user_id, visibility, allowed_roles,
                 effective_from, effective_to, version, storage_key,
-                original_filename, content_type, status, max_attempts
+                original_filename, content_type, approved_visual_pages, status, max_attempts
             ) VALUES (
                 :id, :job_id, :document_id, :source_uri, :title, :document_type,
                 :organization_id, :owner_user_id, :visibility, :allowed_roles,
                 :effective_from, :effective_to, :version, :storage_key,
-                :original_filename, :content_type, 'PENDING', :max_attempts
+                :original_filename, :content_type, :approved_visual_pages, 'PENDING', :max_attempts
             )
             """
         )
@@ -125,6 +129,7 @@ class KnowledgeReindexRepository:
                 "storage_key": source.storage_key,
                 "original_filename": source.original_filename,
                 "content_type": source.content_type,
+                "approved_visual_pages": list(source.approved_visual_pages),
                 "max_attempts": job.max_attempts,
             }
             for item_id, source in zip(item_ids, sources, strict=True)
@@ -358,4 +363,5 @@ def _source_from_row(row: Any) -> KnowledgeReindexSource:
         storage_key=str(row["storage_key"]),
         original_filename=str(row["original_filename"]),
         content_type=str(row["content_type"]),
+        approved_visual_pages=tuple(int(page) for page in row["approved_visual_pages"] or ()),
     )

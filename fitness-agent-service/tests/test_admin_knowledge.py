@@ -68,9 +68,19 @@ class FakeJobs:
     async def get_latest_review_report(self, job_id: str) -> KnowledgeReviewReport:
         return self.reports[job_id]
 
+    async def get_publication_credential(self, job_id: str) -> None:
+        return None
+
 
 class FakeIngestion:
-    async def ingest_file(self, request: Any, *, file_name: str, content: bytes) -> IngestionResult:
+    async def ingest_file(
+        self,
+        request: Any,
+        *,
+        file_name: str,
+        content: bytes,
+        reviewed_visual_pages: tuple[int, ...] = (),
+    ) -> IngestionResult:
         return IngestionResult("INDEXED", "document-1", "checksum", request.version, 1)
 
 
@@ -256,6 +266,7 @@ async def test_medical_document_records_missing_verified_professional_role(
     assert report.required_review_domains == (
         "CLINICAL_EXERCISE_SAFETY",
         "FITNESS_COACHING_SAFETY",
+        "FITNESS_CONTENT_REVIEW",
     )
     assert report.recommended_reviewer_roles == ("COACH",)
     assert report.required_qualifications == ("VERIFIED_HEALTH_PROFESSIONAL",)
