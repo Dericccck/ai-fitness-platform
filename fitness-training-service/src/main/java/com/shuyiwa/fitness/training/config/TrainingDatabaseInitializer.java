@@ -35,23 +35,24 @@ public class TrainingDatabaseInitializer {
         if (!properties.isSchemaInitEnabled()) {
             return;
         }
-        if (schemaAlreadyApplied()) {
-            return;
-        }
-        ResourceDatabasePopulator populator = new ResourceDatabasePopulator();
-        populator.addScript(new ClassPathResource("db/migration/V20260813_001__create_training_plan.sql"));
-        populator.setContinueOnError(false);
-        populator.execute(dataSource);
+        applyIfNeeded("V20260813_001", "db/migration/V20260813_001__create_training_plan.sql");
+        applyIfNeeded("V20260813_002", "db/migration/V20260813_002__add_create_request_id.sql");
     }
 
-    private boolean schemaAlreadyApplied() {
+    private void applyIfNeeded(String version, String resourcePath) {
         try {
             Integer count = jdbcTemplate.queryForObject(
                     "SELECT COUNT(1) FROM training_schema_version WHERE version = ?",
-                    new Object[]{"V20260813_001"}, Integer.class);
-            return count != null && count > 0;
+                    new Object[]{version}, Integer.class);
+            if (count != null && count > 0) {
+                return;
+            }
         } catch (org.springframework.jdbc.BadSqlGrammarException ignored) {
-            return false;
+            // V001 首次执行前版本表不存在，V001 脚本会负责创建版本表。
         }
+        ResourceDatabasePopulator populator = new ResourceDatabasePopulator();
+        populator.addScript(new ClassPathResource(resourcePath));
+        populator.setContinueOnError(false);
+        populator.execute(dataSource);
     }
 }
