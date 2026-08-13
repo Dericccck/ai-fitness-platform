@@ -7,11 +7,13 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from datetime import datetime
 from typing import cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.confirmation.normalization import ConfirmationPolicy
 from app.infrastructure.gateway_client import GatewayClient
 
 from .tool_registry import (
@@ -99,6 +101,171 @@ class ReviewTrainingPlanToolInput(TrainingPlanToolInput):
     decision: str = Field(pattern=r"^(APPROVE|REJECT)$")
     comment: str | None = Field(default=None, max_length=1000)
 
+    @model_validator(mode="after")
+    def require_rejection_comment(self) -> ReviewTrainingPlanToolInput:
+        """驳回必须给出可追溯原因，避免确认卡和审核记录出现无解释拒绝。"""
+
+        if self.decision == "REJECT" and not self.comment:
+            raise ValueError("comment is required when decision is REJECT")
+        return self
+
+
+def _create_training_draft_payload(data: CreateTrainingDraftToolInput) -> dict[str, object]:
+    """生成创建草案的唯一 Gateway Payload，确认摘要与真实执行共用它。"""
+
+    return data.model_dump(mode="json", by_alias=True)
+
+
+def _review_training_plan_payload(data: ReviewTrainingPlanToolInput) -> dict[str, object]:
+    """生成审核 Payload，避免摘要构造和 Gateway 调用各维护一份字段映射。"""
+
+    return {"decision": data.decision, "comment": data.comment}
+
+
+def _summary(
+    operation: str,
+    action: str,
+    target_status: str,
+    payload: dict[str, object],
+    resource: Mapping[str, object] | None,
+    *,
+    organization_id: str,
+    resource_type: str = "training_plan",
+    resource_id: str | None = None,
+    expected_resource_version: int | None = None,
+) -> dict[str, object]:
+    """统一生成给确认卡片使用的机器可渲染摘要。
+
+    operation 是固定的中文业务名称，不能被模型覆盖；其余字段是前端可逐字段展示和
+    对比的稳定 JSON。规范化器随后会再次校验这些字段与实际 Payload 完全绑定。
+    """
+
+    return {
+        "operation": operation,
+        "action": action,
+        "target_status": target_status,
+        "organization_id": organization_id,
+        "resource_type": resource_type,
+        "resource_id": resource_id,
+        "expected_resource_version": expected_resource_version,
+        "details": payload,
+        "resource": resource,
+    }
+
+
+def _create_summary(data: BaseModel, _: Mapping[str, object] | None) -> dict[str, object]:
+    typed = cast(CreateTrainingDraftToolInput, data)
+    payload = _create_training_draft_payload(typed)
+    return _summary(
+        "创建训练计划草案",
+        "CREATE_TRAINING_DRAFT",
+        "DRAFT",
+        payload,
+        None,
+        organization_id=typed.organization_id,
+    )
+
+
+def _plan_summary(
+    operation: str,
+    action: str,
+    target_status: str,
+    data: BaseModel,
+    resource: Mapping[str, object] | None,
+) -> dict[str, object]:
+    typed = cast(TrainingPlanToolInput, data)
+    return _summary(
+        operation,
+        action,
+        target_status,
+        {},
+        resource,
+        organization_id="__resolved_from_resource__",
+        resource_id=typed.plan_id,
+    )
+
+
+def _submit_summary(data: BaseModel, resource: Mapping[str, object] | None) -> dict[str, object]:
+    return _plan_summary(
+        "提交训练计划审核", "SUBMIT_TRAINING_REVIEW", "PENDING_REVIEW", data, resource
+    )
+
+
+def _review_summary(data: BaseModel, resource: Mapping[str, object] | None) -> dict[str, object]:
+    typed = cast(ReviewTrainingPlanToolInput, data)
+    return _summary(
+        "审核训练计划",
+        "REVIEW_TRAINING_PLAN",
+        "APPROVED" if typed.decision == "APPROVE" else "REJECTED",
+        _review_training_plan_payload(typed),
+        resource,
+        organization_id="__resolved_from_resource__",
+        resource_id=typed.plan_id,
+    )
+
+
+def _publish_summary(data: BaseModel, resource: Mapping[str, object] | None) -> dict[str, object]:
+    return _plan_summary("发布训练计划", "PUBLISH_TRAINING_PLAN", "PUBLISHED", data, resource)
+
+
+def _create_policy() -> ConfirmationPolicy:
+    return ConfirmationPolicy(
+        action="CREATE_TRAINING_DRAFT",
+        resource_type="training_plan",
+        risk_level="WRITE",
+        operation="创建训练计划草案",
+        target_status="DRAFT",
+        payload_builder=lambda raw: _create_training_draft_payload(
+            cast(CreateTrainingDraftToolInput, raw)
+        ),
+        summary_builder=_create_summary,
+        organization_id_builder=lambda raw: cast(CreateTrainingDraftToolInput, raw).organization_id,
+    )
+
+
+def _submit_policy() -> ConfirmationPolicy:
+    return ConfirmationPolicy(
+        action="SUBMIT_TRAINING_REVIEW",
+        resource_type="training_plan",
+        risk_level="WRITE",
+        operation="提交训练计划审核",
+        target_status="PENDING_REVIEW",
+        payload_builder=lambda _: {},
+        summary_builder=_submit_summary,
+        resource_required=True,
+        resource_id_builder=lambda raw: cast(TrainingPlanToolInput, raw).plan_id,
+    )
+
+
+def _review_policy() -> ConfirmationPolicy:
+    return ConfirmationPolicy(
+        action="REVIEW_TRAINING_PLAN",
+        resource_type="training_plan",
+        risk_level="WRITE",
+        operation="审核训练计划",
+        target_status="DYNAMIC",
+        payload_builder=lambda raw: _review_training_plan_payload(
+            cast(ReviewTrainingPlanToolInput, raw)
+        ),
+        summary_builder=_review_summary,
+        resource_required=True,
+        resource_id_builder=lambda raw: cast(ReviewTrainingPlanToolInput, raw).plan_id,
+    )
+
+
+def _publish_policy() -> ConfirmationPolicy:
+    return ConfirmationPolicy(
+        action="PUBLISH_TRAINING_PLAN",
+        resource_type="training_plan",
+        risk_level="WRITE",
+        operation="发布训练计划",
+        target_status="PUBLISHED",
+        payload_builder=lambda _: {},
+        summary_builder=_publish_summary,
+        resource_required=True,
+        resource_id_builder=lambda raw: cast(TrainingPlanToolInput, raw).plan_id,
+    )
+
 
 def build_fitness_tool_registry(gateway: GatewayClient) -> ToolRegistry:
     """创建进程级健身工具注册表。
@@ -151,10 +318,11 @@ def build_fitness_tool_registry(gateway: GatewayClient) -> ToolRegistry:
 
     async def create_training_draft(raw: BaseModel, context: ToolContext) -> object:
         data = cast(CreateTrainingDraftToolInput, raw)
-        # confirmation_token 位于请求上下文，不会被模型写入业务 payload。
+        # confirmation_token 位于请求上下文，不会被模型写入业务 payload；Payload 转换
+        # 与确认摘要共用 _create_training_draft_payload，避免二者字段漂移。
         return await gateway.create_training_draft(
             context.gateway_context,
-            data.model_dump(mode="json", by_alias=True),
+            _create_training_draft_payload(data),
         )
 
     async def submit_training_review(raw: BaseModel, context: ToolContext) -> object:
@@ -166,7 +334,7 @@ def build_fitness_tool_registry(gateway: GatewayClient) -> ToolRegistry:
         return await gateway.review_training_plan(
             context.gateway_context,
             data.plan_id,
-            {"decision": data.decision, "comment": data.comment},
+            _review_training_plan_payload(data),
         )
 
     async def publish_training_plan(raw: BaseModel, context: ToolContext) -> object:
@@ -200,6 +368,7 @@ def build_fitness_tool_registry(gateway: GatewayClient) -> ToolRegistry:
             allowed_roles=_READ_ROLES,
             read_only=False,
             requires_confirmation=True,
+            confirmation_policy=_create_policy(),
         ),
         ToolDefinition(
             tool_id="fitness.training.plan.submit_review.v1",
@@ -209,6 +378,7 @@ def build_fitness_tool_registry(gateway: GatewayClient) -> ToolRegistry:
             allowed_roles=frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH"}),
             read_only=False,
             requires_confirmation=True,
+            confirmation_policy=_submit_policy(),
         ),
         ToolDefinition(
             tool_id="fitness.training.plan.review.v1",
@@ -218,6 +388,7 @@ def build_fitness_tool_registry(gateway: GatewayClient) -> ToolRegistry:
             allowed_roles=frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH"}),
             read_only=False,
             requires_confirmation=True,
+            confirmation_policy=_review_policy(),
         ),
         ToolDefinition(
             tool_id="fitness.training.plan.publish.v1",
@@ -227,6 +398,7 @@ def build_fitness_tool_registry(gateway: GatewayClient) -> ToolRegistry:
             allowed_roles=frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH"}),
             read_only=False,
             requires_confirmation=True,
+            confirmation_policy=_publish_policy(),
         ),
         ToolDefinition(
             tool_id="fitness.organization.get.v1",

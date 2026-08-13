@@ -18,6 +18,13 @@ from typing import Any, Literal, Protocol
 import structlog
 from pydantic import BaseModel, ConfigDict, ValidationError
 
+from app.confirmation.normalization import (
+    ConfirmationNormalizationContext,
+    ConfirmationPolicy,
+    ConfirmationResourceSnapshot,
+    NormalizedConfirmationAction,
+    normalize_confirmation_action,
+)
 from app.infrastructure.gateway_client import GatewayClientError, GatewayRequestContext
 
 ToolHandler = Callable[[BaseModel, "ToolContext"], Awaitable[Any]]
@@ -54,6 +61,10 @@ class ToolExecutionError(ToolRegistryError):
 
 class ToolConfirmationRequiredError(ToolRegistryError):
     """写工具缺少上游签发的确认凭证。"""
+
+
+class ToolConfirmationNormalizationError(ToolRegistryError):
+    """写工具参数无法形成确定性确认动作。"""
 
 
 @dataclass(frozen=True)
@@ -123,6 +134,8 @@ class ToolDefinition:
     allowed_roles: frozenset[str]
     read_only: bool
     requires_confirmation: bool
+    # 写工具必须绑定固定策略，避免新增工具忘记定义资源、摘要和风险边界。
+    confirmation_policy: ConfirmationPolicy | None = None
 
     @property
     def version(self) -> str:
@@ -141,6 +154,9 @@ class ToolDefinition:
             "allowed_roles": sorted(self.allowed_roles),
             "read_only": self.read_only,
             "requires_confirmation": self.requires_confirmation,
+            "confirmation_action": (
+                self.confirmation_policy.action if self.confirmation_policy is not None else None
+            ),
         }
 
 
@@ -162,6 +178,14 @@ class ToolRegistry:
             raise InvalidToolDefinitionError("at least one allowed role is required")
         if not definition.read_only and not definition.requires_confirmation:
             raise InvalidToolDefinitionError("write tools must require explicit confirmation")
+        if (
+            not definition.read_only
+            and definition.requires_confirmation
+            and definition.confirmation_policy is None
+        ):
+            raise InvalidToolDefinitionError(
+                "confirmed write tools must declare a confirmation policy"
+            )
         if definition.tool_id in self._definitions:
             raise DuplicateToolError(f"tool already registered: {definition.tool_id}")
         self._definitions[definition.tool_id] = definition
@@ -181,6 +205,41 @@ class ToolRegistry:
             definition.public_spec()
             for definition in sorted(self._definitions.values(), key=lambda item: item.tool_id)
         ]
+
+    def normalize_confirmation(
+        self,
+        tool_id: str,
+        raw_input: Mapping[str, Any],
+        *,
+        context: ConfirmationNormalizationContext,
+        organization_id: str,
+        resource: ConfirmationResourceSnapshot | None = None,
+    ) -> NormalizedConfirmationAction:
+        """把写工具输入转换为确认动作，不执行任何外部副作用。
+
+        该方法是后续 ``interrupt()`` 的前置边界：先校验和规范化，再创建确认单；只有
+        用户批准、签发窄范围凭证并恢复图后，``invoke`` 才能继续调用 Gateway。
+        """
+
+        definition = self.get(tool_id)
+        if definition.read_only or not definition.requires_confirmation:
+            raise ToolConfirmationNormalizationError("only confirmed write tools can be normalized")
+        if definition.confirmation_policy is None:
+            raise ToolConfirmationNormalizationError("tool confirmation policy is missing")
+        try:
+            validated_input = definition.input_model.model_validate(dict(raw_input))
+            return normalize_confirmation_action(
+                tool_id=definition.tool_id,
+                input_data=validated_input,
+                policy=definition.confirmation_policy,
+                context=context,
+                organization_id=organization_id,
+                resource=resource,
+            )
+        except ValueError as exc:
+            raise ToolConfirmationNormalizationError(
+                f"cannot normalize confirmation for tool: {definition.tool_id}"
+            ) from exc
 
     async def invoke(
         self,
