@@ -15,6 +15,8 @@
   内部 Header 传入；本服务在训练计划业务事务中写入确认消费记录，JTI 重放会被唯一键拒绝。
 - 确认消费和训练计划写入处于同一个 MySQL 事务：业务失败会一起回滚，网络重试仍由原始请求 ID
   幂等收敛，不能产生第二份训练计划或第二次状态审计。
+- 最小训练执行闭环支持学员对已发布计划的训练日标记 `COMPLETED`（已完成）或 `SKIPPED`（已跳过），
+  保存执行日期、简短备注、当前版本和不可变审计；暂不保存逐组实绩、身体测量、疼痛或疲劳量表。
 - 独立 Maven 构建，不依赖不完整的旧 Java 赛事代码。
 
 ## 启动与配置
@@ -57,3 +59,8 @@ TRAINING_INTERNAL_SERVICE_TOKEN
 
 这些 Header 只能由已验证的 Gateway 注入，Python Agent 不得直接调用训练服务，也不得自行构造
 用户身份、角色或确认声明。JTI 消费与训练计划写入使用同一个事务边界。
+
+训练日执行接口：
+
+- `GET /internal/training/v1/plans/{planId}/executions`
+- `POST /internal/training/v1/plans/{planId}/days/{dayId}/execution`

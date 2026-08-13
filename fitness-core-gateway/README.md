@@ -1,6 +1,6 @@
 # Fitness Core Tool Gateway
 
-这是健身平台的独立 Java Tool Gateway，当前只读访问健身核心业务：用户/学员、教练、机构、课程、合同、课时和预约。
+这是健身平台的独立 Java Tool Gateway，当前提供健身核心只读查询和结构化训练计划/训练日执行工具：用户/学员、教练、机构、课程、合同、课时和预约。
 
 赛事、作品、活动运营及其历史代码不属于本服务范围。本服务不依赖根目录旧 Java 项目的 Entity、Service 或组件扫描，避免遗留模块污染新的 Agent 业务边界。
 
@@ -73,4 +73,6 @@ POST /internal/agent-tools/v1/training/plans/drafts
 POST /internal/agent-tools/v1/training/plans/{planId}/submit-review
 POST /internal/agent-tools/v1/training/plans/{planId}/review
 POST /internal/agent-tools/v1/training/plans/{planId}/publish
+GET /internal/agent-tools/v1/training/plans/{planId}/executions
+POST /internal/agent-tools/v1/training/plans/{planId}/days/{dayId}/execution
 ```

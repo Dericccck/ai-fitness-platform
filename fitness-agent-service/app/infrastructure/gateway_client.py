@@ -169,6 +169,22 @@ class GatewayTrainingPlan(_GatewayModel):
     days: list[GatewayTrainingDay]
 
 
+class GatewayTrainingDayExecution(_GatewayModel):
+    """训练日完成/跳过记录；本阶段不包含逐组实绩或健康量表。"""
+
+    id: str
+    plan_id: str = Field(alias="planId")
+    day_id: str = Field(alias="dayId")
+    organization_id: str = Field(alias="organizationId")
+    student_id: str = Field(alias="studentId")
+    status: Literal["COMPLETED", "SKIPPED"]
+    execution_date: str = Field(alias="executionDate")
+    note: str | None = None
+    version: int
+    created_at: datetime | None = Field(default=None, alias="createdAt")
+    updated_at: datetime | None = Field(default=None, alias="updatedAt")
+
+
 class GatewayClient:
     """调用 Java 健身核心 Gateway 的异步客户端。
 
@@ -294,6 +310,26 @@ class GatewayClient:
             context,
             {},
             GatewayTrainingPlan,
+        )
+
+    async def list_training_day_executions(
+        self, context: GatewayRequestContext, plan_id: str
+    ) -> list[GatewayTrainingDayExecution]:
+        return await self._get_list(
+            f"/internal/agent-tools/v1/training/plans/{plan_id}/executions",
+            context,
+            {},
+            GatewayTrainingDayExecution,
+        )
+
+    async def record_training_day_execution(
+        self, context: GatewayRequestContext, plan_id: str, day_id: str, payload: dict[str, Any]
+    ) -> GatewayTrainingDayExecution:
+        return await self._post(
+            f"/internal/agent-tools/v1/training/plans/{plan_id}/days/{day_id}/execution",
+            context,
+            {"dayId": day_id, "status": payload["status"], "note": payload.get("note")},
+            GatewayTrainingDayExecution,
         )
 
     async def _get(

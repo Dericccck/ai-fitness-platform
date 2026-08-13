@@ -139,3 +139,28 @@ def test_reject_review_requires_reason_and_summary_binds_decision() -> None:
         "comment": "动作安排需要调整",
         "decision": "REJECT",
     }
+
+
+def test_training_day_execution_binds_day_status_and_plan_version() -> None:
+    registry = build_fitness_tool_registry(cast(GatewayClient, FakeGateway()))
+    resource = ConfirmationResourceSnapshot(
+        organization_id="org-1",
+        resource_id="plan-1:day-1",
+        version=3,
+        attributes=plan_snapshot().attributes,
+    )
+    action = registry.normalize_confirmation(
+        "fitness.training.day.record_execution.v1",
+        {"plan_id": "plan-1", "day_id": "day-1", "status": "COMPLETED", "note": "完成"},
+        context=context(),
+        organization_id="org-1",
+        resource=resource,
+    )
+
+    assert action.resource_id == "plan-1:day-1"
+    assert action.display_summary["target_status"] == "COMPLETED"
+    assert action.display_summary["details"] == {
+        "day_id": "day-1",
+        "note": "完成",
+        "status": "COMPLETED",
+    }

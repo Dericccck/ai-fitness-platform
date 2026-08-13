@@ -61,4 +61,20 @@ public class TrainingToolController {
                                               @RequestHeader("X-Confirmation-Token") String confirmationToken) {
         return client.publish(context, planId, requestId, confirmationToken);
     }
+
+    @GetMapping("/{planId}/executions")
+    public java.util.List<ToolViews.TrainingDayExecutionView> listExecutions(
+            AgentContext context, @PathVariable String planId,
+            @RequestHeader("X-Request-ID") String requestId) {
+        return client.listExecutions(context, planId, requestId);
+    }
+
+    @PostMapping("/{planId}/days/{dayId}/execution")
+    public ToolViews.TrainingDayExecutionView recordExecution(
+            AgentContext context, @PathVariable String planId, @PathVariable String dayId,
+            @RequestHeader("X-Request-ID") String requestId,
+            @RequestHeader("X-Confirmation-Token") String confirmationToken,
+            @RequestBody TrainingToolInputs.ExecutionInput input) {
+        return client.recordExecution(context, planId, dayId, requestId, confirmationToken, input);
+    }
 }

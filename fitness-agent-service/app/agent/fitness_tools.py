@@ -97,6 +97,18 @@ class TrainingPlanToolInput(BaseModel):
     plan_id: str = _ID_FIELD
 
 
+class ListTrainingDayExecutionsToolInput(TrainingPlanToolInput):
+    """查询一个训练计划已经明确提交的训练日结果。"""
+
+
+class RecordTrainingDayExecutionToolInput(TrainingPlanToolInput):
+    """学员记录训练日已完成或已跳过及可选简短备注。"""
+
+    day_id: str = _ID_FIELD
+    status: str = Field(pattern=r"^(COMPLETED|SKIPPED)$")
+    note: str | None = Field(default=None, max_length=1000)
+
+
 class ReviewTrainingPlanToolInput(TrainingPlanToolInput):
     decision: str = Field(pattern=r"^(APPROVE|REJECT)$")
     comment: str | None = Field(default=None, max_length=1000)
@@ -208,6 +220,31 @@ def _publish_summary(data: BaseModel, resource: Mapping[str, object] | None) -> 
     return _plan_summary("发布训练计划", "PUBLISH_TRAINING_PLAN", "PUBLISHED", data, resource)
 
 
+def _record_execution_payload(data: RecordTrainingDayExecutionToolInput) -> dict[str, object]:
+    """生成执行记录的唯一 Payload，确认摘要和真实 Gateway 调用共用该结构。"""
+
+    return {
+        "day_id": data.day_id,
+        "status": data.status,
+        "note": data.note,
+    }
+
+
+def _record_execution_summary(
+    data: BaseModel, resource: Mapping[str, object] | None
+) -> dict[str, object]:
+    typed = cast(RecordTrainingDayExecutionToolInput, data)
+    return _summary(
+        "记录训练日执行结果",
+        "RECORD_TRAINING_DAY_EXECUTION",
+        typed.status,
+        _record_execution_payload(typed),
+        resource,
+        organization_id="__resolved_from_resource__",
+        resource_id=typed.plan_id,
+    )
+
+
 def _create_policy() -> ConfirmationPolicy:
     return ConfirmationPolicy(
         action="CREATE_TRAINING_DRAFT",
@@ -264,6 +301,25 @@ def _publish_policy() -> ConfirmationPolicy:
         summary_builder=_publish_summary,
         resource_required=True,
         resource_id_builder=lambda raw: cast(TrainingPlanToolInput, raw).plan_id,
+    )
+
+
+def _record_execution_policy() -> ConfirmationPolicy:
+    return ConfirmationPolicy(
+        action="RECORD_TRAINING_DAY_EXECUTION",
+        resource_type="training_plan",
+        risk_level="WRITE",
+        operation="记录训练日执行结果",
+        target_status="DYNAMIC",
+        payload_builder=lambda raw: _record_execution_payload(
+            cast(RecordTrainingDayExecutionToolInput, raw)
+        ),
+        summary_builder=_record_execution_summary,
+        resource_required=True,
+        resource_id_builder=lambda raw: (
+            f"{cast(RecordTrainingDayExecutionToolInput, raw).plan_id}:"
+            f"{cast(RecordTrainingDayExecutionToolInput, raw).day_id}"
+        ),
     )
 
 
@@ -341,6 +397,19 @@ def build_fitness_tool_registry(gateway: GatewayClient) -> ToolRegistry:
         data = cast(TrainingPlanToolInput, raw)
         return await gateway.publish_training_plan(context.gateway_context, data.plan_id)
 
+    async def list_training_day_executions(raw: BaseModel, context: ToolContext) -> object:
+        data = cast(ListTrainingDayExecutionsToolInput, raw)
+        return await gateway.list_training_day_executions(context.gateway_context, data.plan_id)
+
+    async def record_training_day_execution(raw: BaseModel, context: ToolContext) -> object:
+        data = cast(RecordTrainingDayExecutionToolInput, raw)
+        return await gateway.record_training_day_execution(
+            context.gateway_context,
+            data.plan_id,
+            data.day_id,
+            _record_execution_payload(data),
+        )
+
     definitions = (
         ToolDefinition(
             tool_id="fitness.user.get_current.v1",
@@ -399,6 +468,25 @@ def build_fitness_tool_registry(gateway: GatewayClient) -> ToolRegistry:
             read_only=False,
             requires_confirmation=True,
             confirmation_policy=_publish_policy(),
+        ),
+        ToolDefinition(
+            tool_id="fitness.training.day.executions.list.v1",
+            description="查询训练计划中已经提交的训练日完成或跳过记录；未执行训练日不会伪造记录。",
+            input_model=ListTrainingDayExecutionsToolInput,
+            handler=list_training_day_executions,
+            allowed_roles=_READ_ROLES,
+            read_only=True,
+            requires_confirmation=False,
+        ),
+        ToolDefinition(
+            tool_id="fitness.training.day.record_execution.v1",
+            description="学员记录本人已发布训练计划中某个训练日已完成或已跳过；可附加简短备注。",
+            input_model=RecordTrainingDayExecutionToolInput,
+            handler=record_training_day_execution,
+            allowed_roles=frozenset({"STUDENT"}),
+            read_only=False,
+            requires_confirmation=True,
+            confirmation_policy=_record_execution_policy(),
         ),
         ToolDefinition(
             tool_id="fitness.organization.get.v1",

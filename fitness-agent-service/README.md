@@ -146,8 +146,8 @@ DeepSeek 配置使用 `DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL` 和 `DEEPSEEK_BASE_U
 和 `http` Reranker，但必须同时执行全量索引重建；向量维度变更不能只修改环境变量。
 
 Supervisor 必须通过 `app.state.tool_registry` 获取工具定义和调用入口；不能在 Prompt、
-Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry 已包含健身只读工具和训练计划草案、
-提交审核、审核、发布四个写工具；写工具具备确认标记和缺少凭证时的前置拒绝。确认单持久化、
+Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry 已包含健身只读工具、训练计划草案、
+提交审核、审核、发布和训练日执行记录写工具；写工具具备确认标记和缺少凭证时的前置拒绝。确认单持久化、
 不可变确认事件、授权/执行状态分离、数据库幂等、参数加密、Checkpoint 脱敏、`interrupt()` 暂停、
 确认详情/决定 API、服务端恢复和真实 Gateway 执行已经完成。批准接口内部自动完成“持久化决定→
 恢复图→调用写工具”，不会把 Token 返回给客户端。当前仅保留 Java Gateway v1 HMAC 兼容凭证；

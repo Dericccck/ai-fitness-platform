@@ -68,6 +68,16 @@ NOT_STARTED ──领取执行权──> RUNNING ──成功──> SUCCEEDED
 允许的业务流转是：`DRAFT/REJECTED -> PENDING_REVIEW -> APPROVED/REJECTED -> PUBLISHED`。
 `PUBLISHED` 不原地回退或静默修改，内容变化应产生新版本或新计划。
 
+### 2.1 训练日执行状态 `training_day_execution.status`
+
+| 英文值 | 中文含义 | 说明 |
+| --- | --- | --- |
+| `COMPLETED` | 已完成 | 学员提交的训练日完成事实；服务端记录执行日期。 |
+| `SKIPPED` | 已跳过 | 学员明确提交的跳过事实；不等同于失败，也不自动触发调参。 |
+
+未执行训练日不在数据库中插入空记录，查询计划时由“没有执行记录”推导。训练日执行写入只允许
+本人学员操作已发布计划，并受确认凭证、JTI 一次性消费、请求幂等和不可变审计保护。
+
 ## 3. 知识库任务与审核状态
 
 ### 3.1 上传/索引任务 `knowledge_ingestion_jobs.status`

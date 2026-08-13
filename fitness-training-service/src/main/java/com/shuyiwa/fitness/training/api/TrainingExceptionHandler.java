@@ -25,7 +25,8 @@ public class TrainingExceptionHandler {
     public Map<String, String> business(TrainingApiException exception,
                                         javax.servlet.http.HttpServletResponse response) {
         response.setStatus(exception.getStatus().value());
-        String code = exception.getStatus() == HttpStatus.CONFLICT ? "CONFLICT"
+        String code = exception.getStatus() == HttpStatus.UNAUTHORIZED ? "UNAUTHORIZED"
+                : exception.getStatus() == HttpStatus.CONFLICT ? "CONFLICT"
                 : exception.getStatus() == HttpStatus.FORBIDDEN ? "FORBIDDEN"
                 : exception.getStatus() == HttpStatus.NOT_FOUND ? "NOT_FOUND" : "INVALID_ARGUMENT";
         return error(code, exception.getMessage());

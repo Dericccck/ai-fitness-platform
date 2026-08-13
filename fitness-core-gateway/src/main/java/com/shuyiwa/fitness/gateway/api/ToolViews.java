@@ -281,4 +281,47 @@ public final class ToolViews {
         public java.math.BigDecimal getTargetRpe() { return targetRpe; }
         public String getNotes() { return notes; }
     }
+
+    /** 学员训练日执行结果的稳定 Tool View；未执行训练日不会伪造一条记录。 */
+    public static final class TrainingDayExecutionView {
+        private final String id;
+        private final String planId;
+        private final String dayId;
+        private final String organizationId;
+        private final String studentId;
+        private final String status;
+        private final java.time.LocalDate executionDate;
+        private final String note;
+        private final int version;
+        private final Instant createdAt;
+        private final Instant updatedAt;
+
+        public TrainingDayExecutionView(String id, String planId, String dayId, String organizationId,
+                                        String studentId, String status, java.time.LocalDate executionDate,
+                                        String note, int version, Instant createdAt, Instant updatedAt) {
+            this.id = id;
+            this.planId = planId;
+            this.dayId = dayId;
+            this.organizationId = organizationId;
+            this.studentId = studentId;
+            this.status = status;
+            this.executionDate = executionDate;
+            this.note = note;
+            this.version = version;
+            this.createdAt = createdAt;
+            this.updatedAt = updatedAt;
+        }
+
+        public String getId() { return id; }
+        public String getPlanId() { return planId; }
+        public String getDayId() { return dayId; }
+        public String getOrganizationId() { return organizationId; }
+        public String getStudentId() { return studentId; }
+        public String getStatus() { return status; }
+        public java.time.LocalDate getExecutionDate() { return executionDate; }
+        public String getNote() { return note; }
+        public int getVersion() { return version; }
+        public Instant getCreatedAt() { return createdAt; }
+        public Instant getUpdatedAt() { return updatedAt; }
+    }
 }

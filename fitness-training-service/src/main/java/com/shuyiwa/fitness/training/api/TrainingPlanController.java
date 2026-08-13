@@ -48,4 +48,17 @@ public class TrainingPlanController {
     public TrainingPlanView get(TrainingActor actor, @PathVariable String planId) {
         return service.get(actor, planId);
     }
+
+    @GetMapping("/{planId}/executions")
+    public java.util.List<TrainingDayExecutionView> listExecutions(TrainingActor actor,
+                                                                    @PathVariable String planId) {
+        return service.listExecutions(actor, planId);
+    }
+
+    @PostMapping("/{planId}/days/{dayId}/execution")
+    public TrainingDayExecutionView recordExecution(TrainingActor actor, @PathVariable String planId,
+                                                    @PathVariable String dayId,
+                                                    @RequestBody TrainingDayExecutionRequest request) {
+        return service.recordExecution(actor, planId, dayId, request);
+    }
 }

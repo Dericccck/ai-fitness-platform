@@ -71,4 +71,23 @@ final class TrainingServiceViews {
                     targetWeightKg, targetRpe, notes);
         }
     }
+
+    static final class Execution {
+        public String id;
+        public String planId;
+        public String dayId;
+        public String organizationId;
+        public String studentId;
+        public String status;
+        public LocalDate executionDate;
+        public String note;
+        public int version;
+        public Instant createdAt;
+        public Instant updatedAt;
+
+        ToolViews.TrainingDayExecutionView toToolView() {
+            return new ToolViews.TrainingDayExecutionView(id, planId, dayId, organizationId, studentId,
+                    status, executionDate, note, version, createdAt, updatedAt);
+        }
+    }
 }

@@ -90,4 +90,18 @@ public final class TrainingToolInputs {
         public String getComment() { return comment; }
         public void setComment(String comment) { this.comment = comment; }
     }
+
+    /** 学员训练日执行结果；业务服务只接受 COMPLETED 或 SKIPPED。 */
+    public static class ExecutionInput {
+        private String dayId;
+        private String status;
+        private String note;
+
+        public String getDayId() { return dayId; }
+        public void setDayId(String dayId) { this.dayId = dayId; }
+        public String getStatus() { return status; }
+        public void setStatus(String status) { this.status = status; }
+        public String getNote() { return note; }
+        public void setNote(String note) { this.note = note; }
+    }
 }

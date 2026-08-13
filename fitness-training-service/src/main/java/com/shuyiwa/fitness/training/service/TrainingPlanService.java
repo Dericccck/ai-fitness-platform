@@ -4,7 +4,10 @@ import com.shuyiwa.fitness.training.api.TrainingApiException;
 import com.shuyiwa.fitness.training.api.TrainingPlanRequest;
 import com.shuyiwa.fitness.training.api.TrainingPlanView;
 import com.shuyiwa.fitness.training.api.TrainingReviewRequest;
+import com.shuyiwa.fitness.training.api.TrainingDayExecutionRequest;
+import com.shuyiwa.fitness.training.api.TrainingDayExecutionView;
 import com.shuyiwa.fitness.training.domain.TrainingDay;
+import com.shuyiwa.fitness.training.domain.TrainingDayExecution;
 import com.shuyiwa.fitness.training.domain.TrainingItem;
 import com.shuyiwa.fitness.training.domain.TrainingPlan;
 import com.shuyiwa.fitness.training.domain.TrainingPlanStatus;
@@ -18,6 +21,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * 训练计划业务边界。
@@ -119,6 +123,50 @@ public class TrainingPlanService {
 
     public TrainingPlanView get(TrainingActor actor, String planId) {
         return view(loadVisiblePlan(actor, planId, true));
+    }
+
+    /** 查询计划下已明确提交的训练日结果；未执行训练日由调用方根据计划明细推导。 */
+    public List<TrainingDayExecutionView> listExecutions(TrainingActor actor, String planId) {
+        TrainingPlan plan = loadVisiblePlan(actor, planId, true);
+        return repository.findExecutionsByPlanId(plan.getId()).stream()
+                .map(this::executionView).collect(Collectors.toList());
+    }
+
+    /**
+     * 学员提交一个训练日的完成或跳过结果。
+     *
+     * <p>只有已发布计划的本人学员可以写入；教练、管理员和其他学员不能代替学员提交执行
+     * 结果。执行日期由服务端取当前日期，避免客户端伪造历史时间；当前阶段不允许回填或
+     * 修改原始训练处方。</p>
+     */
+    @Transactional
+    public TrainingDayExecutionView recordExecution(TrainingActor actor, String planId, String dayId,
+                                                     TrainingDayExecutionRequest request) {
+        TrainingPlan plan = loadVisiblePlan(actor, planId, true);
+        if (!actor.hasRole(TrainingActor.STUDENT) || !actor.getUserId().equals(plan.getStudentId())) {
+            throw forbidden("只有该计划对应的学员可以提交训练执行结果");
+        }
+        if (request == null || request.getStatus() == null) {
+            throw invalid("训练日执行状态不能为空");
+        }
+        if (request.getDayId() == null || !dayId.equals(request.getDayId())) {
+            throw invalid("训练日请求参数与路径不一致");
+        }
+        if (request.getNote() != null && request.getNote().trim().length() > 1000) {
+            throw invalid("训练日备注长度不能超过 1000 个字符");
+        }
+        TrainingDay day = plan.getDays().stream()
+                .filter(item -> dayId.equals(item.getId())).findFirst()
+                .orElseThrow(() -> notFound("训练日不存在"));
+        TrainingConfirmation confirmation = requireConfirmation(
+                actor, "fitness.training.day.record_execution.v1", "RECORD_TRAINING_DAY_EXECUTION",
+                plan.getOrganizationId(), plan.getId() + ":" + day.getId()
+        );
+        TrainingDayExecution execution = repository.recordDayExecution(
+                plan.getId(), day.getId(), plan.getOrganizationId(), plan.getStudentId(), request.getStatus(),
+                java.time.LocalDate.now(), normalizeNote(request.getNote()), actor.getUserId(),
+                actor.getRequestId(), confirmation);
+        return executionView(execution);
     }
 
     private void transition(TrainingPlan plan, TrainingPlanStatus target, TrainingActor actor,
@@ -279,6 +327,30 @@ public class TrainingPlanService {
         view.setPublishedAt(plan.getPublishedAt());
         view.setDays(plan.getDays());
         return view;
+    }
+
+    private TrainingDayExecutionView executionView(TrainingDayExecution execution) {
+        TrainingDayExecutionView view = new TrainingDayExecutionView();
+        view.setId(execution.getId());
+        view.setPlanId(execution.getPlanId());
+        view.setDayId(execution.getDayId());
+        view.setOrganizationId(execution.getOrganizationId());
+        view.setStudentId(execution.getStudentId());
+        view.setStatus(execution.getStatus());
+        view.setExecutionDate(execution.getExecutionDate());
+        view.setNote(execution.getNote());
+        view.setVersion(execution.getVersion());
+        view.setCreatedAt(execution.getCreatedAt());
+        view.setUpdatedAt(execution.getUpdatedAt());
+        return view;
+    }
+
+    private static String normalizeNote(String note) {
+        if (note == null) {
+            return null;
+        }
+        String normalized = note.trim();
+        return normalized.isEmpty() ? null : normalized;
     }
 
     private static void requireRequired(String value, String field) {

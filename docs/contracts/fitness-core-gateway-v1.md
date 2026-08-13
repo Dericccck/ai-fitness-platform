@@ -80,6 +80,8 @@ POST /internal/agent-tools/v1/training/plans/drafts
 POST /internal/agent-tools/v1/training/plans/{planId}/submit-review
 POST /internal/agent-tools/v1/training/plans/{planId}/review
 POST /internal/agent-tools/v1/training/plans/{planId}/publish
+GET  /internal/agent-tools/v1/training/plans/{planId}/executions
+POST /internal/agent-tools/v1/training/plans/{planId}/days/{dayId}/execution
 ```
 
 写工具的 `X-Confirmation-Token` 当前由 Agent 服务端使用共享 HMAC 密钥签发，Gateway 会绑定并校验

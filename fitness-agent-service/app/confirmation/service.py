@@ -83,7 +83,7 @@ class ConfirmationService:
             organization_id = plan.organization_id
             resource = ConfirmationResourceSnapshot(
                 organization_id=plan.organization_id,
-                resource_id=plan.id,
+                resource_id=_confirmation_resource_id(tool_id, raw_input, plan.id),
                 version=plan.version,
                 attributes=plan.model_dump(mode="json", by_alias=False),
             )
@@ -264,3 +264,14 @@ def _token_resource(record: ConfirmationRecord, payload: Mapping[str, Any]) -> s
     if isinstance(organization_id, str) and isinstance(student_id, str):
         return f"{organization_id}:{student_id}"
     raise ConfirmationStateError("confirmation resource scope is incomplete")
+
+
+def _confirmation_resource_id(tool_id: str, raw_input: Mapping[str, Any], plan_id: str) -> str:
+    """为资源型确认生成最终资源范围；训练日执行进一步绑定具体 day_id。"""
+
+    if tool_id == "fitness.training.day.record_execution.v1":
+        day_id = raw_input.get("day_id")
+        if isinstance(day_id, str) and day_id.strip():
+            return f"{plan_id}:{day_id}"
+        raise ConfirmationStateError("training day resource scope is incomplete")
+    return plan_id

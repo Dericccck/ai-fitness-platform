@@ -1,6 +1,8 @@
 package com.shuyiwa.fitness.training.repository;
 
 import com.shuyiwa.fitness.training.domain.TrainingDay;
+import com.shuyiwa.fitness.training.domain.TrainingDayExecution;
+import com.shuyiwa.fitness.training.domain.TrainingDayExecutionStatus;
 import com.shuyiwa.fitness.training.domain.TrainingItem;
 import com.shuyiwa.fitness.training.domain.TrainingPlan;
 import com.shuyiwa.fitness.training.domain.TrainingPlanStatus;
@@ -16,6 +18,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
@@ -168,6 +171,114 @@ public class TrainingPlanRepository {
                 plan.getId(), action, actorId,
                 requestId, plan.getStatus().name(), target.name(), comment);
         return true;
+    }
+
+    /** 查询一个计划下已经明确提交的训练日执行记录。未执行训练日不会人为插入空记录。 */
+    public List<TrainingDayExecution> findExecutionsByPlanId(String planId) {
+        return jdbc.query("SELECT e.id, e.plan_id, e.day_id, e.organization_id, e.student_id, e.status, "
+                        + "e.execution_date, e.note, e.version, e.created_at, e.updated_at "
+                        + "FROM training_day_execution e JOIN training_plan_day d ON d.id = e.day_id "
+                        + "WHERE e.plan_id = ? ORDER BY e.execution_date, d.day_number",
+                new Object[]{planId}, (rs, rowNum) -> mapExecution(rs));
+    }
+
+    /**
+     * 在同一个事务中记录训练日结果、消费确认 JTI 并写入不可变审计。
+     *
+     * <p>先锁定训练日行，保证同一计划训练日的并发提交按顺序处理；如果请求 ID 已经写过
+     * 审计，则直接返回当前事实，避免网络重试再次消费 JTI。真正的新增或更新完成后才消费
+     * JTI，任何后续异常都会回滚状态、审计和凭证消费。</p>
+     */
+    @Transactional
+    public TrainingDayExecution recordDayExecution(String planId, String dayId,
+                                                    String organizationId, String studentId,
+                                                    TrainingDayExecutionStatus status, LocalDate executionDate,
+                                                    String note, String actorId, String requestId,
+                                                    TrainingConfirmation confirmation) {
+        Optional<String> appliedExecution = findExecutionIdByRequest(requestId);
+        if (appliedExecution.isPresent()) {
+            return findExecutionById(appliedExecution.get()).orElseThrow(
+                    () -> new IllegalStateException("训练日执行幂等记录不存在"));
+        }
+
+        List<String> lockedDays = jdbc.query(
+                "SELECT id FROM training_plan_day WHERE id = ? AND plan_id = ? FOR UPDATE",
+                new Object[]{dayId, planId}, (rs, rowNum) -> rs.getString("id"));
+        if (lockedDays.isEmpty()) {
+            throw new TrainingApiException(HttpStatus.NOT_FOUND, "训练日不存在");
+        }
+
+        Optional<TrainingDayExecution> existing = findExecutionByPlanAndDay(planId, dayId);
+        String executionId;
+        if (existing.isPresent()) {
+            executionId = existing.get().getId();
+            int changed = jdbc.update("UPDATE training_day_execution SET status = ?, execution_date = ?, "
+                            + "note = ?, version = version + 1 WHERE id = ? AND version = ?",
+                    status.name(), Date.valueOf(executionDate), note, executionId, existing.get().getVersion());
+            if (changed != 1) {
+                throw new TrainingApiException(HttpStatus.CONFLICT, "训练日执行记录已被其他请求修改");
+            }
+        } else {
+            executionId = id();
+            jdbc.update("INSERT INTO training_day_execution "
+                            + "(id, plan_id, day_id, organization_id, student_id, status, execution_date, note) "
+                            + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                    executionId, planId, dayId, organizationId, studentId, status.name(),
+                    Date.valueOf(executionDate), note);
+        }
+
+        consumeConfirmation(confirmation, requestId);
+        jdbc.update("INSERT INTO training_day_execution_audit "
+                        + "(execution_id, plan_id, day_id, action, status, actor_id, request_id, note) "
+                        + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                executionId, planId, dayId, "RECORD_TRAINING_DAY_EXECUTION", status.name(), actorId,
+                requestId, note);
+        return findExecutionById(executionId).orElseThrow(
+                () -> new IllegalStateException("训练日执行记录写入后无法读取"));
+    }
+
+    private Optional<String> findExecutionIdByRequest(String requestId) {
+        try {
+            return Optional.ofNullable(jdbc.queryForObject(
+                    "SELECT execution_id FROM training_day_execution_audit WHERE request_id = ?",
+                    new Object[]{requestId}, String.class));
+        } catch (EmptyResultDataAccessException ignored) {
+            return Optional.empty();
+        }
+    }
+
+    private Optional<TrainingDayExecution> findExecutionByPlanAndDay(String planId, String dayId) {
+        List<TrainingDayExecution> executions = jdbc.query(
+                "SELECT id, plan_id, day_id, organization_id, student_id, status, execution_date, note, "
+                        + "version, created_at, updated_at FROM training_day_execution "
+                        + "WHERE plan_id = ? AND day_id = ?",
+                new Object[]{planId, dayId}, (rs, rowNum) -> mapExecution(rs));
+        return executions.isEmpty() ? Optional.empty() : Optional.of(executions.get(0));
+    }
+
+    private Optional<TrainingDayExecution> findExecutionById(String executionId) {
+        List<TrainingDayExecution> executions = jdbc.query(
+                "SELECT id, plan_id, day_id, organization_id, student_id, status, execution_date, note, "
+                        + "version, created_at, updated_at FROM training_day_execution WHERE id = ?",
+                new Object[]{executionId}, (rs, rowNum) -> mapExecution(rs));
+        return executions.isEmpty() ? Optional.empty() : Optional.of(executions.get(0));
+    }
+
+    private TrainingDayExecution mapExecution(java.sql.ResultSet rs) throws java.sql.SQLException {
+        TrainingDayExecution execution = new TrainingDayExecution();
+        execution.setId(rs.getString("id"));
+        execution.setPlanId(rs.getString("plan_id"));
+        execution.setDayId(rs.getString("day_id"));
+        execution.setOrganizationId(rs.getString("organization_id"));
+        execution.setStudentId(rs.getString("student_id"));
+        execution.setStatus(TrainingDayExecutionStatus.valueOf(rs.getString("status")));
+        Date date = rs.getDate("execution_date");
+        execution.setExecutionDate(date == null ? null : date.toLocalDate());
+        execution.setNote(rs.getString("note"));
+        execution.setVersion(rs.getInt("version"));
+        execution.setCreatedAt(toInstant(rs.getTimestamp("created_at")));
+        execution.setUpdatedAt(toInstant(rs.getTimestamp("updated_at")));
+        return execution;
     }
 
     /**

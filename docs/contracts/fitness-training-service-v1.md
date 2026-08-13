@@ -27,7 +27,7 @@ X-Confirmation-Payload-Hash
 | --- | --- |
 | 系统/机构管理员 | 在签名机构范围内创建草案、提交审核、审核和发布 |
 | 负责教练 | 为负责学员创建草案、提交审核、审核和发布 |
-| 学员 | 只能参与本人草案内容，不能提交审核、审核、发布；只能查看 `PUBLISHED` 计划 |
+| 学员 | 只能参与本人草案内容，不能提交审核、审核、发布；只能查看 `PUBLISHED` 计划，并记录本人训练日完成或跳过 |
 | Agent | 只能通过业务写工具创建结构化 `DRAFT`，不能把状态写入请求体 |
 
 训练服务再次校验 `organizationId + studentId + coachId` 的现有 `user_and_coach` 关系，不能
@@ -67,5 +67,8 @@ X-Request-ID
 | POST | `/internal/training/v1/plans/{id}/review` | 负责教练/机构管理员审核或驳回 |
 | POST | `/internal/training/v1/plans/{id}/publish` | 发布已审核通过的计划 |
 | GET | `/internal/training/v1/plans/{id}` | 按角色读取计划 |
+| GET | `/internal/training/v1/plans/{id}/executions` | 查询已提交的训练日执行记录 |
+| POST | `/internal/training/v1/plans/{id}/days/{dayId}/execution` | 学员记录训练日完成或跳过 |
 
-训练执行记录、组次反馈、测量和阶段调整暂未开放；不能用计划备注字段替代。
+执行接口的请求体包含 `dayId`、`status=COMPLETED/SKIPPED` 和可选 `note`，其中 `dayId` 必须与路径一致；训练日期由服务端生成，
+并绑定 `planId:dayId` 资源范围。训练执行记录、组次反馈、测量和阶段调整暂未开放；不能用计划备注字段替代。

@@ -1,7 +1,11 @@
 package com.shuyiwa.fitness.training.service;
 
 import com.shuyiwa.fitness.training.api.TrainingPlanRequest;
+import com.shuyiwa.fitness.training.api.TrainingDayExecutionRequest;
+import com.shuyiwa.fitness.training.api.TrainingDayExecutionView;
 import com.shuyiwa.fitness.training.domain.TrainingDay;
+import com.shuyiwa.fitness.training.domain.TrainingDayExecution;
+import com.shuyiwa.fitness.training.domain.TrainingDayExecutionStatus;
 import com.shuyiwa.fitness.training.domain.TrainingItem;
 import com.shuyiwa.fitness.training.domain.TrainingPlan;
 import com.shuyiwa.fitness.training.repository.TrainingPlanRepository;
@@ -72,6 +76,55 @@ public class TrainingPlanServiceTest {
             return;
         }
         throw new AssertionError("缺少确认凭证时必须拒绝创建草案");
+    }
+
+    @Test
+    public void onlyStudentCanRecordExecutionForPublishedPlan() {
+        TrainingPlanRepository repository = mock(TrainingPlanRepository.class);
+        TrainingPlanService service = new TrainingPlanService(repository);
+        TrainingPlan plan = new TrainingPlan();
+        plan.setId("plan-1");
+        plan.setOrganizationId("org-1");
+        plan.setStudentId("student-1");
+        plan.setCoachId("coach-1");
+        plan.setStatus(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.PUBLISHED);
+        TrainingDay day = new TrainingDay();
+        day.setId("day-1");
+        day.setDayNumber(1);
+        day.setTitle("下肢训练");
+        plan.setDays(Collections.singletonList(day));
+        when(repository.findById("plan-1")).thenReturn(java.util.Optional.of(plan));
+        TrainingDayExecution execution = new TrainingDayExecution();
+        execution.setId("execution-1");
+        execution.setPlanId("plan-1");
+        execution.setDayId("day-1");
+        execution.setOrganizationId("org-1");
+        execution.setStudentId("student-1");
+        execution.setStatus(TrainingDayExecutionStatus.COMPLETED);
+        execution.setVersion(0);
+        when(repository.recordDayExecution(any(String.class), any(String.class), any(String.class),
+                any(String.class), any(TrainingDayExecutionStatus.class), any(java.time.LocalDate.class),
+                org.mockito.ArgumentMatchers.any(), any(String.class), any(String.class),
+                any(TrainingConfirmation.class))).thenReturn(execution);
+
+        TrainingDayExecutionRequest request = new TrainingDayExecutionRequest();
+        request.setDayId("day-1");
+        request.setStatus(TrainingDayExecutionStatus.COMPLETED);
+        TrainingConfirmation confirmation = new TrainingConfirmation(
+                "confirmation-1", "jti-1", "fitness.training.day.record_execution.v1",
+                "RECORD_TRAINING_DAY_EXECUTION", "org-1", "plan-1:day-1",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        );
+        TrainingDayExecutionView result = service.recordExecution(new TrainingActor("student-1",
+                Collections.singleton(TrainingActor.STUDENT), Collections.singleton("org-1"), "req-1",
+                confirmation), "plan-1", "day-1", request);
+
+        assertEquals("day-1", result.getDayId());
+        assertEquals(TrainingDayExecutionStatus.COMPLETED, result.getStatus());
+        verify(repository).recordDayExecution(any(String.class), any(String.class), any(String.class),
+                any(String.class), any(TrainingDayExecutionStatus.class), any(java.time.LocalDate.class),
+                org.mockito.ArgumentMatchers.any(), any(String.class), any(String.class),
+                any(TrainingConfirmation.class));
     }
 
     private TrainingPlanRequest validDraftRequest() {

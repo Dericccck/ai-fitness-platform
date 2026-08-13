@@ -17,6 +17,10 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.util.Arrays;
+import java.util.List;
+import java.util.stream.Collectors;
+
 /**
  * Gateway 到训练服务的固定客户端。
  *
@@ -84,6 +88,29 @@ public class TrainingServiceClient {
                 "/internal/training/v1/plans/" + planId + "/publish", null).toToolView();
     }
 
+    public List<ToolViews.TrainingDayExecutionView> listExecutions(AgentContext context, String planId,
+                                                                    String requestId) {
+        TrainingServiceViews.Execution[] executions = exchangeExecutions(context, requestId, null,
+                HttpMethod.GET, "/internal/training/v1/plans/" + planId + "/executions", null);
+        return Arrays.stream(executions).map(TrainingServiceViews.Execution::toToolView)
+                .collect(Collectors.toList());
+    }
+
+    public ToolViews.TrainingDayExecutionView recordExecution(AgentContext context, String planId,
+                                                               String dayId, String requestId,
+                                                               String confirmationToken,
+                                                               TrainingToolInputs.ExecutionInput input) {
+        if (input == null || input.getDayId() == null || !dayId.equals(input.getDayId())) {
+            throw new IllegalArgumentException("execution day does not match request path");
+        }
+        ConfirmationTokenClaims claims = confirmationTokenVerifier.verify(
+                confirmationToken, context, "fitness.training.day.record_execution.v1",
+                "RECORD_TRAINING_DAY_EXECUTION", planId + ":" + dayId, requestId);
+        return exchangeExecution(context, requestId, claims, HttpMethod.POST,
+                "/internal/training/v1/plans/" + planId + "/days/" + dayId + "/execution", input)
+                .toToolView();
+    }
+
     private TrainingServiceViews.Plan exchange(AgentContext context, String requestId,
                                                 ConfirmationTokenClaims confirmationClaims, HttpMethod method,
                                                 String path, Object body) {
@@ -125,6 +152,65 @@ public class TrainingServiceClient {
             }
             if (exception.getStatusCode().value() == 409) {
                 throw new GatewayConflictException("training plan was changed by another request");
+            }
+            throw new IllegalArgumentException("training service rejected the request");
+        } catch (RestClientException exception) {
+            throw new IllegalStateException("training service is temporarily unavailable", exception);
+        }
+    }
+
+    private TrainingServiceViews.Execution exchangeExecution(AgentContext context, String requestId,
+                                                              ConfirmationTokenClaims confirmationClaims,
+                                                              HttpMethod method, String path, Object body) {
+        return exchangeTyped(context, requestId, confirmationClaims, method, path, body,
+                TrainingServiceViews.Execution.class);
+    }
+
+    private TrainingServiceViews.Execution[] exchangeExecutions(AgentContext context, String requestId,
+                                                                 ConfirmationTokenClaims confirmationClaims,
+                                                                 HttpMethod method, String path, Object body) {
+        return exchangeTyped(context, requestId, confirmationClaims, method, path, body,
+                TrainingServiceViews.Execution[].class);
+    }
+
+    private <T> T exchangeTyped(AgentContext context, String requestId,
+                                ConfirmationTokenClaims confirmationClaims, HttpMethod method,
+                                String path, Object body, Class<T> responseType) {
+        if (properties.getInternalServiceToken().trim().isEmpty()) {
+            throw new IllegalStateException("training service internal token is not configured");
+        }
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Internal-Service-Token", properties.getInternalServiceToken());
+        headers.set("X-Actor-User-Id", context.getSubjectUserId());
+        headers.set("X-Actor-Roles", String.join(",", context.getRoles()));
+        headers.set("X-Actor-Organization-Ids", String.join(",", context.getOrganizationIds()));
+        headers.set("X-Request-ID", requestId);
+        if (confirmationClaims != null) {
+            headers.set("X-Confirmation-Id", confirmationClaims.getConfirmationId());
+            headers.set("X-Confirmation-JTI", confirmationClaims.getJti());
+            headers.set("X-Confirmation-Tool-ID", confirmationClaims.getToolId());
+            headers.set("X-Confirmation-Action", confirmationClaims.getAction());
+            headers.set("X-Confirmation-Organization-ID", confirmationClaims.getOrganizationId());
+            headers.set("X-Confirmation-Resource", confirmationClaims.getResource());
+            headers.set("X-Confirmation-Payload-Hash", confirmationClaims.getPayloadHash());
+        }
+        try {
+            ResponseEntity<T> response = restTemplate.exchange(
+                    properties.getBaseUrl().replaceAll("/$", "") + path,
+                    method, new HttpEntity<>(body, headers), responseType);
+            if (response.getBody() == null) {
+                throw new IllegalStateException("training service returned an empty response");
+            }
+            return response.getBody();
+        } catch (HttpClientErrorException exception) {
+            if (exception.getStatusCode().value() == 403) {
+                throw new GatewayForbiddenException("training resource is outside the authorized scope");
+            }
+            if (exception.getStatusCode().value() == 404) {
+                throw new GatewayResourceNotFoundException("training resource was not found");
+            }
+            if (exception.getStatusCode().value() == 409) {
+                throw new GatewayConflictException("training resource was changed by another request");
             }
             throw new IllegalArgumentException("training service rejected the request");
         } catch (RestClientException exception) {
