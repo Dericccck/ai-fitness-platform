@@ -14,7 +14,9 @@ from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
+from langgraph.types import interrupt
 
+from app.confirmation.service import ConfirmationService
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.cache import SessionLockManager, SessionLockUnavailable
 from app.infrastructure.gateway_client import GatewayRequestContext
@@ -37,6 +39,7 @@ SupervisorRoute = Literal[
     "OPERATIONS",
     "UNSUPPORTED_LEGACY",
 ]
+SupervisorRunStatus = Literal["COMPLETED", "CONFIRMATION_REQUIRED"]
 
 
 class SupervisorRuntimeError(RuntimeError):
@@ -66,6 +69,7 @@ class SupervisorRequest:
     user_message: str
     gateway_context: GatewayRequestContext
     conversation_id: str
+    # identity/thread_id 只存在于本次请求上下文，不属于可持久化 State。
     thread_id: str | None = None
     locale: str = "zh-CN"
     identity: AgentIdentity | None = None
@@ -81,6 +85,9 @@ class SupervisorRuntimeContext:
     """
 
     gateway_context: GatewayRequestContext
+    # 签名身份和 thread 只通过 LangGraph runtime context 注入，不能写入 State。
+    identity: AgentIdentity | None = None
+    thread_id: str | None = None
 
 
 @dataclass(frozen=True)
@@ -92,6 +99,10 @@ class SupervisorResponse:
     tool_steps: int
     input_tokens: int | None
     output_tokens: int | None
+    status: SupervisorRunStatus = "COMPLETED"
+    confirmation_id: str | None = None
+    confirmation_summary: dict[str, Any] | None = None
+    confirmation_expires_at: str | None = None
 
 
 class SupervisorState(TypedDict, total=False):
@@ -103,6 +114,8 @@ class SupervisorState(TypedDict, total=False):
     output_tokens: int
     error: str
     model_tool_calls: list[ModelToolCall]
+    # 只保存确认单 ID；精确参数保存在加密确认单，绝不进入 Checkpoint。
+    pending_confirmation_id: str
 
 
 class Supervisor:
@@ -117,6 +130,7 @@ class Supervisor:
         checkpointer: Any | None = None,
         session_lock: SessionLockManager | None = None,
         rag_service: RagService | None = None,
+        confirmation_service: ConfirmationService | None = None,
     ) -> None:
         self.models = models
         self.tools = tools
@@ -124,6 +138,7 @@ class Supervisor:
         self._checkpointer = checkpointer
         self.session_lock = session_lock
         self.rag_service = rag_service
+        self.confirmation_service = confirmation_service
         self._graph = self._build_graph()
 
     async def invoke(self, request: SupervisorRequest) -> SupervisorResponse:
@@ -200,7 +215,11 @@ class Supervisor:
             return await self._graph.ainvoke(
                 initial,
                 config=config,
-                context=SupervisorRuntimeContext(gateway_context=request.gateway_context),
+                context=SupervisorRuntimeContext(
+                    gateway_context=request.gateway_context,
+                    identity=request.identity,
+                    thread_id=thread_id,
+                ),
             )
 
         try:
@@ -214,6 +233,26 @@ class Supervisor:
         except (ModelConfigurationError, ModelResponseError, ToolRegistryError) as exc:
             raise SupervisorRuntimeError("supervisor execution failed") from exc
 
+        interrupts = final_state.get("__interrupt__", [])
+        if interrupts:
+            interrupt_value = interrupts[0].value
+            if not isinstance(interrupt_value, dict):
+                raise SupervisorRuntimeError("supervisor returned an invalid confirmation prompt")
+            return SupervisorResponse(
+                answer="",
+                route=route,
+                tool_steps=final_state.get("tool_steps", 0),
+                input_tokens=_optional_int(final_state.get("input_tokens")),
+                output_tokens=_optional_int(final_state.get("output_tokens")),
+                status="CONFIRMATION_REQUIRED",
+                confirmation_id=_optional_text(interrupt_value.get("confirmation_id")),
+                confirmation_summary=(
+                    interrupt_value.get("summary")
+                    if isinstance(interrupt_value.get("summary"), dict)
+                    else None
+                ),
+                confirmation_expires_at=_optional_text(interrupt_value.get("expires_at")),
+            )
         answer = final_state.get("final_answer", "").strip()
         if not answer:
             raise SupervisorRuntimeError("supervisor produced an empty answer")
@@ -229,16 +268,24 @@ class Supervisor:
         graph = StateGraph(SupervisorState, context_schema=SupervisorRuntimeContext)
         graph.add_node("model", self._model_node)
         graph.add_node("tools", self._tool_node)
+        graph.add_node("confirmation", self._confirmation_node)
         graph.add_edge(START, "model")
         graph.add_conditional_edges(
             "model",
             self._after_model,
-            {"tools": "tools", "finish": END},
+            {"tools": "tools", "confirmation": "confirmation", "finish": END},
         )
         graph.add_edge("tools", "model")
+        graph.add_edge("confirmation", END)
         return graph.compile(checkpointer=self._checkpointer)
 
-    async def _model_node(self, state: SupervisorState) -> dict[str, Any]:
+    async def _model_node(
+        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        # 中断恢复会从该节点重新执行。只要 State 已有待确认 ID，就不能再次调用 LLM，
+        # 否则模型可能重新生成一套与原确认单不同的参数。
+        if state.get("pending_confirmation_id"):
+            return {"model_tool_calls": []}
         tool_schemas = (
             _model_tools(self.tools) if state.get("tool_steps", 0) < self.max_tool_steps else []
         )
@@ -247,12 +294,49 @@ class Supervisor:
             tools=tool_schemas,
         )
         tool_calls = list(turn.tool_calls)
-        assistant_message: dict[str, Any] = {
+        if any(not self.tools.get(call.name).read_only for call in tool_calls):
+            if len(tool_calls) != 1:
+                raise SupervisorRuntimeError(
+                    "a confirmation is required for each write tool call separately"
+                )
+            if runtime.context is None or runtime.context.identity is None:
+                raise SupervisorRuntimeError("signed identity is required for write confirmation")
+            if self.confirmation_service is None:
+                raise SupervisorRuntimeError("confirmation service is not configured")
+            call = tool_calls[0]
+            confirmation = await self.confirmation_service.prepare(
+                tool_id=call.name,
+                raw_input=call.arguments,
+                gateway_context=runtime.context.gateway_context,
+                identity=runtime.context.identity,
+                thread_id=runtime.context.thread_id or "unknown-thread",
+            )
+            # Checkpoint 只保存空参数占位和确认 ID；精确参数已在确认单中加密保存。
+            assistant_message: dict[str, Any] = {
+                "role": "assistant",
+                "content": turn.content,
+                "tool_calls": [
+                    {
+                        "id": call.call_id,
+                        "type": "function",
+                        "function": {"name": call.name, "arguments": "{}"},
+                    }
+                ],
+            }
+            return {
+                "messages": [*state["messages"], assistant_message],
+                "model_tool_calls": [],
+                "pending_confirmation_id": confirmation.id,
+                "final_answer": "",
+                "input_tokens": state.get("input_tokens", 0) + (turn.input_tokens or 0),
+                "output_tokens": state.get("output_tokens", 0) + (turn.output_tokens or 0),
+            }
+        regular_assistant_message: dict[str, Any] = {
             "role": "assistant",
             "content": turn.content,
         }
         if tool_calls:
-            assistant_message["tool_calls"] = [
+            regular_assistant_message["tool_calls"] = [
                 {
                     "id": call.call_id,
                     "type": "function",
@@ -264,12 +348,43 @@ class Supervisor:
                 for call in tool_calls
             ]
         return {
-            "messages": [*state["messages"], assistant_message],
+            "messages": [*state["messages"], regular_assistant_message],
             "model_tool_calls": tool_calls,
             "final_answer": turn.content if not tool_calls else "",
             "input_tokens": state.get("input_tokens", 0) + (turn.input_tokens or 0),
             "output_tokens": state.get("output_tokens", 0) + (turn.output_tokens or 0),
         }
+
+    async def _confirmation_node(
+        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        """展示确认卡片并暂停图；本提交不接受任何 resume 值执行写操作。"""
+
+        confirmation_id = state.get("pending_confirmation_id")
+        if not confirmation_id or runtime.context is None or runtime.context.identity is None:
+            raise SupervisorRuntimeError("confirmation runtime context is incomplete")
+        if self.confirmation_service is None:
+            raise SupervisorRuntimeError("confirmation service is not configured")
+        record = await self.confirmation_service.get_for_subject(
+            confirmation_id, runtime.context.identity
+        )
+        if record.authorization_status != "PENDING":
+            raise SupervisorRuntimeError("confirmation is no longer pending")
+        resume_value = interrupt(
+            {
+                "type": "CONFIRMATION_REQUIRED",
+                "confirmation_id": record.id,
+                "status": record.authorization_status,
+                "tool_id": record.tool_id,
+                "action": record.action,
+                "risk_level": record.risk_level,
+                "summary": dict(record.display_summary),
+                "expires_at": record.expires_at.isoformat(),
+            }
+        )
+        # 批准、凭证签发、解密和 Gateway 执行属于下一阶段确认 API；当前阶段即使收到
+        # resume 也不允许把任意值解释成“用户同意”。
+        raise SupervisorRuntimeError(f"confirmation resume is not enabled: {resume_value!r}")
 
     async def _tool_node(
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
@@ -295,6 +410,8 @@ class Supervisor:
 
     @staticmethod
     def _after_model(state: SupervisorState) -> str:
+        if state.get("pending_confirmation_id"):
+            return "confirmation"
         return "tools" if state.get("model_tool_calls") else "finish"
 
 
@@ -341,3 +458,7 @@ def _model_tools(registry: ToolRegistry) -> list[dict[str, Any]]:
 
 def _optional_int(value: int | None) -> int | None:
     return value if value else None
+
+
+def _optional_text(value: Any) -> str | None:
+    return value if isinstance(value, str) and value else None

@@ -53,6 +53,9 @@
   或队列消费者接管，不依赖单个 API 进程内存。
 - Prometheus：低基数 HTTP 请求量、耗时、并发和构建信息指标。
 - OpenTelemetry：可选 OTLP/HTTP Trace 导出，默认关闭且不发送 Prompt 或用户档案。
+- 写操作确认：训练计划写工具会先生成确定性确认摘要和加密参数，写入 PostgreSQL 确认单后通过
+  LangGraph `interrupt()` 暂停；当前已完成基础暂停和 Checkpoint 脱敏，批准/拒绝 API、服务端恢复和
+  凭证 v2 仍在后续迭代中，不能把“待确认”当作业务已执行。
 
 ## 本地启动
 
@@ -65,6 +68,15 @@ make agent-sync
 make agent-migrate
 make agent-run
 ```
+
+首次本地启动前必须为确认参数加密配置随机密钥；不要把真实密钥提交到 Git：
+
+```bash
+openssl rand -base64 32
+```
+
+将命令输出填入 `fitness-agent-service/.env` 的 `AGENT_CONFIRMATION_ENCRYPTION_KEY_BASE64`。
+密钥缺失或长度不合法时服务会 fail-closed，不会启动一个无法安全保护写参数的确认流程。
 
 本地若要实际处理扫描型 PDF，还需在 Linux/GPU 或 amd64 推理节点启动独立 OCR 服务：
 `make infra-up-ocr`。macOS 开发机可以只运行 Agent，并把 `AGENT_RAG_OCR_ENDPOINT_URL` 指向
@@ -124,8 +136,8 @@ DeepSeek 配置使用 `DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL` 和 `DEEPSEEK_BASE_U
 Supervisor 必须通过 `app.state.tool_registry` 获取工具定义和调用入口；不能在 Prompt、
 Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry 已包含健身只读工具和训练计划草案、
 提交审核、审核、发布四个写工具；写工具具备确认标记和缺少凭证时的前置拒绝。确认单持久化、
-不可变确认事件、授权/执行状态分离、数据库幂等和并发领取基础已经完成，但 LangGraph
-`interrupt()`、确认/拒绝 API、服务端凭证签发和恢复 API 尚未完成。预约写操作要等这套通用确认闭环、幂等键和 Java
+不可变确认事件、授权/执行状态分离、数据库幂等、参数加密、Checkpoint 脱敏和 `interrupt()` 基础暂停
+已经完成；确认/拒绝 API、服务端凭证签发和恢复 API 尚未完成。预约写操作要等这套通用确认闭环、幂等键和 Java
 事务审计完成后再加入。
 
 当前对话接口为 `POST /api/v1/agent/chat`。调用方必须传入认证服务签发的

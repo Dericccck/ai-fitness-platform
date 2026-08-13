@@ -48,6 +48,10 @@ class Settings(BaseSettings):
     checkpoint_pool_min_size: int = Field(default=1, ge=1, le=10)
     checkpoint_pool_max_size: int = Field(default=5, ge=1, le=30)
     session_lock_ttl_seconds: int = Field(default=60, ge=10, le=300)
+    # 确认单精确参数使用 AES-GCM 加密；密钥只允许通过 Secret 注入，不能写入仓库。
+    confirmation_encryption_key_base64: str = ""
+    confirmation_encryption_key_version: str = "local-v1"
+    confirmation_ttl_seconds: int = Field(default=600, ge=60, le=3600)
 
     gateway_context_signing_secret: str = Field(
         default="",

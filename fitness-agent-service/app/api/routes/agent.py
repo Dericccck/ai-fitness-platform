@@ -48,9 +48,17 @@ class AgentChatResponse(BaseModel):
     tool_steps: int
     input_tokens: int | None
     output_tokens: int | None
+    status: str = "COMPLETED"
+    confirmation_id: str | None = None
+    confirmation_summary: dict[str, object] | None = None
+    confirmation_expires_at: str | None = None
 
 
-@router.post("/chat", response_model=AgentChatResponse)
+@router.post(
+    "/chat",
+    response_model=AgentChatResponse,
+    response_model_exclude_defaults=True,
+)
 async def chat(
     payload: AgentChatRequest,
     request: Request,
@@ -116,4 +124,8 @@ async def chat(
         tool_steps=response.tool_steps,
         input_tokens=response.input_tokens,
         output_tokens=response.output_tokens,
+        status=response.status,
+        confirmation_id=response.confirmation_id,
+        confirmation_summary=response.confirmation_summary,
+        confirmation_expires_at=response.confirmation_expires_at,
     )

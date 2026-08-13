@@ -13,6 +13,9 @@ from app.api.routes.agent import router as agent_router
 from app.api.routes.health import router as health_router
 from app.api.routes.knowledge_review import router as knowledge_review_router
 from app.api.routes.rag import router as rag_router
+from app.confirmation.cipher import AesGcmPayloadCipher
+from app.confirmation.repository import ConfirmationRepository
+from app.confirmation.service import ConfirmationService
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import HttpMetrics, MetricsMiddleware
@@ -155,6 +158,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Tool Registry 是 Agent 调用业务能力的唯一入口。它在启动期完成固定工具注册，
     # 让后续 Supervisor 只能看到有 Schema、角色元数据和审计边界的工具集合。
     app.state.tool_registry = build_fitness_tool_registry(app.state.gateway)
+    # 确认参数进入 PostgreSQL 前必须经过应用层加密；密钥缺失时拒绝启动，避免形成
+    # “看似持久化、实际明文落库”的不安全降级路径。
+    app.state.confirmation_cipher = AesGcmPayloadCipher.from_base64(
+        settings.confirmation_encryption_key_base64,
+        settings.confirmation_encryption_key_version,
+    )
+    app.state.confirmation_service = ConfirmationService(
+        ConfirmationRepository(app.state.database),
+        app.state.tool_registry,
+        app.state.gateway,
+        app.state.confirmation_cipher,
+        ttl_seconds=settings.confirmation_ttl_seconds,
+    )
     app.state.session_lock = SessionLockManager(
         app.state.cache.client,
         ttl_seconds=settings.session_lock_ttl_seconds,
@@ -170,6 +186,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             checkpointer=app.state.checkpoint_store.saver,
             session_lock=app.state.session_lock,
             rag_service=app.state.rag_service,
+            confirmation_service=app.state.confirmation_service,
         )
         yield
     finally:
