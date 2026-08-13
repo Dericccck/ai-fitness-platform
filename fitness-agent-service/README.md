@@ -54,8 +54,10 @@
 - Prometheus：低基数 HTTP 请求量、耗时、并发和构建信息指标。
 - OpenTelemetry：可选 OTLP/HTTP Trace 导出，默认关闭且不发送 Prompt 或用户档案。
 - 写操作确认：训练计划写工具会先生成确定性确认摘要和加密参数，写入 PostgreSQL 确认单后通过
-  LangGraph `interrupt()` 暂停；当前已完成基础暂停、Checkpoint 脱敏、确认详情和批准/拒绝 API，
-  服务端恢复、凭证 v2 和真正 Gateway 执行仍在后续迭代中，不能把“待确认”或“已批准”当作业务已执行。
+  LangGraph `interrupt()` 暂停；批准接口会在服务端持久化决定后使用同一 `thread_id` 调用
+  `Command(resume=...)`，从加密参数恢复并通过短时确认凭证调用 Java Gateway。当前凭证仍是与
+  Java Gateway v1 兼容的 HMAC 过渡版本；一次性 JTI 已在 Agent 确认单中领取和审计，Gateway
+  v2 的完整 JTI 消费和非对称验签仍在后续迭代中。
 
 ## 本地启动
 
@@ -77,6 +79,16 @@ openssl rand -base64 32
 
 将命令输出填入 `fitness-agent-service/.env` 的 `AGENT_CONFIRMATION_ENCRYPTION_KEY_BASE64`。
 密钥缺失或长度不合法时服务会 fail-closed，不会启动一个无法安全保护写参数的确认流程。
+
+确认凭证还需要一份与 Java Gateway 共享的服务端签名密钥。开发环境可生成：
+
+```bash
+openssl rand -hex 32
+```
+
+将结果同时注入 Agent 的 `AGENT_CONFIRMATION_SIGNING_SECRET` 和 Gateway 的
+`GATEWAY_CONFIRMATION_SIGNING_SECRET`；生产环境应由 Secret Manager 注入，不能写入 `.env`、
+镜像或 Git。两边的值不一致时，批准后的写操作会在 Gateway 验签阶段失败。
 
 本地若要实际处理扫描型 PDF，还需在 Linux/GPU 或 amd64 推理节点启动独立 OCR 服务：
 `make infra-up-ocr`。macOS 开发机可以只运行 Agent，并把 `AGENT_RAG_OCR_ENDPOINT_URL` 指向
@@ -136,22 +148,23 @@ DeepSeek 配置使用 `DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL` 和 `DEEPSEEK_BASE_U
 Supervisor 必须通过 `app.state.tool_registry` 获取工具定义和调用入口；不能在 Prompt、
 Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry 已包含健身只读工具和训练计划草案、
 提交审核、审核、发布四个写工具；写工具具备确认标记和缺少凭证时的前置拒绝。确认单持久化、
-不可变确认事件、授权/执行状态分离、数据库幂等、参数加密、Checkpoint 脱敏、`interrupt()` 基础暂停
-以及确认详情/决定 API 已经完成；服务端凭证签发和恢复 API 尚未完成。预约写操作要等这套通用确认闭环、幂等键和 Java
-事务审计完成后再加入。
+不可变确认事件、授权/执行状态分离、数据库幂等、参数加密、Checkpoint 脱敏、`interrupt()` 暂停、
+确认详情/决定 API、服务端恢复和真实 Gateway 执行已经完成。批准接口内部自动完成“持久化决定→
+恢复图→调用写工具”，不会把 Token 返回给客户端。当前仅保留 Java Gateway v1 HMAC 兼容凭证；
+预约写操作要等 v2 凭证消费闭环、幂等键和 Java 事务审计完成后再加入。
 
 当前对话接口为 `POST /api/v1/agent/chat`。调用方必须传入认证服务签发的
-`X-Agent-Context`，以及 `conversation_id`、`message` 和可选 `locale`；写工具还需要由上游
-确认流程签发的 `X-Confirmation-Token`，接口拒绝额外的用户/组织/角色字段。该 Header 仍是过渡期
-内部联调通道；最终产品流程将通过持久化确认单、LangGraph `interrupt()` 和服务端恢复注入凭证，
-不让浏览器或模型接触 Token。当前先提供非流式稳定协议；SSE、待确认状态查询和断线恢复将在
-人机确认边界完成后接入。
+`X-Agent-Context`，以及 `conversation_id`、`message` 和可选 `locale`；写工具的正常产品流程不
+要求浏览器提交确认 Token，批准接口会在服务端恢复时注入。`X-Confirmation-Token` 仍保留为受控的
+内部联调过渡通道，接口拒绝额外的用户/组织/角色字段；浏览器和模型不应接触该 Token。当前先提供
+非流式稳定协议；SSE 和更完整的断线/重启故障演练将在 v2 凭证边界完成后接入。
 
 确认单接口为 `GET /api/v1/agent/confirmations/{confirmation_id}` 和
 `POST /api/v1/agent/confirmations/{confirmation_id}/decisions`。决定请求只提交
 `APPROVE`/`REJECT` 与独立 `decision_request_id`；身份、组织和角色仍从签名 AgentContext 获取。
-接口不会返回完整参数、参数哈希、密文或确认凭证；批准成功也只代表授权状态变为 `APPROVED`，
-不会绕过后续恢复流程直接执行 Java Gateway。
+接口不会返回完整参数、参数哈希、密文或确认凭证；`APPROVE` 会在服务端继续恢复图并执行 Java
+Gateway，响应中的 `execution_status` 只反映真实工具结果。执行失败时接口返回暂时不可用或冲突，
+页面可以用同一个 `decision_request_id` 重试；不能新造一个业务参数绕过原确认单。
 
 当前版本已接入 PostgreSQL LangGraph Checkpoint 和 Redis 会话锁：同一用户/组织/角色范围
 内的 `conversation_id` 会生成稳定的匿名 `thread_id`，不同身份即使使用相同会话 ID 也

@@ -52,6 +52,10 @@ class Settings(BaseSettings):
     confirmation_encryption_key_base64: str = ""
     confirmation_encryption_key_version: str = "local-v1"
     confirmation_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+    # 与 Java Gateway v1 兼容的服务端签发密钥；生产环境必须与 Gateway 使用 Secret Manager
+    # 管理的同一密钥，不能通过浏览器或模型传入。
+    confirmation_signing_secret: str = ""
+    confirmation_token_ttl_seconds: int = Field(default=120, ge=30, le=600)
 
     gateway_context_signing_secret: str = Field(
         default="",

@@ -7,21 +7,33 @@
 
 from __future__ import annotations
 
+import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
 from app.agent.tool_registry import ToolRegistry
-from app.confirmation.cipher import AesGcmPayloadCipher
+from app.confirmation.cipher import AesGcmPayloadCipher, ConfirmationPayloadCipherError
 from app.confirmation.models import ConfirmationDecision, ConfirmationRecord, ConfirmationStateError
 from app.confirmation.normalization import (
     ConfirmationNormalizationContext,
     ConfirmationResourceSnapshot,
 )
 from app.confirmation.repository import ConfirmationRepository
+from app.confirmation.token import ConfirmationTokenIssuer
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.gateway_client import GatewayClient, GatewayRequestContext
+
+
+@dataclass(frozen=True)
+class ConfirmationExecutionPreparation:
+    """一次恢复执行所需的短暂内存上下文，不进入 State 或 Checkpoint。"""
+
+    record: ConfirmationRecord
+    tool_input: dict[str, Any]
+    confirmation_token: str
 
 
 class ConfirmationService:
@@ -33,6 +45,7 @@ class ConfirmationService:
         tools: ToolRegistry,
         gateway: GatewayClient,
         cipher: AesGcmPayloadCipher,
+        token_issuer: ConfirmationTokenIssuer,
         *,
         ttl_seconds: int = 600,
     ) -> None:
@@ -40,6 +53,7 @@ class ConfirmationService:
         self.tools = tools
         self.gateway = gateway
         self.cipher = cipher
+        self.token_issuer = token_issuer
         self.ttl_seconds = ttl_seconds
 
     async def prepare(
@@ -95,6 +109,73 @@ class ConfirmationService:
         action = normalized.to_confirmation_action(ciphertext, self.cipher.key_version)
         expires_at = datetime.now(UTC) + timedelta(seconds=self.ttl_seconds)
         return await self.repository.create(str(uuid4()), action, expires_at)
+
+    async def prepare_execution(
+        self, confirmation_id: str, *, identity: AgentIdentity, trace_id: str | None
+    ) -> ConfirmationExecutionPreparation:
+        """读取批准动作、绑定一次性 JTI 并解密原始工具参数。
+
+        原始参数只在当前请求的 Python 内存和运行时 context 中存在；它不会被写回
+        LangGraph State。JTI 先持久化再生成 Token，进程在两步之间重启时可以安全重试。
+        """
+
+        record = await self.get_for_subject(confirmation_id, identity)
+        if record.authorization_status != "APPROVED":
+            raise ConfirmationStateError("only approved confirmation can execute")
+        if record.execution_status == "FAILED_RETRYABLE":
+            # 网络超时等可恢复失败不能直接复用旧 Token；先清空旧 JTI 和执行时间，
+            # 再为下一次尝试重新领取执行权。授权仍保持 APPROVED，不需要用户重复确认。
+            record = await self.repository.requeue_retryable(confirmation_id, trace_id)
+        if record.execution_status != "NOT_STARTED":
+            raise ConfirmationStateError("confirmation execution is not ready to run")
+        jti = record.credential_jti or str(uuid4())
+        if record.credential_jti is None:
+            record = await self.repository.issue_credential_jti(
+                confirmation_id, jti, datetime.now(UTC), trace_id
+            )
+        try:
+            plaintext = self.cipher.decrypt(
+                record.payload_ciphertext, associated_data=record.payload_hash
+            )
+            payload = json.loads(plaintext)
+        except (ConfirmationPayloadCipherError, ValueError, TypeError) as exc:
+            raise ConfirmationStateError("confirmation payload cannot be restored") from exc
+        if not isinstance(payload, dict):
+            raise ConfirmationStateError("confirmation payload must be an object")
+
+        tool_input = {str(key): value for key, value in payload.items()}
+        token = self.token_issuer.issue(
+            record,
+            resource=_token_resource(record, tool_input),
+            jti=jti,
+        )
+        if record.execution_status == "NOT_STARTED":
+            record = await self.repository.claim_execution(
+                confirmation_id, datetime.now(UTC), trace_id
+            )
+        elif record.execution_status != "RUNNING":
+            raise ConfirmationStateError("confirmation execution is no longer resumable")
+        return ConfirmationExecutionPreparation(record, tool_input, token)
+
+    async def finish_execution(
+        self,
+        confirmation_id: str,
+        *,
+        success: bool,
+        trace_id: str | None,
+        error_code: str | None = None,
+        retryable: bool = False,
+    ) -> ConfirmationRecord:
+        """记录 Gateway 工具的真实结果，保持授权状态和执行状态分离。"""
+
+        return await self.repository.finish_execution(
+            confirmation_id,
+            success,
+            datetime.now(UTC),
+            trace_id,
+            error_code=error_code,
+            retryable=retryable,
+        )
 
     async def get_for_subject(
         self, confirmation_id: str, identity: AgentIdentity
@@ -171,3 +252,15 @@ def _plan_id_from_input(raw_input: Mapping[str, Any]) -> str:
     if not isinstance(value, str) or not value.strip():
         raise ValueError("plan_id is required for a training plan confirmation")
     return value
+
+
+def _token_resource(record: ConfirmationRecord, payload: Mapping[str, Any]) -> str:
+    """生成与 Java Gateway v1 契约一致的资源范围。"""
+
+    if record.resource_id:
+        return record.resource_id
+    organization_id = payload.get("organization_id")
+    student_id = payload.get("student_id")
+    if isinstance(organization_id, str) and isinstance(student_id, str):
+        return f"{organization_id}:{student_id}"
+    raise ConfirmationStateError("confirmation resource scope is incomplete")

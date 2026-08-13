@@ -28,7 +28,8 @@ appointment
 ```
 
 配置 `GATEWAY_DB_URL`、`GATEWAY_DB_USERNAME`、`GATEWAY_DB_PASSWORD`、
-`GATEWAY_INTERNAL_SERVICE_TOKEN` 和 `GATEWAY_CONTEXT_SIGNING_SECRET` 后启动：
+`GATEWAY_INTERNAL_SERVICE_TOKEN`、`GATEWAY_CONTEXT_SIGNING_SECRET` 和与 Agent 相同的
+`GATEWAY_CONFIRMATION_SIGNING_SECRET` 后启动：
 
 ```bash
 cd /Users/a1-6/Desktop/fitness-backend
@@ -37,6 +38,8 @@ cd /Users/a1-6/Desktop/fitness-backend
 ```
 
 生产环境的密钥必须由 Secret Manager 注入，不能写入 `application.yml` 或提交到 Git。
+`GATEWAY_CONFIRMATION_SIGNING_SECRET` 必须与 Agent 的 `AGENT_CONFIRMATION_SIGNING_SECRET`
+逐字节一致；当前是兼容 Gateway v1 的 HMAC 过渡密钥，后续 v2 会切换为可轮换的非对称验签。
 
 真实数据库集成测试默认关闭。连接到专门的测试库并提供有效机构 ID 后显式执行：
 

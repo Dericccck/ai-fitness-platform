@@ -7,6 +7,7 @@ from app.agent.fitness_tools import build_fitness_tool_registry
 from app.agent.supervisor import Supervisor, SupervisorRequest
 from app.confirmation.cipher import AesGcmPayloadCipher, ConfirmationPayloadCipherError
 from app.confirmation.models import ConfirmationRecord
+from app.confirmation.service import ConfirmationExecutionPreparation
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.gateway_client import GatewayClient, GatewayRequestContext
 from app.infrastructure.model_gateway import ModelGateway, ModelToolCall, ModelTurn
@@ -60,6 +61,8 @@ class FakeConfirmationService:
     def __init__(self, record: ConfirmationRecord) -> None:
         self.record = record
         self.prepared: list[dict[str, Any]] = []
+        self.execution_preparations = 0
+        self.finished: list[bool] = []
 
     async def prepare(self, **kwargs: Any) -> ConfirmationRecord:
         self.prepared.append(kwargs)
@@ -71,6 +74,74 @@ class FakeConfirmationService:
         assert confirmation_id == self.record.id
         assert identity.subject == self.record.subject_user_id
         return self.record
+
+    async def prepare_execution(
+        self, confirmation_id: str, *, identity: AgentIdentity, trace_id: str | None
+    ) -> ConfirmationExecutionPreparation:
+        assert confirmation_id == self.record.id
+        assert identity.subject == self.record.subject_user_id
+        assert self.record.authorization_status == "APPROVED"
+        self.execution_preparations += 1
+        self.record = self.record.issue_credential("test-jti", datetime.now(UTC)).claim_execution(
+            datetime.now(UTC)
+        )
+        return ConfirmationExecutionPreparation(
+            record=self.record,
+            tool_input={
+                "organization_id": "org-1",
+                "student_id": "student-1",
+                "coach_id": "coach-1",
+                "title": "基础力量",
+                "goal_type": "力量",
+                "days": [
+                    {
+                        "day_number": 1,
+                        "title": "下肢",
+                        "items": [
+                            {
+                                "exercise_name": "深蹲",
+                                "sort_order": 1,
+                                "sets": 3,
+                                "reps": "8-10",
+                            }
+                        ],
+                    }
+                ],
+            },
+            confirmation_token="server-issued-token",
+        )
+
+    async def finish_execution(
+        self,
+        confirmation_id: str,
+        *,
+        success: bool,
+        trace_id: str | None,
+        error_code: str | None = None,
+        retryable: bool = False,
+    ) -> ConfirmationRecord:
+        assert confirmation_id == self.record.id
+        self.finished.append(success)
+        self.record = (
+            self.record.finish_success(datetime.now(UTC))
+            if success
+            else self.record.finish_failure(
+                datetime.now(UTC), error_code or "TEST_FAILURE", retryable
+            )
+        )
+        return self.record
+
+
+class RecordingGateway(FakeGateway):
+    def __init__(self) -> None:
+        super().__init__()
+        self.confirmation_tokens: list[str | None] = []
+
+    async def create_training_draft(
+        self, context: GatewayRequestContext, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        self.confirmation_tokens.append(context.confirmation_token)
+        return await super().create_training_draft(context, payload)
 
 
 def pending_record() -> ConfirmationRecord:
@@ -160,3 +231,55 @@ async def test_write_tool_creates_confirmation_interrupt_without_gateway_executi
     assert messages[-1]["tool_calls"][0]["function"]["arguments"] == "{}"
     assert state.values["pending_confirmation_id"] == "confirmation-1"
     assert "深蹲" not in str(state.values)
+
+
+async def test_approved_confirmation_resumes_server_side_and_executes_once() -> None:
+    models = OneWriteModel()
+    gateway = RecordingGateway()
+    registry = build_fitness_tool_registry(cast(GatewayClient, gateway))
+    confirmation_service = FakeConfirmationService(pending_record())
+    supervisor = Supervisor(
+        cast(ModelGateway, models),
+        registry,
+        checkpointer=InMemorySaver(),
+        confirmation_service=cast(Any, confirmation_service),
+    )
+    request = SupervisorRequest(
+        user_message="制定一个基础力量计划",
+        gateway_context=GatewayRequestContext(
+            signed_context="signed-context",
+            request_id="request-1",
+            trace_id="trace-1",
+        ),
+        conversation_id="conversation-1",
+        thread_id="thread-1",
+        identity=AgentIdentity(
+            subject="coach-1",
+            organization_ids=frozenset({"org-1"}),
+            roles=frozenset({"COACH"}),
+            issued_at=1,
+            expires_at=2,
+        ),
+    )
+
+    first_response = await supervisor.invoke(request)
+    assert first_response.status == "CONFIRMATION_REQUIRED"
+
+    confirmation_service.record = confirmation_service.record.approve(
+        datetime.now(UTC), "decision-1"
+    )
+    resumed_response = await supervisor.resume_confirmation(
+        "confirmation-1",
+        identity=request.identity,
+        gateway_context=request.gateway_context,
+        thread_id="thread-1",
+    )
+
+    assert resumed_response.status == "COMPLETED"
+    assert resumed_response.answer == "已完成创建训练计划草案。"
+    assert models.calls == 1
+    assert confirmation_service.execution_preparations == 1
+    assert confirmation_service.finished == [True]
+    assert gateway.confirmation_tokens == ["server-issued-token"]
+    state = await supervisor._graph.aget_state({"configurable": {"thread_id": "thread-1"}})
+    assert state.values["pending_confirmation_id"] is None

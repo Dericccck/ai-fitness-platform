@@ -1,8 +1,8 @@
 """Agent 写操作确认单查询和决定 API。
 
-这里是用户确认动作的 HTTP 边界，不负责直接执行训练计划。接口只读取确认单的脱敏
-摘要和双状态；真正的 Gateway 执行、窄范围凭证和 LangGraph ``Command(resume=...)``
-恢复会在后续步骤接入。
+这里是用户确认动作的 HTTP 边界。接口只读取确认单的脱敏摘要；批准时先持久化决定，
+再由服务端恢复对应 LangGraph thread，使用确认单中的加密参数和短时凭证调用 Gateway。
+浏览器不会接触精确参数、确认 Token 或 ``Command(resume=...)``。
 """
 
 from __future__ import annotations
@@ -13,10 +13,12 @@ from typing import Literal, cast
 from fastapi import APIRouter, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.agent.supervisor import SupervisorRuntimeError, SupervisorSessionBusy
 from app.confirmation.models import ConfirmationRecord, ConfirmationStateError
 from app.confirmation.repository import ConfirmationNotFound
 from app.confirmation.service import ConfirmationDecision
 from app.infrastructure.agent_context import AgentContextVerificationError, AgentIdentity
+from app.infrastructure.gateway_client import GatewayRequestContext
 
 router = APIRouter(prefix="/api/v1/agent/confirmations", tags=["agent-confirmations"])
 
@@ -91,7 +93,7 @@ async def decide_confirmation(
     x_agent_context: str | None = Header(default=None),
     x_trace_id: str | None = Header(default=None),
 ) -> ConfirmationResponse:
-    """批准或拒绝确认单；相同决定请求重试返回相同事实，冲突决定返回 409。"""
+    """批准或拒绝确认单；批准会继续服务端恢复，重复请求仍由决定 ID 幂等收敛。"""
 
     identity = _verify_identity(request, x_agent_context)
     try:
@@ -108,7 +110,43 @@ async def decide_confirmation(
         ) from exc
     except ConfirmationStateError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
-    return _to_response(record)
+    if payload.decision == "REJECT":
+        return _to_response(record)
+
+    # 已经执行成功的相同批准重试直接返回最终事实，不能再次恢复图或重复调用 Gateway。
+    if record.execution_status in {"SUCCEEDED", "FAILED_FINAL"}:
+        return _to_response(record)
+    if record.execution_status == "RUNNING":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="confirmed operation is already running",
+        )
+
+    # 批准后由服务端使用同一 thread 恢复图；前端不提交 thread、参数或 Token。
+    supervisor = request.app.state.supervisor
+    try:
+        await supervisor.resume_confirmation(
+            confirmation_id,
+            identity=identity,
+            gateway_context=GatewayRequestContext(
+                signed_context=x_agent_context or "",
+                request_id=payload.decision_request_id,
+                trace_id=x_trace_id or payload.decision_request_id,
+            ),
+            thread_id=record.thread_id,
+        )
+    except SupervisorSessionBusy as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="conversation is already being processed"
+        ) from exc
+    except SupervisorRuntimeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="confirmed operation is temporarily unavailable",
+        ) from exc
+    return _to_response(
+        await request.app.state.confirmation_service.get_for_subject(confirmation_id, identity)
+    )
 
 
 def _verify_identity(request: Request, token: str | None) -> AgentIdentity:

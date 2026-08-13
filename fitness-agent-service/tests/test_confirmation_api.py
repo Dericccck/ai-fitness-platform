@@ -75,10 +75,19 @@ class FakeConfirmationService:
         return self.current
 
 
+class FakeSupervisor:
+    async def resume_confirmation(self, confirmation_id: str, **kwargs: Any) -> None:
+        assert confirmation_id == "confirmation-1"
+        assert kwargs["identity"].subject == "coach-1"
+        assert kwargs["gateway_context"].confirmation_token is None
+        assert kwargs["thread_id"] == "fitness:thread"
+
+
 def build_app(service: FakeConfirmationService) -> FastAPI:
     app = FastAPI()
     app.state.context_verifier = FakeVerifier()
     app.state.confirmation_service = service
+    app.state.supervisor = FakeSupervisor()
     app.add_middleware(RequestContextMiddleware)
     app.include_router(router)
     return app

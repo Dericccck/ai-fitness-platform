@@ -9,17 +9,18 @@ Supervisor 负责维护一次对话的状态、让模型选择已注册工具、
 from __future__ import annotations
 
 import json
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any, Literal, TypedDict
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
-from langgraph.types import interrupt
+from langgraph.types import Command, interrupt
 
+from app.confirmation.models import ConfirmationStateError
 from app.confirmation.service import ConfirmationService
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.cache import SessionLockManager, SessionLockUnavailable
-from app.infrastructure.gateway_client import GatewayRequestContext
+from app.infrastructure.gateway_client import GatewayRequestContext, GatewayUnavailableError
 from app.infrastructure.model_gateway import (
     ModelConfigurationError,
     ModelGateway,
@@ -115,7 +116,7 @@ class SupervisorState(TypedDict, total=False):
     error: str
     model_tool_calls: list[ModelToolCall]
     # 只保存确认单 ID；精确参数保存在加密确认单，绝不进入 Checkpoint。
-    pending_confirmation_id: str
+    pending_confirmation_id: str | None
 
 
 class Supervisor:
@@ -264,6 +265,72 @@ class Supervisor:
             output_tokens=_optional_int(final_state.get("output_tokens")),
         )
 
+    async def resume_confirmation(
+        self,
+        confirmation_id: str,
+        *,
+        identity: AgentIdentity,
+        gateway_context: GatewayRequestContext,
+        thread_id: str,
+    ) -> SupervisorResponse:
+        """由服务端恢复已批准确认，不接受客户端直接注入执行参数或 Token。
+
+        ``Command(resume=...)`` 只携带服务端生成的确认 ID，节点会再次从 PostgreSQL 读取
+        已批准事实，并在恢复节点内临时解密参数、生成 Token 和调用 Registry。Token 与
+        明文参数不会进入 State、Checkpoint、消息或 HTTP 响应。
+        """
+
+        if self.confirmation_service is None:
+            raise SupervisorRuntimeError("confirmation service is not configured")
+        config = {"configurable": {"thread_id": thread_id}}
+        try:
+            if self.session_lock is None:
+                final_state = await self._graph.ainvoke(
+                    Command(resume={"confirmation_id": confirmation_id}),
+                    config=config,
+                    context=SupervisorRuntimeContext(
+                        gateway_context=gateway_context,
+                        identity=identity,
+                        thread_id=thread_id,
+                    ),
+                )
+            else:
+                async with self.session_lock.hold(thread_id):
+                    final_state = await self._graph.ainvoke(
+                        Command(resume={"confirmation_id": confirmation_id}),
+                        config=config,
+                        context=SupervisorRuntimeContext(
+                            gateway_context=gateway_context,
+                            identity=identity,
+                            thread_id=thread_id,
+                        ),
+                    )
+        except SessionLockUnavailable as exc:
+            raise SupervisorSessionBusy("conversation is already being processed") from exc
+        except (
+            ConfirmationStateError,
+            ModelConfigurationError,
+            ModelResponseError,
+            ToolRegistryError,
+        ) as exc:
+            raise SupervisorRuntimeError("confirmation execution failed") from exc
+        return self._response_from_state(final_state)
+
+    @staticmethod
+    def _response_from_state(final_state: dict[str, Any]) -> SupervisorResponse:
+        """把恢复后的图状态转换成稳定完成响应。"""
+
+        answer = str(final_state.get("final_answer", "")).strip()
+        if not answer:
+            raise SupervisorRuntimeError("confirmed execution produced an empty answer")
+        return SupervisorResponse(
+            answer=answer,
+            route=final_state["route"],
+            tool_steps=final_state.get("tool_steps", 0),
+            input_tokens=_optional_int(final_state.get("input_tokens")),
+            output_tokens=_optional_int(final_state.get("output_tokens")),
+        )
+
     def _build_graph(self) -> Any:
         graph = StateGraph(SupervisorState, context_schema=SupervisorRuntimeContext)
         graph.add_node("model", self._model_node)
@@ -358,7 +425,7 @@ class Supervisor:
     async def _confirmation_node(
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
     ) -> dict[str, Any]:
-        """展示确认卡片并暂停图；本提交不接受任何 resume 值执行写操作。"""
+        """展示确认卡片，或在服务端批准后恢复并执行唯一写工具。"""
 
         confirmation_id = state.get("pending_confirmation_id")
         if not confirmation_id or runtime.context is None or runtime.context.identity is None:
@@ -368,23 +435,76 @@ class Supervisor:
         record = await self.confirmation_service.get_for_subject(
             confirmation_id, runtime.context.identity
         )
-        if record.authorization_status != "PENDING":
-            raise SupervisorRuntimeError("confirmation is no longer pending")
-        resume_value = interrupt(
-            {
-                "type": "CONFIRMATION_REQUIRED",
-                "confirmation_id": record.id,
-                "status": record.authorization_status,
-                "tool_id": record.tool_id,
-                "action": record.action,
-                "risk_level": record.risk_level,
-                "summary": dict(record.display_summary),
-                "expires_at": record.expires_at.isoformat(),
-            }
+        if record.authorization_status == "PENDING":
+            # 首次进入节点只展示脱敏摘要并暂停；resume 的内容不会被当作批准事实。
+            resume_value = interrupt(
+                {
+                    "type": "CONFIRMATION_REQUIRED",
+                    "confirmation_id": record.id,
+                    "status": record.authorization_status,
+                    "tool_id": record.tool_id,
+                    "action": record.action,
+                    "risk_level": record.risk_level,
+                    "summary": dict(record.display_summary),
+                    "expires_at": record.expires_at.isoformat(),
+                }
+            )
+            if (
+                not isinstance(resume_value, dict)
+                or resume_value.get("confirmation_id") != confirmation_id
+            ):
+                raise SupervisorRuntimeError("confirmation resume scope does not match")
+            record = await self.confirmation_service.get_for_subject(
+                confirmation_id, runtime.context.identity
+            )
+        if record.authorization_status != "APPROVED":
+            raise ConfirmationStateError("confirmation is not approved for execution")
+
+        prepared = await self.confirmation_service.prepare_execution(
+            confirmation_id,
+            identity=runtime.context.identity,
+            trace_id=runtime.context.gateway_context.trace_id,
         )
-        # 批准、凭证签发、解密和 Gateway 执行属于下一阶段确认 API；当前阶段即使收到
-        # resume 也不允许把任意值解释成“用户同意”。
-        raise SupervisorRuntimeError(f"confirmation resume is not enabled: {resume_value!r}")
+        execution_context = ToolContext(
+            gateway_context=replace(
+                runtime.context.gateway_context,
+                request_id=prepared.record.request_id,
+                confirmation_token=prepared.confirmation_token,
+            )
+        )
+        try:
+            result = await self.tools.invoke(
+                prepared.record.tool_id, prepared.tool_input, execution_context
+            )
+        except Exception as exc:
+            retryable = isinstance(exc, GatewayUnavailableError)
+            await self.confirmation_service.finish_execution(
+                confirmation_id,
+                success=False,
+                trace_id=runtime.context.gateway_context.trace_id,
+                error_code=type(exc).__name__,
+                retryable=retryable,
+            )
+            raise SupervisorRuntimeError("confirmed training operation failed") from exc
+        await self.confirmation_service.finish_execution(
+            confirmation_id,
+            success=True,
+            trace_id=runtime.context.gateway_context.trace_id,
+        )
+        return {
+            "messages": [
+                *state["messages"],
+                {
+                    "role": "tool",
+                    "tool_call_id": "confirmed-execution",
+                    "content": json.dumps(result, ensure_ascii=False),
+                },
+            ],
+            "pending_confirmation_id": None,
+            "model_tool_calls": [],
+            "tool_steps": state.get("tool_steps", 0) + 1,
+            "final_answer": f"已完成{record.display_summary.get('operation', '确认写操作')}。",
+        }
 
     async def _tool_node(
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]

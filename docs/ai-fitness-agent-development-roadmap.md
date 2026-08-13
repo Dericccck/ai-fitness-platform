@@ -280,10 +280,11 @@ Java 后端统一提供 `/internal/agent-tools/**` 内部接口，并采用服�
 ### 7.4 LangGraph 人机确认与恢复协议
 
 当前实现边界（2026-08-13）：训练计划写工具已经具备 `requires_confirmation` 元数据、Python
-前置拒绝、Java Gateway 确认凭证验签、请求 ID 幂等、事务和审计；Agent 已接入确认单持久化、
-AES-GCM 参数保护、LangGraph `interrupt()` 基础暂停，以及确认详情查询和批准/拒绝 API。
-但 `Command(resume=...)`、服务端窄范围凭证签发、确认后解密执行和一次性消费闭环仍未完成，
-因此现在仍不能描述为完整的 Human-in-the-loop 执行闭环。
+前置拒绝、Java Gateway v1 确认凭证验签、请求 ID 幂等、事务和审计；Agent 已接入确认单持久化、
+AES-GCM 参数保护、LangGraph `interrupt()` 暂停、确认详情查询、批准/拒绝和服务端恢复执行。
+批准接口会先持久化决定，再用同一 `thread_id` 执行 `Command(resume=...)`；确认参数只在服务端
+内存中解密，Token 只注入工具上下文。当前 HMAC v1 已用于内部联调，一次性 JTI 在 Agent 确认单
+中领取和审计；Gateway v2 的完整 JTI 消费、非对称验签和训练服务审计透传仍未完成。
 
 该缺口属于所有写 Agent 的公共安全基础，必须在训练执行记录和 Booking Agent 写操作继续扩展前完成。
 最终链路固定为：
@@ -302,13 +303,15 @@ AES-GCM 参数保护、LangGraph `interrupt()` 基础暂停，以及确认详情
 6. 用户通过版本化确认 API 提交决定。接口每次都重新验证最新签名 AgentContext；不能只相信
    `conversation_id`、浏览器参数、自然语言“我同意”或 `Command(resume=...)` 中的布尔值。
 7. 确认授权模块在同一主体、机构、线程、动作摘要和有效期全部匹配后记录不可变决定。批准后由 Agent
-   服务在后端签发短时、窄范围的确认凭证，浏览器和模型都不能接触该 Token。签发器只接受数据库中
+   服务在后端签发短时、窄范围的确认凭证，浏览器和模型都不能接触该 Token。当前 v1 签发器已绑定
+   `sub/action/resource/request_id/exp`，并额外携带 v2 预留的确认 ID、工具、组织、参数哈希和 JTI；签发器只接受数据库中
    已批准且未消费的确认事实，不能接受“approved=true”之类的客户端直接声明。
 8. Agent 使用相同 `thread_id` 通过 `Command(resume=...)` 恢复，重新读取确认事实并把确认凭证作为
    本次运行的临时上下文注入 Tool Registry；确认凭证不得写入 LangGraph State、Checkpoint、消息、
    Prompt、日志或 Trace。
-9. Gateway 验证凭证签名及 `sub`、机构、`confirmation_id`、`tool_id/action`、资源、`payload_hash`、
-   `request_id`、`exp` 和唯一凭证 ID，再由业务服务重新执行角色、资源、状态机和并发校验。
+9. Gateway v1 当前验证凭证签名及 `sub`、动作、资源、`request_id`、`exp`，再由业务服务重新执行
+   角色、资源、状态机和并发校验；v2 必须继续增加 `confirmation_id`、`tool_id/action`、机构、
+   `payload_hash` 和唯一凭证 ID 的验签与消费。
 10. 业务服务在事务内执行并写入请求 ID/确认 ID/操作者审计。HTTP 超时后的重试必须继续使用同一个
     请求 ID；同一批准决定不得生成第二个不同业务动作。
 11. 拒绝、过期、身份变化、组织范围变化、资源状态变化或参数摘要不匹配时一律 fail-closed；图恢复后
@@ -428,12 +431,12 @@ PostgreSQL 迁移至少建立以下逻辑结构，具体字段名在实现时固
 4. **LangGraph 等待节点（已完成基础实现）**：模型提出写工具后先校验参数、创建或幂等复用确认单，
    再进入独立确认节点并调用 `interrupt()`；只读工具继续直接执行。暂停响应只暴露确认 ID、确定性摘要、
    工具/风险信息和过期时间，Checkpoint 只保留确认 ID和空参数占位。当前项目使用的 LangGraph 0.6.x，
-   已在现有锁定版本上增加 AES-GCM、暂停结果和不执行 Gateway 的兼容测试；批准/拒绝 API 已完成，
-   但本步骤仍不把批准决定伪装成业务已执行，实际恢复仍由下一步完成。
-5. **确认与恢复 API（查询/决定已完成，恢复待完成）**：确认详情查询、批准、拒绝和决定幂等已接入；
-   剩余幂等恢复仍需每次用最新 AgentContext 重新认证，
-   使用同一 thread 会话锁并通过 `Command(resume=...)` 恢复；API 返回判别联合状态，前端可以稳定渲染
-   完成、待确认、拒绝、过期和执行失败。
+   已在现有锁定版本上增加 AES-GCM、暂停结果和不执行 Gateway 的兼容测试；批准/拒绝 API 和服务端
+   恢复已在第 5 步完成，本步骤只负责图的安全暂停边界，不能把“待确认”伪装成业务已执行。
+5. **确认与恢复 API（已完成 v1）**：确认详情查询、批准、拒绝和决定幂等已接入；批准会每次用最新
+   AgentContext 重新认证，使用同一 thread 会话锁通过 `Command(resume=...)` 恢复，并从加密确认单
+   恢复原始工具参数后调用 Gateway。API 返回授权/执行双状态，前端可以稳定渲染完成、待确认、拒绝、
+   过期、执行中和执行失败；服务端不会把 thread、参数或 Token 交给前端。
 6. **凭证 v2 与消费闭环**：确认凭证新增 `confirmation_id/tool_id/organization_id/payload_hash/jti`；
    同时绑定 issuer、audience、签发/过期时间和预期资源版本。生产采用 ES256 等非对称 JWS：Agent
    授权模块只持有私钥，Gateway 只持有按 `kid` 轮换的公钥，避免验证方同时具备任意签发能力。Gateway
@@ -602,8 +605,8 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 ### 阶段 2：AgentContext、权限和 Java Tool Gateway
 
 状态：阶段 2 已完成独立 Gateway、签名上下文、首批只读工具、训练计划四个写工具和 Python Tool
-Registry 的基础实现；训练写工具已有凭证验签、幂等和契约测试，完整 Human-in-the-loop 交互确认按
-7.4 节继续；预约写工具和真实数据库全链路集成测试待建设。
+Registry 的基础实现；训练写工具已有 v1 凭证验签、幂等和契约测试，训练计划 Human-in-the-loop
+恢复已按 7.4 节完成 v1；预约写工具和真实数据库全链路集成测试待建设。
 
 工作内容：
 
@@ -623,17 +626,17 @@ Registry 的基础实现；训练写工具已有凭证验签、幂等和契约�
 - 建立 Tool 注册表、Schema、统一错误码、超时和审计。
 - 首批只读工具：当前用户、组织、课程、合同、剩余课时、教练、预约和可预约时间。
 - 已落地训练计划创建草案、提交审核、审核和发布写工具；创建预约、改约和取消预约在通用确认闭环后接入。
-- 已实现训练计划过渡版确认凭证和请求幂等；确认单、参数加密、interrupt 基础暂停、确认查询/决定已接入，
-  按 7.4 节继续完成恢复、凭证 v2 和一次性消费闭环。
+- 已实现训练计划过渡版确认凭证和请求幂等；确认单、参数加密、interrupt 基础暂停、确认查询/决定、
+  服务端 Command 恢复和真实 Gateway 执行已接入，按 7.4 节继续完成凭证 v2 和一次性消费闭环。
 
 完成标准：越权、跨组织、伪造 ID、重复提交和过期确认凭证均有自动化测试；Agent 无法绕过 Java 权限直接操作业务库。
 
 ### 阶段 3：Agent Runtime 与 Supervisor
 
 状态：已完成统一非流式对话接口、LangGraph Supervisor 基础图、模型 Tool Calling 协议、工具步数预算、
-旧业务范围护栏和 PostgreSQL/Redis 会话持久化基础；写工具已经具备确认单、`interrupt()` 基础暂停、
-确认查询/决定和后端验签边界，但完整恢复协议尚未完成。SSE 流式响应、断线恢复 API、角色意图评测和
-Prompt 版本管理待继续建设。
+旧业务范围护栏、PostgreSQL/Redis 会话持久化基础和训练计划写操作的服务端确认恢复；写工具已经具备
+确认单、`interrupt()` 暂停、确认查询/决定、`Command(resume=...)` 恢复、短时凭证注入和真实 Gateway
+执行。SSE 流式响应、断线/重启故障演练、角色意图评测和 Prompt 版本管理待继续建设。
 
 工作内容：
 
@@ -644,9 +647,9 @@ Prompt 版本管理待继续建设。
 - 已接入 PostgreSQL LangGraph Checkpoint、启动期官方表迁移、Redis 会话锁和按签名身份隔离的匿名 thread_id。
 - 已实现同一会话后续请求读取最新 Checkpoint 并恢复历史消息；会话锁包围“读取历史→执行图→写入新 Checkpoint”完整临界区。
 - 已增加会话并发冲突返回 409 的协议；SSE 流式响应和断线恢复 API 待基于 Checkpoint 契约接入。
-- 已完成 Checkpoint 敏感上下文剥离和旧状态 fail-closed、持久化确认单、LangGraph interrupt 基础暂停、
-  确认查询/决定 API；仍需按 7.4 节完成确认凭证服务端换取、Command 恢复、断线恢复及完整安全测试；该项完成前不继续
-  增加新的业务写工具。
+- 已完成 Checkpoint 敏感上下文剥离和旧状态 fail-closed、持久化确认单、LangGraph interrupt 暂停、
+  确认查询/决定 API、服务端确认凭证换取、Command 恢复和训练计划写工具执行；仍需完成凭证 v2、
+  Gateway 一次性消费、断线/重启故障演练及完整安全测试后，再增加新的业务写工具。
 - 建立角色路由、意图分类、任务状态和失败恢复。
 - 接入 PostgreSQL/Redis Checkpoint。
 - 统一模型超时、重试、限流、Token 预算和结构化输出。
@@ -1057,19 +1060,19 @@ OCR 适配器、独立 OCR 服务骨架、离线评测门禁和真实 ClamAV 联
   质量指标、页级画像、来源风险和专业审核要求，审批对 `BLOCKED`、`REVIEW_REQUIRED` 及缺失报告
   的历史任务全部 fail-closed；正式 Gateway 管理员角色已与兼容别名统一识别。
 - Agent 写操作确认基础：完成 0013 确认单与不可变事件迁移、确认授权/执行双状态领域模型、数据库
-  幂等创建、决定幂等、行锁并发控制、一次性 JTI 消费边界和可重试失败重新签发 JTI；已完成确认动作
-  规范化、AES-GCM 参数加密、LangGraph `interrupt()` 基础暂停和 Checkpoint 脱敏；尚未完成确认/拒绝 API、
-  服务端恢复、凭证 v2 和一次性消费闭环。
+  幂等创建、决定幂等、行锁并发控制、一次性 JTI 领取边界和可重试失败重新签发 JTI；已完成确认动作
+  规范化、AES-GCM 参数加密、LangGraph `interrupt()` 暂停、Checkpoint 脱敏、确认 API、服务端恢复
+  和真实 Gateway 执行；尚未完成凭证 v2 和 Gateway 一次性消费闭环。
 
 路线调整后的下一步按顺序执行：
 
 1. **训练领域第一切片（已完成）**：通过 `fitness-core-gateway` 增加训练计划查询、提交审核、
    审核和发布写工具；后端已具备确认凭证验签、幂等、资源级权限和 Agent 契约测试。这里的“确认凭证”
    只代表安全执行边界已经完成，不能等同于前端可交互的人机确认闭环。
-2. **通用写操作 Human-in-the-loop 闭环（当前进行中）**：确认单、参数加密、Checkpoint 脱敏和
-   LangGraph `interrupt()` 基础暂停已完成；下一步接入确认详情、确认/拒绝与 `Command(resume=...)`
-   恢复 API、断线/重启恢复和安全测试。第一批覆盖训练计划四个写工具，完成后
-   供 Booking、Memory 等复用；Java Gateway 继续负责独立验签和最终业务权限复核。
+2. **通用写操作 Human-in-the-loop 闭环（训练计划 v1 已完成）**：确认单、参数加密、Checkpoint 脱敏、
+   `interrupt()` 暂停、确认详情/决定、`Command(resume=...)` 恢复和真实 Gateway 执行已完成，第一批覆盖
+   训练计划四个写工具；完成 v2 凭证消费闭环和断线/重启故障演练后，再供 Booking、Memory 等复用。
+   Java Gateway 继续负责独立验签和最终业务权限复核。
 3. **最小训练执行闭环**：增加训练日级完成或跳过、完成时间和可选简短备注；不建设逐组实绩、身体
    测量、疼痛/疲劳量表、阶段调整和自动调参。最终提交保持权限、幂等和审计。
 4. **多角色按页审核决策**：在不可变审核报告之上增加审核决定、身份/资质快照、

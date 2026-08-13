@@ -17,6 +17,7 @@ from app.api.routes.rag import router as rag_router
 from app.confirmation.cipher import AesGcmPayloadCipher
 from app.confirmation.repository import ConfirmationRepository
 from app.confirmation.service import ConfirmationService
+from app.confirmation.token import ConfirmationTokenIssuer
 from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import HttpMetrics, MetricsMiddleware
@@ -165,11 +166,16 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.confirmation_encryption_key_base64,
         settings.confirmation_encryption_key_version,
     )
+    app.state.confirmation_token_issuer = ConfirmationTokenIssuer(
+        settings.confirmation_signing_secret,
+        ttl_seconds=settings.confirmation_token_ttl_seconds,
+    )
     app.state.confirmation_service = ConfirmationService(
         ConfirmationRepository(app.state.database),
         app.state.tool_registry,
         app.state.gateway,
         app.state.confirmation_cipher,
+        app.state.confirmation_token_issuer,
         ttl_seconds=settings.confirmation_ttl_seconds,
     )
     app.state.session_lock = SessionLockManager(
