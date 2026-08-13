@@ -106,6 +106,9 @@ class ConfirmationRecord:
     credential_jti: str | None = None
     credential_consumed_at: datetime | None = None
     last_error_code: str | None = None
+    # 创建确认时的签名授权快照。确认时若角色或机构范围发生变化，必须重新发起动作。
+    actor_roles: tuple[str, ...] = ()
+    actor_organization_ids: tuple[str, ...] = ()
 
     def is_expired(self, now: datetime) -> bool:
         """判断是否已经超过授权有效期。"""

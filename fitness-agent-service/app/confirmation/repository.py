@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, cast
 
 from sqlalchemy import bindparam, text
@@ -47,12 +47,14 @@ class ConfirmationRepository:
                 id, protocol_version, thread_id, subject_user_id, organization_id, tool_id,
                 risk_level, action, resource_type, resource_id, expected_resource_version,
                 request_id, payload_hash, display_summary, payload_ciphertext, payload_key_version,
-                authorization_status, execution_status, expires_at
+                authorization_status, execution_status, expires_at, actor_roles,
+                actor_organization_ids
             ) VALUES (
                 :id, 1, :thread_id, :subject_user_id, :organization_id, :tool_id,
                 :risk_level, :action, :resource_type, :resource_id, :expected_resource_version,
                 :request_id, :payload_hash, CAST(:display_summary AS JSONB), :payload_ciphertext,
-                :payload_key_version, 'PENDING', 'NOT_STARTED', :expires_at
+                :payload_key_version, 'PENDING', 'NOT_STARTED', :expires_at,
+                :actor_roles, :actor_organization_ids
             )
             ON CONFLICT (request_id) DO NOTHING
             RETURNING *
@@ -92,9 +94,10 @@ class ConfirmationRepository:
             SELECT * FROM agent_action_confirmations
             WHERE id = :id AND subject_user_id = :subject_user_id
               AND organization_id IN :organization_ids
+            FOR UPDATE
             """
         ).bindparams(bindparam("organization_ids", expanding=True))
-        async with self._database.engine.connect() as connection:
+        async with self._database.engine.begin() as connection:
             row = (
                 (
                     await connection.execute(
@@ -109,9 +112,22 @@ class ConfirmationRepository:
                 .mappings()
                 .first()
             )
-        if row is None:
-            raise ConfirmationNotFound("confirmation was not found")
-        return _record_from_row(row)
+            if row is None:
+                raise ConfirmationNotFound("confirmation was not found")
+            record = _record_from_row(row)
+            # 页面刷新不应继续显示已经过期的待确认动作。这里使用短事务和行锁做惰性过期，
+            # 仍由 ConfirmationRecord 统一判断状态转移，并记录不可变 EXPIRED 事件。
+            now = datetime.now(UTC)
+            if (
+                record.authorization_status in {"PENDING", "APPROVED"}
+                and record.execution_status == "NOT_STARTED"
+                and record.is_expired(now)
+            ):
+                expired = record.expire(now)
+                await self._update_record(connection, expired, expected_version=record.version)
+                await self._insert_event(connection, _event_for(expired, "EXPIRED", None))
+                return expired
+            return record
 
     async def decide(
         self,
@@ -136,6 +152,10 @@ class ConfirmationRepository:
                 connection, confirmation_id, subject_user_id, organization_ids
             )
             record = _record_from_row(row)
+            if record.actor_roles != tuple(
+                sorted(actor_roles)
+            ) or record.actor_organization_ids != tuple(sorted(organization_ids)):
+                raise ConfirmationStateError("confirmation identity scope has changed")
             if record.authorization_status == "PENDING" and record.is_expired(now):
                 expired = record.expire(now)
                 await self._update_record(connection, expired, expected_version=record.version)
@@ -457,6 +477,8 @@ def _action_params(
         "payload_ciphertext": action.payload_ciphertext,
         "payload_key_version": action.payload_key_version,
         "expires_at": expires_at,
+        "actor_roles": list(action.actor_roles),
+        "actor_organization_ids": list(action.actor_organization_ids),
     }
 
 
@@ -477,6 +499,8 @@ def _same_action(row: Any, action: ConfirmationAction) -> bool:
         and row["payload_hash"] == action.payload_hash
         and row["payload_key_version"] == action.payload_key_version
         and row["subject_user_id"] == action.subject_user_id
+        and tuple(row["actor_roles"] or ()) == action.actor_roles
+        and tuple(row["actor_organization_ids"] or ()) == action.actor_organization_ids
         and _json_dumps(row["display_summary"]) == _json_dumps(action.display_summary)
     )
 
@@ -512,6 +536,8 @@ def _record_from_row(row: Any) -> ConfirmationRecord:
         credential_jti=row["credential_jti"],
         credential_consumed_at=row["credential_consumed_at"],
         last_error_code=row["last_error_code"],
+        actor_roles=tuple(row["actor_roles"] or ()),
+        actor_organization_ids=tuple(row["actor_organization_ids"] or ()),
     )
 
 

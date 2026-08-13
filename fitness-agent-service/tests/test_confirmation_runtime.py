@@ -101,6 +101,8 @@ def pending_record() -> ConfirmationRecord:
         version=0,
         created_at=now,
         expires_at=now + timedelta(minutes=10),
+        actor_roles=("COACH",),
+        actor_organization_ids=("org-1",),
     )
 
 

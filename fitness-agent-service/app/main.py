@@ -10,6 +10,7 @@ from app.agent.supervisor import Supervisor
 from app.api.middleware.request_context import RequestContextMiddleware
 from app.api.routes.admin_knowledge import router as admin_knowledge_router
 from app.api.routes.agent import router as agent_router
+from app.api.routes.confirmations import router as confirmations_router
 from app.api.routes.health import router as health_router
 from app.api.routes.knowledge_review import router as knowledge_review_router
 from app.api.routes.rag import router as rag_router
@@ -213,6 +214,7 @@ if runtime_settings.metrics_enabled:
     app.add_middleware(MetricsMiddleware, metrics=http_metrics)
 app.add_middleware(RequestContextMiddleware, service_name=runtime_settings.service_name)
 app.include_router(agent_router)
+app.include_router(confirmations_router)
 app.include_router(admin_knowledge_router)
 app.include_router(knowledge_review_router)
 app.include_router(rag_router)

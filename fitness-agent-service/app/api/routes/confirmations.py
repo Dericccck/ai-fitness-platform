@@ -1,0 +1,152 @@
+"""Agent 写操作确认单查询和决定 API。
+
+这里是用户确认动作的 HTTP 边界，不负责直接执行训练计划。接口只读取确认单的脱敏
+摘要和双状态；真正的 Gateway 执行、窄范围凭证和 LangGraph ``Command(resume=...)``
+恢复会在后续步骤接入。
+"""
+
+from __future__ import annotations
+
+from datetime import datetime
+from typing import Literal, cast
+
+from fastapi import APIRouter, Header, HTTPException, Request, status
+from pydantic import BaseModel, ConfigDict, Field
+
+from app.confirmation.models import ConfirmationRecord, ConfirmationStateError
+from app.confirmation.repository import ConfirmationNotFound
+from app.confirmation.service import ConfirmationDecision
+from app.infrastructure.agent_context import AgentContextVerificationError, AgentIdentity
+
+router = APIRouter(prefix="/api/v1/agent/confirmations", tags=["agent-confirmations"])
+
+
+class ConfirmationDecisionRequest(BaseModel):
+    """确认决定输入；主体、组织和角色只能来自签名 AgentContext。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    decision: Literal["APPROVE", "REJECT"]
+    # 决定请求和最初业务 request_id 分离，避免不同阶段的重试相互覆盖。
+    decision_request_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+
+
+class ConfirmationResponse(BaseModel):
+    """供确认卡片和页面刷新使用的脱敏确认单状态。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    protocol_version: int
+    organization_id: str
+    tool_id: str
+    risk_level: str
+    action: str
+    resource_type: str
+    resource_id: str | None
+    expected_resource_version: int | None
+    display_summary: dict[str, object]
+    authorization_status: str
+    execution_status: str
+    version: int
+    created_at: datetime
+    expires_at: datetime
+    approved_at: datetime | None
+    rejected_at: datetime | None
+    execution_started_at: datetime | None
+    finished_at: datetime | None
+    decision_request_id: str | None
+    last_error_code: str | None
+
+
+@router.get("/{confirmation_id}", response_model=ConfirmationResponse)
+async def get_confirmation(
+    confirmation_id: str,
+    request: Request,
+    x_agent_context: str | None = Header(default=None),
+) -> ConfirmationResponse:
+    """读取当前主体可见的确认单，支持页面刷新和断线重连。"""
+
+    identity = _verify_identity(request, x_agent_context)
+    try:
+        record = await request.app.state.confirmation_service.get_for_subject(
+            confirmation_id, identity
+        )
+    except (ConfirmationNotFound, ConfirmationStateError) as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="confirmation not found"
+        ) from exc
+    return _to_response(record)
+
+
+@router.post("/{confirmation_id}/decisions", response_model=ConfirmationResponse)
+async def decide_confirmation(
+    confirmation_id: str,
+    payload: ConfirmationDecisionRequest,
+    request: Request,
+    x_agent_context: str | None = Header(default=None),
+    x_trace_id: str | None = Header(default=None),
+) -> ConfirmationResponse:
+    """批准或拒绝确认单；相同决定请求重试返回相同事实，冲突决定返回 409。"""
+
+    identity = _verify_identity(request, x_agent_context)
+    try:
+        record = await request.app.state.confirmation_service.decide(
+            confirmation_id,
+            identity=identity,
+            decision=cast(ConfirmationDecision, payload.decision),
+            decision_request_id=payload.decision_request_id,
+            trace_id=x_trace_id,
+        )
+    except ConfirmationNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="confirmation not found"
+        ) from exc
+    except ConfirmationStateError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return _to_response(record)
+
+
+def _verify_identity(request: Request, token: str | None) -> AgentIdentity:
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="signed agent context is required"
+        )
+    try:
+        return cast(AgentIdentity, request.app.state.context_verifier.verify(token))
+    except AgentContextVerificationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid signed agent context"
+        ) from exc
+
+
+def _to_response(record: ConfirmationRecord) -> ConfirmationResponse:
+    """只映射可展示字段，刻意不返回 payload_ciphertext、payload_hash 或凭证 JTI。"""
+
+    return ConfirmationResponse(
+        id=record.id,
+        protocol_version=record.protocol_version,
+        organization_id=record.organization_id,
+        tool_id=record.tool_id,
+        risk_level=record.risk_level,
+        action=record.action,
+        resource_type=record.resource_type,
+        resource_id=record.resource_id,
+        expected_resource_version=record.expected_resource_version,
+        display_summary=dict(record.display_summary),
+        authorization_status=record.authorization_status,
+        execution_status=record.execution_status,
+        version=record.version,
+        created_at=record.created_at,
+        expires_at=record.expires_at,
+        approved_at=record.approved_at,
+        rejected_at=record.rejected_at,
+        execution_started_at=record.execution_started_at,
+        finished_at=record.finished_at,
+        decision_request_id=record.decision_request_id,
+        last_error_code=record.last_error_code,
+    )

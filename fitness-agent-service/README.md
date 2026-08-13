@@ -54,8 +54,8 @@
 - Prometheus：低基数 HTTP 请求量、耗时、并发和构建信息指标。
 - OpenTelemetry：可选 OTLP/HTTP Trace 导出，默认关闭且不发送 Prompt 或用户档案。
 - 写操作确认：训练计划写工具会先生成确定性确认摘要和加密参数，写入 PostgreSQL 确认单后通过
-  LangGraph `interrupt()` 暂停；当前已完成基础暂停和 Checkpoint 脱敏，批准/拒绝 API、服务端恢复和
-  凭证 v2 仍在后续迭代中，不能把“待确认”当作业务已执行。
+  LangGraph `interrupt()` 暂停；当前已完成基础暂停、Checkpoint 脱敏、确认详情和批准/拒绝 API，
+  服务端恢复、凭证 v2 和真正 Gateway 执行仍在后续迭代中，不能把“待确认”或“已批准”当作业务已执行。
 
 ## 本地启动
 
@@ -136,8 +136,8 @@ DeepSeek 配置使用 `DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL` 和 `DEEPSEEK_BASE_U
 Supervisor 必须通过 `app.state.tool_registry` 获取工具定义和调用入口；不能在 Prompt、
 Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry 已包含健身只读工具和训练计划草案、
 提交审核、审核、发布四个写工具；写工具具备确认标记和缺少凭证时的前置拒绝。确认单持久化、
-不可变确认事件、授权/执行状态分离、数据库幂等、参数加密、Checkpoint 脱敏和 `interrupt()` 基础暂停
-已经完成；确认/拒绝 API、服务端凭证签发和恢复 API 尚未完成。预约写操作要等这套通用确认闭环、幂等键和 Java
+不可变确认事件、授权/执行状态分离、数据库幂等、参数加密、Checkpoint 脱敏、`interrupt()` 基础暂停
+以及确认详情/决定 API 已经完成；服务端凭证签发和恢复 API 尚未完成。预约写操作要等这套通用确认闭环、幂等键和 Java
 事务审计完成后再加入。
 
 当前对话接口为 `POST /api/v1/agent/chat`。调用方必须传入认证服务签发的
@@ -146,6 +146,12 @@ Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry 已包�
 内部联调通道；最终产品流程将通过持久化确认单、LangGraph `interrupt()` 和服务端恢复注入凭证，
 不让浏览器或模型接触 Token。当前先提供非流式稳定协议；SSE、待确认状态查询和断线恢复将在
 人机确认边界完成后接入。
+
+确认单接口为 `GET /api/v1/agent/confirmations/{confirmation_id}` 和
+`POST /api/v1/agent/confirmations/{confirmation_id}/decisions`。决定请求只提交
+`APPROVE`/`REJECT` 与独立 `decision_request_id`；身份、组织和角色仍从签名 AgentContext 获取。
+接口不会返回完整参数、参数哈希、密文或确认凭证；批准成功也只代表授权状态变为 `APPROVED`，
+不会绕过后续恢复流程直接执行 Java Gateway。
 
 当前版本已接入 PostgreSQL LangGraph Checkpoint 和 Redis 会话锁：同一用户/组织/角色范围
 内的 `conversation_id` 会生成稳定的匿名 `thread_id`，不同身份即使使用相同会话 ID 也

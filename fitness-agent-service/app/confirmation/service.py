@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from app.agent.tool_registry import ToolRegistry
 from app.confirmation.cipher import AesGcmPayloadCipher
-from app.confirmation.models import ConfirmationRecord
+from app.confirmation.models import ConfirmationDecision, ConfirmationRecord, ConfirmationStateError
 from app.confirmation.normalization import (
     ConfirmationNormalizationContext,
     ConfirmationResourceSnapshot,
@@ -101,11 +101,60 @@ class ConfirmationService:
     ) -> ConfirmationRecord:
         """按签名主体和组织范围读取确认单，防止确认 ID 枚举跨租户数据。"""
 
-        return await self.repository.get_for_subject(
+        record = await self.repository.get_for_subject(
             confirmation_id,
             identity.subject,
             tuple(sorted(identity.organization_ids)),
         )
+        _ensure_identity_snapshot(record, identity)
+        return record
+
+    async def decide(
+        self,
+        confirmation_id: str,
+        *,
+        identity: AgentIdentity,
+        decision: ConfirmationDecision,
+        decision_request_id: str,
+        trace_id: str | None,
+    ) -> ConfirmationRecord:
+        """提交确认决定，并把签名身份快照交给仓储记录不可变事件。
+
+        ``decision_request_id`` 是客户端重试使用的幂等键，不能拿业务 ``request_id``
+        代替。仓储会在 PostgreSQL 行锁事务中再次校验主体、机构、状态和过期时间，
+        因此 API 层的身份检查不是最终授权边界。
+        """
+
+        if not decision_request_id.strip():
+            raise ValueError("decision_request_id is required")
+
+        record = await self.repository.get_for_subject(
+            confirmation_id,
+            identity.subject,
+            tuple(sorted(identity.organization_ids)),
+        )
+        _ensure_identity_snapshot(record, identity)
+        return await self.repository.decide(
+            confirmation_id,
+            identity.subject,
+            tuple(sorted(identity.organization_ids)),
+            decision,
+            decision_request_id,
+            datetime.now(UTC),
+            trace_id,
+            identity.subject,
+            tuple(sorted(identity.roles)),
+        )
+
+
+def _ensure_identity_snapshot(record: ConfirmationRecord, identity: AgentIdentity) -> None:
+    """确认阶段必须仍使用创建动作时的角色和完整机构范围。"""
+
+    if record.actor_roles != tuple(
+        sorted(identity.roles)
+    ) or record.actor_organization_ids != tuple(sorted(identity.organization_ids)):
+        # 对外按“不可见”处理，避免通过确认接口探测其他授权快照。
+        raise ConfirmationStateError("confirmation identity scope has changed")
 
 
 def _organization_from_input(tool_id: str, raw_input: Mapping[str, Any]) -> str:
