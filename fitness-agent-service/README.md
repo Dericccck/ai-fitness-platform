@@ -123,14 +123,15 @@ DeepSeek 配置使用 `DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL` 和 `DEEPSEEK_BASE_U
 
 Supervisor 必须通过 `app.state.tool_registry` 获取工具定义和调用入口；不能在 Prompt、
 Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry 已包含健身只读工具和训练计划草案、
-提交审核、审核、发布四个写工具；写工具具备确认标记和缺少凭证时的前置拒绝，但 LangGraph
-`interrupt()`、确认单持久化和恢复 API 尚未完成。预约写操作要等这套通用确认闭环、幂等键和 Java
+提交审核、审核、发布四个写工具；写工具具备确认标记和缺少凭证时的前置拒绝。确认单持久化、
+不可变确认事件、授权/执行状态分离、数据库幂等和并发领取基础已经完成，但 LangGraph
+`interrupt()`、确认/拒绝 API、服务端凭证签发和恢复 API 尚未完成。预约写操作要等这套通用确认闭环、幂等键和 Java
 事务审计完成后再加入。
 
 当前对话接口为 `POST /api/v1/agent/chat`。调用方必须传入认证服务签发的
 `X-Agent-Context`，以及 `conversation_id`、`message` 和可选 `locale`；写工具还需要由上游
-确认流程签发的 `X-Confirmation-Token`，接口拒绝额外的用户/组织/角色字段。该 Header 是过渡期
-内部联调通道，最终产品流程将通过持久化确认单、LangGraph `interrupt()` 和服务端恢复注入凭证，
+确认流程签发的 `X-Confirmation-Token`，接口拒绝额外的用户/组织/角色字段。该 Header 仍是过渡期
+内部联调通道；最终产品流程将通过持久化确认单、LangGraph `interrupt()` 和服务端恢复注入凭证，
 不让浏览器或模型接触 Token。当前先提供非流式稳定协议；SSE、待确认状态查询和断线恢复将在
 人机确认边界完成后接入。
 

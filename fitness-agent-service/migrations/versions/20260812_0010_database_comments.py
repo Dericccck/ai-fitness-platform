@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 
 import sqlalchemy as sa
-from alembic import op
+from alembic import context, op
 
 revision: str = "20260812_0010"
 down_revision: str | None = "20260812_0009"
@@ -203,6 +203,10 @@ def _sql_literal(value: str) -> str:
 def _apply_comments() -> None:
     """执行表级和字段级 COMMENT，注释不会修改任何业务数据。"""
 
+    # 这一步需要查询 information_schema 判断旧环境是否存在对应表；离线模式没有查询结果，
+    # 不能把 None 当成 Result 使用。真实在线升级仍完整执行数据字典注释。
+    if context.is_offline_mode():
+        return
     connection = op.get_bind()
     for table, comment in TABLE_COMMENTS.items():
         table_exists = connection.execute(
@@ -237,6 +241,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     """移除本迁移写入的表级和字段级注释，不删除任何表或数据。"""
 
+    if context.is_offline_mode():
+        return
     connection = op.get_bind()
     for table, columns in COLUMN_COMMENTS.items():
         for column in columns:

@@ -411,9 +411,12 @@ PostgreSQL 迁移至少建立以下逻辑结构，具体字段名在实现时固
 1. **状态与密钥边界改造**：从持久化 `SupervisorState` 删除 `SupervisorRequest`、签名上下文和未来
    Token；定义只含 JSON 安全字段的运行状态与非持久化调用上下文；对旧 Checkpoint 做版本标记，无法
    安全读取的旧状态明确失效并要求用户重新发起，不能尝试反序列化未知敏感对象。
-2. **确认领域模型**：通过 Alembic 新增 `agent_action_confirmations` 和不可变决定/消费审计；状态至少为
-   `PENDING/APPROVED/REJECTED/EXPIRED/CONSUMED/CANCELLED`，增加唯一业务请求、并发版本、TTL、
-   `payload_hash` 和必要索引；定时过期只改变授权状态，不删除审计事实。
+2. **确认领域模型（已完成）**：通过 Alembic 新增 `agent_action_confirmations` 和不可变决定/消费审计；
+   授权状态为 `PENDING/APPROVED/REJECTED/EXPIRED/CANCELLED`，执行状态为
+   `NOT_STARTED/RUNNING/SUCCEEDED/FAILED_RETRYABLE/FAILED_FINAL`，并增加唯一业务请求、决定请求、
+   一次性 JTI、并发版本、TTL、`payload_hash`、加密参数密文和必要索引。可重试失败只重置执行状态并
+   清空旧 JTI，不改变原始批准事实；过期只改变授权状态，不删除审计事实。领域模型和 PostgreSQL
+   仓储已通过状态、幂等、过期和重试单元测试；下一步是规范化动作和摘要。
 3. **规范化动作与摘要**：为每个写工具注册资源解析器、风险级别和确定性展示模板；使用稳定 JSON
    canonicalization 计算 hash，并验证展示字段与实际执行字段一致。模型生成的解释只能作为辅助说明，
    不能参与授权范围计算。
@@ -1040,6 +1043,9 @@ OCR 适配器、独立 OCR 服务骨架、离线评测门禁和真实 ClamAV 联
 - 审核报告持久化与查询 API：0011 迁移新增不可变审核报告；上传时保存文件哈希、解析/策略版本、
   质量指标、页级画像、来源风险和专业审核要求，审批对 `BLOCKED`、`REVIEW_REQUIRED` 及缺失报告
   的历史任务全部 fail-closed；正式 Gateway 管理员角色已与兼容别名统一识别。
+- Agent 写操作确认基础：完成 0013 确认单与不可变事件迁移、确认授权/执行双状态领域模型、数据库
+  幂等创建、决定幂等、行锁并发控制、一次性 JTI 消费边界和可重试失败重新签发 JTI；尚未接入
+  LangGraph `interrupt()`、确认/拒绝 API 和服务端恢复。
 
 路线调整后的下一步按顺序执行：
 
