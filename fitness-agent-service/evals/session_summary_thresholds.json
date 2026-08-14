@@ -1,0 +1,10 @@
+{
+  "max_summary_chars": 3000,
+  "min_pass_rate": 1.0,
+  "max_invalid_cases": 0,
+  "max_empty_cases": 0,
+  "max_oversize_cases": 0,
+  "max_credential_leaks_after_sanitize": 0,
+  "max_missing_required_terms": 0,
+  "max_redaction_misses": 0
+}

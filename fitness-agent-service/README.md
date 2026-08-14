@@ -290,6 +290,10 @@ AES-GCM 密文被清空，类型、稳定键、状态、哈希和生命周期审
 `make agent-eval` 会校验 Recall@K、MRR 和禁止 ID 命中数；CI 会把同一命令作为质量门禁。
 当前是稳定的黄金结果回归集，不使用线上用户数据；后续接入真实评测数据库时复用相同指标和阈值模型。
 
+短期会话摘要的确定性安全评测样例位于 `fitness-agent-service/evals/session_summary_samples.json`，阈值位于
+`fitness-agent-service/evals/session_summary_thresholds.json`。执行 `make agent-session-summary-eval` 会检查摘要 JSON、
+非空、长度、必需上下文、凭证脱敏和通过率；该命令不调用 DeepSeek，不使用真实用户会话，只作为摘要后处理逻辑的 CI 门禁。
+
 训练计划生成使用只读工具 `fitness.training.plan.generate_draft.v1`：工具先按已验证身份检索已发布
 健身知识，再通过统一模型网关要求 DeepSeek 返回 JSON Object，最后复用训练计划 Schema 和业务规则
 校验训练日、动作数量、编号连续性及目标一致性。返回值是带引用的 `DRAFT_PREVIEW`，不会直接写入训练
