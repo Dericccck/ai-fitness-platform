@@ -554,10 +554,48 @@ def _area_ratio(area: float, page_area: float) -> float:
 
 
 def _normalize_pdf_line(line: str) -> str:
-    """修复 PDF 常见的兼容字符和空白，但不改动正文数值。"""
+    """修复 PDF 常见的兼容字符、重复字形和空白，但不改动正文语义。
+
+    某些演示文稿 PDF 的字体映射会把每个 ASCII 字符提取两次，例如把
+    ``Information`` 提取为 ``IInnffoorrmmaattiioonn``。不能直接把所有相邻重复
+    字符压缩，否则 ``coffee``、``letter`` 等正常单词会被破坏。因此这里只在一个
+    完整单词的每一对字符都完全相同时才折叠，例如 ``IInn`` → ``In``、``22nndd``
+    → ``2nd``；普通英文单词保持不变。
+    """
 
     normalized = unicodedata.normalize("NFKC", line).replace("\u00a0", " ")
-    return re.sub(r"\s+", " ", normalized).strip()
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    return _repair_pdf_duplicate_glyphs(normalized)
+
+
+_PDF_ASCII_TOKEN = re.compile(r"[A-Za-z0-9]+")
+
+
+def _repair_pdf_duplicate_glyphs(line: str) -> str:
+    """只折叠“整词每个字形都重复”的 PDF 提取噪声。"""
+
+    changed = False
+
+    def replace_token(match: re.Match[str]) -> str:
+        nonlocal changed
+        token = match.group(0)
+        if len(token) < 4 or len(token) % 2 != 0:
+            return token
+        if all(token[index] == token[index + 1] for index in range(0, len(token), 2)):
+            changed = True
+            return token[::2]
+        return token
+
+    repaired = _PDF_ASCII_TOKEN.sub(replace_token, line)
+    if not changed:
+        return repaired
+    # 字体映射异常可能同时把逗号、句号和 URL 路径分隔符复制一遍。只有同一行已经
+    # 证实存在“整词重复字形”时才做这些窄规则，避免把正常省略号、网址协议或英文
+    # 双写字母误判成噪声。
+    repaired = re.sub(r"(?<!\.)\.\.(?!\.)", ".", repaired)
+    repaired = re.sub(r"(?<!,),,(?!,)", ",", repaired)
+    repaired = re.sub(r"(?<=[A-Za-z0-9])//(?=[A-Za-z0-9])", "/", repaired)
+    return repaired
 
 
 def _is_pdf_template_line(line: str) -> bool:
@@ -567,8 +605,17 @@ def _is_pdf_template_line(line: str) -> bool:
 
 
 def _is_pdf_layout_noise_table(table: Sequence[Sequence[str | None]]) -> bool:
-    """过滤网页导航布局表格，但保留正文业务表格。"""
+    """过滤网页导航和误识别布局表格，但保留正文业务表格。
 
+    PDF 中的多栏文本框有时会被表格算法误判成“一列多行文本表格”。这类对象没有
+    表头、没有行列语义，直接走表格提取反而容易重复字符；把它交回正文文本层更可靠。
+    """
+
+    raw_cells = [
+        str(cell) for row in table for cell in row if cell is not None and str(cell).strip()
+    ]
+    if len(raw_cells) == 1 and "\n" in raw_cells[0]:
+        return True
     cells = [
         _normalize_pdf_line(str(cell))
         for row in table
@@ -884,7 +931,8 @@ def _table_to_markdown(rows: Sequence[Sequence[str | None]]) -> str:
     """渲染表格并重复表头，使按行切分的内容块仍能自描述。"""
 
     cleaned_rows = [
-        ["" if cell is None else _escape_cell(str(cell)) for cell in row] for row in rows
+        ["" if cell is None else _escape_cell(_normalize_pdf_line(str(cell))) for cell in row]
+        for row in rows
     ]
     cleaned_rows = [row for row in cleaned_rows if any(cell.strip() for cell in row)]
     if not cleaned_rows:

@@ -111,6 +111,22 @@ def test_pdf_cleaning_normalizes_font_mapping_and_removes_web_templates() -> Non
     assert lines == ["高温运动防护四注意", "一、科学补水:运动前30分钟喝200至300毫升温水。"]
 
 
+def test_pdf_cleaning_repairs_full_word_duplicate_glyphs_without_breaking_normal_words() -> None:
+    lines = _clean_pdf_lines(
+        [
+            "IInnffoorrmmaattiioonn aaddaapptteedd ffrroomm tthhee 22nndd eeddiittiioonn.",
+            "AAddaapptteedd ffrroomm hheeaalltthh..ggoovv//PPAAGGuuiiddeelliinneess..",
+            "Coffee and letter remain normal.",
+        ]
+    )
+
+    assert lines == [
+        "Information adapted from the 2nd edition.",
+        "Adapted from health.gov/PAGuidelines.",
+        "Coffee and letter remain normal.",
+    ]
+
+
 def test_pdf_cleaning_removes_toc_page_and_repeated_short_headers() -> None:
     repeated = frozenset({"Physical Activity Guidelines for Americans"})
     lines = _clean_pdf_lines(
@@ -138,6 +154,7 @@ def test_pdf_cleaning_removes_repeated_chinese_edge_headers_only() -> None:
 
 def test_pdf_cleaning_filters_web_layout_tables_but_keeps_domain_tables() -> None:
     assert _is_pdf_layout_noise_table([["无障碍浏览", "网站导航"], ["公务员邮箱", "请输入关键字"]])
+    assert _is_pdf_layout_noise_table([["多栏文本框被误识别成表格\n第二行正文"]])
     assert not _is_pdf_layout_noise_table([["动作", "组数", "次数"], ["深蹲", "4", "12"]])
 
 
