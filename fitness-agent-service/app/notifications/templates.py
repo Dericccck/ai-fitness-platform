@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import json
 import string
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -16,6 +17,7 @@ from sqlalchemy import text
 
 NotificationChannel = Literal["IN_APP"]
 NotificationTemplateStatus = Literal["DRAFT", "APPROVED", "PUBLISHED", "RETIRED"]
+NotificationTemplateEventType = Literal["DRAFT_CREATED", "APPROVED", "PUBLISHED"]
 
 _CHANNELS = frozenset({"IN_APP"})
 _STATUSES = frozenset({"DRAFT", "APPROVED", "PUBLISHED", "RETIRED"})
@@ -46,6 +48,21 @@ class NotificationTemplateRecord:
     published_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(frozen=True)
+class NotificationTemplateEventRecord:
+    """模板生命周期审计摘要；不保存标题、正文或模板变量。"""
+
+    id: int
+    template_key: str
+    channel: str
+    version: int
+    event_type: str
+    actor_user_id: str
+    status_after: str
+    operation_id: str
+    created_at: datetime
 
 
 class NotificationTemplateRepository:
@@ -95,9 +112,21 @@ class NotificationTemplateRepository:
         body_template: str,
         variables: tuple[str, ...] = (),
         created_by: str,
+        operation_id: str,
     ) -> NotificationTemplateRecord:
-        """创建下一个版本的草稿，不允许覆盖已有版本。"""
+        """创建下一个版本的草稿；相同 operation_id 重试返回同一版本。"""
 
+        _validate_operation_id(operation_id)
+        await _lock_operation(connection, operation_id)
+        replay = await self._replay_template_operation(
+            connection,
+            operation_id=operation_id,
+            event_type="DRAFT_CREATED",
+            template_key=template_key,
+            channel=channel,
+        )
+        if replay is not None:
+            return replay
         _validate_template(
             template_key=template_key,
             channel=channel,
@@ -145,6 +174,16 @@ class NotificationTemplateRepository:
         )
         if row is None:
             raise RuntimeError("notification template draft was not created")
+        await self._insert_event(
+            connection,
+            template_key=template_key,
+            channel=channel,
+            version=int(row["version"]),
+            event_type="DRAFT_CREATED",
+            actor_user_id=created_by,
+            status_after="DRAFT",
+            operation_id=operation_id,
+        )
         return _from_row(row)
 
     async def approve(
@@ -155,10 +194,23 @@ class NotificationTemplateRepository:
         channel: NotificationChannel,
         version: int,
         approved_by: str,
+        operation_id: str,
     ) -> NotificationTemplateRecord:
-        """把草稿变为已审核版本；审核人不能为空。"""
+        """把草稿变为已审核版本；相同 operation_id 重试返回同一结果。"""
 
         _validate_key_and_channel(template_key, channel)
+        _validate_operation_id(operation_id)
+        await _lock_operation(connection, operation_id)
+        replay = await self._replay_template_operation(
+            connection,
+            operation_id=operation_id,
+            event_type="APPROVED",
+            template_key=template_key,
+            channel=channel,
+            version=version,
+        )
+        if replay is not None:
+            return replay
         if version < 1 or not approved_by.strip():
             raise NotificationTemplateValidationError("template version and approver are required")
         row = (
@@ -188,15 +240,44 @@ class NotificationTemplateRepository:
         )
         if row is None:
             raise NotificationTemplateValidationError("only DRAFT templates can be approved")
+        await self._insert_event(
+            connection,
+            template_key=template_key,
+            channel=channel,
+            version=version,
+            event_type="APPROVED",
+            actor_user_id=approved_by,
+            status_after="APPROVED",
+            operation_id=operation_id,
+        )
         return _from_row(row)
 
     async def publish(
-        self, connection: Any, *, template_key: str, channel: NotificationChannel, version: int
+        self,
+        connection: Any,
+        *,
+        template_key: str,
+        channel: NotificationChannel,
+        version: int,
+        published_by: str,
+        operation_id: str,
     ) -> NotificationTemplateRecord:
-        """发布已审核版本，并将同键旧版本退役。调用方应在事务中执行。"""
+        """发布已审核版本，并将同键旧版本退役；相同 operation_id 重试返回同一结果。"""
 
         _validate_key_and_channel(template_key, channel)
-        if version < 1:
+        _validate_operation_id(operation_id)
+        await _lock_operation(connection, operation_id)
+        replay = await self._replay_template_operation(
+            connection,
+            operation_id=operation_id,
+            event_type="PUBLISHED",
+            template_key=template_key,
+            channel=channel,
+            version=version,
+        )
+        if replay is not None:
+            return replay
+        if version < 1 or not published_by.strip():
             raise NotificationTemplateValidationError("template version must be positive")
         target = (
             (
@@ -222,6 +303,24 @@ class NotificationTemplateRepository:
         )
         if target is None or target["status"] != "APPROVED":
             raise NotificationTemplateValidationError("only APPROVED templates can be published")
+        retired_rows = (
+            (
+                await connection.execute(
+                    text(
+                        """
+                        SELECT version
+                        FROM agent_notification_templates
+                        WHERE template_key = :template_key AND channel = :channel
+                          AND status = 'PUBLISHED' AND version <> :version
+                        FOR UPDATE
+                        """
+                    ),
+                    {"template_key": template_key, "channel": channel, "version": version},
+                )
+            )
+            .mappings()
+            .all()
+        )
         await connection.execute(
             text(
                 """
@@ -258,7 +357,158 @@ class NotificationTemplateRepository:
         )
         if row is None:
             raise NotificationTemplateValidationError("only APPROVED templates can be published")
+        await self._insert_event(
+            connection,
+            template_key=template_key,
+            channel=channel,
+            version=version,
+            event_type="PUBLISHED",
+            actor_user_id=published_by,
+            status_after="PUBLISHED",
+            operation_id=operation_id,
+            metadata={"retired_versions": [int(item["version"]) for item in retired_rows]},
+        )
         return _from_row(row)
+
+    async def list_events(
+        self,
+        connection: Any,
+        *,
+        template_key: str,
+        channel: NotificationChannel,
+        version: int,
+        limit: int = 50,
+    ) -> list[NotificationTemplateEventRecord]:
+        """读取模板生命周期摘要，不返回模板正文或变量。"""
+
+        _validate_key_and_channel(template_key, channel)
+        if version < 1 or limit < 1 or limit > 100:
+            raise ValueError("template event parameters are invalid")
+        rows = (
+            (
+                await connection.execute(
+                    text(
+                        """
+                        SELECT *
+                        FROM agent_notification_template_events
+                        WHERE template_key = :template_key AND channel = :channel
+                          AND version = :version
+                        ORDER BY id
+                        LIMIT :limit
+                        """
+                    ),
+                    {
+                        "template_key": template_key,
+                        "channel": channel,
+                        "version": version,
+                        "limit": limit,
+                    },
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [_event_from_row(row) for row in rows]
+
+    async def _replay_template_operation(
+        self,
+        connection: Any,
+        *,
+        operation_id: str,
+        event_type: NotificationTemplateEventType,
+        template_key: str,
+        channel: NotificationChannel,
+        version: int | None = None,
+    ) -> NotificationTemplateRecord | None:
+        """检查操作重试；同一幂等键不能被复用到其他模板动作。"""
+
+        row = (
+            (
+                await connection.execute(
+                    text(
+                        "SELECT * FROM agent_notification_template_events WHERE operation_id = :operation_id"
+                    ),
+                    {"operation_id": operation_id},
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if row is None:
+            return None
+        if (
+            row["event_type"] != event_type
+            or row["template_key"] != template_key
+            or row["channel"] != channel
+            or (version is not None and int(row["version"]) != version)
+        ):
+            raise NotificationTemplateValidationError(
+                "operation_id was used for another template action"
+            )
+        template_row = (
+            (
+                await connection.execute(
+                    text(
+                        """
+                        SELECT * FROM agent_notification_templates
+                        WHERE template_key = :template_key AND channel = :channel AND version = :version
+                        """
+                    ),
+                    {
+                        "template_key": template_key,
+                        "channel": channel,
+                        "version": int(row["version"]),
+                    },
+                )
+            )
+            .mappings()
+            .first()
+        )
+        if template_row is None:
+            raise NotificationTemplateValidationError(
+                "template for idempotent operation is missing"
+            )
+        return _from_row(template_row)
+
+    async def _insert_event(
+        self,
+        connection: Any,
+        *,
+        template_key: str,
+        channel: NotificationChannel,
+        version: int,
+        event_type: NotificationTemplateEventType,
+        actor_user_id: str,
+        status_after: NotificationTemplateStatus,
+        operation_id: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """在模板状态变更同一事务内追加不可变事件。"""
+
+        await connection.execute(
+            text(
+                """
+                INSERT INTO agent_notification_template_events (
+                    template_key, channel, version, event_type, actor_user_id,
+                    status_after, operation_id, metadata
+                ) VALUES (
+                    :template_key, :channel, :version, :event_type, :actor_user_id,
+                    :status_after, :operation_id, CAST(:metadata AS JSONB)
+                )
+                ON CONFLICT (operation_id) DO NOTHING
+                """
+            ),
+            {
+                "template_key": template_key,
+                "channel": channel,
+                "version": version,
+                "event_type": event_type,
+                "actor_user_id": actor_user_id,
+                "status_after": status_after,
+                "operation_id": operation_id,
+                "metadata": json.dumps(metadata or {}, ensure_ascii=False),
+            },
+        )
 
 
 def render_notification_template(
@@ -324,6 +574,20 @@ def _validate_key_and_channel(template_key: str, channel: str) -> None:
         raise NotificationTemplateValidationError("notification channel is not supported")
 
 
+def _validate_operation_id(operation_id: str) -> None:
+    if not operation_id.strip() or len(operation_id) > 128:
+        raise NotificationTemplateValidationError("operation_id is invalid")
+
+
+async def _lock_operation(connection: Any, operation_id: str) -> None:
+    """串行化相同幂等键，避免两个并发请求都先查不到审计事件。"""
+
+    await connection.execute(
+        text("SELECT pg_advisory_xact_lock(hashtext(:lock_key))"),
+        {"lock_key": f"notification-operation:{operation_id}"},
+    )
+
+
 def _from_row(row: Any) -> NotificationTemplateRecord:
     return NotificationTemplateRecord(
         template_key=str(row["template_key"]),
@@ -341,9 +605,21 @@ def _from_row(row: Any) -> NotificationTemplateRecord:
     )
 
 
-def _json_array(values: tuple[str, ...]) -> str:
-    import json
+def _event_from_row(row: Any) -> NotificationTemplateEventRecord:
+    return NotificationTemplateEventRecord(
+        id=int(row["id"]),
+        template_key=str(row["template_key"]),
+        channel=str(row["channel"]),
+        version=int(row["version"]),
+        event_type=str(row["event_type"]),
+        actor_user_id=str(row["actor_user_id"]),
+        status_after=str(row["status_after"]),
+        operation_id=str(row["operation_id"]),
+        created_at=_required_utc(row["created_at"]),
+    )
 
+
+def _json_array(values: tuple[str, ...]) -> str:
     return json.dumps(list(values), ensure_ascii=False)
 
 

@@ -5,11 +5,12 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Literal, cast
 
-from fastapi import APIRouter, Header, HTTPException, Path, Request, status
+from fastapi import APIRouter, Header, HTTPException, Path, Query, Request, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.infrastructure.agent_context import AgentContextVerificationError, AgentIdentity
 from app.notifications.templates import (
+    NotificationTemplateEventRecord,
     NotificationTemplateRecord,
     NotificationTemplateRepository,
     NotificationTemplateValidationError,
@@ -28,6 +29,23 @@ class NotificationTemplateDraftRequest(BaseModel):
     title_template: str = Field(min_length=1, max_length=200)
     body_template: str = Field(min_length=1, max_length=2000)
     variables: tuple[str, ...] = Field(default=(), max_length=20)
+    operation_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+
+
+class NotificationTemplateOperationRequest(BaseModel):
+    """审核或发布动作的幂等请求体。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    operation_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
 
 
 class NotificationTemplateResponse(BaseModel):
@@ -47,6 +65,18 @@ class NotificationTemplateResponse(BaseModel):
     published_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+class NotificationTemplateEventResponse(BaseModel):
+    """模板生命周期审计摘要，不返回操作幂等键或模板正文。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    event_type: str
+    actor_user_id: str
+    status_after: str
+    created_at: datetime
 
 
 @router.post("/templates", response_model=NotificationTemplateResponse)
@@ -69,6 +99,7 @@ async def create_notification_template_draft(
                 body_template=payload.body_template,
                 variables=payload.variables,
                 created_by=identity.subject,
+                operation_id=payload.operation_id,
             )
     except NotificationTemplateValidationError as exc:
         raise HTTPException(
@@ -82,6 +113,7 @@ async def create_notification_template_draft(
     response_model=NotificationTemplateResponse,
 )
 async def approve_notification_template(
+    payload: NotificationTemplateOperationRequest,
     request: Request,
     template_key: str = Path(min_length=1, max_length=128),
     channel: Literal["IN_APP"] = Path("IN_APP"),
@@ -99,6 +131,7 @@ async def approve_notification_template(
                 channel=channel,
                 version=version,
                 approved_by=identity.subject,
+                operation_id=payload.operation_id,
             )
     except NotificationTemplateValidationError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -110,6 +143,7 @@ async def approve_notification_template(
     response_model=NotificationTemplateResponse,
 )
 async def publish_notification_template(
+    payload: NotificationTemplateOperationRequest,
     request: Request,
     template_key: str = Path(min_length=1, max_length=128),
     channel: Literal["IN_APP"] = Path("IN_APP"),
@@ -118,7 +152,7 @@ async def publish_notification_template(
 ) -> NotificationTemplateResponse:
     """发布已审核模板；旧的同键发布版本会被退役。"""
 
-    _verify_platform_admin(request, x_agent_context)
+    identity = _verify_platform_admin(request, x_agent_context)
     try:
         async with request.app.state.database.engine.begin() as connection:
             template = await _repository(request).publish(
@@ -126,10 +160,43 @@ async def publish_notification_template(
                 template_key=template_key,
                 channel=channel,
                 version=version,
+                published_by=identity.subject,
+                operation_id=payload.operation_id,
             )
     except NotificationTemplateValidationError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return _to_response(template)
+
+
+@router.get(
+    "/templates/{template_key}/{channel}/{version}/events",
+    response_model=list[NotificationTemplateEventResponse],
+)
+async def list_notification_template_events(
+    request: Request,
+    template_key: str = Path(min_length=1, max_length=128),
+    channel: Literal["IN_APP"] = Path("IN_APP"),
+    version: int = Path(ge=1),
+    limit: int = Query(default=50, ge=1, le=100),
+    x_agent_context: str | None = Header(default=None),
+) -> list[NotificationTemplateEventResponse]:
+    """读取模板生命周期摘要，供管理员排查发布状态。"""
+
+    _verify_platform_admin(request, x_agent_context)
+    try:
+        async with request.app.state.database.engine.connect() as connection:
+            events = await _repository(request).list_events(
+                connection,
+                template_key=template_key,
+                channel=channel,
+                version=version,
+                limit=limit,
+            )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    return [_to_event_response(event) for event in events]
 
 
 def _repository(request: Request) -> NotificationTemplateRepository:
@@ -168,4 +235,14 @@ def _to_response(template: NotificationTemplateRecord) -> NotificationTemplateRe
         published_at=template.published_at,
         created_at=template.created_at,
         updated_at=template.updated_at,
+    )
+
+
+def _to_event_response(event: NotificationTemplateEventRecord) -> NotificationTemplateEventResponse:
+    return NotificationTemplateEventResponse(
+        id=event.id,
+        event_type=event.event_type,
+        actor_user_id=event.actor_user_id,
+        status_after=event.status_after,
+        created_at=event.created_at,
     )

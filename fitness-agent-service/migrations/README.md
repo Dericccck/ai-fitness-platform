@@ -33,6 +33,10 @@ Worker 在发布事务内执行授权、安静时间和频率限制判断；未�
 按 `DRAFT`、`APPROVED`、`PUBLISHED`、`RETIRED` 流转，Worker 只渲染已发布版本；历史收件箱内容不会随着模板升级
 而变化。当前只启用 `IN_APP` 渠道，短信、Push 和 RabbitMQ 仍由后续渠道适配器接入。
 
+0026 增加 `agent_notification_template_events` 不可变模板生命周期审计表。创建草稿、审核和发布都必须携带唯一
+`operation_id`，同一操作重试返回原版本，不重复生成状态或审计事件；审计表只保存模板键、版本、操作者和状态快照，
+不保存通知标题、正文和变量内容。
+
 0023 增加正式 Memory 和候选的正文保留期限字段、脱敏标记和 `REDACTED` 审计事件。正式 Memory 进入
 `REVOKED/EXPIRED` 后默认保留 90 天，候选进入 `APPROVED/REJECTED/EXPIRED` 后默认保留 30 天；期限到达后，
 独立 Memory Retention Worker 将正式 Memory 内容替换为脱敏标记、清空候选密文，但不删除类型、状态、主体范围
