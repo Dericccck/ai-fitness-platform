@@ -65,32 +65,70 @@ class MemoryService:
         """保存用户明确确认的结构化偏好；同一键再次保存表示纠正旧记忆。"""
 
         validate_memory_owner(identity, organization_id)
-        normalized_type = memory_type.strip().upper()
-        if normalized_type not in _MEMORY_TYPES:
-            raise MemoryValidationError("memory type is outside the current fitness scope")
-        normalized_key = _validate_text(memory_key, "memory_key", 64)
-        normalized_value = _validate_text(value, "value", 500)
-        if any(term in normalized_value for term in _FORBIDDEN_TERMS):
-            raise MemoryValidationError(
-                "health diagnosis, disease, medication, and treatment facts are not stored as v1 memory"
-            )
-        normalized_unit = _validate_text(unit, "unit", 16) if unit is not None else None
-        if expires_at is not None:
-            expires_at = _as_utc(expires_at)
-            if expires_at <= datetime.now(UTC):
-                raise MemoryValidationError("memory expiry must be in the future")
+        normalized_type, normalized_key, content, expires_at = _normalize_memory_payload(
+            memory_type=memory_type,
+            memory_key=memory_key,
+            value=value,
+            unit=unit,
+            expires_at=expires_at,
+        )
         if not source_request_id.strip():
             raise MemoryValidationError("source_request_id is required for idempotent writes")
-        content: dict[str, Any] = {"key": normalized_key, "value": normalized_value}
-        if normalized_unit:
-            content["unit"] = normalized_unit
         return await self.repository.save(
             identity=identity,
             organization_id=organization_id,
-            memory_type=cast(MemoryType, normalized_type),
+            memory_type=normalized_type,
             memory_key=normalized_key,
             content=content,
             expires_at=expires_at,
+            source_request_id=source_request_id,
+            request_id=request_id,
+        )
+
+    async def correct(
+        self,
+        *,
+        identity: AgentIdentity,
+        organization_id: str,
+        memory_id: str,
+        expected_version: int,
+        value: str,
+        unit: str | None,
+        expires_at: datetime | None,
+        source_request_id: str,
+        request_id: str | None = None,
+    ) -> FitnessMemory:
+        """按 Memory ID 和期望版本纠正本人 Memory。
+
+        纠正不会改变原 Memory 的类型和稳定键，只替换用户明确修改的值、单位和过期策略。
+        这样管理页面的旧版本不会覆盖其他请求刚刚保存的新版本；成功后仍写入 ``SAVED``
+        审计事件，表示这是一条新的已确认事实。
+        """
+
+        validate_memory_owner(identity, organization_id)
+        if not memory_id.strip() or expected_version < 1 or not source_request_id.strip():
+            raise MemoryValidationError(
+                "memory id, positive expected version, and source request id are required"
+            )
+        target = await self.repository.get_for_subject(memory_id, identity=identity)
+        if target.organization_id != organization_id:
+            raise MemoryValidationError("memory organization is outside signed identity scope")
+        _, _, content, normalized_expiry = _normalize_memory_payload(
+            # 类型和稳定键从数据库目标读取，管理页面只能修改值、单位和过期策略，不能
+            # 借纠正接口改变 Memory 的身份分类或把它迁移到另一条稳定键。
+            memory_type=target.memory_type,
+            memory_key=target.memory_key,
+            value=value,
+            unit=unit,
+            expires_at=expires_at,
+        )
+        return await self.repository.correct(
+            identity=identity,
+            organization_id=organization_id,
+            memory_id=memory_id,
+            expected_version=expected_version,
+            content=content,
+            expires_at=normalized_expiry,
             source_request_id=source_request_id,
             request_id=request_id,
         )
@@ -163,6 +201,35 @@ def _validate_text(value: str | None, field_name: str, max_length: int) -> str:
     if not normalized or len(normalized) > max_length:
         raise MemoryValidationError(f"{field_name} is blank or too long")
     return normalized
+
+
+def _normalize_memory_payload(
+    *,
+    memory_type: str,
+    memory_key: str,
+    value: str,
+    unit: str | None,
+    expires_at: datetime | None,
+) -> tuple[MemoryType, str, dict[str, Any], datetime | None]:
+    """统一保存和纠正的低敏字段校验，避免两个写入口出现安全规则漂移。"""
+
+    normalized_type = memory_type.strip().upper()
+    if normalized_type not in _MEMORY_TYPES:
+        raise MemoryValidationError("memory type is outside the current fitness scope")
+    normalized_key = _validate_text(memory_key, "memory_key", 64)
+    normalized_value = _validate_text(value, "value", 500)
+    if any(term in normalized_value for term in _FORBIDDEN_TERMS):
+        raise MemoryValidationError(
+            "health diagnosis, disease, medication, and treatment facts are not stored as v1 memory"
+        )
+    normalized_unit = _validate_text(unit, "unit", 16) if unit is not None else None
+    normalized_expiry = _as_utc(expires_at) if expires_at is not None else None
+    if normalized_expiry is not None and normalized_expiry <= datetime.now(UTC):
+        raise MemoryValidationError("memory expiry must be in the future")
+    content: dict[str, Any] = {"key": normalized_key, "value": normalized_value}
+    if normalized_unit:
+        content["unit"] = normalized_unit
+    return cast(MemoryType, normalized_type), normalized_key, content, normalized_expiry
 
 
 def _as_utc(value: datetime) -> datetime:

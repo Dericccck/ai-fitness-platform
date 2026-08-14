@@ -179,6 +179,147 @@ class MemoryRepository:
                 )
         return memory_from_row(row)
 
+    async def correct(
+        self,
+        *,
+        identity: AgentIdentity,
+        organization_id: str,
+        memory_id: str,
+        expected_version: int,
+        content: dict[str, Any],
+        expires_at: datetime | None,
+        source_request_id: str,
+        request_id: str | None = None,
+    ) -> FitnessMemory:
+        """按具体 Memory 和乐观锁版本纠正内容，并追加一条 SAVED 事件。"""
+
+        event_statement = text(
+            """
+            SELECT memory_id FROM agent_memory_events
+            WHERE event_type = 'SAVED' AND operation_id = :operation_id
+              AND subject_user_id = :subject_user_id
+              AND organization_id = :organization_id
+            """
+        )
+        memory_by_id_statement = text(
+            """
+            SELECT * FROM agent_memories
+            WHERE id = :memory_id
+              AND subject_user_id = :subject_user_id
+              AND organization_id = :organization_id
+            """
+        )
+        update_statement = text(
+            """
+            UPDATE agent_memories
+            SET content = CAST(:content AS JSONB),
+                status = 'ACTIVE',
+                version = version + 1,
+                expires_at = :expires_at,
+                source_request_id = :source_request_id,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :memory_id
+              AND subject_user_id = :subject_user_id
+              AND organization_id = :organization_id
+              AND status = 'ACTIVE'
+              AND version = :expected_version
+            RETURNING *
+            """
+        )
+        params = {
+            "memory_id": memory_id,
+            "subject_user_id": identity.subject,
+            "organization_id": organization_id,
+            "expected_version": expected_version,
+            "content": json.dumps(content, ensure_ascii=False),
+            "expires_at": expires_at,
+            "source_request_id": source_request_id,
+        }
+        async with self._database.engine.begin() as connection:
+            # 纠正请求可能因客户端超时重试；先查审计事件可以返回第一次成功结果，
+            # 即使当前页面携带的 expected_version 已经不是最新版本。
+            previous_event = (
+                (
+                    await connection.execute(
+                        event_statement,
+                        {
+                            "operation_id": source_request_id,
+                            "subject_user_id": identity.subject,
+                            "organization_id": organization_id,
+                        },
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if previous_event is not None:
+                row = (
+                    (
+                        await connection.execute(
+                            memory_by_id_statement,
+                            {
+                                "memory_id": previous_event["memory_id"],
+                                "subject_user_id": identity.subject,
+                                "organization_id": organization_id,
+                            },
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if row is None:
+                    raise RuntimeError("Memory audit event points to a missing row")
+                return memory_from_row(row)
+            row = (await connection.execute(update_statement, params)).mappings().first()
+            if row is None:
+                # 与撤销一致，处理同一纠正请求的并发提交；其他版本冲突必须返回 409。
+                previous_event = (
+                    (
+                        await connection.execute(
+                            event_statement,
+                            {
+                                "operation_id": source_request_id,
+                                "subject_user_id": identity.subject,
+                                "organization_id": organization_id,
+                            },
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+                if previous_event is not None:
+                    row = (
+                        (
+                            await connection.execute(
+                                memory_by_id_statement,
+                                {
+                                    "memory_id": previous_event["memory_id"],
+                                    "subject_user_id": identity.subject,
+                                    "organization_id": organization_id,
+                                },
+                            )
+                        )
+                        .mappings()
+                        .first()
+                    )
+                    if row is not None:
+                        return memory_from_row(row)
+                raise MemoryVersionConflictError("memory is missing, revoked, or version changed")
+            await self._insert_event(
+                connection,
+                memory_id=str(row["id"]),
+                subject_user_id=identity.subject,
+                organization_id=organization_id,
+                event_type="SAVED",
+                actor_type="USER",
+                actor_user_id=identity.subject,
+                status_after="ACTIVE",
+                version_after=int(row["version"]),
+                request_id=request_id or source_request_id,
+                operation_id=source_request_id,
+            )
+        return memory_from_row(row)
+
     async def list_active(
         self,
         *,

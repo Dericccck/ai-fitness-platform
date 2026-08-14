@@ -254,7 +254,9 @@ Prometheus 指标。数据库使用 `FOR UPDATE SKIP LOCKED`，多个 Worker 实
 
 正式 Memory 的生命周期事件保存在 `agent_memory_events`，保存、撤销和自动过期与状态变更在同一事务内写入。
 用户可以通过 `GET /api/v1/agent/memories?organization_id=...` 查看本人有效 Memory，通过
+`PUT /api/v1/agent/memories/{memory_id}` 纠正值、单位和过期策略，或通过
 `POST /api/v1/agent/memories/{memory_id}/revocations` 明确撤销，并通过同路径的 `/events` 查看状态摘要。
+纠正只能修改已有 Memory 的内容，不能改变稳定键和类型。
 撤销请求必须携带 `expected_version` 和稳定 `decision_request_id`；接口从签名主体反查机构，不接受调用方注入
 任意用户或机构。管理页面的点击撤销本身就是确认动作，不再重复触发 `interrupt()`；对话工具仍保留原有确认单。
 

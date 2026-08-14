@@ -57,6 +57,12 @@ class FakeMemoryRepository:
     async def list_active(self, **_: object) -> list[FitnessMemory]:
         return [item for item in self.items.values() if item.status == "ACTIVE"]
 
+    async def get_for_subject(self, memory_id: str, **_: object) -> FitnessMemory:
+        for item in self.items.values():
+            if item.id == memory_id:
+                return item
+        raise RuntimeError("not found")
+
     async def revoke(self, **kwargs: object) -> FitnessMemory:
         for key, item in self.items.items():
             if item.id == kwargs["memory_id"]:
@@ -67,6 +73,27 @@ class FakeMemoryRepository:
                 )
                 self.items[key] = revoked
                 return revoked
+        raise RuntimeError("not found")
+
+    async def correct(self, **kwargs: object) -> FitnessMemory:
+        request_id = str(kwargs["source_request_id"])
+        if request_id in self.request_results:
+            return self.request_results[request_id]
+        for key, item in self.items.items():
+            if item.id == kwargs["memory_id"]:
+                if item.version != kwargs["expected_version"]:
+                    raise RuntimeError("version changed")
+                corrected = FitnessMemory(
+                    **{
+                        **item.__dict__,
+                        "content": dict(kwargs["content"]),
+                        "expires_at": kwargs["expires_at"],
+                        "version": item.version + 1,
+                    }
+                )
+                self.items[key] = corrected
+                self.request_results[request_id] = corrected
+                return corrected
         raise RuntimeError("not found")
 
     async def expire_due(self, **_: object) -> int:
@@ -180,3 +207,34 @@ async def test_memory_expiry_must_be_in_the_future_and_revoke_is_version_bound()
         source_request_id="revoke-request-1",
     )
     assert revoked.status == "REVOKED"
+
+
+@pytest.mark.asyncio
+async def test_memory_correction_preserves_stable_key_and_increments_version() -> None:
+    repository = FakeMemoryRepository()
+    service = MemoryService(repository)  # type: ignore[arg-type]
+    item = await service.save(
+        identity=IDENTITY,
+        organization_id="org-1",
+        memory_type="TRAINING_PREFERENCE",
+        memory_key="preferred_style",
+        value="力量训练",
+        unit=None,
+        expires_at=None,
+        source_request_id="save-request-correction",
+    )
+
+    corrected = await service.correct(
+        identity=IDENTITY,
+        organization_id="org-1",
+        memory_id=item.id,
+        expected_version=item.version,
+        value="自重训练",
+        unit=None,
+        expires_at=None,
+        source_request_id="correct-request-1",
+    )
+
+    assert corrected.version == item.version + 1
+    assert corrected.memory_key == "preferred_style"
+    assert corrected.content == {"key": "preferred_style", "value": "自重训练"}

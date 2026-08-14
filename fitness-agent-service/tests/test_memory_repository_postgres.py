@@ -12,7 +12,7 @@ from sqlalchemy import text
 from app.core.config import Settings
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.database import Database
-from app.memory.repository import MemoryRepository
+from app.memory.repository import MemoryRepository, MemoryVersionConflictError
 
 pytestmark = pytest.mark.skipif(
     os.getenv("AGENT_RUN_POSTGRES_TESTS") != "1",
@@ -64,18 +64,49 @@ async def test_memory_repository_writes_audit_and_revoke_is_idempotent() -> None
         )
         assert corrected.version == 2
 
-        revoked = await repository.revoke(
+        corrected_again = await repository.correct(
             identity=identity,
             organization_id="org-1",
             memory_id=corrected.id,
             expected_version=corrected.version,
+            content={"key": "preferred_style", "value": "器械训练"},
+            expires_at=None,
+            source_request_id=f"memory-correct:{suffix}:1",
+        )
+        retried_correction = await repository.correct(
+            identity=identity,
+            organization_id="org-1",
+            memory_id=corrected.id,
+            expected_version=corrected.version,
+            content={"key": "preferred_style", "value": "错误重试内容"},
+            expires_at=None,
+            source_request_id=f"memory-correct:{suffix}:1",
+        )
+        assert corrected_again.version == 3
+        assert retried_correction.content["value"] == "器械训练"
+        with pytest.raises(MemoryVersionConflictError):
+            await repository.correct(
+                identity=identity,
+                organization_id="org-1",
+                memory_id=corrected.id,
+                expected_version=corrected.version,
+                content={"key": "preferred_style", "value": "旧页面内容"},
+                expires_at=None,
+                source_request_id=f"memory-correct:{suffix}:stale",
+            )
+
+        revoked = await repository.revoke(
+            identity=identity,
+            organization_id="org-1",
+            memory_id=corrected.id,
+            expected_version=corrected_again.version,
             source_request_id=f"memory-revoke:{suffix}:1",
         )
         retried_revoke = await repository.revoke(
             identity=identity,
             organization_id="org-1",
             memory_id=corrected.id,
-            expected_version=corrected.version,
+            expected_version=corrected_again.version,
             source_request_id=f"memory-revoke:{suffix}:1",
         )
         assert revoked.status == "REVOKED"
@@ -83,6 +114,7 @@ async def test_memory_repository_writes_audit_and_revoke_is_idempotent() -> None
 
         events = await repository.list_events(corrected.id, identity=identity)
         assert [(event.event_type, event.status_after) for event in events] == [
+            ("SAVED", "ACTIVE"),
             ("SAVED", "ACTIVE"),
             ("SAVED", "ACTIVE"),
             ("REVOKED", "REVOKED"),

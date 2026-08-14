@@ -38,6 +38,22 @@ class MemoryRevocationRequest(BaseModel):
     )
 
 
+class MemoryCorrectionRequest(BaseModel):
+    """管理页面纠正 Memory 时提交的新值和页面读取时的版本。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    value: str = Field(min_length=1, max_length=500)
+    unit: str | None = Field(default=None, max_length=16)
+    expires_at: datetime | None = None
+    expected_version: int = Field(ge=1)
+    decision_request_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+
+
 class MemoryResponse(BaseModel):
     """返回给用户管理页面的 Memory 视图，不暴露请求幂等字段。"""
 
@@ -86,6 +102,49 @@ async def list_memories(
             status_code=status.HTTP_403_FORBIDDEN, detail="organization is forbidden"
         ) from exc
     return [_to_response(memory) for memory in memories]
+
+
+@router.put("/{memory_id}", response_model=MemoryResponse)
+async def correct_memory(
+    memory_id: str,
+    payload: MemoryCorrectionRequest,
+    request: Request,
+    x_agent_context: str | None = Header(default=None),
+    x_request_id: str | None = Header(default=None),
+) -> MemoryResponse:
+    """纠正本人 Memory；管理页面的提交动作本身就是显式确认。"""
+
+    identity = _verify_identity(request, x_agent_context)
+    operation_id = f"memory-api-correct:{memory_id}:{payload.decision_request_id}"
+    request_id = normalize_context_id(x_request_id) or operation_id
+    try:
+        service = _memory_service(request)
+        target = await service.get_for_subject(identity=identity, memory_id=memory_id)
+        memory = await service.correct(
+            identity=identity,
+            organization_id=target.organization_id,
+            memory_id=memory_id,
+            expected_version=payload.expected_version,
+            value=payload.value,
+            unit=payload.unit,
+            expires_at=payload.expires_at,
+            source_request_id=operation_id,
+            request_id=request_id,
+        )
+    except MemoryNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="memory not found"
+        ) from exc
+    except MemoryVersionConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="memory version changed or memory is no longer active",
+        ) from exc
+    except MemoryValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    return _to_response(memory)
 
 
 @router.post("/{memory_id}/revocations", response_model=MemoryResponse)
