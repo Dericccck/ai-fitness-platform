@@ -25,6 +25,7 @@ from app.confirmation.normalization import (
     NormalizedConfirmationAction,
     normalize_confirmation_action,
 )
+from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.gateway_client import GatewayClientError, GatewayRequestContext
 
 ToolHandler = Callable[[BaseModel, "ToolContext"], Awaitable[Any]]
@@ -63,6 +64,10 @@ class ToolConfirmationRequiredError(ToolRegistryError):
     """写工具缺少上游签发的确认凭证。"""
 
 
+class ToolRoleForbiddenError(ToolRegistryError):
+    """当前签名 AgentContext 的角色不能调用该工具。"""
+
+
 class ToolConfirmationNormalizationError(ToolRegistryError):
     """写工具参数无法形成确定性确认动作。"""
 
@@ -77,6 +82,9 @@ class ToolContext:
     """
 
     gateway_context: GatewayRequestContext
+    # 只读 Agent 工具在需要按当前用户做 RAG 权限过滤时使用。该身份来自已验证的
+    # AgentContext，不是模型参数；写工具仍由 Gateway 再次完成最终权限判断。
+    identity: AgentIdentity | None = None
 
 
 @dataclass(frozen=True)
@@ -259,6 +267,19 @@ class ToolRegistry:
         request_id = context.gateway_context.request_id
         trace_id = context.gateway_context.trace_id
         self._audit_sink.record(ToolAuditEvent(tool_id, "started", request_id, trace_id))
+
+        # allowed_roles 是 Agent 层的第一道工具暴露边界，必须在实际调用入口复核，
+        # 不能只把它作为模型描述字段。Java Gateway 仍会根据签名上下文、组织范围和
+        # 资源关系做最终授权；这里的提前拒绝可以避免学员触发教练专属的 LLM/RAG
+        # 计算，也防止未来新增纯 Python 工具遗漏下游权限层。直接单测若没有身份，
+        # 保持兼容；生产 Supervisor 和确认恢复链路始终注入已验证身份。
+        if context.identity is not None and not definition.allowed_roles.intersection(
+            context.identity.roles
+        ):
+            self._record_failure(
+                definition.tool_id, request_id, trace_id, "ROLE_FORBIDDEN", started_at
+            )
+            raise ToolRoleForbiddenError(f"role is not allowed for tool: {definition.tool_id}")
 
         if not definition.read_only and not context.gateway_context.confirmation_token:
             self._record_failure(

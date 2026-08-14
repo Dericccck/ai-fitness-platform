@@ -470,7 +470,8 @@ class Supervisor:
                 runtime.context.gateway_context,
                 request_id=prepared.record.request_id,
                 confirmation_token=prepared.confirmation_token,
-            )
+            ),
+            identity=runtime.context.identity,
         )
         try:
             result = await self.tools.invoke(
@@ -511,7 +512,10 @@ class Supervisor:
     ) -> dict[str, Any]:
         if runtime.context is None:
             raise SupervisorRuntimeError("supervisor runtime context is missing")
-        context = ToolContext(gateway_context=runtime.context.gateway_context)
+        context = ToolContext(
+            gateway_context=runtime.context.gateway_context,
+            identity=runtime.context.identity,
+        )
         tool_messages: list[dict[str, Any]] = []
         calls = state.get("model_tool_calls", [])
         for call in calls:

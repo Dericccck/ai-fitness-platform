@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime
-from typing import cast
+from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -323,7 +323,12 @@ def _record_execution_policy() -> ConfirmationPolicy:
     )
 
 
-def build_fitness_tool_registry(gateway: GatewayClient) -> ToolRegistry:
+def build_fitness_tool_registry(
+    gateway: GatewayClient,
+    *,
+    models: Any | None = None,
+    rag_service: Any | None = None,
+) -> ToolRegistry:
     """创建进程级健身工具注册表。
 
     Registry 在应用生命周期内只创建一次，所有工具共享 Gateway 连接池。每个 handler
@@ -332,6 +337,14 @@ def build_fitness_tool_registry(gateway: GatewayClient) -> ToolRegistry:
     """
 
     registry = ToolRegistry()
+
+    # 延迟导入是有意的：生成服务需要复用本文件中的训练计划 Schema，若在模块顶部
+    # 导入会形成循环依赖。函数执行时本模块已经完成加载，仍然保持单一 Schema 来源。
+    from .training_plan_generation import (
+        TrainingPlanGenerationError,
+        TrainingPlanGenerationInput,
+        TrainingPlanGenerationService,
+    )
 
     async def get_current_user(_: BaseModel, context: ToolContext) -> object:
         return await gateway.get_current_user(context.gateway_context)
@@ -410,6 +423,16 @@ def build_fitness_tool_registry(gateway: GatewayClient) -> ToolRegistry:
             _record_execution_payload(data),
         )
 
+    async def generate_training_plan_draft(raw: BaseModel, context: ToolContext) -> object:
+        """生成只读草案预览；不调用 Gateway 写接口，也不创建确认单。"""
+
+        if models is None or rag_service is None:
+            raise TrainingPlanGenerationError("训练计划生成依赖未配置")
+        if context.identity is None:
+            raise TrainingPlanGenerationError("生成训练计划需要已验证的 AgentContext")
+        service = TrainingPlanGenerationService(models, rag_service)
+        return await service.generate(cast(TrainingPlanGenerationInput, raw), context.identity)
+
     definitions = (
         ToolDefinition(
             tool_id="fitness.user.get_current.v1",
@@ -426,6 +449,18 @@ def build_fitness_tool_registry(gateway: GatewayClient) -> ToolRegistry:
             input_model=TrainingPlanToolInput,
             handler=get_training_plan,
             allowed_roles=_READ_ROLES,
+            read_only=True,
+            requires_confirmation=False,
+        ),
+        ToolDefinition(
+            tool_id="fitness.training.plan.generate_draft.v1",
+            description=(
+                "检索已发布健身知识并生成结构化训练计划草案预览；不会直接写入，"
+                "后续创建草案仍需用户确认并经过教练审核。"
+            ),
+            input_model=TrainingPlanGenerationInput,
+            handler=generate_training_plan_draft,
+            allowed_roles=frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH"}),
             read_only=True,
             requires_confirmation=False,
         ),

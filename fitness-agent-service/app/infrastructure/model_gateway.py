@@ -88,6 +88,40 @@ class ModelGateway:
         )
         return response.choices[0].message.content or ""
 
+    async def chat_json(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.2,
+    ) -> str:
+        """调用对话模型并要求返回一个 JSON 对象。
+
+        结构化训练计划不能依赖“让模型尽量输出 JSON”的自然语言约定。这里使用
+        OpenAI-compatible 接口的 ``response_format`` 让 DeepSeek 在供应商边界执行
+        JSON Object 约束；业务层仍必须再用 Pydantic 校验字段、数量和业务规则。
+        ``response_format`` 不是权限控制，也不能证明内容正确，只是减少解析失败的
+        概率。模型未配置、返回空结果或供应商不符合契约时统一抛错，禁止伪造草案。
+        """
+
+        if not self.settings.llm_configured:
+            raise ModelConfigurationError("LLM provider is not configured")
+
+        request: dict[str, Any] = {
+            "model": self.settings.llm_model,
+            "messages": messages,
+            "temperature": temperature,
+            "max_tokens": self.settings.llm_max_output_tokens,
+            "response_format": {"type": "json_object"},
+            "extra_body": _deepseek_extra_body(self.settings.llm_thinking_enabled),
+        }
+        response = await self._llm.chat.completions.create(**request)
+        if not response.choices:
+            raise ModelResponseError("LLM returned no choices")
+        content = response.choices[0].message.content or ""
+        if not content.strip():
+            raise ModelResponseError("LLM returned an empty JSON response")
+        return content
+
     async def chat_with_tools(
         self,
         messages: list[dict[str, Any]],

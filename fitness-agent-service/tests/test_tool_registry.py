@@ -14,8 +14,10 @@ from app.agent.tool_registry import (
     ToolInputValidationError,
     ToolRegistry,
     ToolRegistryError,
+    ToolRoleForbiddenError,
     UnknownToolError,
 )
+from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.gateway_client import (
     GatewayClient,
     GatewayCourse,
@@ -128,6 +130,7 @@ def test_fitness_registry_exposes_only_versioned_specs() -> None:
         "fitness.training.day.executions.list.v1",
         "fitness.training.day.record_execution.v1",
         "fitness.training.plan.create_draft.v1",
+        "fitness.training.plan.generate_draft.v1",
         "fitness.training.plan.get.v1",
         "fitness.training.plan.publish.v1",
         "fitness.training.plan.review.v1",
@@ -209,6 +212,36 @@ async def test_write_training_tool_requires_confirmation_before_gateway_call() -
                 ],
             },
             tool_context(),
+        )
+
+
+async def test_registry_blocks_student_from_coach_only_generation_tool() -> None:
+    gateway = FakeGateway()
+    registry = build_fitness_tool_registry(cast(GatewayClient, gateway))
+    context = ToolContext(
+        gateway_context=GatewayRequestContext(signed_context="signed-context"),
+        identity=AgentIdentity(
+            subject="student-1",
+            organization_ids=frozenset({"org-1"}),
+            roles=frozenset({"STUDENT"}),
+            issued_at=1,
+            expires_at=2,
+        ),
+    )
+
+    with pytest.raises(ToolRoleForbiddenError):
+        await registry.invoke(
+            "fitness.training.plan.generate_draft.v1",
+            {
+                "organization_id": "org-1",
+                "student_id": "student-1",
+                "coach_id": "coach-1",
+                "goal_type": "力量",
+                "training_days": 2,
+                "level": "初级",
+                "session_minutes": 45,
+            },
+            context,
         )
 
 

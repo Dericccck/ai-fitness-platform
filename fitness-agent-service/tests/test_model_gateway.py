@@ -60,6 +60,20 @@ async def test_model_gateway_normalizes_openai_tool_call() -> None:
     create.assert_awaited_once()
 
 
+async def test_model_gateway_requests_json_object_for_structured_generation() -> None:
+    gateway = ModelGateway(configured_settings())
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content='{"title":"力量计划"}'))]
+    )
+    create = AsyncMock(return_value=response)
+    gateway._llm.chat.completions.create = create
+
+    result = await gateway.chat_json([{"role": "user", "content": "生成计划"}])
+
+    assert result == '{"title":"力量计划"}'
+    assert create.await_args.kwargs["response_format"] == {"type": "json_object"}
+
+
 async def test_model_gateway_rejects_non_object_tool_arguments() -> None:
     gateway = ModelGateway(configured_settings())
     gateway._llm.chat.completions.create = AsyncMock(return_value=response_for(arguments="[]"))
