@@ -111,7 +111,11 @@ class MemoryCandidateService:
         decision: Literal["APPROVE", "REJECT"],
         decision_request_id: str,
     ) -> MemoryCandidateDecisionResult:
-        """批准候选时先幂等保存 ACTIVE Memory，再记录候选已批准。
+        """处理候选页面/接口中的用户决定；批准时先幂等保存 ACTIVE Memory，再记录候选已批准。
+
+        候选管理接口的批准动作本身就是显式人机确认，所以这里不再启动第二个
+        LangGraph ``interrupt()``；对话式 ``fitness.memory.save.v1`` 仍走独立的
+        interrupt 确认链路。
 
         两步操作之间如果进程崩溃，候选可能暂时仍为 PENDING；相同决定请求重试时，
         MemoryService 会按稳定 source_request_id 幂等收敛，最终再把候选改为 APPROVED。
