@@ -260,6 +260,11 @@ Prometheus 指标。数据库使用 `FOR UPDATE SKIP LOCKED`，多个 Worker 实
 撤销请求必须携带 `expected_version` 和稳定 `decision_request_id`；接口从签名主体反查机构，不接受调用方注入
 任意用户或机构。管理页面的点击撤销本身就是确认动作，不再重复触发 `interrupt()`；对话工具仍保留原有确认单。
 
+候选进入 `PENDING` 时会在同一 PostgreSQL 事务中写入 `agent_notification_outbox`，通知任务使用
+`memory-candidate-pending:{candidate_id}` 去重。Outbox 只保存候选 ID，不保存候选正文；下游发布器可以通过
+`claim_batch`、`mark_published` 和 `mark_retry` 接入 RabbitMQ、站内信或其他通知渠道。当前仓库完成的是可靠出站基础，
+尚未把任何供应商发送结果伪装成已送达。
+
 检索引用接口为 `POST /api/v1/agent/knowledge/search`，只返回已完成权限过滤的来源引用，
 包括来源 URI、版本、章节、PDF 页码、Excel 工作表、表格序号/行范围和命中片段。离线评测
 样例位于 `evals/rag_smoke.json`，阈值位于 `evals/rag_thresholds.json`。本地执行

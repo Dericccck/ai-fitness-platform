@@ -19,6 +19,9 @@ AES-GCM 加密，支持去重、机构隔离和过期状态。0018 增加 `agent
 0019 增加 `agent_memory_events` 正式 Memory 不可变事件表，在同一事务内记录保存、撤销和自动过期；
 事件只保存主体/机构快照、状态和版本，不保存 Memory 正文。保存和撤销均以 `operation_id` 做幂等，
 支持管理页面重试而不重复递增版本或产生重复审计事件。
+0020 增加 `agent_notification_outbox` 事务性通知 Outbox。Memory 候选进入 `PENDING` 时，候选状态、候选审计
+事件和通知任务在同一个事务中提交；Outbox 只保存候选 ID 等路由参数，不保存候选正文。下游发布器通过
+`FOR UPDATE SKIP LOCKED` 抢占任务，并使用 `PUBLISHED`、`RETRYABLE_FAILED`、`DEAD` 状态和有限重试控制可靠投递。
 
 训练计划领域表仍由 Java/MySQL 业务迁移管理。
 

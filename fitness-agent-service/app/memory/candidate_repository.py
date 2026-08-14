@@ -14,6 +14,7 @@ from app.confirmation.cipher import AesGcmPayloadCipher, ConfirmationPayloadCiph
 from app.confirmation.normalization import canonical_json_bytes
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.database import Database
+from app.notifications.outbox import NotificationOutboxRepository
 
 from .candidate import MemoryCandidate, MemoryCandidateEventRecord, MemoryCandidateRecord
 from .models import validate_memory_owner
@@ -127,6 +128,19 @@ class MemoryCandidateRepository:
                     )
                     .mappings()
                     .first()
+                )
+            if row is not None:
+                # 候选和通知任务必须在同一事务内提交。通知只携带候选 ID，不把解密后的
+                # 用户偏好正文写进通用 Outbox；重复调用也能补齐历史候选缺失的通知任务。
+                await NotificationOutboxRepository.enqueue_on_connection(
+                    connection,
+                    notification_type="MEMORY_CANDIDATE_PENDING",
+                    subject_user_id=identity.subject,
+                    organization_id=organization_id,
+                    aggregate_type="memory_candidate",
+                    aggregate_id=str(row["id"]),
+                    dedupe_key=f"memory-candidate-pending:{row['id']}",
+                    payload={"candidate_id": str(row["id"])},
                 )
         if row is None:
             raise MemoryCandidateStateError("candidate idempotency write did not return a row")

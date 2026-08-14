@@ -15,6 +15,7 @@ from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.database import Database
 from app.memory.candidate import MemoryCandidate
 from app.memory.candidate_repository import MemoryCandidateNotFound, MemoryCandidateRepository
+from app.notifications.outbox import NotificationOutboxRepository
 
 pytestmark = pytest.mark.skipif(
     os.getenv("AGENT_RUN_POSTGRES_TESTS") != "1",
@@ -60,6 +61,34 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
         )
         assert duplicate.id == first.id
         assert duplicate.candidate.value == "自重训练"
+        async with database.engine.begin() as connection:
+            outbox_rows = (
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT * FROM agent_notification_outbox "
+                            "WHERE aggregate_id = :candidate_id"
+                        ),
+                        {"candidate_id": first.id},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            assert len(outbox_rows) == 1
+            assert outbox_rows[0]["status"] == "PENDING"
+            assert outbox_rows[0]["payload"] == {"candidate_id": first.id}
+            outbox_repository = NotificationOutboxRepository()
+            claimed = await outbox_repository.claim_batch(
+                connection, worker_id="notification-test-worker", limit=10
+            )
+            assert len(claimed) == 1
+            assert claimed[0].status == "PROCESSING"
+            assert await outbox_repository.mark_published(
+                connection,
+                outbox_id=claimed[0].id,
+                worker_id="notification-test-worker",
+            )
         created_events = await repository.list_events(first.id, identity=identity)
         assert [(event.event_type, event.actor_type) for event in created_events] == [
             ("CREATED", "AGENT")
@@ -107,6 +136,10 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
             expires_at=datetime.now(UTC) + timedelta(hours=1),
         )
         async with database.engine.begin() as connection:
+            await connection.execute(
+                text("DELETE FROM agent_notification_outbox WHERE subject_user_id = :subject"),
+                {"subject": identity.subject},
+            )
             await connection.execute(
                 text(
                     "UPDATE agent_memory_candidates "
