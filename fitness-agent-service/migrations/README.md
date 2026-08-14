@@ -9,7 +9,11 @@ Agent 服务的结构化数据、Memory、RAG 文档和向量索引统一使用 
 make agent-migrate
 ```
 
-后续将继续增加长期 Memory 和评测记录表；训练计划领域表仍由 Java/MySQL 业务迁移管理。
+0015/0016 迁移增加 `agent_memories` 及表级说明。它只保存用户明确提供并确认过的低敏健身偏好、目标、器械、
+时间安排和沟通偏好。保存、覆盖和撤销由 Agent 的确认链路保护；表内保留状态、版本、过期时间和
+来源请求 ID，便于幂等、并发控制和审计。当前不保存医疗诊断、疾病、药物、支付凭证或合同预约事实。
+
+训练计划领域表仍由 Java/MySQL 业务迁移管理。
 
 `knowledge_ingestion_jobs` 记录上传审核、索引 Claim、失败和有限重试状态。上传任务不会
 直接写入可检索的 `knowledge_documents`，只有审核后的后台索引任务完成父子节点、Embedding

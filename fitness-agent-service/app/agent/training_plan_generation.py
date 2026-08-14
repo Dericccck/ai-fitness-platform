@@ -14,6 +14,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_valida
 
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.model_gateway import ModelGateway, ModelResponseError
+from app.memory.service import MemoryService
 from app.rag.models import RetrievalScope
 from app.rag.service import RagSearchError, RagSearchResult, RagService
 
@@ -78,12 +79,14 @@ class TrainingPlanGenerationService:
         models: ModelGateway,
         rag_service: RagService,
         *,
+        memory_service: MemoryService | None = None,
         max_repair_attempts: int = 1,
     ) -> None:
         if max_repair_attempts < 0 or max_repair_attempts > 2:
             raise ValueError("max_repair_attempts must be between 0 and 2")
         self.models = models
         self.rag_service = rag_service
+        self.memory_service = memory_service
         self.max_repair_attempts = max_repair_attempts
 
     async def generate(
@@ -108,7 +111,18 @@ class TrainingPlanGenerationService:
         if not evidence.chunks:
             raise TrainingPlanGenerationError("没有检索到已发布且有权限的健身知识，无法生成草案")
 
-        content = await self._generate_content(request, evidence)
+        memories = []
+        if self.memory_service is not None:
+            try:
+                memories = await self.memory_service.list_active(
+                    identity=identity, organization_id=request.organization_id
+                )
+            except Exception as exc:
+                # Memory 是增强上下文，不应把已授权的知识检索降级成不可用；同时不能
+                # 静默把读取异常当成“没有记忆”，所以对外返回可定位的稳定错误。
+                raise TrainingPlanGenerationError("读取已确认健身 Memory 失败，未生成草案") from exc
+
+        content = await self._generate_content(request, evidence, memories)
         payload = _build_create_payload(request, content)
         validated = CreateTrainingDraftToolInput.model_validate(payload)
         _validate_semantic_rules(validated, request)
@@ -126,8 +140,9 @@ class TrainingPlanGenerationService:
         self,
         request: TrainingPlanGenerationInput,
         evidence: RagSearchResult,
+        memories: list[Any],
     ) -> GeneratedTrainingPlanContent:
-        prompt = _generation_prompt(request, evidence)
+        prompt = _generation_prompt(request, evidence, memories)
         last_error = ""
         for attempt in range(self.max_repair_attempts + 1):
             messages = [
@@ -177,7 +192,11 @@ def _retrieval_query(request: TrainingPlanGenerationInput) -> str:
     return "；".join(parts)
 
 
-def _generation_prompt(request: TrainingPlanGenerationInput, evidence: RagSearchResult) -> str:
+def _generation_prompt(
+    request: TrainingPlanGenerationInput,
+    evidence: RagSearchResult,
+    memories: list[Any],
+) -> str:
     """构造版本稳定的结构化生成 Prompt，明确模型可生成和不可生成的边界。"""
 
     schema = {
@@ -203,6 +222,7 @@ def _generation_prompt(request: TrainingPlanGenerationInput, evidence: RagSearch
             }
         ],
     }
+    memory_context = "\n".join(memory.to_prompt_line() for memory in memories)
     return (
         f"输入目标：{request.goal_type}；水平：{request.level}；每周训练日：{request.training_days}；"
         f"单次时长：{request.session_minutes} 分钟；器械：{'、'.join(request.equipment) or '无特殊器械'}；"
@@ -210,6 +230,8 @@ def _generation_prompt(request: TrainingPlanGenerationInput, evidence: RagSearch
         f"必须生成恰好 {request.training_days} 个训练日，每日 1 到 8 个动作，"
         "不填写诊断、治疗、药物、疾病处方或未经用户提供的身体指标。"
         f"输出 JSON 结构示例：{json.dumps(schema, ensure_ascii=False)}\n\n"
+        "已确认的用户长期偏好（仅作辅助上下文；本次明确输入优先，不能把它们扩展成新的健康事实）：\n"
+        f"{memory_context or '无'}\n\n"
         f"已授权知识证据：\n{evidence.as_prompt_context()}"
     )
 

@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 import pytest
 
@@ -8,6 +9,7 @@ from app.agent.training_plan_generation import (
     TrainingPlanGenerationService,
 )
 from app.infrastructure.agent_context import AgentIdentity
+from app.memory.models import FitnessMemory
 from app.rag.models import KnowledgeChunk
 from app.rag.service import RagSearchResult
 
@@ -72,6 +74,18 @@ class FakeModels:
         return self.responses.pop(0)
 
 
+@dataclass
+class FakeMemory:
+    memories: list[FitnessMemory]
+
+    async def list_active(
+        self, *, identity: AgentIdentity, organization_id: str
+    ) -> list[FitnessMemory]:
+        assert identity.subject == "coach-1"
+        assert organization_id == "org-1"
+        return self.memories
+
+
 def valid_json() -> str:
     return (
         '{"title":"弹力带力量入门","goal_type":"力量","days":['
@@ -121,6 +135,37 @@ async def test_generation_rejects_empty_authorized_knowledge() -> None:
 
     with pytest.raises(TrainingPlanGenerationError, match="没有检索到"):
         await service.generate(request(), IDENTITY)
+
+
+@pytest.mark.asyncio
+async def test_generation_includes_only_confirmed_memory_context_in_prompt() -> None:
+    now = datetime.now(UTC)
+    memory = FitnessMemory(
+        id="memory-1",
+        subject_user_id="coach-1",
+        organization_id="org-1",
+        memory_type="EQUIPMENT_AVAILABILITY",
+        memory_key="available_equipment",
+        content={"key": "available_equipment", "value": "弹力带"},
+        source_type="USER_EXPLICIT",
+        confidence=1.0,
+        status="ACTIVE",
+        version=1,
+        expires_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    models = FakeModels([valid_json()])
+    service = TrainingPlanGenerationService(
+        models,
+        FakeRag(evidence()),
+        memory_service=FakeMemory([memory]),  # type: ignore[arg-type]
+    )
+
+    await service.generate(request(), IDENTITY)
+
+    assert "available_equipment" in models.calls[0][-1]["content"]
+    assert "弹力带" in models.calls[0][-1]["content"]
 
 
 @pytest.mark.asyncio

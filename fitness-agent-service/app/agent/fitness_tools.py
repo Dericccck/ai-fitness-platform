@@ -15,6 +15,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.confirmation.normalization import ConfirmationPolicy
 from app.infrastructure.gateway_client import GatewayClient
+from app.memory.service import MemoryService
 
 from .tool_registry import (
     EmptyToolInput,
@@ -31,6 +32,30 @@ class OrganizationToolInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     organization_id: str = _ID_FIELD
+
+
+class SaveMemoryToolInput(OrganizationToolInput):
+    """保存或覆盖一条用户明确提供的低敏健身 Memory。"""
+
+    memory_type: str = Field(
+        pattern=r"^(TRAINING_GOAL|TRAINING_PREFERENCE|EQUIPMENT_AVAILABILITY|"
+        r"SCHEDULE_PREFERENCE|COMMUNICATION_PREFERENCE)$"
+    )
+    memory_key: str = Field(min_length=1, max_length=64)
+    value: str = Field(min_length=1, max_length=500)
+    unit: str | None = Field(default=None, max_length=16)
+    expires_at: datetime | None = None
+
+
+class ListMemoryToolInput(OrganizationToolInput):
+    """查询当前用户在指定机构内仍生效的长期 Memory。"""
+
+
+class RevokeMemoryToolInput(OrganizationToolInput):
+    """撤销一条 Memory，并用读取时版本防止确认期间误撤销新内容。"""
+
+    memory_id: str = _ID_FIELD
+    expected_version: int = Field(ge=1)
 
 
 class CourseListToolInput(OrganizationToolInput):
@@ -175,6 +200,42 @@ def _create_summary(data: BaseModel, _: Mapping[str, object] | None) -> dict[str
         payload,
         None,
         organization_id=typed.organization_id,
+    )
+
+
+def _save_memory_payload(data: SaveMemoryToolInput) -> dict[str, object]:
+    """生成 Memory 保存的唯一 Payload，确认展示和落库共用同一份字段。"""
+
+    return data.model_dump(mode="json", exclude_none=True)
+
+
+def _save_memory_summary(data: BaseModel, _: Mapping[str, object] | None) -> dict[str, object]:
+    typed = cast(SaveMemoryToolInput, data)
+    payload = _save_memory_payload(typed)
+    return _summary(
+        "保存或更新健身 Memory",
+        "SAVE_FITNESS_MEMORY",
+        "ACTIVE",
+        payload,
+        None,
+        organization_id=typed.organization_id,
+        resource_type="agent_memory",
+    )
+
+
+def _revoke_memory_summary(data: BaseModel, _: Mapping[str, object] | None) -> dict[str, object]:
+    typed = cast(RevokeMemoryToolInput, data)
+    payload = typed.model_dump(mode="json")
+    return _summary(
+        "撤销健身 Memory",
+        "REVOKE_FITNESS_MEMORY",
+        "REVOKED",
+        payload,
+        None,
+        organization_id=typed.organization_id,
+        resource_type="agent_memory",
+        resource_id=typed.memory_id,
+        expected_resource_version=typed.expected_version,
     )
 
 
@@ -323,10 +384,39 @@ def _record_execution_policy() -> ConfirmationPolicy:
     )
 
 
+def _save_memory_policy() -> ConfirmationPolicy:
+    return ConfirmationPolicy(
+        action="SAVE_FITNESS_MEMORY",
+        resource_type="agent_memory",
+        risk_level="WRITE",
+        operation="保存或更新健身 Memory",
+        target_status="ACTIVE",
+        payload_builder=lambda raw: _save_memory_payload(cast(SaveMemoryToolInput, raw)),
+        summary_builder=_save_memory_summary,
+        organization_id_builder=lambda raw: cast(SaveMemoryToolInput, raw).organization_id,
+    )
+
+
+def _revoke_memory_policy() -> ConfirmationPolicy:
+    return ConfirmationPolicy(
+        action="REVOKE_FITNESS_MEMORY",
+        resource_type="agent_memory",
+        risk_level="WRITE",
+        operation="撤销健身 Memory",
+        target_status="REVOKED",
+        payload_builder=lambda raw: cast(RevokeMemoryToolInput, raw).model_dump(mode="json"),
+        summary_builder=_revoke_memory_summary,
+        resource_id_builder=lambda raw: cast(RevokeMemoryToolInput, raw).memory_id,
+        organization_id_builder=lambda raw: cast(RevokeMemoryToolInput, raw).organization_id,
+        resource_version_builder=lambda raw: cast(RevokeMemoryToolInput, raw).expected_version,
+    )
+
+
 def build_fitness_tool_registry(
     gateway: GatewayClient,
     *,
     plan_generator: Any | None = None,
+    memory_service: MemoryService | None = None,
 ) -> ToolRegistry:
     """创建进程级健身工具注册表。
 
@@ -432,6 +522,66 @@ def build_fitness_tool_registry(
             cast(TrainingPlanGenerationInput, raw), context.identity
         )
 
+    async def list_memories(raw: BaseModel, context: ToolContext) -> object:
+        """只返回签名身份本人在指定机构内的 active Memory。"""
+
+        if memory_service is None or context.identity is None:
+            raise RuntimeError("Memory service and verified AgentContext are required")
+        data = cast(ListMemoryToolInput, raw)
+        memories = await memory_service.list_active(
+            identity=context.identity, organization_id=data.organization_id
+        )
+        return [_memory_view(memory) for memory in memories]
+
+    async def save_memory(raw: BaseModel, context: ToolContext) -> object:
+        """确认恢复后保存 Memory；主体始终来自签名上下文，不接受模型指定用户。"""
+
+        if memory_service is None or context.identity is None:
+            raise RuntimeError("Memory service and verified AgentContext are required")
+        data = cast(SaveMemoryToolInput, raw)
+        request_id = context.gateway_context.request_id
+        if not request_id:
+            raise RuntimeError("confirmed Memory write requires request_id")
+        memory = await memory_service.save(
+            identity=context.identity,
+            organization_id=data.organization_id,
+            memory_type=data.memory_type,
+            memory_key=data.memory_key,
+            value=data.value,
+            unit=data.unit,
+            expires_at=data.expires_at,
+            source_request_id=request_id,
+        )
+        return _memory_view(memory)
+
+    async def revoke_memory(raw: BaseModel, context: ToolContext) -> object:
+        """确认恢复后撤销 Memory，保留数据库记录但移出后续上下文。"""
+
+        if memory_service is None or context.identity is None:
+            raise RuntimeError("Memory service and verified AgentContext are required")
+        data = cast(RevokeMemoryToolInput, raw)
+        memory = await memory_service.revoke(
+            identity=context.identity,
+            organization_id=data.organization_id,
+            memory_id=data.memory_id,
+            expected_version=data.expected_version,
+        )
+        return _memory_view(memory)
+
+    def _memory_view(memory: Any) -> dict[str, object]:
+        """把领域对象转换为可写入消息和 HTTP 响应的稳定 JSON。"""
+
+        return {
+            "id": memory.id,
+            "organization_id": memory.organization_id,
+            "memory_type": memory.memory_type,
+            "memory_key": memory.memory_key,
+            "content": memory.content,
+            "status": memory.status,
+            "version": memory.version,
+            "expires_at": memory.expires_at.isoformat() if memory.expires_at else None,
+        }
+
     definitions = (
         ToolDefinition(
             tool_id="fitness.user.get_current.v1",
@@ -472,6 +622,38 @@ def build_fitness_tool_registry(
             read_only=False,
             requires_confirmation=True,
             confirmation_policy=_create_policy(),
+        ),
+        ToolDefinition(
+            tool_id="fitness.memory.list.v1",
+            description="查询当前用户在指定机构内已确认且未过期的健身 Memory。",
+            input_model=ListMemoryToolInput,
+            handler=list_memories,
+            allowed_roles=_READ_ROLES,
+            read_only=True,
+            requires_confirmation=False,
+        ),
+        ToolDefinition(
+            tool_id="fitness.memory.save.v1",
+            description=(
+                "保存或覆盖用户明确提供的训练目标、偏好、器械、时间或沟通偏好；"
+                "执行前必须展示确认卡。"
+            ),
+            input_model=SaveMemoryToolInput,
+            handler=save_memory,
+            allowed_roles=_READ_ROLES,
+            read_only=False,
+            requires_confirmation=True,
+            confirmation_policy=_save_memory_policy(),
+        ),
+        ToolDefinition(
+            tool_id="fitness.memory.revoke.v1",
+            description="撤销当前用户的一条健身 Memory；执行前必须展示确认卡。",
+            input_model=RevokeMemoryToolInput,
+            handler=revoke_memory,
+            allowed_roles=_READ_ROLES,
+            read_only=False,
+            requires_confirmation=True,
+            confirmation_policy=_revoke_memory_policy(),
         ),
         ToolDefinition(
             tool_id="fitness.training.plan.submit_review.v1",

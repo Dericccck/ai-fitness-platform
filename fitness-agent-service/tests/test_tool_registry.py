@@ -126,6 +126,9 @@ def test_fitness_registry_exposes_only_versioned_specs() -> None:
         "fitness.appointment.list.v1",
         "fitness.contract.list.v1",
         "fitness.course.list.v1",
+        "fitness.memory.list.v1",
+        "fitness.memory.revoke.v1",
+        "fitness.memory.save.v1",
         "fitness.organization.get.v1",
         "fitness.training.day.executions.list.v1",
         "fitness.training.day.record_execution.v1",
@@ -137,8 +140,8 @@ def test_fitness_registry_exposes_only_versioned_specs() -> None:
         "fitness.training.plan.submit_review.v1",
         "fitness.user.get_current.v1",
     ]
-    assert sum(spec["read_only"] is False for spec in specs) == 5
-    assert sum(spec["requires_confirmation"] is True for spec in specs) == 5
+    assert sum(spec["read_only"] is False for spec in specs) == 7
+    assert sum(spec["requires_confirmation"] is True for spec in specs) == 7
 
 
 async def test_registry_validates_input_calls_fixed_gateway_adapter_and_serializes_result() -> None:

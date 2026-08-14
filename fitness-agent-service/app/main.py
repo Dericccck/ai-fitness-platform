@@ -29,6 +29,8 @@ from app.infrastructure.database import CheckpointStore, Database
 from app.infrastructure.gateway_client import GatewayClient
 from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient
+from app.memory.repository import MemoryRepository
+from app.memory.service import MemoryService
 from app.rag.admin_repository import KnowledgeIngestionRepository
 from app.rag.admin_service import KnowledgeAdminService
 from app.rag.document_quality import DocumentQualityThresholds
@@ -158,6 +160,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         batch_size=settings.rag_reindex_worker_batch_size,
     )
     app.state.gateway = GatewayClient(settings)
+    # Memory 属于 Agent 的长期上下文，不是 Java/MySQL 的健身业务事实。通过独立仓储和
+    # Service 装配，后续可以单独增加过期 Worker、审计和数据保留策略。
+    app.state.memory_service = MemoryService(MemoryRepository(app.state.database))
     # Tool Registry 是 Agent 调用业务能力的唯一入口。它在启动期完成固定工具注册，
     # 让后续 Supervisor 只能看到有 Schema、角色元数据和审计边界的工具集合。
     # 生成器与模型、RAG 连接池一起按进程复用，避免每次 Tool Calling 都重新装配服务；
@@ -165,10 +170,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.training_plan_generator = TrainingPlanGenerationService(
         app.state.models,
         app.state.rag_service,
+        memory_service=app.state.memory_service,
     )
     app.state.tool_registry = build_fitness_tool_registry(
         app.state.gateway,
         plan_generator=app.state.training_plan_generator,
+        memory_service=app.state.memory_service,
     )
     # 确认参数进入 PostgreSQL 前必须经过应用层加密；密钥缺失时拒绝启动，避免形成
     # “看似持久化、实际明文落库”的不安全降级路径。

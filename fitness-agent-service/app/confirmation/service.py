@@ -239,7 +239,11 @@ def _ensure_identity_snapshot(record: ConfirmationRecord, identity: AgentIdentit
 
 
 def _organization_from_input(tool_id: str, raw_input: Mapping[str, Any]) -> str:
-    if tool_id == "fitness.training.plan.create_draft.v1":
+    if tool_id in {
+        "fitness.training.plan.create_draft.v1",
+        "fitness.memory.save.v1",
+        "fitness.memory.revoke.v1",
+    }:
         value = raw_input.get("organization_id")
         if isinstance(value, str) and value.strip():
             return value
@@ -263,6 +267,10 @@ def _token_resource(record: ConfirmationRecord, payload: Mapping[str, Any]) -> s
     student_id = payload.get("student_id")
     if isinstance(organization_id, str) and isinstance(student_id, str):
         return f"{organization_id}:{student_id}"
+    # Memory 不经过 Java Gateway，但仍使用相同的窄范围凭证生命周期；其资源范围绑定
+    # 到确认创建时的主体和机构，而不是允许模型伪造 student_id。
+    if record.resource_type == "agent_memory" and isinstance(organization_id, str):
+        return f"{organization_id}:{record.subject_user_id}"
     raise ConfirmationStateError("confirmation resource scope is incomplete")
 
 

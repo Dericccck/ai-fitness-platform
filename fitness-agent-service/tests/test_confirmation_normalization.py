@@ -164,3 +164,19 @@ def test_training_day_execution_binds_day_status_and_plan_version() -> None:
         "note": "完成",
         "status": "COMPLETED",
     }
+
+
+def test_memory_write_binds_subject_scope_and_optimistic_version() -> None:
+    registry = build_fitness_tool_registry(cast(GatewayClient, FakeGateway()))
+    action = registry.normalize_confirmation(
+        "fitness.memory.revoke.v1",
+        {"organization_id": "org-1", "memory_id": "memory-1", "expected_version": 4},
+        context=context(),
+        organization_id="org-1",
+    )
+
+    assert action.resource_type == "agent_memory"
+    assert action.resource_id == "memory-1"
+    assert action.expected_resource_version == 4
+    assert action.display_summary["target_status"] == "REVOKED"
+    assert action.display_summary["details"]["expected_version"] == 4

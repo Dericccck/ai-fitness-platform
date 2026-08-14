@@ -80,6 +80,7 @@ PayloadBuilder = Callable[[BaseModel], Mapping[str, Any]]
 SummaryBuilder = Callable[[BaseModel, Mapping[str, Any] | None], Mapping[str, Any]]
 ResourceIdBuilder = Callable[[BaseModel], str | None]
 OrganizationIdBuilder = Callable[[BaseModel], str | None]
+ResourceVersionBuilder = Callable[[BaseModel], int | None]
 
 
 @dataclass(frozen=True)
@@ -100,6 +101,9 @@ class ConfirmationPolicy:
     resource_required: bool = False
     resource_id_builder: ResourceIdBuilder | None = None
     organization_id_builder: OrganizationIdBuilder | None = None
+    # 非 Gateway 资源型写操作（例如 Agent 自己维护的 Memory）没有可读取的 Java
+    # 资源快照，但仍可以把确认前读取到的乐观锁版本绑定进动作哈希。
+    resource_version_builder: ResourceVersionBuilder | None = None
 
 
 @dataclass(frozen=True)
@@ -192,10 +196,18 @@ def normalize_confirmation_action(
         raise ConfirmationNormalizationError("resource organization does not match action")
 
     payload = _json_compatible_mapping(policy.payload_builder(input_data))
-    resource_id = resource.resource_id if resource else None
-    if resource_id != declared_resource_id:
+    resource_id = resource.resource_id if resource else declared_resource_id
+    if resource is not None and resource_id != declared_resource_id:
         raise ConfirmationNormalizationError("resource snapshot does not match tool input")
-    expected_version = resource.version if resource else None
+    expected_version = (
+        resource.version
+        if resource is not None
+        else (
+            policy.resource_version_builder(input_data)
+            if policy.resource_version_builder is not None
+            else None
+        )
+    )
     resource_projection = _resource_projection(policy, resource)
     summary = _json_compatible_mapping(policy.summary_builder(input_data, resource_projection))
     operation = summary.get("operation")
