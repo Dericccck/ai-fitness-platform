@@ -35,6 +35,15 @@ class ModelTurn:
     output_tokens: int | None = None
 
 
+@dataclass(frozen=True)
+class JsonModelTurn:
+    """结构化 JSON 模型回合及供应商返回的 Token 用量。"""
+
+    content: str
+    input_tokens: int | None = None
+    output_tokens: int | None = None
+
+
 class ModelGateway:
     """DeepSeek LLM 与 Embedding 的统一模型网关。
 
@@ -103,9 +112,18 @@ class ModelGateway:
         概率。模型未配置、返回空结果或供应商不符合契约时统一抛错，禁止伪造草案。
         """
 
+        return (await self.chat_json_with_usage(messages, temperature=temperature)).content
+
+    async def chat_json_with_usage(
+        self,
+        messages: list[dict[str, str]],
+        *,
+        temperature: float = 0.2,
+    ) -> JsonModelTurn:
+        """结构化生成并保留 Token 用量，供摘要等后台能力做成本监控。"""
+
         if not self.settings.llm_configured:
             raise ModelConfigurationError("LLM provider is not configured")
-
         request: dict[str, Any] = {
             "model": self.settings.llm_model,
             "messages": messages,
@@ -120,7 +138,12 @@ class ModelGateway:
         content = response.choices[0].message.content or ""
         if not content.strip():
             raise ModelResponseError("LLM returned an empty JSON response")
-        return content
+        usage = getattr(response, "usage", None)
+        return JsonModelTurn(
+            content=content,
+            input_tokens=usage.prompt_tokens if usage else None,
+            output_tokens=usage.completion_tokens if usage else None,
+        )
 
     async def chat_with_tools(
         self,

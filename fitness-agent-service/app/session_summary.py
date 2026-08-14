@@ -13,15 +13,16 @@ import json
 import re
 from dataclasses import dataclass
 from datetime import datetime
-from typing import Any
+from typing import Any, cast
 
 import structlog
 from pydantic import BaseModel, Field, ValidationError
 from sqlalchemy import text
 
 from app.confirmation.cipher import AesGcmPayloadCipher, ConfirmationPayloadCipherError
+from app.core.metrics import HttpMetrics
 from app.infrastructure.database import Database
-from app.infrastructure.model_gateway import ModelGateway
+from app.infrastructure.model_gateway import JsonModelTurn, ModelGateway
 
 _logger = structlog.get_logger("agent.session_summary")
 
@@ -184,6 +185,7 @@ class SessionSummaryService:
         max_summary_chars: int = 3000,
         max_input_chars: int = 12_000,
         retention_days: int = 7,
+        metrics: HttpMetrics | None = None,
     ) -> None:
         if trigger_messages < 2 or keep_recent_messages < 1:
             raise ValueError("invalid session summary message thresholds")
@@ -197,6 +199,7 @@ class SessionSummaryService:
         self.max_summary_chars = max_summary_chars
         self.max_input_chars = max_input_chars
         self.retention_days = retention_days
+        self.metrics = metrics
 
     async def load_for_subject(self, thread_id: str, subject_user_id: str) -> str | None:
         """解密摘要；密钥版本或完整性不匹配时拒绝使用，而不是猜测内容。"""
@@ -236,7 +239,10 @@ class SessionSummaryService:
             existing_record is not None
             and len(conversation_messages) - previous_count < self.keep_recent_messages
         ):
+            self._record_event("skipped_threshold")
             return None
+
+        self._record_event("triggered")
 
         existing_summary = None
         if existing_record is not None:
@@ -246,46 +252,90 @@ class SessionSummaryService:
             existing_summary=existing_summary,
             max_chars=self.max_input_chars,
         )
-        raw = await self.models.chat_json(
-            [
-                {
-                    "role": "system",
-                    "content": (
-                        "你是健身平台的会话压缩器。只总结当前会话中对后续对话有帮助的上下文，"
-                        "不要生成长期用户画像、医疗诊断、权限结论或训练计划事实。动态业务数据可能已过期，"
-                        "必须标记为‘需要重新查询’。不要保留密码、Token、签名上下文、确认单 ID、密钥或其他凭证。"
-                        '只返回 JSON：{"summary": "不超过指定长度的中文摘要"}。'
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": f"请压缩以下会话上下文，摘要最多 {self.max_summary_chars} 个字符：\n{source}",
-                },
-            ],
-            temperature=0.1,
-        )
+        try:
+            model_turn = await self._chat_json_with_usage(source)
+            self._record_tokens(model_turn)
+            self._record_chars("input", len(source))
+            raw = model_turn.content
+        except Exception:
+            self._record_event("failed")
+            raise
         try:
             payload = SessionSummaryPayload.model_validate(json.loads(raw))
         except (json.JSONDecodeError, TypeError, ValidationError) as exc:
+            self._record_event("failed")
             raise SessionSummaryError("LLM returned an invalid session summary") from exc
-        summary = _sanitize_summary(payload.summary, self.max_summary_chars)
+        raw_summary = payload.summary.strip()
+        summary = _sanitize_summary(raw_summary, self.max_summary_chars)
+        if summary != raw_summary:
+            self._record_event("redacted")
         if not summary:
+            self._record_event("empty")
             return None
+        self._record_chars("output", len(summary))
         summary_hash = _sha256(summary)
         ciphertext = self.cipher.encrypt(
             summary.encode("utf-8"),
             associated_data=_associated_data(thread_id, summary_hash),
         )
-        await self.repository.upsert(
-            thread_id=thread_id,
-            subject_user_id=subject_user_id,
-            summary_ciphertext=ciphertext,
-            summary_key_version=self.cipher.key_version,
-            summary_hash=summary_hash,
-            message_count=len(conversation_messages),
-            retention_days=self.retention_days,
-        )
+        try:
+            await self.repository.upsert(
+                thread_id=thread_id,
+                subject_user_id=subject_user_id,
+                summary_ciphertext=ciphertext,
+                summary_key_version=self.cipher.key_version,
+                summary_hash=summary_hash,
+                message_count=len(conversation_messages),
+                retention_days=self.retention_days,
+            )
+        except Exception:
+            self._record_event("failed")
+            raise
+        self._record_event("stored")
         return summary
+
+    async def _chat_json_with_usage(self, source: str) -> JsonModelTurn:
+        """调用支持用量回传的网关；兼容只实现 chat_json 的测试替身。"""
+
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是健身平台的会话压缩器。只总结当前会话中对后续对话有帮助的上下文，"
+                    "不要生成长期用户画像、医疗诊断、权限结论或训练计划事实。动态业务数据可能已过期，"
+                    "必须标记为‘需要重新查询’。不要保留密码、Token、签名上下文、确认单 ID、密钥或其他凭证。"
+                    '只返回 JSON：{"summary": "不超过指定长度的中文摘要"}。'
+                ),
+            },
+            {
+                "role": "user",
+                "content": f"请压缩以下会话上下文，摘要最多 {self.max_summary_chars} 个字符：\n{source}",
+            },
+        ]
+        method = getattr(self.models, "chat_json_with_usage", None)
+        if method is not None:
+            return cast(JsonModelTurn, await method(messages, temperature=0.1))
+        return JsonModelTurn(content=await self.models.chat_json(messages, temperature=0.1))
+
+    def _record_event(self, event: str) -> None:
+        if self.metrics is not None:
+            self.metrics.record_session_summary_event(event)
+
+    def _record_tokens(self, turn: JsonModelTurn) -> None:
+        if self.metrics is None:
+            return
+        if turn.input_tokens:
+            self.metrics.session_summary_tokens_total.labels(direction="input").inc(
+                turn.input_tokens
+            )
+        if turn.output_tokens:
+            self.metrics.session_summary_tokens_total.labels(direction="output").inc(
+                turn.output_tokens
+            )
+
+    def _record_chars(self, kind: str, count: int) -> None:
+        if self.metrics is not None:
+            self.metrics.session_summary_chars.labels(kind=kind).observe(count)
 
 
 def build_compacted_messages(

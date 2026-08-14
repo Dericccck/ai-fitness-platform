@@ -246,6 +246,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         max_summary_chars=settings.session_summary_max_chars,
         max_input_chars=settings.session_summary_max_input_chars,
         retention_days=settings.session_summary_retention_days,
+        metrics=http_metrics,
     )
     app.state.session_lock = SessionLockManager(
         app.state.cache.client,

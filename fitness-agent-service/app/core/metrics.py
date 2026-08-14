@@ -22,6 +22,9 @@ class HttpMetrics:
     maintenance_runs_total: Counter
     maintenance_items_total: Counter
     memory_candidate_events_total: Counter
+    session_summary_events_total: Counter
+    session_summary_tokens_total: Counter
+    session_summary_chars: Histogram
 
     @classmethod
     def create(
@@ -93,6 +96,28 @@ class HttpMetrics:
                 namespace="fitness_agent",
                 registry=target_registry,
             ),
+            session_summary_events_total=Counter(
+                "session_summary_events_total",
+                "Total short-term session summary lifecycle events.",
+                labelnames=("event",),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
+            session_summary_tokens_total=Counter(
+                "session_summary_tokens_total",
+                "Total LLM tokens used by short-term session summaries.",
+                labelnames=("direction",),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
+            session_summary_chars=Histogram(
+                "session_summary_chars",
+                "Character count of short-term session summary input and output.",
+                labelnames=("kind",),
+                namespace="fitness_agent",
+                registry=target_registry,
+                buckets=(100, 500, 1000, 2000, 3000, 5000, 10000, 20000),
+            ),
         )
 
     def record_memory_candidate_event(self, event: str, count: int = 1) -> None:
@@ -100,6 +125,12 @@ class HttpMetrics:
 
         if count > 0:
             self.memory_candidate_events_total.labels(event=event).inc(count)
+
+    def record_session_summary_event(self, event: str, count: int = 1) -> None:
+        """记录固定枚举摘要事件，禁止把 thread 或用户 ID 放入标签。"""
+
+        if count > 0:
+            self.session_summary_events_total.labels(event=event).inc(count)
 
 
 def _route_template(scope: Scope) -> str:
