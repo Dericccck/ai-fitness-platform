@@ -29,6 +29,7 @@ from app.infrastructure.database import CheckpointStore, Database
 from app.infrastructure.gateway_client import GatewayClient
 from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient
+from app.memory.candidate import MemoryCandidateExtractionService
 from app.memory.repository import MemoryRepository
 from app.memory.service import MemoryService
 from app.rag.admin_repository import KnowledgeIngestionRepository
@@ -163,6 +164,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Memory 属于 Agent 的长期上下文，不是 Java/MySQL 的健身业务事实。通过独立仓储和
     # Service 装配，后续可以单独增加过期 Worker、审计和数据保留策略。
     app.state.memory_service = MemoryService(MemoryRepository(app.state.database))
+    app.state.memory_candidate_extractor = MemoryCandidateExtractionService(app.state.models)
     # Tool Registry 是 Agent 调用业务能力的唯一入口。它在启动期完成固定工具注册，
     # 让后续 Supervisor 只能看到有 Schema、角色元数据和审计边界的工具集合。
     # 生成器与模型、RAG 连接池一起按进程复用，避免每次 Tool Calling 都重新装配服务；
@@ -211,6 +213,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             session_lock=app.state.session_lock,
             rag_service=app.state.rag_service,
             confirmation_service=app.state.confirmation_service,
+            memory_candidate_extractor=app.state.memory_candidate_extractor,
         )
         yield
     finally:

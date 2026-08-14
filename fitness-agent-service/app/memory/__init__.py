@@ -4,7 +4,22 @@ Memory 只保存用户明确表达、且对后续训练计划有长期价值的�
 聊天记录，也不是医疗档案。写入必须经过确认，读取必须使用签名身份做主体和机构隔离。
 """
 
+from .candidate import (
+    MemoryCandidate,
+    MemoryCandidateExtractionError,
+    MemoryCandidateExtractionService,
+    build_candidate_context,
+)
 from .models import FitnessMemory, MemoryType, MemoryValidationError
 from .service import MemoryService
 
-__all__ = ["FitnessMemory", "MemoryService", "MemoryType", "MemoryValidationError"]
+__all__ = [
+    "FitnessMemory",
+    "MemoryCandidate",
+    "MemoryCandidateExtractionError",
+    "MemoryCandidateExtractionService",
+    "MemoryService",
+    "MemoryType",
+    "MemoryValidationError",
+    "build_candidate_context",
+]

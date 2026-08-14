@@ -19,7 +19,22 @@ _MEMORY_TYPES: frozenset[str] = frozenset(
         "COMMUNICATION_PREFERENCE",
     }
 )
-_FORBIDDEN_TERMS = ("诊断", "疾病", "处方", "药物", "癌症", "怀孕", "骨折", "心脏病")
+_FORBIDDEN_TERMS = (
+    "诊断",
+    "疾病",
+    "处方",
+    "药物",
+    "癌症",
+    "怀孕",
+    "骨折",
+    "心脏病",
+    "疼痛",
+    "体脂",
+    "血压",
+    "心率",
+    "受伤",
+    "手术",
+)
 
 
 class MemoryService:

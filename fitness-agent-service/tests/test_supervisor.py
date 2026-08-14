@@ -14,8 +14,10 @@ from app.agent.supervisor import (
     classify_route,
 )
 from app.agent.tool_registry import ToolContext, ToolDefinition, ToolRegistry
+from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.gateway_client import GatewayRequestContext
 from app.infrastructure.model_gateway import ModelGateway, ModelToolCall, ModelTurn
+from app.memory.candidate import MemoryCandidate
 
 
 class ToolInput(BaseModel):
@@ -28,6 +30,7 @@ class FakeModels:
     def __init__(self, turns: list[ModelTurn]) -> None:
         self.turns = turns
         self.tools_seen: list[list[dict[str, Any]]] = []
+        self.messages_seen: list[list[dict[str, Any]]] = []
 
     async def chat_with_tools(
         self,
@@ -36,7 +39,19 @@ class FakeModels:
         tools: list[dict[str, Any]],
     ) -> ModelTurn:
         self.tools_seen.append(tools)
+        self.messages_seen.append(messages)
         return self.turns.pop(0)
+
+
+class FakeCandidateExtractor:
+    async def propose(self, _: str) -> tuple[MemoryCandidate, ...]:
+        return (
+            MemoryCandidate(
+                memory_type="EQUIPMENT_AVAILABILITY",
+                memory_key="available_equipment",
+                value="弹力带",
+            ),
+        )
 
 
 def build_registry(calls: list[dict[str, Any]]) -> ToolRegistry:
@@ -117,6 +132,37 @@ async def test_supervisor_runs_model_tool_model_cycle_and_returns_real_result() 
     assert len(models.tools_seen) == 2
     assert models.tools_seen[0]
     assert models.tools_seen[1] == []
+
+
+async def test_supervisor_passes_unconfirmed_memory_candidate_to_model_context() -> None:
+    models = FakeModels([ModelTurn(content="请确认是否保存这个偏好。", tool_calls=())])
+    identity = AgentIdentity(
+        subject="student-1",
+        organization_ids=frozenset({"org-1"}),
+        roles=frozenset({"STUDENT"}),
+        issued_at=1,
+        expires_at=2,
+    )
+    supervisor = Supervisor(
+        cast(ModelGateway, models),
+        build_registry([]),
+        memory_candidate_extractor=FakeCandidateExtractor(),  # type: ignore[arg-type]
+    )
+
+    response = await supervisor.invoke(
+        SupervisorRequest(
+            user_message="请记住我喜欢弹力带",
+            gateway_context=GatewayRequestContext(signed_context="signed-context"),
+            conversation_id="conversation-memory-1",
+            identity=identity,
+        )
+    )
+
+    assert response.answer == "请确认是否保存这个偏好。"
+    assert any(
+        message["role"] == "system" and "不是已保存事实" in message["content"]
+        for message in models.messages_seen[0]
+    )
 
 
 async def test_supervisor_restores_previous_conversation_messages() -> None:
