@@ -171,7 +171,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.gateway = GatewayClient(settings)
     # Memory 属于 Agent 的长期上下文，不是 Java/MySQL 的健身业务事实。通过独立仓储和
     # Service 装配，后续可以单独增加过期 Worker、审计和数据保留策略。
-    app.state.memory_service = MemoryService(MemoryRepository(app.state.database))
+    app.state.memory_service = MemoryService(
+        MemoryRepository(
+            app.state.database,
+            terminal_retention_days=settings.memory_terminal_retention_days,
+        )
+    )
     app.state.notification_outbox = NotificationOutboxRepository()
     app.state.notification_preferences = NotificationPreferenceRepository(
         default_timezone=settings.notification_default_timezone
@@ -204,7 +209,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # 必须解密后才能交给批准逻辑，避免数据库泄露用户偏好原文。
     app.state.memory_candidate_service = MemoryCandidateService(
         app.state.memory_candidate_extractor,
-        MemoryCandidateRepository(app.state.database, app.state.confirmation_cipher),
+        MemoryCandidateRepository(
+            app.state.database,
+            app.state.confirmation_cipher,
+            terminal_retention_days=settings.memory_candidate_terminal_retention_days,
+        ),
         app.state.memory_service,
         metrics=http_metrics,
     )

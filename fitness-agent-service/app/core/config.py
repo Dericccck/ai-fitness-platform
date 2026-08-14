@@ -132,6 +132,13 @@ class Settings(BaseSettings):
     memory_candidate_expiry_batch_size: int = Field(default=500, ge=1, le=5000)
     memory_candidate_expiry_poll_seconds: float = Field(default=60.0, ge=1, le=3600)
     memory_candidate_worker_metrics_port: int = Field(default=8092, ge=1, le=65535)
+    # 正式 Memory 与候选进入终态后仍保留有限期限用于用户追踪和故障排查，期限到达后由
+    # 独立 Worker 清除正文；不可变生命周期审计事件不随正文删除。
+    memory_terminal_retention_days: int = Field(default=90, ge=1, le=3650)
+    memory_candidate_terminal_retention_days: int = Field(default=30, ge=1, le=3650)
+    memory_retention_batch_size: int = Field(default=500, ge=1, le=5000)
+    memory_retention_poll_seconds: float = Field(default=3600.0, ge=1, le=86400)
+    memory_retention_worker_metrics_port: int = Field(default=8094, ge=1, le=65535)
     # 站内通知由独立 Outbox Worker 发布，避免 API 进程重启造成通知任务滞留。
     notification_worker_batch_size: int = Field(default=100, ge=1, le=500)
     notification_worker_poll_seconds: float = Field(default=5.0, ge=1, le=3600)

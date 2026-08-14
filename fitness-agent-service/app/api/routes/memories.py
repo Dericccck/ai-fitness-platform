@@ -69,6 +69,7 @@ class MemoryResponse(BaseModel):
     expires_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    content_redacted: bool
 
 
 class MemoryEventResponse(BaseModel):
@@ -243,6 +244,7 @@ def _to_response(memory: FitnessMemory) -> MemoryResponse:
         expires_at=memory.expires_at,
         created_at=memory.created_at,
         updated_at=memory.updated_at,
+        content_redacted=memory.content_redacted,
     )
 
 

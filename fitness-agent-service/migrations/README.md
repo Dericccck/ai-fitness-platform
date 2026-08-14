@@ -29,6 +29,11 @@ AES-GCM 加密，支持去重、机构隔离和过期状态。0018 增加 `agent
 Worker 在发布事务内执行授权、安静时间和频率限制判断；未配置偏好默认允许，用户关闭或频率限制会留下可审计
 的抑制结果，安静时间会延迟到下一次允许时间。
 
+0023 增加正式 Memory 和候选的正文保留期限字段、脱敏标记和 `REDACTED` 审计事件。正式 Memory 进入
+`REVOKED/EXPIRED` 后默认保留 90 天，候选进入 `APPROVED/REJECTED/EXPIRED` 后默认保留 30 天；期限到达后，
+独立 Memory Retention Worker 将正式 Memory 内容替换为脱敏标记、清空候选密文，但不删除类型、状态、主体范围
+和不可变生命周期审计。期限可以通过部署配置调整，历史终态数据在迁移时补齐默认保留截止时间。
+
 训练计划领域表仍由 Java/MySQL 业务迁移管理。
 
 `knowledge_ingestion_jobs` 记录上传审核、索引 Claim、失败和有限重试状态。上传任务不会

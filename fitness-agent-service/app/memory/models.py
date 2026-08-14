@@ -16,7 +16,7 @@ MemoryType = Literal[
     "COMMUNICATION_PREFERENCE",
 ]
 MemoryStatus = Literal["ACTIVE", "REVOKED", "EXPIRED"]
-MemoryEventType = Literal["SAVED", "REVOKED", "EXPIRED"]
+MemoryEventType = Literal["SAVED", "REVOKED", "EXPIRED", "REDACTED"]
 MemoryEventActorType = Literal["AGENT", "USER", "SYSTEM"]
 
 
@@ -45,15 +45,24 @@ class FitnessMemory:
     expires_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    # 正文脱敏后仍保留类型、稳定键和生命周期状态，供用户看到“这条 Memory 曾存在过”，
+    # 但不能再恢复原始偏好。默认值兼容内存测试和历史调用方构造领域对象。
+    content_redacted: bool = False
 
     def is_active(self, now: datetime) -> bool:
         """判断当前是否仍可作为训练计划上下文使用。"""
 
-        return self.status == "ACTIVE" and (self.expires_at is None or self.expires_at > now)
+        return (
+            self.status == "ACTIVE"
+            and not self.content_redacted
+            and (self.expires_at is None or self.expires_at > now)
+        )
 
     def to_prompt_line(self) -> str:
         """转换成受控、简短的 Prompt 上下文，不暴露数据库内部字段。"""
 
+        if self.content_redacted:
+            return f"- {self.memory_type}/{self.memory_key}: [内容已按保留策略脱敏]"
         value = self.content.get("value")
         unit = self.content.get("unit")
         suffix = f"{unit}" if isinstance(unit, str) and unit else ""

@@ -131,7 +131,7 @@ class MemoryCandidateEventRecord:
     candidate_id: str
     subject_user_id: str
     organization_id: str
-    event_type: Literal["CREATED", "APPROVED", "REJECTED", "EXPIRED"]
+    event_type: Literal["CREATED", "APPROVED", "REJECTED", "EXPIRED", "REDACTED"]
     actor_type: Literal["AGENT", "USER", "SYSTEM"]
     actor_user_id: str | None
     status_after: Literal["PENDING", "APPROVED", "REJECTED", "EXPIRED"]

@@ -247,6 +247,13 @@ Memory 候选过期由 `MemoryCandidateExpiryWorker` 独立处理。本地可通
 Prometheus 指标。数据库使用 `FOR UPDATE SKIP LOCKED`，多个 Worker 实例可以并行运行而不会重复
 处理同一候选。该 Worker 只更新 `PENDING → EXPIRED` 状态，不读取候选正文，也不会创建或修改正式 Memory。
 
+Memory 正文保留期限由独立 `MemoryRetentionWorker` 处理，本地可通过
+`make agent-memory-retention-worker` 启动。正式 Memory 进入 `REVOKED/EXPIRED` 后默认保留 90 天，候选进入
+`APPROVED/REJECTED/EXPIRED` 后默认保留 30 天；到期后正式 Memory 的 `content` 被替换为脱敏标记，候选的
+AES-GCM 密文被清空，类型、稳定键、状态、哈希和生命周期审计仍保留。Worker 使用 `FOR UPDATE SKIP LOCKED`、
+有界批次和 `REDACTED` 审计事件，既支持多实例并行，也不会读取或解密正文。`content_redacted=true` 的 Memory
+不能再进入训练计划 Prompt，脱敏候选只能查询生命周期事件，不能继续批准。
+
 候选生命周期事件保存在 `agent_memory_candidate_events` 不可变审计表中，候选创建、批准、拒绝和过期与状态变更
 使用同一事务写入。用户可通过 `GET /api/v1/agent/memory-candidates/{candidate_id}/events` 查看自己的事件摘要；
 响应不会返回候选密文、正文摘要或内部请求标识。候选提取、过滤、持久化失败和状态流转使用固定枚举指标，避免

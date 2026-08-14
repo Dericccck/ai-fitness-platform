@@ -4,7 +4,7 @@ AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-security-check agent-run agent-reindex-worker agent-memory-expiry-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run training-check training-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-security-check agent-run agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run training-check training-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
@@ -23,6 +23,7 @@ help:
 	@echo "  agent-run    Start the Agent API locally"
 	@echo "  agent-reindex-worker Start the knowledge index rebuild worker locally"
 	@echo "  agent-memory-expiry-worker Start the Memory candidate expiry worker locally"
+	@echo "  agent-memory-retention-worker Start the Memory content retention worker locally"
 	@echo "  agent-notification-worker Start the in-app notification Outbox worker locally"
 	@echo "  agent-image  Build the production Agent container image"
 	@echo "  knowledge-manifest  Generate the local source and SHA-256 manifest"
@@ -102,6 +103,9 @@ agent-reindex-worker:
 
 agent-memory-expiry-worker:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.candidate_expiry_worker_main
+
+agent-memory-retention-worker:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.memory_retention_worker_main
 
 agent-notification-worker:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.notification_worker_main

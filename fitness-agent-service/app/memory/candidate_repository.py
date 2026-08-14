@@ -31,9 +31,18 @@ class MemoryCandidateStateError(RuntimeError):
 class MemoryCandidateRepository:
     """保存加密候选，并在每次读取/决定时强制主体和机构范围。"""
 
-    def __init__(self, database: Database, cipher: AesGcmPayloadCipher) -> None:
+    def __init__(
+        self,
+        database: Database,
+        cipher: AesGcmPayloadCipher,
+        *,
+        terminal_retention_days: int = 30,
+    ) -> None:
+        if terminal_retention_days < 1 or terminal_retention_days > 3650:
+            raise ValueError("candidate terminal retention must be between 1 and 3650 days")
         self._database = database
         self._cipher = cipher
+        self._terminal_retention_days = terminal_retention_days
 
     async def create_pending(
         self,
@@ -253,7 +262,39 @@ class MemoryCandidateRepository:
             )
         if row is None:
             raise MemoryCandidateNotFound("memory candidate was not found")
+        if bool(row.get("payload_redacted", False)):
+            raise MemoryCandidateStateError("memory candidate payload has been redacted")
         return self._record_from_row(row)
+
+    async def ensure_exists_for_subject(
+        self, candidate_id: str, *, identity: AgentIdentity
+    ) -> None:
+        """只校验候选归属，不解密正文，供脱敏后的审计查询使用。"""
+
+        statement = text(
+            """
+            SELECT 1 FROM agent_memory_candidates
+            WHERE id = :id AND subject_user_id = :subject_user_id
+              AND organization_id IN :organization_ids
+            """
+        ).bindparams(bindparam("organization_ids", expanding=True))
+        async with self._database.engine.connect() as connection:
+            row = (
+                (
+                    await connection.execute(
+                        statement,
+                        {
+                            "id": candidate_id,
+                            "subject_user_id": identity.subject,
+                            "organization_ids": list(identity.organization_ids),
+                        },
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        if row is None:
+            raise MemoryCandidateNotFound("memory candidate was not found")
 
     async def decide(
         self,
@@ -278,7 +319,9 @@ class MemoryCandidateRepository:
             """
             UPDATE agent_memory_candidates
             SET status = :status, decision_request_id = :decision_request_id,
-                decided_at = :decided_at, updated_at = CURRENT_TIMESTAMP
+                decided_at = :decided_at,
+                retention_until = CURRENT_TIMESTAMP + (:retention_days * INTERVAL '1 day'),
+                updated_at = CURRENT_TIMESTAMP
             WHERE id = :id AND status = 'PENDING'
             RETURNING *
             """
@@ -313,6 +356,7 @@ class MemoryCandidateRepository:
                             "status": decision,
                             "decision_request_id": decision_request_id,
                             "decided_at": now,
+                            "retention_days": self._terminal_retention_days,
                         },
                     )
                 )
@@ -348,13 +392,24 @@ class MemoryCandidateRepository:
             )
             UPDATE agent_memory_candidates AS candidate
             SET status = 'EXPIRED', decision_request_id = 'system:expiry',
-                decided_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                decided_at = CURRENT_TIMESTAMP,
+                retention_until = CURRENT_TIMESTAMP + (:retention_days * INTERVAL '1 day'),
+                updated_at = CURRENT_TIMESTAMP
             FROM due WHERE candidate.id = due.id
             RETURNING candidate.*
             """
         )
         async with self._database.engine.begin() as connection:
-            rows = (await connection.execute(statement, {"limit": limit})).mappings().all()
+            rows = (
+                (
+                    await connection.execute(
+                        statement,
+                        {"limit": limit, "retention_days": self._terminal_retention_days},
+                    )
+                )
+                .mappings()
+                .all()
+            )
             for row in rows:
                 candidate_id = str(row["id"])
                 await self._insert_event(

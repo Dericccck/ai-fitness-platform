@@ -38,8 +38,11 @@ class MemoryRepository:
     的精确过滤和版本控制比语义近邻检索更适合企业权限边界。
     """
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: Database, *, terminal_retention_days: int = 90) -> None:
+        if terminal_retention_days < 1 or terminal_retention_days > 3650:
+            raise ValueError("memory terminal retention must be between 1 and 3650 days")
         self._database = database
+        self._terminal_retention_days = terminal_retention_days
 
     async def save(
         self,
@@ -59,11 +62,12 @@ class MemoryRepository:
             """
             INSERT INTO agent_memories (
                 id, subject_user_id, organization_id, memory_type, memory_key, content,
-                source_type, confidence, status, version, expires_at, source_request_id
+                source_type, confidence, status, version, expires_at, source_request_id,
+                retention_until, content_redacted, redacted_at, redaction_reason
             ) VALUES (
                 :id, :subject_user_id, :organization_id, :memory_type, :memory_key,
                 CAST(:content AS JSONB), 'USER_EXPLICIT', 1.0, 'ACTIVE', 1,
-                :expires_at, :source_request_id
+                :expires_at, :source_request_id, NULL, false, NULL, NULL
             )
             ON CONFLICT (subject_user_id, organization_id, memory_type, memory_key)
             DO UPDATE SET
@@ -74,6 +78,10 @@ class MemoryRepository:
                 version = agent_memories.version + 1,
                 expires_at = EXCLUDED.expires_at,
                 source_request_id = EXCLUDED.source_request_id,
+                retention_until = NULL,
+                content_redacted = false,
+                redacted_at = NULL,
+                redaction_reason = NULL,
                 updated_at = CURRENT_TIMESTAMP
             WHERE agent_memories.source_request_id <> EXCLUDED.source_request_id
             RETURNING *
@@ -217,6 +225,10 @@ class MemoryRepository:
                 version = version + 1,
                 expires_at = :expires_at,
                 source_request_id = :source_request_id,
+                retention_until = NULL,
+                content_redacted = false,
+                redacted_at = NULL,
+                redaction_reason = NULL,
                 updated_at = CURRENT_TIMESTAMP
             WHERE id = :memory_id
               AND subject_user_id = :subject_user_id
@@ -369,7 +381,9 @@ class MemoryRepository:
         statement = text(
             """
             UPDATE agent_memories
-            SET status = 'REVOKED', version = version + 1, updated_at = CURRENT_TIMESTAMP
+            SET status = 'REVOKED', version = version + 1,
+                retention_until = CURRENT_TIMESTAMP + (:retention_days * INTERVAL '1 day'),
+                updated_at = CURRENT_TIMESTAMP
             WHERE id = :id
               AND subject_user_id = :subject_user_id
               AND organization_id = :organization_id
@@ -437,6 +451,7 @@ class MemoryRepository:
                             "subject_user_id": identity.subject,
                             "organization_id": organization_id,
                             "expected_version": expected_version,
+                            "retention_days": self._terminal_retention_days,
                         },
                     )
                 )
@@ -577,14 +592,25 @@ class MemoryRepository:
                 LIMIT :limit
             )
             UPDATE agent_memories AS memory
-            SET status = 'EXPIRED', updated_at = CURRENT_TIMESTAMP
+            SET status = 'EXPIRED',
+                retention_until = CURRENT_TIMESTAMP + (:retention_days * INTERVAL '1 day'),
+                updated_at = CURRENT_TIMESTAMP
             FROM due
             WHERE memory.id = due.id
             RETURNING memory.*
             """
         )
         async with self._database.engine.begin() as connection:
-            rows = (await connection.execute(statement, {"limit": limit})).mappings().all()
+            rows = (
+                (
+                    await connection.execute(
+                        statement,
+                        {"limit": limit, "retention_days": self._terminal_retention_days},
+                    )
+                )
+                .mappings()
+                .all()
+            )
             for row in rows:
                 memory_id = str(row["id"])
                 operation_id = f"memory-expiry:{memory_id}:{int(row['version'])}"
@@ -668,6 +694,7 @@ def memory_from_row(row: Any) -> FitnessMemory:
         expires_at=_as_utc(row["expires_at"]),
         created_at=_required_as_utc(row["created_at"]),
         updated_at=_required_as_utc(row["updated_at"]),
+        content_redacted=bool(row.get("content_redacted", False)),
     )
 
 

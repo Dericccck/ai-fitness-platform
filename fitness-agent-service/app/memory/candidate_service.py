@@ -126,8 +126,9 @@ class MemoryCandidateService:
     ) -> list[MemoryCandidateEventRecord]:
         """读取本人候选的生命周期摘要，供页面展示和审计排查。"""
 
-        # 先按候选主体读取，避免“没有事件”把越权候选伪装成合法空列表。
-        await self.repository.get_for_subject(candidate_id, identity=identity)
+        # 只校验主体范围，不解密候选正文。保留期到了之后正文可能已经被脱敏，
+        # 但用户仍应能够看到“已创建/已拒绝/已过期/已脱敏”的生命周期审计摘要。
+        await self.repository.ensure_exists_for_subject(candidate_id, identity=identity)
         return await self.repository.list_events(candidate_id, identity=identity, limit=limit)
 
     async def decide(
