@@ -252,6 +252,9 @@ OCR 服务需要返回 `media_type`、`warnings` 和 `blocks` 数组；每个 bl
 校验训练日、动作数量、编号连续性及目标一致性。返回值是带引用的 `DRAFT_PREVIEW`，不会直接写入训练
 业务库；若要创建草案，必须继续调用 `fitness.training.plan.create_draft.v1`，由 LangGraph `interrupt()`
 展示确认卡并签发窄范围凭证，之后仍要经过教练审核和发布。模型不能生成或决定组织权限、计划状态和审核结论。
+当前已通过 Supervisor 集成测试验证“生成预览 → 调用创建工具 → `interrupt()` 拦截 → 用户批准后恢复执行”
+链路；确认前不会调用 Java Gateway 的创建接口。Memory 尚未接入训练计划生成，不能把本次生成结果描述为已完成
+个性化记忆能力。
 
 本地连接默认使用 Docker Compose 创建的 `fitness-agent-postgres`：宿主机
 `127.0.0.1:5433` 映射到容器 `5432`，数据库 `fitness_agent`，用户 `fitness_agent`。

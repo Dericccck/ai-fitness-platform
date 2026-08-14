@@ -7,6 +7,7 @@ from starlette.responses import Response
 
 from app.agent.fitness_tools import build_fitness_tool_registry
 from app.agent.supervisor import Supervisor
+from app.agent.training_plan_generation import TrainingPlanGenerationService
 from app.api.middleware.request_context import RequestContextMiddleware
 from app.api.routes.admin_knowledge import router as admin_knowledge_router
 from app.api.routes.agent import router as agent_router
@@ -159,10 +160,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.gateway = GatewayClient(settings)
     # Tool Registry 是 Agent 调用业务能力的唯一入口。它在启动期完成固定工具注册，
     # 让后续 Supervisor 只能看到有 Schema、角色元数据和审计边界的工具集合。
+    # 生成器与模型、RAG 连接池一起按进程复用，避免每次 Tool Calling 都重新装配服务；
+    # 生成器本身不保存用户身份，当前身份仍由 Supervisor 的运行时上下文注入。
+    app.state.training_plan_generator = TrainingPlanGenerationService(
+        app.state.models,
+        app.state.rag_service,
+    )
     app.state.tool_registry = build_fitness_tool_registry(
         app.state.gateway,
-        models=app.state.models,
-        rag_service=app.state.rag_service,
+        plan_generator=app.state.training_plan_generator,
     )
     # 确认参数进入 PostgreSQL 前必须经过应用层加密；密钥缺失时拒绝启动，避免形成
     # “看似持久化、实际明文落库”的不安全降级路径。

@@ -326,8 +326,7 @@ def _record_execution_policy() -> ConfirmationPolicy:
 def build_fitness_tool_registry(
     gateway: GatewayClient,
     *,
-    models: Any | None = None,
-    rag_service: Any | None = None,
+    plan_generator: Any | None = None,
 ) -> ToolRegistry:
     """创建进程级健身工具注册表。
 
@@ -343,7 +342,6 @@ def build_fitness_tool_registry(
     from .training_plan_generation import (
         TrainingPlanGenerationError,
         TrainingPlanGenerationInput,
-        TrainingPlanGenerationService,
     )
 
     async def get_current_user(_: BaseModel, context: ToolContext) -> object:
@@ -426,12 +424,13 @@ def build_fitness_tool_registry(
     async def generate_training_plan_draft(raw: BaseModel, context: ToolContext) -> object:
         """生成只读草案预览；不调用 Gateway 写接口，也不创建确认单。"""
 
-        if models is None or rag_service is None:
+        if plan_generator is None:
             raise TrainingPlanGenerationError("训练计划生成依赖未配置")
         if context.identity is None:
             raise TrainingPlanGenerationError("生成训练计划需要已验证的 AgentContext")
-        service = TrainingPlanGenerationService(models, rag_service)
-        return await service.generate(cast(TrainingPlanGenerationInput, raw), context.identity)
+        return await plan_generator.generate(
+            cast(TrainingPlanGenerationInput, raw), context.identity
+        )
 
     definitions = (
         ToolDefinition(

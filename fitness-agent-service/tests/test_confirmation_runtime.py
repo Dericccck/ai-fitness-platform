@@ -57,6 +57,64 @@ class OneWriteModel:
         )
 
 
+class GenerateThenWriteModel:
+    """先请求生成预览，再把同一份草案交给写工具，验证两步之间仍有确认拦截。"""
+
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+        self.calls = 0
+
+    async def chat_with_tools(
+        self, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]]
+    ) -> ModelTurn:
+        self.calls += 1
+        if self.calls == 1:
+            return ModelTurn(
+                content="",
+                tool_calls=(
+                    ModelToolCall(
+                        call_id="call-generate",
+                        name="fitness.training.plan.generate_draft.v1",
+                        arguments={
+                            "organization_id": "org-1",
+                            "student_id": "student-1",
+                            "coach_id": "coach-1",
+                            "goal_type": "力量",
+                            "training_days": 1,
+                            "level": "初级",
+                            "session_minutes": 45,
+                        },
+                    ),
+                ),
+            )
+        return ModelTurn(
+            content="",
+            tool_calls=(
+                ModelToolCall(
+                    call_id="call-create-from-preview",
+                    name="fitness.training.plan.create_draft.v1",
+                    arguments=self.payload,
+                ),
+            ),
+        )
+
+
+class FakePlanGenerator:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload = payload
+        self.identities: list[str] = []
+
+    async def generate(self, request: Any, identity: AgentIdentity) -> dict[str, object]:
+        self.identities.append(identity.subject)
+        return {
+            "status": "DRAFT_PREVIEW",
+            "requires_confirmation": True,
+            "requires_coach_review": True,
+            "payload": self.payload,
+            "citations": [],
+        }
+
+
 class FakeConfirmationService:
     def __init__(self, record: ConfirmationRecord) -> None:
         self.record = record
@@ -231,6 +289,66 @@ async def test_write_tool_creates_confirmation_interrupt_without_gateway_executi
     assert messages[-1]["tool_calls"][0]["function"]["arguments"] == "{}"
     assert state.values["pending_confirmation_id"] == "confirmation-1"
     assert "深蹲" not in str(state.values)
+
+
+async def test_generated_preview_flows_into_confirmation_before_draft_creation() -> None:
+    payload = {
+        "organization_id": "org-1",
+        "student_id": "student-1",
+        "coach_id": "coach-1",
+        "title": "证据驱动力量入门",
+        "goal_type": "力量",
+        "days": [
+            {
+                "day_number": 1,
+                "title": "全身力量",
+                "items": [
+                    {
+                        "exercise_name": "弹力带深蹲",
+                        "sort_order": 1,
+                        "sets": 3,
+                        "reps": "8-10",
+                    }
+                ],
+            }
+        ],
+    }
+    models = GenerateThenWriteModel(payload)
+    gateway = FakeGateway()
+    generator = FakePlanGenerator(payload)
+    registry = build_fitness_tool_registry(cast(GatewayClient, gateway), plan_generator=generator)
+    confirmation_service = FakeConfirmationService(pending_record())
+    supervisor = Supervisor(
+        cast(ModelGateway, models),
+        registry,
+        checkpointer=InMemorySaver(),
+        confirmation_service=cast(Any, confirmation_service),
+    )
+    request = SupervisorRequest(
+        user_message="根据知识生成并创建力量训练草案",
+        gateway_context=GatewayRequestContext(
+            signed_context="signed-context",
+            request_id="request-1",
+            trace_id="trace-1",
+        ),
+        conversation_id="conversation-generation-1",
+        thread_id="thread-generation-1",
+        identity=AgentIdentity(
+            subject="coach-1",
+            organization_ids=frozenset({"org-1"}),
+            roles=frozenset({"COACH"}),
+            issued_at=1,
+            expires_at=2,
+        ),
+    )
+
+    response = await supervisor.invoke(request)
+
+    assert response.status == "CONFIRMATION_REQUIRED"
+    assert models.calls == 2
+    assert generator.identities == ["coach-1"]
+    assert confirmation_service.prepared[0]["raw_input"] == payload
+    assert gateway.current_user_calls == 0
 
 
 async def test_approved_confirmation_resumes_server_side_and_executes_once() -> None:
