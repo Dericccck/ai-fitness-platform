@@ -25,6 +25,10 @@ AES-GCM 加密，支持去重、机构隔离和过期状态。0018 增加 `agent
 0021 增加 `agent_in_app_notifications` 站内通知收件箱。Outbox Worker 将待发布任务原子写入收件箱并标记为
 `PUBLISHED`，收件箱使用相同去重键避免重复通知；用户只能读取和标记自己签名机构范围内的通知。
 
+0022 增加 `agent_notification_preferences` 用户通知偏好表，并扩展 Outbox 的 `DEFERRED`、`SUPPRESSED` 状态。
+Worker 在发布事务内执行授权、安静时间和频率限制判断；未配置偏好默认允许，用户关闭或频率限制会留下可审计
+的抑制结果，安静时间会延迟到下一次允许时间。
+
 训练计划领域表仍由 Java/MySQL 业务迁移管理。
 
 `knowledge_ingestion_jobs` 记录上传审核、索引 Claim、失败和有限重试状态。上传任务不会

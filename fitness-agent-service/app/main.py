@@ -39,6 +39,7 @@ from app.memory.candidate_worker import MemoryCandidateExpiryWorker
 from app.memory.repository import MemoryRepository
 from app.memory.service import MemoryService
 from app.notifications.outbox import NotificationOutboxRepository
+from app.notifications.preferences import NotificationPreferenceRepository
 from app.rag.admin_repository import KnowledgeIngestionRepository
 from app.rag.admin_service import KnowledgeAdminService
 from app.rag.document_quality import DocumentQualityThresholds
@@ -172,6 +173,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Service 装配，后续可以单独增加过期 Worker、审计和数据保留策略。
     app.state.memory_service = MemoryService(MemoryRepository(app.state.database))
     app.state.notification_outbox = NotificationOutboxRepository()
+    app.state.notification_preferences = NotificationPreferenceRepository(
+        default_timezone=settings.notification_default_timezone
+    )
     app.state.memory_candidate_extractor = MemoryCandidateExtractionService(
         app.state.models, metrics=http_metrics
     )

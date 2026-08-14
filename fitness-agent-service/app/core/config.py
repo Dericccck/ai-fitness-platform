@@ -136,6 +136,8 @@ class Settings(BaseSettings):
     notification_worker_batch_size: int = Field(default=100, ge=1, le=500)
     notification_worker_poll_seconds: float = Field(default=5.0, ge=1, le=3600)
     notification_worker_metrics_port: int = Field(default=8093, ge=1, le=65535)
+    # 未显式配置通知偏好时使用的本地时区；用户保存偏好后以用户自己的 IANA 时区为准。
+    notification_default_timezone: str = "Asia/Shanghai"
     # 页面路由阈值由部署配置统一控制，上传者和 LLM 无权覆盖。默认值偏保守，
     # 用于把可能承载健身动作、姿态或风险信息的图片密集页送入专业审核。
     rag_pdf_min_image_area_ratio: float = Field(default=0.45, ge=0, le=1)

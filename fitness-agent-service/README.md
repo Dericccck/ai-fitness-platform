@@ -270,6 +270,13 @@ Prometheus 指标。数据库使用 `FOR UPDATE SKIP LOCKED`，多个 Worker 实
 通过 `POST /api/v1/agent/notifications/{notification_id}/read` 标记已读；已读只改变界面状态，不需要
 `interrupt()`。通知接口仍按签名 AgentContext 校验用户和机构范围。
 
+通知策略已通过 `0022` 补齐：用户可以按机构和通知类型通过
+`GET/PUT /api/v1/agent/notifications/preferences` 查询或保存授权开关、IANA 时区下的安静时间和同类通知最小间隔。
+偏好不存在时默认允许站内通知；Outbox Worker 在收件箱写入同一事务中重新判断策略，安静时间会进入
+`DEFERRED` 并在窗口结束后重试，用户关闭或频率限制进入 `SUPPRESSED`，不会伪装成系统失败。设置页面的
+显式保存是用户操作，不是模型隐式改变业务事实，因此不触发 `interrupt()`；策略只保存用户/机构/通知类型配置，
+不保存 Memory 候选正文。
+
 检索引用接口为 `POST /api/v1/agent/knowledge/search`，只返回已完成权限过滤的来源引用，
 包括来源 URI、版本、章节、PDF 页码、Excel 工作表、表格序号/行范围和命中片段。离线评测
 样例位于 `evals/rag_smoke.json`，阈值位于 `evals/rag_thresholds.json`。本地执行

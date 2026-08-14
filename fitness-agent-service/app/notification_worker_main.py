@@ -9,6 +9,7 @@ from prometheus_client import start_http_server
 from app.core.config import Settings
 from app.main import app, http_metrics, lifespan
 from app.notifications.outbox import NotificationOutboxRepository
+from app.notifications.preferences import NotificationPreferenceRepository
 from app.notifications.worker import NotificationOutboxWorker
 
 
@@ -22,6 +23,9 @@ async def run() -> None:
             app.state.database,
             NotificationOutboxRepository(),
             batch_size=settings.notification_worker_batch_size,
+            preferences=NotificationPreferenceRepository(
+                default_timezone=settings.notification_default_timezone
+            ),
             metrics=http_metrics,
         )
         while True:

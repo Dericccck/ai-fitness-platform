@@ -117,7 +117,7 @@ class NotificationOutboxRepository:
                 SELECT id
                 FROM agent_notification_outbox
                 WHERE (
-                    status IN ('PENDING', 'RETRYABLE_FAILED')
+                    status IN ('PENDING', 'DEFERRED', 'RETRYABLE_FAILED')
                     AND available_at <= CURRENT_TIMESTAMP
                 ) OR (
                     status = 'PROCESSING'
@@ -201,6 +201,63 @@ class NotificationOutboxRepository:
                 "delay": delay_seconds,
                 "max_attempts": max_attempts,
             },
+        )
+        return int(result.rowcount or 0) == 1
+
+    async def mark_deferred(
+        self,
+        connection: Any,
+        *,
+        outbox_id: str,
+        worker_id: str,
+        available_at: datetime,
+        reason: str,
+    ) -> bool:
+        """安静时间内不算失败，延迟到下一个允许时间再领取。"""
+
+        if available_at <= datetime.now(UTC) or not reason.strip():
+            raise ValueError("deferred notification must have a future time and reason")
+        result = await connection.execute(
+            text(
+                """
+                UPDATE agent_notification_outbox
+                SET status = 'DEFERRED', available_at = :available_at,
+                    last_error_code = NULL, locked_by = NULL, locked_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :id AND status = 'PROCESSING' AND locked_by = :worker_id
+                """
+            ),
+            {
+                "id": outbox_id,
+                "worker_id": worker_id,
+                "available_at": available_at,
+            },
+        )
+        return int(result.rowcount or 0) == 1
+
+    async def mark_suppressed(
+        self,
+        connection: Any,
+        *,
+        outbox_id: str,
+        worker_id: str,
+        reason: str,
+    ) -> bool:
+        """用户关闭或频率限制时终态抑制，不进入无限重试。"""
+
+        if not reason.strip():
+            raise ValueError("suppression reason is required")
+        result = await connection.execute(
+            text(
+                """
+                UPDATE agent_notification_outbox
+                SET status = 'SUPPRESSED', suppressed_at = CURRENT_TIMESTAMP,
+                    suppression_reason = :reason, locked_by = NULL, locked_at = NULL,
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE id = :id AND status = 'PROCESSING' AND locked_by = :worker_id
+                """
+            ),
+            {"id": outbox_id, "worker_id": worker_id, "reason": reason[:128]},
         )
         return int(result.rowcount or 0) == 1
 
