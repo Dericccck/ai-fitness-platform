@@ -8,7 +8,18 @@ from .candidate import (
     MemoryCandidate,
     MemoryCandidateExtractionError,
     MemoryCandidateExtractionService,
+    MemoryCandidateRecord,
     build_candidate_context,
+)
+from .candidate_repository import (
+    MemoryCandidateNotFound,
+    MemoryCandidateRepository,
+    MemoryCandidateStateError,
+)
+from .candidate_service import (
+    MemoryCandidateDecisionResult,
+    MemoryCandidatePersistenceError,
+    MemoryCandidateService,
 )
 from .models import FitnessMemory, MemoryType, MemoryValidationError
 from .service import MemoryService
@@ -16,8 +27,15 @@ from .service import MemoryService
 __all__ = [
     "FitnessMemory",
     "MemoryCandidate",
+    "MemoryCandidateDecisionResult",
     "MemoryCandidateExtractionError",
     "MemoryCandidateExtractionService",
+    "MemoryCandidateNotFound",
+    "MemoryCandidatePersistenceError",
+    "MemoryCandidateRecord",
+    "MemoryCandidateRepository",
+    "MemoryCandidateService",
+    "MemoryCandidateStateError",
     "MemoryService",
     "MemoryType",
     "MemoryValidationError",

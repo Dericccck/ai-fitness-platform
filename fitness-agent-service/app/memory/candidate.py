@@ -1,14 +1,17 @@
 """从当前用户消息提取待确认的 Memory 候选。
 
-候选提取是只读能力：模型可以提出“这句话可能值得记住什么”，但本模块不写数据库、
-不调用 MemoryService，也不把候选当成已生效事实。候选最终必须通过现有
-``fitness.memory.save.v1`` 工具和 ``interrupt()`` 确认后，才会转为 ACTIVE Memory。
+候选提取本身仍是只读能力：模型可以提出“这句话可能值得记住什么”，但不直接调用
+MemoryService，也不把候选当成已生效事实。候选由上层服务加密保存为 PENDING，用户可以
+在候选管理接口中批准或拒绝；批准后才会转为 ACTIVE Memory。对话式保存仍保留现有
+``fitness.memory.save.v1`` 和 ``interrupt()`` 确认链路。
 """
 
 from __future__ import annotations
 
 import json
 import re
+from dataclasses import dataclass
+from datetime import datetime
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -93,6 +96,30 @@ class MemoryCandidateEnvelope(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     candidates: list[MemoryCandidate] = Field(default_factory=list, max_length=5)
+
+
+@dataclass(frozen=True)
+class MemoryCandidateRecord:
+    """持久化的候选快照；内容已在 Repository 层解密后才进入本对象。
+
+    ``PENDING`` 表示尚未得到用户确认，不能作为已生效的长期事实使用；``APPROVED``
+    表示已经晋级为 ACTIVE Memory；``REJECTED`` 和 ``EXPIRED`` 只保留审计结果，不再
+    允许继续批准。
+    """
+
+    id: str
+    subject_user_id: str
+    organization_id: str
+    candidate: MemoryCandidate
+    payload_hash: str
+    source_thread_id: str
+    source_request_id: str
+    status: Literal["PENDING", "APPROVED", "REJECTED", "EXPIRED"]
+    expires_at: datetime
+    created_at: datetime
+    updated_at: datetime
+    decision_request_id: str | None = None
+    decided_at: datetime | None = None
 
 
 class MemoryCandidateExtractionService:

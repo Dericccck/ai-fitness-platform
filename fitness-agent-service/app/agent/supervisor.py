@@ -33,6 +33,10 @@ from app.memory.candidate import (
     MemoryCandidateExtractionService,
     build_candidate_context,
 )
+from app.memory.candidate_service import (
+    MemoryCandidatePersistenceError,
+    MemoryCandidateService,
+)
 from app.rag.models import RetrievalScope
 from app.rag.service import RagSearchError, RagService
 
@@ -139,6 +143,9 @@ class Supervisor:
         session_lock: SessionLockManager | None = None,
         rag_service: RagService | None = None,
         confirmation_service: ConfirmationService | None = None,
+        memory_candidate_service: MemoryCandidateService | None = None,
+        # 保留此参数是为了兼容当前单元测试和旧的内嵌装配；正式应用使用上面的
+        # Service，因为它还负责跨请求持久化和用户批准/拒绝。
         memory_candidate_extractor: MemoryCandidateExtractionService | None = None,
     ) -> None:
         self.models = models
@@ -148,6 +155,7 @@ class Supervisor:
         self.session_lock = session_lock
         self.rag_service = rag_service
         self.confirmation_service = confirmation_service
+        self.memory_candidate_service = memory_candidate_service
         self.memory_candidate_extractor = memory_candidate_extractor
         self._graph = self._build_graph()
 
@@ -157,6 +165,10 @@ class Supervisor:
         route = classify_route(request.user_message)
         if route == "UNSUPPORTED_LEGACY":
             raise UnsupportedLegacyRequest("赛事、作品和活动运营不属于当前健身 Agent 的业务范围")
+
+        # API 传入的 thread_id 已经由 conversation_thread_id 脱敏；候选仓储只保存这个
+        # 稳定标识，不接触原始会话 ID。没有显式 thread 时的单测回退不代表生产路径。
+        thread_id = request.thread_id or request.conversation_id
 
         knowledge_context = ""
         if route == "FITNESS_COACHING" and self.rag_service is not None and request.identity:
@@ -178,12 +190,37 @@ class Supervisor:
         if (
             route == "FITNESS_COACHING"
             and request.identity is not None
-            and self.memory_candidate_extractor is not None
+            and (
+                self.memory_candidate_service is not None
+                or self.memory_candidate_extractor is not None
+            )
         ):
             try:
-                candidates = await self.memory_candidate_extractor.propose(request.user_message)
+                if self.memory_candidate_service is not None:
+                    candidates = await self.memory_candidate_service.propose(
+                        user_message=request.user_message,
+                        identity=request.identity,
+                        thread_id=thread_id,
+                        source_request_id=request.gateway_context.request_id,
+                    )
+                else:
+                    # 兼容旧装配时只做当前请求提取；这条路径不会持久化候选。
+                    extractor = self.memory_candidate_extractor
+                    assert extractor is not None
+                    candidates = await extractor.propose(request.user_message)
                 memory_candidate_context = build_candidate_context(
                     candidates, request.identity.organization_ids
+                )
+            except MemoryCandidatePersistenceError as exc:
+                # 候选持久化故障不应阻断普通对话，但仍把未确认候选交给主模型，让用户
+                # 知道当前不能声称“已记住”；同时通过日志和指标暴露需要修复的基础设施问题。
+                memory_candidate_context = build_candidate_context(
+                    exc.candidates, request.identity.organization_ids
+                )
+                _logger.warning(
+                    "memory_candidate_persistence_failed",
+                    request_id=request.gateway_context.request_id,
+                    trace_id=request.gateway_context.trace_id,
                 )
             except (MemoryCandidateExtractionError, ModelConfigurationError, ModelResponseError):
                 # 候选提取是辅助能力，暂时不可用时不应阻断普通健身问答；主模型仍会
@@ -215,7 +252,6 @@ class Supervisor:
             "input_tokens": 0,
             "output_tokens": 0,
         }
-        thread_id = request.thread_id or request.conversation_id
         config = {"configurable": {"thread_id": thread_id}}
 
         async def run_with_persisted_history() -> Any:

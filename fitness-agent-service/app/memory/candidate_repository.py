@@ -1,0 +1,314 @@
+"""加密 Memory 候选的 PostgreSQL 仓储。"""
+
+from __future__ import annotations
+
+import json
+from datetime import UTC, datetime
+from typing import Any, Literal
+from uuid import uuid4
+
+from pydantic import ValidationError
+from sqlalchemy import bindparam, text
+
+from app.confirmation.cipher import AesGcmPayloadCipher, ConfirmationPayloadCipherError
+from app.confirmation.normalization import canonical_json_bytes
+from app.infrastructure.agent_context import AgentIdentity
+from app.infrastructure.database import Database
+
+from .candidate import MemoryCandidate, MemoryCandidateRecord
+from .models import validate_memory_owner
+
+
+class MemoryCandidateNotFound(LookupError):
+    """当前签名主体范围内找不到候选。"""
+
+
+class MemoryCandidateStateError(RuntimeError):
+    """候选当前状态不允许执行目标决定。"""
+
+
+class MemoryCandidateRepository:
+    """保存加密候选，并在每次读取/决定时强制主体和机构范围。"""
+
+    def __init__(self, database: Database, cipher: AesGcmPayloadCipher) -> None:
+        self._database = database
+        self._cipher = cipher
+
+    async def create_pending(
+        self,
+        *,
+        identity: AgentIdentity,
+        organization_id: str,
+        candidate: MemoryCandidate,
+        source_thread_id: str,
+        source_request_id: str,
+        expires_at: datetime,
+    ) -> MemoryCandidateRecord:
+        """创建或复用同一内容的待确认候选，避免重复弹出相同候选。"""
+
+        validate_memory_owner(identity, organization_id)
+        if not source_thread_id.strip() or not source_request_id.strip():
+            raise MemoryCandidateStateError("candidate source identifiers are required")
+        if expires_at <= datetime.now(UTC):
+            raise MemoryCandidateStateError("candidate expiry must be in the future")
+        payload = canonical_json_bytes(candidate.model_dump(mode="json", exclude_none=True))
+        payload_hash = _sha256(payload)
+        ciphertext = self._cipher.encrypt(payload, associated_data=payload_hash)
+        statement = text(
+            """
+            INSERT INTO agent_memory_candidates (
+                id, subject_user_id, organization_id, memory_type, memory_key,
+                payload_hash, payload_ciphertext, payload_key_version,
+                source_thread_id, source_request_id, status, expires_at
+            ) VALUES (
+                :id, :subject_user_id, :organization_id, :memory_type, :memory_key,
+                :payload_hash, :payload_ciphertext, :payload_key_version,
+                :source_thread_id, :source_request_id, 'PENDING', :expires_at
+            )
+            ON CONFLICT (subject_user_id, organization_id, memory_type, memory_key, payload_hash)
+            WHERE status = 'PENDING'
+            DO NOTHING
+            RETURNING *
+            """
+        )
+        existing = text(
+            """
+            SELECT * FROM agent_memory_candidates
+            WHERE subject_user_id = :subject_user_id
+              AND organization_id = :organization_id
+              AND memory_type = :memory_type
+              AND memory_key = :memory_key
+              AND payload_hash = :payload_hash
+              AND status = 'PENDING'
+            """
+        )
+        params = {
+            "id": str(uuid4()),
+            "subject_user_id": identity.subject,
+            "organization_id": organization_id,
+            "memory_type": candidate.memory_type,
+            "memory_key": candidate.memory_key,
+            "payload_hash": payload_hash,
+            "payload_ciphertext": ciphertext,
+            "payload_key_version": self._cipher.key_version,
+            "source_thread_id": source_thread_id,
+            "source_request_id": source_request_id,
+            "expires_at": expires_at,
+        }
+        async with self._database.engine.begin() as connection:
+            row = (await connection.execute(statement, params)).mappings().first()
+            if row is None:
+                row = (
+                    (
+                        await connection.execute(
+                            existing,
+                            {
+                                "subject_user_id": identity.subject,
+                                "organization_id": organization_id,
+                                "memory_type": candidate.memory_type,
+                                "memory_key": candidate.memory_key,
+                                "payload_hash": payload_hash,
+                            },
+                        )
+                    )
+                    .mappings()
+                    .first()
+                )
+        if row is None:
+            raise MemoryCandidateStateError("candidate idempotency write did not return a row")
+        return self._record_from_row(row)
+
+    async def list_pending(
+        self,
+        *,
+        identity: AgentIdentity,
+        organization_id: str,
+        limit: int,
+    ) -> list[MemoryCandidateRecord]:
+        """查询本人未过期候选；过期候选不会继续出现在可操作列表。"""
+
+        validate_memory_owner(identity, organization_id)
+        statement = text(
+            """
+            SELECT * FROM agent_memory_candidates
+            WHERE subject_user_id = :subject_user_id
+              AND organization_id = :organization_id
+              AND status = 'PENDING'
+              AND expires_at > CURRENT_TIMESTAMP
+            ORDER BY created_at, id
+            LIMIT :limit
+            """
+        )
+        async with self._database.engine.connect() as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        statement,
+                        {
+                            "subject_user_id": identity.subject,
+                            "organization_id": organization_id,
+                            "limit": limit,
+                        },
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        return [self._record_from_row(row) for row in rows]
+
+    async def get_for_subject(
+        self, candidate_id: str, *, identity: AgentIdentity
+    ) -> MemoryCandidateRecord:
+        """按候选 ID 和主体读取，跨主体时按不存在处理。"""
+
+        statement = text(
+            """
+            SELECT * FROM agent_memory_candidates
+            WHERE id = :id AND subject_user_id = :subject_user_id
+              AND organization_id IN :organization_ids
+            """
+        ).bindparams(bindparam("organization_ids", expanding=True))
+        async with self._database.engine.connect() as connection:
+            row = (
+                (
+                    await connection.execute(
+                        statement,
+                        {
+                            "id": candidate_id,
+                            "subject_user_id": identity.subject,
+                            "organization_ids": list(identity.organization_ids),
+                        },
+                    )
+                )
+                .mappings()
+                .first()
+            )
+        if row is None:
+            raise MemoryCandidateNotFound("memory candidate was not found")
+        return self._record_from_row(row)
+
+    async def decide(
+        self,
+        candidate_id: str,
+        *,
+        identity: AgentIdentity,
+        decision: Literal["APPROVED", "REJECTED"],
+        decision_request_id: str,
+        now: datetime,
+    ) -> MemoryCandidateRecord:
+        """在行锁事务中幂等记录用户决定。"""
+
+        statement = text(
+            """
+            SELECT * FROM agent_memory_candidates
+            WHERE id = :id AND subject_user_id = :subject_user_id
+              AND organization_id IN :organization_ids
+            FOR UPDATE
+            """
+        ).bindparams(bindparam("organization_ids", expanding=True))
+        update = text(
+            """
+            UPDATE agent_memory_candidates
+            SET status = :status, decision_request_id = :decision_request_id,
+                decided_at = :decided_at, updated_at = CURRENT_TIMESTAMP
+            WHERE id = :id AND status = 'PENDING'
+            RETURNING *
+            """
+        )
+        async with self._database.engine.begin() as connection:
+            row = (
+                (
+                    await connection.execute(
+                        statement,
+                        {
+                            "id": candidate_id,
+                            "subject_user_id": identity.subject,
+                            "organization_ids": list(identity.organization_ids),
+                        },
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if row is None:
+                raise MemoryCandidateNotFound("memory candidate was not found")
+            if row["status"] == decision and row["decision_request_id"] == decision_request_id:
+                return self._record_from_row(row)
+            if row["status"] != "PENDING":
+                raise MemoryCandidateStateError("memory candidate decision is already final")
+            updated = (
+                (
+                    await connection.execute(
+                        update,
+                        {
+                            "id": candidate_id,
+                            "status": decision,
+                            "decision_request_id": decision_request_id,
+                            "decided_at": now,
+                        },
+                    )
+                )
+                .mappings()
+                .one()
+            )
+        return self._record_from_row(updated)
+
+    async def expire_due(self, *, limit: int = 500) -> int:
+        """批量标记过期候选，供后续 Worker 或运维任务调用。"""
+
+        statement = text(
+            """
+            WITH due AS (
+                SELECT id FROM agent_memory_candidates
+                WHERE status = 'PENDING' AND expires_at <= CURRENT_TIMESTAMP
+                ORDER BY expires_at, id
+                FOR UPDATE SKIP LOCKED
+                LIMIT :limit
+            )
+            UPDATE agent_memory_candidates AS candidate
+            SET status = 'EXPIRED', decision_request_id = 'system:expiry',
+                decided_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+            FROM due WHERE candidate.id = due.id
+            """
+        )
+        async with self._database.engine.begin() as connection:
+            result = await connection.execute(statement, {"limit": limit})
+        return result.rowcount or 0
+
+    def _record_from_row(self, row: Any) -> MemoryCandidateRecord:
+        try:
+            if str(row["payload_key_version"]) != self._cipher.key_version:
+                raise ConfirmationPayloadCipherError(
+                    "candidate encryption key version is unavailable"
+                )
+            plaintext = self._cipher.decrypt(
+                bytes(row["payload_ciphertext"]), associated_data=str(row["payload_hash"])
+            )
+            candidate = MemoryCandidate.model_validate(json.loads(plaintext))
+        except (ConfirmationPayloadCipherError, json.JSONDecodeError, ValidationError) as exc:
+            raise MemoryCandidateStateError("memory candidate payload cannot be restored") from exc
+        return MemoryCandidateRecord(
+            id=str(row["id"]),
+            subject_user_id=str(row["subject_user_id"]),
+            organization_id=str(row["organization_id"]),
+            candidate=candidate,
+            payload_hash=str(row["payload_hash"]),
+            source_thread_id=str(row["source_thread_id"]),
+            source_request_id=str(row["source_request_id"]),
+            status=row["status"],
+            expires_at=_as_utc(row["expires_at"]),
+            created_at=_as_utc(row["created_at"]),
+            updated_at=_as_utc(row["updated_at"]),
+            decision_request_id=row["decision_request_id"],
+            decided_at=_as_utc(row["decided_at"]) if row["decided_at"] else None,
+        )
+
+
+def _sha256(value: bytes) -> str:
+    import hashlib
+
+    return hashlib.sha256(value).hexdigest()
+
+
+def _as_utc(value: datetime) -> datetime:
+    return value if value.tzinfo is not None else value.replace(tzinfo=UTC)

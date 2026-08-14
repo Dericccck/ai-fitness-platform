@@ -14,6 +14,7 @@ from app.api.routes.agent import router as agent_router
 from app.api.routes.confirmations import router as confirmations_router
 from app.api.routes.health import router as health_router
 from app.api.routes.knowledge_review import router as knowledge_review_router
+from app.api.routes.memory_candidates import router as memory_candidates_router
 from app.api.routes.rag import router as rag_router
 from app.confirmation.cipher import AesGcmPayloadCipher
 from app.confirmation.repository import ConfirmationRepository
@@ -30,6 +31,8 @@ from app.infrastructure.gateway_client import GatewayClient
 from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient
 from app.memory.candidate import MemoryCandidateExtractionService
+from app.memory.candidate_repository import MemoryCandidateRepository
+from app.memory.candidate_service import MemoryCandidateService
 from app.memory.repository import MemoryRepository
 from app.memory.service import MemoryService
 from app.rag.admin_repository import KnowledgeIngestionRepository
@@ -185,6 +188,14 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         settings.confirmation_encryption_key_base64,
         settings.confirmation_encryption_key_version,
     )
+    # 候选正文和确认单参数使用同一套 AES-GCM 密钥管理边界，但通过不同 Repository
+    # 隔离业务职责。候选只有 PENDING/APPROVED 等状态元数据可被 SQL 判断，value/unit
+    # 必须解密后才能交给批准逻辑，避免数据库泄露用户偏好原文。
+    app.state.memory_candidate_service = MemoryCandidateService(
+        app.state.memory_candidate_extractor,
+        MemoryCandidateRepository(app.state.database, app.state.confirmation_cipher),
+        app.state.memory_service,
+    )
     app.state.confirmation_token_issuer = ConfirmationTokenIssuer(
         settings.confirmation_signing_secret,
         ttl_seconds=settings.confirmation_token_ttl_seconds,
@@ -213,7 +224,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             session_lock=app.state.session_lock,
             rag_service=app.state.rag_service,
             confirmation_service=app.state.confirmation_service,
-            memory_candidate_extractor=app.state.memory_candidate_extractor,
+            memory_candidate_service=app.state.memory_candidate_service,
         )
         yield
     finally:
@@ -241,6 +252,7 @@ if runtime_settings.metrics_enabled:
 app.add_middleware(RequestContextMiddleware, service_name=runtime_settings.service_name)
 app.include_router(agent_router)
 app.include_router(confirmations_router)
+app.include_router(memory_candidates_router)
 app.include_router(admin_knowledge_router)
 app.include_router(knowledge_review_router)
 app.include_router(rag_router)
