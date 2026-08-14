@@ -292,7 +292,8 @@ AES-GCM 密文被清空，类型、稳定键、状态、哈希和生命周期审
 
 短期会话摘要的确定性安全评测样例位于 `fitness-agent-service/evals/session_summary_samples.json`，阈值位于
 `fitness-agent-service/evals/session_summary_thresholds.json`。执行 `make agent-session-summary-eval` 会检查摘要 JSON、
-非空、长度、必需上下文、凭证脱敏和通过率；该命令不调用 DeepSeek，不使用真实用户会话，只作为摘要后处理逻辑的 CI 门禁。
+非空、长度、必需上下文、凭证脱敏、禁止越权表达和通过率；禁止表达用于拦截动态事实、权限、医疗诊断和训练计划状态
+被固化进摘要的明显风险。该命令不调用 DeepSeek，不使用真实用户会话，只作为摘要后处理逻辑的 CI 门禁，不能替代人工语义评审。
 
 训练计划生成使用只读工具 `fitness.training.plan.generate_draft.v1`：工具先按已验证身份检索已发布
 健身知识，再通过统一模型网关要求 DeepSeek 返回 JSON Object，最后复用训练计划 Schema 和业务规则

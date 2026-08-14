@@ -6,5 +6,6 @@
   "max_oversize_cases": 0,
   "max_credential_leaks_after_sanitize": 0,
   "max_missing_required_terms": 0,
-  "max_redaction_misses": 0
+  "max_redaction_misses": 0,
+  "max_forbidden_terms": 0
 }

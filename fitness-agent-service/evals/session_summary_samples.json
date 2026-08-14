@@ -2,17 +2,20 @@
   {
     "case_id": "safe-fitness-context",
     "model_output": "{\"summary\":\"用户希望每周进行力量训练；动态课程信息需要重新查询。\"}",
-    "required_terms": ["力量训练", "重新查询"]
+    "required_terms": ["力量训练", "重新查询"],
+    "forbidden_terms": ["已发布", "你有权", "诊断为", "永久安排", "已经确定"]
   },
   {
     "case_id": "synthetic-token-redaction",
     "model_output": "{\"summary\":\"用户 token: demo-token-123456789，目标是减脂；动态训练计划需要重新查询。\"}",
     "required_terms": ["减脂", "重新查询"],
-    "expect_redaction": true
+    "expect_redaction": true,
+    "forbidden_terms": ["已发布", "你有权", "诊断为", "永久安排", "已经确定"]
   },
   {
     "case_id": "equipment-preference",
     "model_output": "{\"summary\":\"用户偏好使用弹力带训练；后续动作安排需要结合最新知识库重新查询。\"}",
-    "required_terms": ["弹力带", "知识库"]
+    "required_terms": ["弹力带", "知识库"],
+    "forbidden_terms": ["已发布", "你有权", "诊断为", "永久安排", "已经确定"]
   }
 ]

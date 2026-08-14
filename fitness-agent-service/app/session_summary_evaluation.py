@@ -1,8 +1,8 @@
-"""短期会话摘要的确定性安全与格式离线评测。
+"""短期会话摘要的确定性安全、范围与格式离线评测。
 
 该评测不调用 LLM，也不使用真实用户数据，只验证模型输出经过本地脱敏和结构化校验后
-能否满足上线门禁。它不能证明摘要事实正确；语义质量需要另行建立人工标注集和模型评审
-流程，本命令只负责把凭证泄露、空结果、超长和结构破坏拦在 CI。
+能否满足上线门禁。它不能证明摘要事实正确，也不能替代人工标注和模型评审；本命令先把
+凭证泄露、空结果、超长、结构破坏以及明显的权限/医疗/动态事实越权表达拦在 CI。
 """
 
 from __future__ import annotations
@@ -29,12 +29,17 @@ _CREDENTIAL_PATTERN = re.compile(
 
 @dataclass(frozen=True)
 class SessionSummaryEvalCase:
-    """一条脱敏后的模型输出样本。"""
+    """一条脱敏后的模型输出样本。
+
+    `forbidden_terms` 是范围护栏，不代表简单的关键词命中就等于真正的语义越权。
+    它用于先拦截高风险、可确定识别的表达，并为后续人工标注评测保留扩展点。
+    """
 
     case_id: str
     model_output: str
     required_terms: tuple[str, ...] = ()
     expect_redaction: bool = False
+    forbidden_terms: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -50,6 +55,7 @@ class SessionSummaryEvalResult:
     missing_required_terms: int
     redaction_applied: bool
     redaction_miss: bool
+    forbidden_terms_found: int
 
 
 @dataclass(frozen=True)
@@ -64,6 +70,7 @@ class SessionSummaryEvalThresholds:
     max_credential_leaks_after_sanitize: int = 0
     max_missing_required_terms: int = 0
     max_redaction_misses: int = 0
+    max_forbidden_terms: int = 0
 
     def validate(self, metrics: dict[str, float]) -> list[str]:
         """返回可执行失败原因，不把异常输出静默当成合格摘要。"""
@@ -87,6 +94,12 @@ class SessionSummaryEvalThresholds:
                 ">",
             ),
             ("redaction_misses", metrics["redaction_misses"], self.max_redaction_misses, ">"),
+            (
+                "forbidden_terms_found",
+                metrics["forbidden_terms_found"],
+                self.max_forbidden_terms,
+                ">",
+            ),
         )
         for name, actual, threshold, operator in checks:
             breached = actual < threshold if operator == "<" else actual > threshold
@@ -103,7 +116,18 @@ def evaluate_case(
     try:
         payload = SessionSummaryPayload.model_validate(json.loads(case.model_output))
     except (json.JSONDecodeError, TypeError, ValidationError):
-        return SessionSummaryEvalResult(case.case_id, False, True, False, False, 0, 0, False, False)
+        return SessionSummaryEvalResult(
+            case_id=case.case_id,
+            passed=False,
+            invalid_json=True,
+            empty_summary=False,
+            oversize=False,
+            credential_leaks_after_sanitize=0,
+            missing_required_terms=0,
+            redaction_applied=False,
+            redaction_miss=False,
+            forbidden_terms_found=0,
+        )
 
     raw_summary = payload.summary.strip()
     sanitized = _sanitize_summary(raw_summary, max_summary_chars)
@@ -111,10 +135,16 @@ def evaluate_case(
     oversize = len(raw_summary) > max_summary_chars
     credential_leaks = len(_CREDENTIAL_PATTERN.findall(sanitized))
     missing_terms = sum(term not in sanitized for term in case.required_terms)
+    forbidden_terms_found = sum(term in sanitized for term in case.forbidden_terms)
     redaction_applied = sanitized != raw_summary
     redaction_misses = int(case.expect_redaction and not redaction_applied)
     passed = not (
-        empty_summary or oversize or credential_leaks or missing_terms or redaction_misses
+        empty_summary
+        or oversize
+        or credential_leaks
+        or missing_terms
+        or redaction_misses
+        or forbidden_terms_found
     )
     return SessionSummaryEvalResult(
         case.case_id,
@@ -126,6 +156,7 @@ def evaluate_case(
         missing_terms,
         redaction_applied,
         bool(redaction_misses),
+        forbidden_terms_found,
     )
 
 
@@ -144,6 +175,7 @@ def aggregate_results(results: Sequence[SessionSummaryEvalResult]) -> dict[str, 
             "missing_required_terms": 0.0,
             "redaction_misses": 0.0,
             "redaction_cases": 0.0,
+            "forbidden_terms_found": 0.0,
         }
     passed = sum(result.passed for result in results)
     return {
@@ -159,6 +191,7 @@ def aggregate_results(results: Sequence[SessionSummaryEvalResult]) -> dict[str, 
         "missing_required_terms": float(sum(result.missing_required_terms for result in results)),
         "redaction_misses": float(sum(result.redaction_miss for result in results)),
         "redaction_cases": float(sum(result.redaction_applied for result in results)),
+        "forbidden_terms_found": float(sum(result.forbidden_terms_found for result in results)),
     }
 
 
@@ -170,6 +203,7 @@ def case_from_mapping(data: dict[str, Any]) -> SessionSummaryEvalCase:
         model_output=str(data["model_output"]),
         required_terms=tuple(str(item) for item in data.get("required_terms", [])),
         expect_redaction=bool(data.get("expect_redaction", False)),
+        forbidden_terms=tuple(str(item) for item in data.get("forbidden_terms", [])),
     )
 
 
@@ -194,6 +228,7 @@ def main(argv: list[str] | None = None) -> int:
         ),
         max_missing_required_terms=int(threshold_data.get("max_missing_required_terms", 0)),
         max_redaction_misses=int(threshold_data.get("max_redaction_misses", 0)),
+        max_forbidden_terms=int(threshold_data.get("max_forbidden_terms", 0)),
     )
     results = [
         evaluate_case(case_from_mapping(item), max_summary_chars=thresholds.max_summary_chars)

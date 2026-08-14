@@ -14,6 +14,7 @@ def test_session_summary_evaluation_accepts_safe_and_redacted_samples() -> None:
             "safe",
             '{"summary":"用户希望力量训练；动态课程需要重新查询。"}',
             ("力量训练", "重新查询"),
+            forbidden_terms=("已发布", "你有权", "诊断为"),
         ),
         max_summary_chars=3000,
     )
@@ -23,6 +24,7 @@ def test_session_summary_evaluation_accepts_safe_and_redacted_samples() -> None:
             '{"summary":"用户 token: demo-token-123456789，目标是减脂。"}',
             ("减脂",),
             expect_redaction=True,
+            forbidden_terms=("已发布", "你有权", "诊断为"),
         ),
         max_summary_chars=3000,
     )
@@ -66,3 +68,21 @@ def test_session_summary_evaluation_counts_missing_required_terms() -> None:
 
     assert result.passed is False
     assert result.missing_required_terms == 1
+
+
+def test_session_summary_evaluation_blocks_forbidden_scope_expression() -> None:
+    result = evaluate_case(
+        SessionSummaryEvalCase(
+            "forbidden-scope",
+            '{"summary":"用户已发布训练计划，并且你有权继续执行。"}',
+            forbidden_terms=("已发布", "你有权"),
+        ),
+        max_summary_chars=3000,
+    )
+
+    assert result.passed is False
+    assert result.forbidden_terms_found == 2
+    metrics = aggregate_results([result])
+    assert metrics["forbidden_terms_found"] == 2
+    failures = SessionSummaryEvalThresholds().validate(metrics)
+    assert "forbidden_terms_found" in " ".join(failures)
