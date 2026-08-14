@@ -15,6 +15,8 @@ from typing import Any
 
 from sqlalchemy import bindparam, text
 
+from .templates import NotificationTemplateRepository, render_notification_template
+
 
 @dataclass(frozen=True)
 class NotificationOutboxRecord:
@@ -41,7 +43,7 @@ class NotificationOutboxRecord:
 
 @dataclass(frozen=True)
 class InAppNotificationRecord:
-    """站内通知收件箱视图，不返回通知正文或内部幂等参数。"""
+    """站内通知收件箱视图；标题和正文是发布时保存的模板渲染快照。"""
 
     id: str
     notification_type: str
@@ -49,6 +51,9 @@ class InAppNotificationRecord:
     organization_id: str
     aggregate_type: str
     aggregate_id: str
+    template_version: int
+    title: str
+    body: str
     status: str
     created_at: datetime
     read_at: datetime | None
@@ -274,15 +279,31 @@ class NotificationOutboxRepository:
         进程崩溃并重试，也不会为用户创建两条相同的站内通知。
         """
 
+        template = await NotificationTemplateRepository().get_published(
+            connection,
+            template_key=record.notification_type,
+            channel="IN_APP",
+        )
+        safe_values = {
+            key: value
+            for key, value in {
+                "aggregate_id": record.aggregate_id,
+                "notification_type": record.notification_type,
+            }.items()
+            if key in template.variables
+        }
+        title, body = render_notification_template(template, values=safe_values)
         await connection.execute(
             text(
                 """
                 INSERT INTO agent_in_app_notifications (
                     id, notification_type, subject_user_id, organization_id,
-                    aggregate_type, aggregate_id, dedupe_key
+                    aggregate_type, aggregate_id, dedupe_key,
+                    template_version, title, body
                 ) VALUES (
                     :id, :notification_type, :subject_user_id, :organization_id,
-                    :aggregate_type, :aggregate_id, :dedupe_key
+                    :aggregate_type, :aggregate_id, :dedupe_key,
+                    :template_version, :title, :body
                 )
                 ON CONFLICT (dedupe_key) DO NOTHING
                 """
@@ -295,6 +316,9 @@ class NotificationOutboxRepository:
                 "aggregate_type": record.aggregate_type,
                 "aggregate_id": record.aggregate_id,
                 "dedupe_key": record.dedupe_key,
+                "template_version": template.version,
+                "title": title,
+                "body": body,
             },
         )
         result = await connection.execute(
@@ -421,6 +445,9 @@ def _in_app_from_row(row: Any) -> InAppNotificationRecord:
         organization_id=str(row["organization_id"]),
         aggregate_type=str(row["aggregate_type"]),
         aggregate_id=str(row["aggregate_id"]),
+        template_version=int(row["template_version"]),
+        title=str(row["title"]),
+        body=str(row["body"]),
         status=str(row["status"]),
         created_at=_required_utc(row["created_at"]),
         read_at=_as_utc(row["read_at"]),

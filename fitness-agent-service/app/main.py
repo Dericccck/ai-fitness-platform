@@ -10,6 +10,7 @@ from app.agent.supervisor import Supervisor
 from app.agent.training_plan_generation import TrainingPlanGenerationService
 from app.api.middleware.request_context import RequestContextMiddleware
 from app.api.routes.admin_knowledge import router as admin_knowledge_router
+from app.api.routes.admin_notifications import router as admin_notifications_router
 from app.api.routes.agent import router as agent_router
 from app.api.routes.confirmations import router as confirmations_router
 from app.api.routes.health import router as health_router
@@ -40,6 +41,7 @@ from app.memory.repository import MemoryRepository
 from app.memory.service import MemoryService
 from app.notifications.outbox import NotificationOutboxRepository
 from app.notifications.preferences import NotificationPreferenceRepository
+from app.notifications.templates import NotificationTemplateRepository
 from app.rag.admin_repository import KnowledgeIngestionRepository
 from app.rag.admin_service import KnowledgeAdminService
 from app.rag.document_quality import DocumentQualityThresholds
@@ -179,6 +181,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         )
     )
     app.state.notification_outbox = NotificationOutboxRepository()
+    app.state.notification_templates = NotificationTemplateRepository()
     app.state.notification_preferences = NotificationPreferenceRepository(
         default_timezone=settings.notification_default_timezone
     )
@@ -297,6 +300,7 @@ app.include_router(memory_candidates_router)
 app.include_router(memories_router)
 app.include_router(notifications_router)
 app.include_router(admin_knowledge_router)
+app.include_router(admin_notifications_router)
 app.include_router(knowledge_review_router)
 app.include_router(rag_router)
 app.include_router(health_router)

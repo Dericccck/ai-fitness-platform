@@ -24,7 +24,7 @@ router = APIRouter(prefix="/api/v1/agent/notifications", tags=["agent-notificati
 
 
 class InAppNotificationResponse(BaseModel):
-    """用户可见的通知摘要，不返回 Outbox payload 或内部请求标识。"""
+    """用户可见的通知快照，不返回 Outbox payload 或内部请求标识。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -33,6 +33,9 @@ class InAppNotificationResponse(BaseModel):
     aggregate_type: str
     aggregate_id: str
     organization_id: str
+    template_version: int
+    title: str
+    body: str
     status: str
     created_at: datetime
     read_at: datetime | None
@@ -218,6 +221,9 @@ def _to_response(notification: InAppNotificationRecord) -> InAppNotificationResp
         aggregate_type=notification.aggregate_type,
         aggregate_id=notification.aggregate_id,
         organization_id=notification.organization_id,
+        template_version=notification.template_version,
+        title=notification.title,
+        body=notification.body,
         status=notification.status,
         created_at=notification.created_at,
         read_at=notification.read_at,
