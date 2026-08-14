@@ -21,6 +21,7 @@ class HttpMetrics:
     requests_in_progress: Gauge
     maintenance_runs_total: Counter
     maintenance_items_total: Counter
+    notification_delivery_attempts_total: Counter
     memory_candidate_events_total: Counter
     session_summary_events_total: Counter
     session_summary_tokens_total: Counter
@@ -89,6 +90,13 @@ class HttpMetrics:
                 namespace="fitness_agent",
                 registry=target_registry,
             ),
+            notification_delivery_attempts_total=Counter(
+                "notification_delivery_attempts_total",
+                "Total notification channel delivery attempts by channel and outcome.",
+                labelnames=("channel", "status"),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
             memory_candidate_events_total=Counter(
                 "memory_candidate_events_total",
                 "Total Memory candidate lifecycle and extraction events.",
@@ -125,6 +133,16 @@ class HttpMetrics:
 
         if count > 0:
             self.memory_candidate_events_total.labels(event=event).inc(count)
+
+    def record_notification_delivery_attempt(
+        self, channel: str, status: str, count: int = 1
+    ) -> None:
+        """记录通知渠道投递结果；标签只能使用渠道和固定状态，不能放入通知 ID。"""
+
+        if count > 0:
+            self.notification_delivery_attempts_total.labels(channel=channel, status=status).inc(
+                count
+            )
 
     def record_session_summary_event(self, event: str, count: int = 1) -> None:
         """记录固定枚举摘要事件，禁止把 thread 或用户 ID 放入标签。"""

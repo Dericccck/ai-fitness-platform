@@ -46,3 +46,14 @@ async def test_metrics_group_unknown_paths_under_single_label() -> None:
     assert response.status_code == 404
     assert 'route="unmatched"' in exposition
     assert "does-not-exist" not in exposition
+
+
+def test_notification_delivery_metrics_use_only_low_cardinality_labels() -> None:
+    _, metrics = build_test_app()
+    metrics.record_notification_delivery_attempt("IN_APP", "SUCCEEDED")
+    metrics.record_notification_delivery_attempt("IN_APP", "FINAL_FAILED")
+
+    exposition = generate_latest(metrics.registry).decode()
+    assert 'channel="IN_APP",status="SUCCEEDED"' in exposition
+    assert 'channel="IN_APP",status="FINAL_FAILED"' in exposition
+    assert "notification_id" not in exposition

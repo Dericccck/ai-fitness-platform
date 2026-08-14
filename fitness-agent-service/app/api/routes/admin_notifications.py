@@ -9,6 +9,10 @@ from fastapi import APIRouter, Header, HTTPException, Path, Query, Request, stat
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.infrastructure.agent_context import AgentContextVerificationError, AgentIdentity
+from app.notifications.outbox import (
+    NotificationDeliveryAttemptRecord,
+    NotificationOutboxRepository,
+)
 from app.notifications.templates import (
     NotificationTemplateEventRecord,
     NotificationTemplateRecord,
@@ -79,6 +83,24 @@ class NotificationTemplateEventResponse(BaseModel):
     created_at: datetime
 
 
+class NotificationDeliveryAttemptResponse(BaseModel):
+    """通知投递运维摘要；不返回用户主体 ID、业务聚合 ID 或通知正文。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    outbox_id: str
+    notification_type: str
+    organization_id: str
+    channel: str
+    attempt_no: int
+    status: str
+    error_code: str | None
+    provider_message_id: str | None
+    started_at: datetime
+    finished_at: datetime | None
+
+
 @router.post("/templates", response_model=NotificationTemplateResponse)
 async def create_notification_template_draft(
     payload: NotificationTemplateDraftRequest,
@@ -116,7 +138,7 @@ async def approve_notification_template(
     payload: NotificationTemplateOperationRequest,
     request: Request,
     template_key: str = Path(min_length=1, max_length=128),
-    channel: Literal["IN_APP"] = Path("IN_APP"),
+    channel: Literal["IN_APP"] = Path(...),
     version: int = Path(ge=1),
     x_agent_context: str | None = Header(default=None),
 ) -> NotificationTemplateResponse:
@@ -146,7 +168,7 @@ async def publish_notification_template(
     payload: NotificationTemplateOperationRequest,
     request: Request,
     template_key: str = Path(min_length=1, max_length=128),
-    channel: Literal["IN_APP"] = Path("IN_APP"),
+    channel: Literal["IN_APP"] = Path(...),
     version: int = Path(ge=1),
     x_agent_context: str | None = Header(default=None),
 ) -> NotificationTemplateResponse:
@@ -175,7 +197,7 @@ async def publish_notification_template(
 async def list_notification_template_events(
     request: Request,
     template_key: str = Path(min_length=1, max_length=128),
-    channel: Literal["IN_APP"] = Path("IN_APP"),
+    channel: Literal["IN_APP"] = Path(...),
     version: int = Path(ge=1),
     limit: int = Query(default=50, ge=1, le=100),
     x_agent_context: str | None = Header(default=None),
@@ -199,8 +221,50 @@ async def list_notification_template_events(
     return [_to_event_response(event) for event in events]
 
 
+@router.get(
+    "/delivery-attempts",
+    response_model=list[NotificationDeliveryAttemptResponse],
+)
+async def list_notification_delivery_attempts(
+    request: Request,
+    organization_id: str | None = Query(default=None, min_length=1, max_length=128),
+    notification_type: str | None = Query(default=None, min_length=1, max_length=128),
+    channel: Literal["IN_APP"] | None = Query(default=None),
+    delivery_status: Literal["STARTED", "SUCCEEDED", "RETRYABLE_FAILED", "FINAL_FAILED"]
+    | None = Query(default=None),
+    limit: int = Query(default=50, ge=1, le=100),
+    x_agent_context: str | None = Header(default=None),
+) -> list[NotificationDeliveryAttemptResponse]:
+    """读取通知投递摘要，供平台管理员排查重试和最终失败。
+
+    返回结果刻意隐藏用户主体 ID、业务聚合 ID、标题和正文；管理员只能通过固定的
+    通知类型、机构和错误码定位基础设施问题，不能把运维接口当成业务数据查询入口。
+    """
+
+    _verify_platform_admin(request, x_agent_context)
+    try:
+        async with request.app.state.database.engine.connect() as connection:
+            attempts = await _outbox_repository(request).list_delivery_attempts(
+                connection,
+                organization_id=organization_id,
+                notification_type=notification_type,
+                channel=channel,
+                status=delivery_status,
+                limit=limit,
+            )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+        ) from exc
+    return [_to_delivery_attempt_response(attempt) for attempt in attempts]
+
+
 def _repository(request: Request) -> NotificationTemplateRepository:
     return cast(NotificationTemplateRepository, request.app.state.notification_templates)
+
+
+def _outbox_repository(request: Request) -> NotificationOutboxRepository:
+    return cast(NotificationOutboxRepository, request.app.state.notification_outbox)
 
 
 def _verify_platform_admin(request: Request, token: str | None) -> AgentIdentity:
@@ -245,4 +309,22 @@ def _to_event_response(event: NotificationTemplateEventRecord) -> NotificationTe
         actor_user_id=event.actor_user_id,
         status_after=event.status_after,
         created_at=event.created_at,
+    )
+
+
+def _to_delivery_attempt_response(
+    attempt: NotificationDeliveryAttemptRecord,
+) -> NotificationDeliveryAttemptResponse:
+    return NotificationDeliveryAttemptResponse(
+        id=attempt.id,
+        outbox_id=attempt.outbox_id,
+        notification_type=attempt.notification_type,
+        organization_id=attempt.organization_id,
+        channel=attempt.channel,
+        attempt_no=attempt.attempt_no,
+        status=attempt.status,
+        error_code=attempt.error_code,
+        provider_message_id=attempt.provider_message_id,
+        started_at=attempt.started_at,
+        finished_at=attempt.finished_at,
     )

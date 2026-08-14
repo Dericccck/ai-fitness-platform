@@ -221,6 +221,9 @@ class NotificationOutboxWorker:
                 )
                 if not published:
                     raise RuntimeError("notification outbox lock was lost while publishing")
+            # 指标在事务提交后再增加，避免数据库回滚但 Prometheus 已记录成功的假象。
+            if self.metrics is not None:
+                self.metrics.record_notification_delivery_attempt(channel, "SUCCEEDED")
             return "published"
         except Exception:
             _logger.exception(
@@ -228,20 +231,24 @@ class NotificationOutboxWorker:
                 outbox_id=record.id,
                 notification_type=record.notification_type,
             )
+            failed_attempt_status: str | None = None
             async with self.database.engine.begin() as connection:
                 if attempt_started:
-                    await self.repository.finish_delivery_attempt(
+                    attempt_status = (
+                        "FINAL_FAILED"
+                        if attempt_no >= self.max_delivery_attempts
+                        else "RETRYABLE_FAILED"
+                    )
+                    finished = await self.repository.finish_delivery_attempt(
                         connection,
                         outbox_id=record.id,
                         channel=channel,
                         attempt_no=attempt_no,
-                        status=(
-                            "FINAL_FAILED"
-                            if attempt_no >= self.max_delivery_attempts
-                            else "RETRYABLE_FAILED"
-                        ),
+                        status=attempt_status,
                         error_code="NOTIFICATION_DELIVERY_FAILED",
                     )
+                    if finished and self.metrics is not None:
+                        failed_attempt_status = attempt_status
                 retried = await self.repository.mark_retry(
                     connection,
                     outbox_id=record.id,
@@ -251,4 +258,7 @@ class NotificationOutboxWorker:
                 )
                 if not retried:
                     raise RuntimeError("notification outbox lock was lost while retrying")
+            # 只有失败状态和 Outbox 重试状态一起提交后，才向监控系统报告本次失败。
+            if self.metrics is not None and failed_attempt_status is not None:
+                self.metrics.record_notification_delivery_attempt(channel, failed_attempt_status)
             return "retried"

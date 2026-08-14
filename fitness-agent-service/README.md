@@ -295,6 +295,9 @@ Push 或 RabbitMQ。
 通知 Worker 已通过渠道适配器投递：当前 `IN_APP` 适配器将渲染快照写入站内收件箱，投递开始、成功和失败会写入
 `agent_notification_delivery_attempts`（`0027`）。失败会按照 Outbox 的有限重试进入 `RETRYABLE_FAILED` 或
 `FINAL_FAILED`；未来确有主动提醒或跨服务事件需求时，再新增 RabbitMQ、短信或 Push 适配器，不需要改动候选和 Outbox 业务逻辑。
+当前已增加管理员运维查询 `GET /api/v1/admin/notifications/delivery-attempts`，支持按机构、通知类型、渠道和投递状态
+过滤，并且只返回投递摘要、错误码和渠道消息 ID，不返回用户主体 ID、业务聚合 ID、标题或正文；同时提供低基数
+Prometheus 指标 `fitness_agent_notification_delivery_attempts_total`，用于观察各渠道成功、可重试失败和最终失败数量。
 
 检索引用接口为 `POST /api/v1/agent/knowledge/search`，只返回已完成权限过滤的来源引用，
 包括来源 URI、版本、章节、PDF 页码、Excel 工作表、表格序号/行范围和命中片段。离线评测

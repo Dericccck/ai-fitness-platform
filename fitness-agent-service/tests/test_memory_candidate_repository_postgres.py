@@ -31,9 +31,10 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
         AesGcmPayloadCipher(key=b"1" * 32, key_version="test-v1"),
     )
     candidate_id = str(uuid4())
+    organization_id = f"candidate-test-org-{candidate_id}"
     identity = AgentIdentity(
         subject=f"candidate-test-{candidate_id}",
-        organization_ids=frozenset({"org-1"}),
+        organization_ids=frozenset({organization_id}),
         roles=frozenset({"STUDENT"}),
         issued_at=1,
         expires_at=2,
@@ -46,7 +47,7 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
     try:
         first = await repository.create_pending(
             identity=identity,
-            organization_id="org-1",
+            organization_id=organization_id,
             candidate=candidate,
             source_thread_id="fitness:thread-hash",
             source_request_id="request-1",
@@ -54,7 +55,7 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
         )
         duplicate = await repository.create_pending(
             identity=identity,
-            organization_id="org-1",
+            organization_id=organization_id,
             candidate=candidate,
             source_thread_id="fitness:thread-hash-2",
             source_request_id="request-2",
@@ -125,10 +126,21 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
             ]
             assert attempt_rows[0]["provider_message_id"] == notification_rows[0]["id"]
             inbox = NotificationOutboxRepository()
+            delivery_attempts = await inbox.list_delivery_attempts(
+                connection,
+                organization_id=organization_id,
+                notification_type="MEMORY_CANDIDATE_PENDING",
+                channel="IN_APP",
+                status="SUCCEEDED",
+                limit=10,
+            )
+            assert len(delivery_attempts) == 1
+            assert delivery_attempts[0].attempt_no == 1
+            assert delivery_attempts[0].organization_id == organization_id
             listed = await inbox.list_in_app(
                 connection,
                 subject_user_id=identity.subject,
-                organization_id="org-1",
+                organization_id=organization_id,
                 status="UNREAD",
                 limit=10,
             )
@@ -137,7 +149,7 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
                 connection,
                 notification_id=str(notification_rows[0]["id"]),
                 subject_user_id=identity.subject,
-                organization_ids=["org-1"],
+                organization_ids=[organization_id],
             )
             assert marked is not None
             assert marked.status == "READ"
@@ -148,7 +160,7 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
 
         pending = await repository.list_pending(
             identity=identity,
-            organization_id="org-1",
+            organization_id=organization_id,
             limit=10,
         )
         assert [record.id for record in pending] == [first.id]
@@ -177,7 +189,7 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
 
         expiring = await repository.create_pending(
             identity=identity,
-            organization_id="org-1",
+                organization_id=organization_id,
             candidate=MemoryCandidate(
                 memory_type="SCHEDULE_PREFERENCE",
                 memory_key="training_time",

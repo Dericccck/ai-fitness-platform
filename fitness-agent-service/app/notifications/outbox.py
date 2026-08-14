@@ -57,6 +57,23 @@ class InAppNotificationRecord:
     read_at: datetime | None
 
 
+@dataclass(frozen=True)
+class NotificationDeliveryAttemptRecord:
+    """管理员运维查询使用的投递尝试摘要，不包含通知正文和用户主体 ID。"""
+
+    id: int
+    outbox_id: str
+    notification_type: str
+    organization_id: str
+    channel: str
+    attempt_no: int
+    status: str
+    error_code: str | None
+    provider_message_id: str | None
+    started_at: datetime
+    finished_at: datetime | None
+
+
 class NotificationOutboxRepository:
     """提供事务内入队和下游发布器需要的抢占/确认接口。"""
 
@@ -391,6 +408,78 @@ class NotificationOutboxRepository:
         )
         return int(result.rowcount or 0) == 1
 
+    async def list_delivery_attempts(
+        self,
+        connection: Any,
+        *,
+        organization_id: str | None = None,
+        notification_type: str | None = None,
+        channel: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list[NotificationDeliveryAttemptRecord]:
+        """查询投递尝试摘要，供管理员定位失败、重试和最终失败。
+
+        这是运维视图，不返回标题、正文、subject_user_id 或 aggregate_id。即使管理员
+        需要排查失败，也只应该看到通知类型、机构范围和错误码，避免把个人健身偏好
+        通过运维接口再次扩大暴露面。
+        """
+
+        if limit < 1 or limit > 100:
+            raise ValueError("delivery attempt list limit must be between 1 and 100")
+        if organization_id is not None and not organization_id.strip():
+            raise ValueError("organization id cannot be blank")
+        if notification_type is not None and not notification_type.strip():
+            raise ValueError("notification type cannot be blank")
+        if channel is not None and not channel.strip():
+            raise ValueError("notification channel cannot be blank")
+        if status is not None and status not in {
+            "STARTED",
+            "SUCCEEDED",
+            "RETRYABLE_FAILED",
+            "FINAL_FAILED",
+        }:
+            raise ValueError("delivery attempt status is invalid")
+
+        rows = (
+            (
+                await connection.execute(
+                    text(
+                        """
+                        SELECT attempt.id, attempt.outbox_id, outbox.notification_type,
+                               outbox.organization_id, attempt.channel, attempt.attempt_no,
+                               attempt.status, attempt.error_code,
+                               attempt.provider_message_id, attempt.started_at,
+                               attempt.finished_at
+                        FROM agent_notification_delivery_attempts AS attempt
+                        JOIN agent_notification_outbox AS outbox
+                          ON outbox.id = attempt.outbox_id
+                        WHERE (CAST(:organization_id AS TEXT) IS NULL
+                               OR outbox.organization_id = CAST(:organization_id AS TEXT))
+                          AND (CAST(:notification_type AS TEXT) IS NULL
+                               OR outbox.notification_type = CAST(:notification_type AS TEXT))
+                          AND (CAST(:channel AS TEXT) IS NULL
+                               OR attempt.channel = CAST(:channel AS TEXT))
+                          AND (CAST(:status AS TEXT) IS NULL
+                               OR attempt.status = CAST(:status AS TEXT))
+                        ORDER BY attempt.started_at DESC, attempt.id DESC
+                        LIMIT :limit
+                        """
+                    ),
+                    {
+                        "organization_id": organization_id,
+                        "notification_type": notification_type,
+                        "channel": channel,
+                        "status": status,
+                        "limit": limit,
+                    },
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [_delivery_attempt_from_row(row) for row in rows]
+
     async def list_in_app(
         self,
         connection: Any,
@@ -489,6 +578,29 @@ def _from_row(row: Any) -> NotificationOutboxRecord:
         published_at=_as_utc(row["published_at"]),
         created_at=_required_utc(row["created_at"]),
         updated_at=_required_utc(row["updated_at"]),
+    )
+
+
+def _delivery_attempt_from_row(row: Any) -> NotificationDeliveryAttemptRecord:
+    """把数据库行转换成不携带正文的运维摘要。"""
+
+    started_at = row["started_at"]
+    if started_at is None:
+        raise RuntimeError("notification delivery attempt started_at is NULL")
+    return NotificationDeliveryAttemptRecord(
+        id=int(row["id"]),
+        outbox_id=str(row["outbox_id"]),
+        notification_type=str(row["notification_type"]),
+        organization_id=str(row["organization_id"]),
+        channel=str(row["channel"]),
+        attempt_no=int(row["attempt_no"]),
+        status=str(row["status"]),
+        error_code=str(row["error_code"]) if row["error_code"] is not None else None,
+        provider_message_id=(
+            str(row["provider_message_id"]) if row["provider_message_id"] is not None else None
+        ),
+        started_at=started_at,
+        finished_at=row["finished_at"],
     )
 
 
