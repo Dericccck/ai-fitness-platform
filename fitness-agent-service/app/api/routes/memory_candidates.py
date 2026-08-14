@@ -17,7 +17,7 @@ from app.infrastructure.agent_context import (
     AgentContextVerificationError,
     AgentIdentity,
 )
-from app.memory.candidate import MemoryCandidateRecord
+from app.memory.candidate import MemoryCandidateEventRecord, MemoryCandidateRecord
 from app.memory.candidate_repository import MemoryCandidateNotFound, MemoryCandidateStateError
 from app.memory.candidate_service import (
     MemoryCandidatePersistenceError,
@@ -62,6 +62,18 @@ class MemoryCandidateResponse(BaseModel):
     decision_request_id: str | None
     decided_at: datetime | None
     memory_id: str | None = None
+
+
+class MemoryCandidateEventResponse(BaseModel):
+    """候选审计摘要；隐藏请求 ID、正文摘要和主体内部字段。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: int
+    event_type: str
+    actor_type: str
+    status_after: str
+    created_at: datetime
 
 
 @router.get("", response_model=list[MemoryCandidateResponse])
@@ -123,6 +135,27 @@ async def decide_memory_candidate(
     return _to_response(result.candidate, memory_id=result.memory.id if result.memory else None)
 
 
+@router.get("/{candidate_id}/events", response_model=list[MemoryCandidateEventResponse])
+async def list_memory_candidate_events(
+    candidate_id: str,
+    request: Request,
+    limit: int = Query(default=50, ge=1, le=100),
+    x_agent_context: str | None = Header(default=None),
+) -> list[MemoryCandidateEventResponse]:
+    """读取当前用户本人候选的生命周期摘要。"""
+
+    identity = _verify_identity(request, x_agent_context)
+    try:
+        events = await _candidate_service(request).list_events(
+            candidate_id, identity=identity, limit=limit
+        )
+    except MemoryCandidateNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="memory candidate not found"
+        ) from exc
+    return [_to_event_response(event) for event in events]
+
+
 def _candidate_service(request: Request) -> MemoryCandidateService:
     return cast(MemoryCandidateService, request.app.state.memory_candidate_service)
 
@@ -161,4 +194,14 @@ def _to_response(
         decision_request_id=record.decision_request_id,
         decided_at=record.decided_at,
         memory_id=memory_id,
+    )
+
+
+def _to_event_response(event: MemoryCandidateEventRecord) -> MemoryCandidateEventResponse:
+    return MemoryCandidateEventResponse(
+        id=event.id,
+        event_type=event.event_type,
+        actor_type=event.actor_type,
+        status_after=event.status_after,
+        created_at=event.created_at,
     )

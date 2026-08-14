@@ -16,6 +16,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.core.metrics import HttpMetrics
 from app.infrastructure.model_gateway import ModelGateway, ModelResponseError
 
 MemoryCandidateType = Literal[
@@ -122,11 +123,30 @@ class MemoryCandidateRecord:
     decided_at: datetime | None = None
 
 
+@dataclass(frozen=True)
+class MemoryCandidateEventRecord:
+    """候选生命周期不可变审计事件，不包含候选正文或密文。"""
+
+    id: int
+    candidate_id: str
+    subject_user_id: str
+    organization_id: str
+    event_type: Literal["CREATED", "APPROVED", "REJECTED", "EXPIRED"]
+    actor_type: Literal["AGENT", "USER", "SYSTEM"]
+    actor_user_id: str | None
+    status_after: Literal["PENDING", "APPROVED", "REJECTED", "EXPIRED"]
+    request_id: str
+    decision_request_id: str | None
+    payload_hash: str
+    created_at: datetime
+
+
 class MemoryCandidateExtractionService:
     """使用 DeepSeek 做候选提取，但把模型输出限制在只读结构化边界内。"""
 
-    def __init__(self, models: ModelGateway) -> None:
+    def __init__(self, models: ModelGateway, metrics: HttpMetrics | None = None) -> None:
         self.models = models
+        self.metrics = metrics
 
     async def propose(self, user_message: str) -> tuple[MemoryCandidate, ...]:
         """只对疑似长期记忆表达调用 LLM，降低成本并避免无意义候选。
@@ -136,6 +156,8 @@ class MemoryCandidateExtractionService:
         """
 
         if not _has_memory_intent(user_message):
+            if self.metrics is not None:
+                self.metrics.record_memory_candidate_event("extraction_skipped")
             return ()
         messages = [
             {
@@ -156,8 +178,16 @@ class MemoryCandidateExtractionService:
             raw = await self.models.chat_json(messages)
             envelope = MemoryCandidateEnvelope.model_validate(json.loads(raw))
         except (json.JSONDecodeError, ValidationError, ModelResponseError) as exc:
+            if self.metrics is not None:
+                self.metrics.record_memory_candidate_event("extraction_failed")
             raise MemoryCandidateExtractionError("Memory 候选未通过结构化校验") from exc
-        return _safe_candidates(envelope.candidates)
+        candidates = _safe_candidates(envelope.candidates)
+        if self.metrics is not None:
+            self.metrics.record_memory_candidate_event("extraction_succeeded")
+            self.metrics.record_memory_candidate_event(
+                "extraction_filtered", len(envelope.candidates) - len(candidates)
+            )
+        return candidates
 
 
 def build_candidate_context(

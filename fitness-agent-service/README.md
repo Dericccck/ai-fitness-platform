@@ -247,6 +247,11 @@ Memory 候选过期由 `MemoryCandidateExpiryWorker` 独立处理。本地可通
 Prometheus 指标。数据库使用 `FOR UPDATE SKIP LOCKED`，多个 Worker 实例可以并行运行而不会重复
 处理同一候选。该 Worker 只更新 `PENDING → EXPIRED` 状态，不读取候选正文，也不会创建或修改正式 Memory。
 
+候选生命周期事件保存在 `agent_memory_candidate_events` 不可变审计表中，候选创建、批准、拒绝和过期与状态变更
+使用同一事务写入。用户可通过 `GET /api/v1/agent/memory-candidates/{candidate_id}/events` 查看自己的事件摘要；
+响应不会返回候选密文、正文摘要或内部请求标识。候选提取、过滤、持久化失败和状态流转使用固定枚举指标，避免
+把用户 ID、候选 ID 等高基数信息放进 Prometheus 标签。
+
 检索引用接口为 `POST /api/v1/agent/knowledge/search`，只返回已完成权限过滤的来源引用，
 包括来源 URI、版本、章节、PDF 页码、Excel 工作表、表格序号/行范围和命中片段。离线评测
 样例位于 `evals/rag_smoke.json`，阈值位于 `evals/rag_thresholds.json`。本地执行

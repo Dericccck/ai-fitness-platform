@@ -21,6 +21,7 @@ class HttpMetrics:
     requests_in_progress: Gauge
     maintenance_runs_total: Counter
     maintenance_items_total: Counter
+    memory_candidate_events_total: Counter
 
     @classmethod
     def create(
@@ -85,7 +86,20 @@ class HttpMetrics:
                 namespace="fitness_agent",
                 registry=target_registry,
             ),
+            memory_candidate_events_total=Counter(
+                "memory_candidate_events_total",
+                "Total Memory candidate lifecycle and extraction events.",
+                labelnames=("event",),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
         )
+
+    def record_memory_candidate_event(self, event: str, count: int = 1) -> None:
+        """记录固定枚举事件；调用方不能把用户 ID、候选 ID 等高基数值作为标签。"""
+
+        if count > 0:
+            self.memory_candidate_events_total.labels(event=event).inc(count)
 
 
 def _route_template(scope: Scope) -> str:

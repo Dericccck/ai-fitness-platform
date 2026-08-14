@@ -6,6 +6,7 @@ Memory 只保存用户明确表达、且对后续训练计划有长期价值的�
 
 from .candidate import (
     MemoryCandidate,
+    MemoryCandidateEventRecord,
     MemoryCandidateExtractionError,
     MemoryCandidateExtractionService,
     MemoryCandidateRecord,
@@ -28,6 +29,7 @@ __all__ = [
     "FitnessMemory",
     "MemoryCandidate",
     "MemoryCandidateDecisionResult",
+    "MemoryCandidateEventRecord",
     "MemoryCandidateExtractionError",
     "MemoryCandidateExtractionService",
     "MemoryCandidateNotFound",

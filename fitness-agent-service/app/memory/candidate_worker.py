@@ -61,6 +61,7 @@ class MemoryCandidateExpiryWorker:
             self.metrics.maintenance_items_total.labels(worker=_WORKER_NAME, outcome="expired").inc(
                 expired
             )
+            self.metrics.record_memory_candidate_event("expired", expired)
         _logger.info(
             "memory_candidate_expiry_batch",
             expired_count=expired,

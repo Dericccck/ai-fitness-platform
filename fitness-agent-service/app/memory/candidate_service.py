@@ -6,10 +6,12 @@ from datetime import UTC, datetime, timedelta
 from typing import Literal
 
 from app.confirmation.cipher import ConfirmationPayloadCipherError
+from app.core.metrics import HttpMetrics
 from app.infrastructure.agent_context import AgentIdentity
 
 from .candidate import (
     MemoryCandidate,
+    MemoryCandidateEventRecord,
     MemoryCandidateExtractionService,
     MemoryCandidateRecord,
 )
@@ -53,6 +55,7 @@ class MemoryCandidateService:
         memory_service: MemoryService,
         *,
         ttl_hours: int = 24,
+        metrics: HttpMetrics | None = None,
     ) -> None:
         if ttl_hours < 1 or ttl_hours > 168:
             raise ValueError("candidate ttl must be between 1 and 168 hours")
@@ -60,6 +63,7 @@ class MemoryCandidateService:
         self.repository = repository
         self.memory_service = memory_service
         self.ttl = timedelta(hours=ttl_hours)
+        self.metrics = metrics
 
     async def propose(
         self,
@@ -88,6 +92,8 @@ class MemoryCandidateService:
                     expires_at=expires_at,
                 )
             except (MemoryCandidateStateError, ConfirmationPayloadCipherError) as exc:
+                if self.metrics is not None:
+                    self.metrics.record_memory_candidate_event("persistence_failed")
                 raise MemoryCandidatePersistenceError("Memory 候选持久化失败", candidates) from exc
         return candidates
 
@@ -114,6 +120,15 @@ class MemoryCandidateService:
         if limit < 1 or limit > 5000:
             raise ValueError("candidate expiry batch size must be between 1 and 5000")
         return await self.repository.expire_due(limit=limit)
+
+    async def list_events(
+        self, candidate_id: str, *, identity: AgentIdentity, limit: int = 50
+    ) -> list[MemoryCandidateEventRecord]:
+        """读取本人候选的生命周期摘要，供页面展示和审计排查。"""
+
+        # 先按候选主体读取，避免“没有事件”把越权候选伪装成合法空列表。
+        await self.repository.get_for_subject(candidate_id, identity=identity)
+        return await self.repository.list_events(candidate_id, identity=identity, limit=limit)
 
     async def decide(
         self,
@@ -147,6 +162,8 @@ class MemoryCandidateService:
                 decision_request_id=decision_request_id,
                 now=datetime.now(UTC),
             )
+            if self.metrics is not None:
+                self.metrics.record_memory_candidate_event("rejected")
             return MemoryCandidateDecisionResult(rejected)
         if candidate.status == "APPROVED" and candidate.decision_request_id == decision_request_id:
             memory = await self._save_candidate_memory(candidate, identity)
@@ -161,6 +178,8 @@ class MemoryCandidateService:
             decision_request_id=decision_request_id,
             now=datetime.now(UTC),
         )
+        if self.metrics is not None:
+            self.metrics.record_memory_candidate_event("approved")
         return MemoryCandidateDecisionResult(approved, memory)
 
     async def _save_candidate_memory(

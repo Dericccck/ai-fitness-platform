@@ -13,6 +13,10 @@ make agent-migrate
 时间安排和沟通偏好。保存、覆盖和撤销由 Agent 的确认链路保护；表内保留状态、版本、过期时间和
 来源请求 ID，便于幂等、并发控制和审计。当前不保存医疗诊断、疾病、药物、支付凭证或合同预约事实。
 
+0017 迁移增加 `agent_memory_candidates`，模型提取的候选在用户批准前以 PENDING 状态保存，正文使用
+AES-GCM 加密，支持去重、机构隔离和过期状态。0018 增加 `agent_memory_candidate_events` 不可变事件表，
+在同一事务内记录候选创建、批准、拒绝和过期；事件只保存状态和正文摘要，不保存候选明文或确认凭证。
+
 训练计划领域表仍由 Java/MySQL 业务迁移管理。
 
 `knowledge_ingestion_jobs` 记录上传审核、索引 Claim、失败和有限重试状态。上传任务不会

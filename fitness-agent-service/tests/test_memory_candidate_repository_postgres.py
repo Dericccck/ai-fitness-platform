@@ -60,6 +60,10 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
         )
         assert duplicate.id == first.id
         assert duplicate.candidate.value == "自重训练"
+        created_events = await repository.list_events(first.id, identity=identity)
+        assert [(event.event_type, event.actor_type) for event in created_events] == [
+            ("CREATED", "AGENT")
+        ]
 
         pending = await repository.list_pending(
             identity=identity,
@@ -87,6 +91,8 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
         )
         assert decided.status == "APPROVED"
         assert decided.decision_request_id == "decision-1"
+        approved_events = await repository.list_events(first.id, identity=identity)
+        assert [event.event_type for event in approved_events] == ["CREATED", "APPROVED"]
 
         expiring = await repository.create_pending(
             identity=identity,
@@ -112,8 +118,14 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
         expired = await repository.get_for_subject(expiring.id, identity=identity)
         assert expired.status == "EXPIRED"
         assert expired.decision_request_id == "system:expiry"
+        expired_events = await repository.list_events(expiring.id, identity=identity)
+        assert [event.event_type for event in expired_events] == ["CREATED", "EXPIRED"]
     finally:
         async with database.engine.begin() as connection:
+            await connection.execute(
+                text("DELETE FROM agent_memory_candidate_events WHERE subject_user_id = :subject"),
+                {"subject": identity.subject},
+            )
             await connection.execute(
                 text("DELETE FROM agent_memory_candidates WHERE subject_user_id = :subject"),
                 {"subject": identity.subject},

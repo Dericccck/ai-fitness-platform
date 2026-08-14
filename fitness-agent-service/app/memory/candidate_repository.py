@@ -15,7 +15,7 @@ from app.confirmation.normalization import canonical_json_bytes
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.database import Database
 
-from .candidate import MemoryCandidate, MemoryCandidateRecord
+from .candidate import MemoryCandidate, MemoryCandidateEventRecord, MemoryCandidateRecord
 from .models import validate_memory_owner
 
 
@@ -97,7 +97,21 @@ class MemoryCandidateRepository:
         }
         async with self._database.engine.begin() as connection:
             row = (await connection.execute(statement, params)).mappings().first()
-            if row is None:
+            if row is not None:
+                await self._insert_event(
+                    connection,
+                    candidate_id=str(row["id"]),
+                    subject_user_id=identity.subject,
+                    organization_id=organization_id,
+                    event_type="CREATED",
+                    actor_type="AGENT",
+                    actor_user_id=None,
+                    status_after="PENDING",
+                    request_id=source_request_id,
+                    decision_request_id=None,
+                    payload_hash=payload_hash,
+                )
+            else:
                 row = (
                     (
                         await connection.execute(
@@ -117,6 +131,46 @@ class MemoryCandidateRepository:
         if row is None:
             raise MemoryCandidateStateError("candidate idempotency write did not return a row")
         return self._record_from_row(row)
+
+    async def list_events(
+        self,
+        candidate_id: str,
+        *,
+        identity: AgentIdentity,
+        limit: int = 50,
+    ) -> list[MemoryCandidateEventRecord]:
+        """查询本人候选的不可变生命周期事件，不返回候选正文。"""
+
+        if limit < 1 or limit > 100:
+            raise ValueError("candidate event limit must be between 1 and 100")
+        statement = text(
+            """
+            SELECT event.*
+            FROM agent_memory_candidate_events AS event
+            WHERE event.candidate_id = :candidate_id
+              AND event.subject_user_id = :subject_user_id
+              AND event.organization_id IN :organization_ids
+            ORDER BY event.created_at, event.id
+            LIMIT :limit
+            """
+        ).bindparams(bindparam("organization_ids", expanding=True))
+        async with self._database.engine.connect() as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        statement,
+                        {
+                            "candidate_id": candidate_id,
+                            "subject_user_id": identity.subject,
+                            "organization_ids": list(identity.organization_ids),
+                            "limit": limit,
+                        },
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        return [event_from_row(row) for row in rows]
 
     async def list_pending(
         self,
@@ -251,6 +305,19 @@ class MemoryCandidateRepository:
                 .mappings()
                 .one()
             )
+            await self._insert_event(
+                connection,
+                candidate_id=candidate_id,
+                subject_user_id=identity.subject,
+                organization_id=str(updated["organization_id"]),
+                event_type=decision,
+                actor_type="USER",
+                actor_user_id=identity.subject,
+                status_after=decision,
+                request_id=decision_request_id,
+                decision_request_id=decision_request_id,
+                payload_hash=str(updated["payload_hash"]),
+            )
         return self._record_from_row(updated)
 
     async def expire_due(self, *, limit: int = 500) -> int:
@@ -269,11 +336,72 @@ class MemoryCandidateRepository:
             SET status = 'EXPIRED', decision_request_id = 'system:expiry',
                 decided_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
             FROM due WHERE candidate.id = due.id
+            RETURNING candidate.*
             """
         )
         async with self._database.engine.begin() as connection:
-            result = await connection.execute(statement, {"limit": limit})
-        return result.rowcount or 0
+            rows = (await connection.execute(statement, {"limit": limit})).mappings().all()
+            for row in rows:
+                candidate_id = str(row["id"])
+                await self._insert_event(
+                    connection,
+                    candidate_id=candidate_id,
+                    subject_user_id=str(row["subject_user_id"]),
+                    organization_id=str(row["organization_id"]),
+                    event_type="EXPIRED",
+                    actor_type="SYSTEM",
+                    actor_user_id=None,
+                    status_after="EXPIRED",
+                    request_id=f"system:expiry:{candidate_id}",
+                    decision_request_id="system:expiry",
+                    payload_hash=str(row["payload_hash"]),
+                )
+        return len(rows)
+
+    async def _insert_event(
+        self,
+        connection: Any,
+        *,
+        candidate_id: str,
+        subject_user_id: str,
+        organization_id: str,
+        event_type: str,
+        actor_type: str,
+        actor_user_id: str | None,
+        status_after: str,
+        request_id: str,
+        decision_request_id: str | None,
+        payload_hash: str,
+    ) -> None:
+        """在候选状态事务内追加审计事件，避免出现状态已变但审计缺失。"""
+
+        await connection.execute(
+            text(
+                """
+                INSERT INTO agent_memory_candidate_events (
+                    candidate_id, subject_user_id, organization_id, event_type,
+                    actor_type, actor_user_id, status_after, request_id,
+                    decision_request_id, payload_hash
+                ) VALUES (
+                    :candidate_id, :subject_user_id, :organization_id, :event_type,
+                    :actor_type, :actor_user_id, :status_after, :request_id,
+                    :decision_request_id, :payload_hash
+                )
+                """
+            ),
+            {
+                "candidate_id": candidate_id,
+                "subject_user_id": subject_user_id,
+                "organization_id": organization_id,
+                "event_type": event_type,
+                "actor_type": actor_type,
+                "actor_user_id": actor_user_id,
+                "status_after": status_after,
+                "request_id": request_id,
+                "decision_request_id": decision_request_id,
+                "payload_hash": payload_hash,
+            },
+        )
 
     def _record_from_row(self, row: Any) -> MemoryCandidateRecord:
         try:
@@ -312,3 +440,22 @@ def _sha256(value: bytes) -> str:
 
 def _as_utc(value: datetime) -> datetime:
     return value if value.tzinfo is not None else value.replace(tzinfo=UTC)
+
+
+def event_from_row(row: Any) -> MemoryCandidateEventRecord:
+    """把审计事件映射成不包含 SQLAlchemy 细节的领域对象。"""
+
+    return MemoryCandidateEventRecord(
+        id=int(row["id"]),
+        candidate_id=str(row["candidate_id"]),
+        subject_user_id=str(row["subject_user_id"]),
+        organization_id=str(row["organization_id"]),
+        event_type=row["event_type"],
+        actor_type=row["actor_type"],
+        actor_user_id=row["actor_user_id"],
+        status_after=row["status_after"],
+        request_id=str(row["request_id"]),
+        decision_request_id=row["decision_request_id"],
+        payload_hash=str(row["payload_hash"]),
+        created_at=_as_utc(row["created_at"]),
+    )
