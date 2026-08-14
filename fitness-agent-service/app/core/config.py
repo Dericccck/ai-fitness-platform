@@ -128,6 +128,10 @@ class Settings(BaseSettings):
     rag_ingestion_worker_batch_size: int = Field(default=10, ge=1, le=100)
     rag_reindex_worker_batch_size: int = Field(default=2, ge=1, le=20)
     rag_reindex_worker_poll_seconds: float = Field(default=2.0, ge=0.1, le=60)
+    # Memory 候选过期由独立 Worker 执行，避免 API 进程重启或多实例部署造成清理任务丢失。
+    memory_candidate_expiry_batch_size: int = Field(default=500, ge=1, le=5000)
+    memory_candidate_expiry_poll_seconds: float = Field(default=60.0, ge=1, le=3600)
+    memory_candidate_worker_metrics_port: int = Field(default=8092, ge=1, le=65535)
     # 页面路由阈值由部署配置统一控制，上传者和 LLM 无权覆盖。默认值偏保守，
     # 用于把可能承载健身动作、姿态或风险信息的图片密集页送入专业审核。
     rag_pdf_min_image_area_ratio: float = Field(default=0.45, ge=0, le=1)

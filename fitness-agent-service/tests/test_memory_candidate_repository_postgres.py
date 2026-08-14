@@ -87,6 +87,31 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
         )
         assert decided.status == "APPROVED"
         assert decided.decision_request_id == "decision-1"
+
+        expiring = await repository.create_pending(
+            identity=identity,
+            organization_id="org-1",
+            candidate=MemoryCandidate(
+                memory_type="SCHEDULE_PREFERENCE",
+                memory_key="training_time",
+                value="周二晚上",
+            ),
+            source_thread_id="fitness:thread-hash",
+            source_request_id="request-expiring",
+            expires_at=datetime.now(UTC) + timedelta(hours=1),
+        )
+        async with database.engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "UPDATE agent_memory_candidates "
+                    "SET expires_at = CURRENT_TIMESTAMP - INTERVAL '1 minute' WHERE id = :id"
+                ),
+                {"id": expiring.id},
+            )
+        assert await repository.expire_due(limit=10) == 1
+        expired = await repository.get_for_subject(expiring.id, identity=identity)
+        assert expired.status == "EXPIRED"
+        assert expired.decision_request_id == "system:expiry"
     finally:
         async with database.engine.begin() as connection:
             await connection.execute(

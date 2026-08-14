@@ -103,6 +103,18 @@ class MemoryCandidateService:
             identity=identity, organization_id=organization_id, limit=limit
         )
 
+    async def expire_due(self, *, limit: int = 500) -> int:
+        """批量关闭已过期候选，供独立 Worker 调用。
+
+        过期是服务端状态机动作，不需要用户或模型确认。Repository 使用
+        ``FOR UPDATE SKIP LOCKED`` 领取待处理行，因此多个 Worker 实例可以并行执行，
+        同一候选最多由一个事务更新；这里只负责校验批次边界并委托数据库完成原子状态变更。
+        """
+
+        if limit < 1 or limit > 5000:
+            raise ValueError("candidate expiry batch size must be between 1 and 5000")
+        return await self.repository.expire_due(limit=limit)
+
     async def decide(
         self,
         candidate_id: str,

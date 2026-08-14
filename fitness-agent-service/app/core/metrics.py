@@ -19,6 +19,8 @@ class HttpMetrics:
     requests_total: Counter
     request_duration_seconds: Histogram
     requests_in_progress: Gauge
+    maintenance_runs_total: Counter
+    maintenance_items_total: Counter
 
     @classmethod
     def create(
@@ -66,6 +68,20 @@ class HttpMetrics:
                 "http_requests_in_progress",
                 "Current number of HTTP requests being processed.",
                 labelnames=("method",),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
+            maintenance_runs_total=Counter(
+                "maintenance_runs_total",
+                "Total completed background maintenance batches by worker and status.",
+                labelnames=("worker", "status"),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
+            maintenance_items_total=Counter(
+                "maintenance_items_total",
+                "Total items handled by background maintenance workers.",
+                labelnames=("worker", "outcome"),
                 namespace="fitness_agent",
                 registry=target_registry,
             ),

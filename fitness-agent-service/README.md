@@ -241,6 +241,12 @@ OCR 服务需要返回 `media_type`、`warnings` 和 `blocks` 数组；每个 bl
 本地可通过 `make agent-reindex-worker` 启动独立轮询进程；生产环境应将它部署为独立 Worker，
 与 API 进程分开扩缩容。
 
+Memory 候选过期由 `MemoryCandidateExpiryWorker` 独立处理。本地可通过
+`make agent-memory-expiry-worker` 启动；它按 `AGENT_MEMORY_CANDIDATE_EXPIRY_POLL_SECONDS`
+轮询，每批最多处理 `AGENT_MEMORY_CANDIDATE_EXPIRY_BATCH_SIZE` 条记录，并在 `8092` 暴露低基数
+Prometheus 指标。数据库使用 `FOR UPDATE SKIP LOCKED`，多个 Worker 实例可以并行运行而不会重复
+处理同一候选。该 Worker 只更新 `PENDING → EXPIRED` 状态，不读取候选正文，也不会创建或修改正式 Memory。
+
 检索引用接口为 `POST /api/v1/agent/knowledge/search`，只返回已完成权限过滤的来源引用，
 包括来源 URI、版本、章节、PDF 页码、Excel 工作表、表格序号/行范围和命中片段。离线评测
 样例位于 `evals/rag_smoke.json`，阈值位于 `evals/rag_thresholds.json`。本地执行

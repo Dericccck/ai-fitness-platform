@@ -33,6 +33,7 @@ from app.infrastructure.reranker import RerankerClient
 from app.memory.candidate import MemoryCandidateExtractionService
 from app.memory.candidate_repository import MemoryCandidateRepository
 from app.memory.candidate_service import MemoryCandidateService
+from app.memory.candidate_worker import MemoryCandidateExpiryWorker
 from app.memory.repository import MemoryRepository
 from app.memory.service import MemoryService
 from app.rag.admin_repository import KnowledgeIngestionRepository
@@ -195,6 +196,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.memory_candidate_extractor,
         MemoryCandidateRepository(app.state.database, app.state.confirmation_cipher),
         app.state.memory_service,
+    )
+    app.state.memory_candidate_expiry_worker = MemoryCandidateExpiryWorker(
+        app.state.memory_candidate_service,
+        batch_size=settings.memory_candidate_expiry_batch_size,
+        metrics=http_metrics,
     )
     app.state.confirmation_token_issuer = ConfirmationTokenIssuer(
         settings.confirmation_signing_secret,
