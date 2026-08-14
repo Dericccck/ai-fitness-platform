@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Literal
 from uuid import uuid4
 
 import structlog
@@ -10,8 +11,14 @@ import structlog
 from app.core.metrics import HttpMetrics
 from app.infrastructure.database import Database
 
+from .channels import (
+    InAppNotificationChannelAdapter,
+    NotificationChannelAdapter,
+    NotificationDeliveryRequest,
+)
 from .outbox import NotificationOutboxRecord, NotificationOutboxRepository
 from .preferences import NotificationPreferenceRepository
+from .templates import NotificationTemplateRepository, render_notification_template
 
 _logger = structlog.get_logger("notifications.outbox_worker")
 _WORKER_NAME = "notification_outbox"
@@ -29,11 +36,10 @@ class NotificationOutboxRunResult:
 
 
 class NotificationOutboxWorker:
-    """把 Outbox 事件发布到站内通知收件箱。
+    """领取 Outbox 并通过渠道适配器投递通知。
 
-    Worker 不直接发送短信或 Push；站内通知是当前项目的第一种可用渠道。未来接入
-    RabbitMQ 时，可以保留同一套领取、幂等和失败状态，把 ``publish_to_inbox`` 替换为
-    消息发布适配器，候选业务和 Outbox 表无需改动。
+    Worker 只编排策略、模板和投递状态，不依赖短信、Push 或 RabbitMQ SDK。当前默认
+    注册 IN_APP 适配器；未来新增渠道时只增加适配器和配置，不修改候选业务。
     """
 
     def __init__(
@@ -45,15 +51,24 @@ class NotificationOutboxWorker:
         worker_id: str | None = None,
         metrics: HttpMetrics | None = None,
         preferences: NotificationPreferenceRepository | None = None,
+        channel_adapters: dict[str, NotificationChannelAdapter] | None = None,
+        max_delivery_attempts: int = 8,
     ) -> None:
         if batch_size < 1 or batch_size > 500:
             raise ValueError("notification outbox batch size must be between 1 and 500")
+        if max_delivery_attempts < 1 or max_delivery_attempts > 20:
+            raise ValueError("notification max delivery attempts must be between 1 and 20")
         self.database = database
         self.repository = repository
         self.batch_size = batch_size
         self.worker_id = worker_id or f"notification-worker:{uuid4()}"
         self.metrics = metrics
         self.preferences = preferences or NotificationPreferenceRepository()
+        self.templates = NotificationTemplateRepository()
+        self.max_delivery_attempts = max_delivery_attempts
+        self.channel_adapters = channel_adapters or {
+            "IN_APP": InAppNotificationChannelAdapter(repository)
+        }
 
     async def run_once(self) -> NotificationOutboxRunResult:
         """领取一批事件，逐条写入站内收件箱，失败时进入有限重试。"""
@@ -121,7 +136,11 @@ class NotificationOutboxWorker:
         )
 
     async def _publish_one(self, record: NotificationOutboxRecord) -> str:
+        channel: Literal["IN_APP"] = "IN_APP"
+        attempt_no = record.attempt_count + 1
+        attempt_started = False
         try:
+            # 策略判断单独完成；DEFER/SUPPRESS 不是投递失败，不应生成 delivery attempt。
             async with self.database.engine.begin() as connection:
                 decision = await self.preferences.evaluate(connection, record=record)
                 if decision.action == "DEFER":
@@ -147,8 +166,58 @@ class NotificationOutboxWorker:
                     if not suppressed:
                         raise RuntimeError("notification outbox lock was lost while suppressing")
                     return "suppressed"
-                published = await self.repository.publish_to_inbox(
-                    connection, record=record, worker_id=self.worker_id
+
+            adapter = self.channel_adapters.get(channel)
+            if adapter is None:
+                raise RuntimeError(f"notification channel is unsupported: {channel}")
+
+            # 先提交 STARTED。这样即使渠道调用过程中进程崩溃，下一次排查也能看到
+            # 哪一次尝试中断，而不会把所有失败都压缩成 Outbox 的一个计数器。
+            async with self.database.engine.begin() as connection:
+                await self.repository.start_delivery_attempt(
+                    connection,
+                    outbox_id=record.id,
+                    channel=channel,
+                    attempt_no=attempt_no,
+                )
+            attempt_started = True
+
+            async with self.database.engine.begin() as connection:
+                template = await self.templates.get_published(
+                    connection,
+                    template_key=record.notification_type,
+                    channel=channel,
+                )
+                safe_values = {
+                    key: value
+                    for key, value in {
+                        "aggregate_id": record.aggregate_id,
+                        "notification_type": record.notification_type,
+                    }.items()
+                    if key in template.variables
+                }
+                title, body = render_notification_template(template, values=safe_values)
+                receipt = await adapter.deliver(
+                    connection,
+                    NotificationDeliveryRequest(
+                        record=record,
+                        template_version=template.version,
+                        title=title,
+                        body=body,
+                    ),
+                )
+                finished = await self.repository.finish_delivery_attempt(
+                    connection,
+                    outbox_id=record.id,
+                    channel=channel,
+                    attempt_no=attempt_no,
+                    status="SUCCEEDED",
+                    provider_message_id=receipt.provider_message_id,
+                )
+                if not finished:
+                    raise RuntimeError("notification delivery attempt was not open")
+                published = await self.repository.mark_published(
+                    connection, outbox_id=record.id, worker_id=self.worker_id
                 )
                 if not published:
                     raise RuntimeError("notification outbox lock was lost while publishing")
@@ -160,10 +229,26 @@ class NotificationOutboxWorker:
                 notification_type=record.notification_type,
             )
             async with self.database.engine.begin() as connection:
-                await self.repository.mark_retry(
+                if attempt_started:
+                    await self.repository.finish_delivery_attempt(
+                        connection,
+                        outbox_id=record.id,
+                        channel=channel,
+                        attempt_no=attempt_no,
+                        status=(
+                            "FINAL_FAILED"
+                            if attempt_no >= self.max_delivery_attempts
+                            else "RETRYABLE_FAILED"
+                        ),
+                        error_code="NOTIFICATION_DELIVERY_FAILED",
+                    )
+                retried = await self.repository.mark_retry(
                     connection,
                     outbox_id=record.id,
                     worker_id=self.worker_id,
-                    error_code="IN_APP_PUBLISH_FAILED",
+                    error_code="NOTIFICATION_DELIVERY_FAILED",
+                    max_attempts=self.max_delivery_attempts,
                 )
+                if not retried:
+                    raise RuntimeError("notification outbox lock was lost while retrying")
             return "retried"

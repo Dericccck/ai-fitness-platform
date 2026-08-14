@@ -124,6 +124,15 @@ async def test_notification_policy_publishes_defers_and_suppresses() -> None:
             )
             await connection.execute(
                 text(
+                    "DELETE FROM agent_notification_delivery_attempts "
+                    "WHERE outbox_id IN ("
+                    "SELECT id FROM agent_notification_outbox WHERE subject_user_id = ANY(:subjects)"
+                    ")"
+                ),
+                {"subjects": subjects},
+            )
+            await connection.execute(
+                text(
                     "DELETE FROM agent_notification_outbox WHERE subject_user_id = ANY(:subjects)"
                 ),
                 {"subjects": subjects},

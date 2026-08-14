@@ -37,6 +37,10 @@ Worker 在发布事务内执行授权、安静时间和频率限制判断；未�
 `operation_id`，同一操作重试返回原版本，不重复生成状态或审计事件；审计表只保存模板键、版本、操作者和状态快照，
 不保存通知标题、正文和变量内容。
 
+0027 增加 `agent_notification_delivery_attempts` 渠道投递尝试表。每次真实渠道投递记录 `STARTED`、`SUCCEEDED`、
+`RETRYABLE_FAILED` 或 `FINAL_FAILED`，并保存受控错误码和渠道消息 ID；该表通过外键保护 Outbox，清理 Outbox 前必须先
+按保留策略处理投递尝试，不能无审计删除父事件。
+
 0023 增加正式 Memory 和候选的正文保留期限字段、脱敏标记和 `REDACTED` 审计事件。正式 Memory 进入
 `REVOKED/EXPIRED` 后默认保留 90 天，候选进入 `APPROVED/REJECTED/EXPIRED` 后默认保留 30 天；期限到达后，
 独立 Memory Retention Worker 将正式 Memory 内容替换为脱敏标记、清空候选密文，但不删除类型、状态、主体范围

@@ -102,6 +102,28 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
             )
             assert len(notification_rows) == 1
             assert notification_rows[0]["status"] == "UNREAD"
+            attempt_rows = (
+                (
+                    await connection.execute(
+                        text(
+                            """
+                            SELECT attempt.channel, attempt.attempt_no, attempt.status,
+                                   attempt.provider_message_id
+                            FROM agent_notification_delivery_attempts AS attempt
+                            JOIN agent_notification_outbox AS outbox ON outbox.id = attempt.outbox_id
+                            WHERE outbox.aggregate_id = :candidate_id
+                            """
+                        ),
+                        {"candidate_id": first.id},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            assert [(row["channel"], row["attempt_no"], row["status"]) for row in attempt_rows] == [
+                ("IN_APP", 1, "SUCCEEDED")
+            ]
+            assert attempt_rows[0]["provider_message_id"] == notification_rows[0]["id"]
             inbox = NotificationOutboxRepository()
             listed = await inbox.list_in_app(
                 connection,
@@ -166,6 +188,15 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
             expires_at=datetime.now(UTC) + timedelta(hours=1),
         )
         async with database.engine.begin() as connection:
+            await connection.execute(
+                text(
+                    "DELETE FROM agent_notification_delivery_attempts "
+                    "WHERE outbox_id IN ("
+                    "SELECT id FROM agent_notification_outbox WHERE subject_user_id = :subject"
+                    ")"
+                ),
+                {"subject": identity.subject},
+            )
             await connection.execute(
                 text("DELETE FROM agent_notification_outbox WHERE subject_user_id = :subject"),
                 {"subject": identity.subject},

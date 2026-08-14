@@ -291,6 +291,10 @@ AES-GCM 密文被清空，类型、稳定键、状态、哈希和生命周期审
 模板管理动作还通过 `0026` 写入不可变生命周期审计事件；创建、审核和发布都必须携带唯一 `operation_id`，网络重试
 会复用原结果，不重复生成版本或状态事件。审计只保存模板键、版本、操作者和状态，不保存模板正文。
 
+通知 Worker 已通过渠道适配器投递：当前 `IN_APP` 适配器将渲染快照写入站内收件箱，投递开始、成功和失败会写入
+`agent_notification_delivery_attempts`（`0027`）。失败会按照 Outbox 的有限重试进入 `RETRYABLE_FAILED` 或
+`FINAL_FAILED`；未来新增 RabbitMQ、短信或 Push 适配器时，不需要改动候选和 Outbox 业务逻辑。
+
 检索引用接口为 `POST /api/v1/agent/knowledge/search`，只返回已完成权限过滤的来源引用，
 包括来源 URI、版本、章节、PDF 页码、Excel 工作表、表格序号/行范围和命中片段。离线评测
 样例位于 `evals/rag_smoke.json`，阈值位于 `evals/rag_thresholds.json`。本地执行

@@ -15,8 +15,6 @@ from typing import Any
 
 from sqlalchemy import bindparam, text
 
-from .templates import NotificationTemplateRepository, render_notification_template
-
 
 @dataclass(frozen=True)
 class NotificationOutboxRecord:
@@ -266,71 +264,130 @@ class NotificationOutboxRepository:
         )
         return int(result.rowcount or 0) == 1
 
-    async def publish_to_inbox(
+    async def write_in_app_notification(
         self,
         connection: Any,
         *,
         record: NotificationOutboxRecord,
-        worker_id: str,
-    ) -> bool:
-        """把已领取 Outbox 事件写入站内通知收件箱并原子标记为已发布。
+        template_version: int,
+        title: str,
+        body: str,
+    ) -> str:
+        """幂等写入站内收件箱并返回收件箱 ID。
 
-        收件箱使用 Outbox 的 ``dedupe_key`` 做唯一约束，即使发布器在写入收件箱后
-        进程崩溃并重试，也不会为用户创建两条相同的站内通知。
+        收件箱使用 Outbox 的 ``dedupe_key`` 做唯一约束；适配器只负责渠道写入，Outbox
+        状态和投递尝试状态由 Worker 在同一成功事务中确认。
         """
 
-        template = await NotificationTemplateRepository().get_published(
-            connection,
-            template_key=record.notification_type,
-            channel="IN_APP",
-        )
-        safe_values = {
-            key: value
-            for key, value in {
-                "aggregate_id": record.aggregate_id,
-                "notification_type": record.notification_type,
-            }.items()
-            if key in template.variables
-        }
-        title, body = render_notification_template(template, values=safe_values)
+        if template_version < 1 or not title.strip() or not body.strip():
+            raise ValueError("notification delivery snapshot is invalid")
+        inserted = (
+            await connection.execute(
+                text(
+                    """
+                        INSERT INTO agent_in_app_notifications (
+                            id, notification_type, subject_user_id, organization_id,
+                            aggregate_type, aggregate_id, dedupe_key,
+                            template_version, title, body
+                        ) VALUES (
+                            :id, :notification_type, :subject_user_id, :organization_id,
+                            :aggregate_type, :aggregate_id, :dedupe_key,
+                            :template_version, :title, :body
+                        )
+                        ON CONFLICT (dedupe_key) DO NOTHING
+                        RETURNING id
+                        """
+                ),
+                {
+                    "id": _new_id(),
+                    "notification_type": record.notification_type,
+                    "subject_user_id": record.subject_user_id,
+                    "organization_id": record.organization_id,
+                    "aggregate_type": record.aggregate_type,
+                    "aggregate_id": record.aggregate_id,
+                    "dedupe_key": record.dedupe_key,
+                    "template_version": template_version,
+                    "title": title,
+                    "body": body,
+                },
+            )
+        ).scalar_one_or_none()
+        if inserted is not None:
+            return str(inserted)
+        existing = (
+            await connection.execute(
+                text("SELECT id FROM agent_in_app_notifications WHERE dedupe_key = :dedupe_key"),
+                {"dedupe_key": record.dedupe_key},
+            )
+        ).scalar_one_or_none()
+        if existing is None:
+            raise RuntimeError("in-app notification dedupe row disappeared")
+        return str(existing)
+
+    async def start_delivery_attempt(
+        self,
+        connection: Any,
+        *,
+        outbox_id: str,
+        channel: str,
+        attempt_no: int,
+    ) -> None:
+        """记录投递开始；相同 Outbox、渠道和次数只创建一条尝试。"""
+
+        if not outbox_id.strip() or not channel.strip() or attempt_no < 1:
+            raise ValueError("delivery attempt parameters are invalid")
         await connection.execute(
             text(
                 """
-                INSERT INTO agent_in_app_notifications (
-                    id, notification_type, subject_user_id, organization_id,
-                    aggregate_type, aggregate_id, dedupe_key,
-                    template_version, title, body
+                INSERT INTO agent_notification_delivery_attempts (
+                    outbox_id, channel, attempt_no, status
                 ) VALUES (
-                    :id, :notification_type, :subject_user_id, :organization_id,
-                    :aggregate_type, :aggregate_id, :dedupe_key,
-                    :template_version, :title, :body
+                    :outbox_id, :channel, :attempt_no, 'STARTED'
                 )
-                ON CONFLICT (dedupe_key) DO NOTHING
+                ON CONFLICT (outbox_id, channel, attempt_no) DO NOTHING
                 """
             ),
             {
-                "id": _new_id(),
-                "notification_type": record.notification_type,
-                "subject_user_id": record.subject_user_id,
-                "organization_id": record.organization_id,
-                "aggregate_type": record.aggregate_type,
-                "aggregate_id": record.aggregate_id,
-                "dedupe_key": record.dedupe_key,
-                "template_version": template.version,
-                "title": title,
-                "body": body,
+                "outbox_id": outbox_id,
+                "channel": channel,
+                "attempt_no": attempt_no,
             },
         )
+
+    async def finish_delivery_attempt(
+        self,
+        connection: Any,
+        *,
+        outbox_id: str,
+        channel: str,
+        attempt_no: int,
+        status: str,
+        error_code: str | None = None,
+        provider_message_id: str | None = None,
+    ) -> bool:
+        """完成一次投递尝试，状态只允许进入终态。"""
+
+        if status not in {"SUCCEEDED", "RETRYABLE_FAILED", "FINAL_FAILED"}:
+            raise ValueError("delivery attempt status is invalid")
         result = await connection.execute(
             text(
                 """
-                UPDATE agent_notification_outbox
-                SET status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP,
-                    locked_by = NULL, locked_at = NULL, updated_at = CURRENT_TIMESTAMP
-                WHERE id = :id AND status = 'PROCESSING' AND locked_by = :worker_id
+                UPDATE agent_notification_delivery_attempts
+                SET status = :status, error_code = :error_code,
+                    provider_message_id = :provider_message_id,
+                    finished_at = CURRENT_TIMESTAMP
+                WHERE outbox_id = :outbox_id AND channel = :channel
+                  AND attempt_no = :attempt_no AND status = 'STARTED'
                 """
             ),
-            {"id": record.id, "worker_id": worker_id},
+            {
+                "outbox_id": outbox_id,
+                "channel": channel,
+                "attempt_no": attempt_no,
+                "status": status,
+                "error_code": error_code[:128] if error_code else None,
+                "provider_message_id": provider_message_id,
+            },
         )
         return int(result.rowcount or 0) == 1
 
