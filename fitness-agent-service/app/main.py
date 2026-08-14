@@ -56,6 +56,7 @@ from app.rag.safety import ClamAvScanner, CompositeDocumentScanner, StructuralDo
 from app.rag.service import RagService
 from app.rag.storage import DocumentStorage, LocalDocumentStorage, S3DocumentStorage
 from app.rag.worker import KnowledgeIngestionWorker
+from app.session_summary import SessionSummaryRepository, SessionSummaryService
 
 runtime_settings = get_settings()
 configure_logging(runtime_settings.log_level)
@@ -234,6 +235,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.confirmation_token_issuer,
         ttl_seconds=settings.confirmation_ttl_seconds,
     )
+    # 短期会话摘要只用于压缩当前 thread 的上下文，不读取或写入长期 Memory，也不
+    # 参与权限判断。它复用同一个密钥管理边界，但使用独立表和 thread AAD 做隔离。
+    app.state.session_summary_service = SessionSummaryService(
+        app.state.models,
+        SessionSummaryRepository(app.state.database),
+        app.state.confirmation_cipher,
+        trigger_messages=settings.session_summary_trigger_messages,
+        keep_recent_messages=settings.session_summary_keep_recent_messages,
+        max_summary_chars=settings.session_summary_max_chars,
+        max_input_chars=settings.session_summary_max_input_chars,
+        retention_days=settings.session_summary_retention_days,
+    )
     app.state.session_lock = SessionLockManager(
         app.state.cache.client,
         ttl_seconds=settings.session_lock_ttl_seconds,
@@ -251,6 +264,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             rag_service=app.state.rag_service,
             confirmation_service=app.state.confirmation_service,
             memory_candidate_service=app.state.memory_candidate_service,
+            session_summary_service=app.state.session_summary_service,
         )
         yield
     finally:

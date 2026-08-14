@@ -139,6 +139,16 @@ class Settings(BaseSettings):
     memory_retention_batch_size: int = Field(default=500, ge=1, le=5000)
     memory_retention_poll_seconds: float = Field(default=3600.0, ge=1, le=86400)
     memory_retention_worker_metrics_port: int = Field(default=8094, ge=1, le=65535)
+    # 短期会话摘要只压缩当前 thread 的上下文，不是长期 Memory；达到阈值后用 DeepSeek
+    # 生成加密摘要，并把 Checkpoint 历史压缩为摘要加最近几轮消息。
+    session_summary_trigger_messages: int = Field(default=12, ge=2, le=100)
+    session_summary_keep_recent_messages: int = Field(default=6, ge=1, le=50)
+    session_summary_max_chars: int = Field(default=3000, ge=500, le=4000)
+    session_summary_max_input_chars: int = Field(default=12000, ge=1000, le=50000)
+    session_summary_retention_days: int = Field(default=7, ge=1, le=365)
+    session_summary_batch_size: int = Field(default=500, ge=1, le=5000)
+    session_summary_poll_seconds: float = Field(default=3600.0, ge=1, le=86400)
+    session_summary_worker_metrics_port: int = Field(default=8095, ge=1, le=65535)
     # 站内通知由独立 Outbox Worker 发布，避免 API 进程重启造成通知任务滞留。
     notification_worker_batch_size: int = Field(default=100, ge=1, le=500)
     notification_worker_poll_seconds: float = Field(default=5.0, ge=1, le=3600)

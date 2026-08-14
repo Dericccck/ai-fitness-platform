@@ -54,6 +54,16 @@ class FakeCandidateExtractor:
         )
 
 
+class FakeSessionSummaryService:
+    keep_recent_messages = 2
+
+    async def load_for_subject(self, _: str, __: str) -> str:
+        return "用户目标是改善体能；动态课程需要重新查询。"
+
+    async def maybe_summarize(self, **_: Any) -> str:
+        return "用户目标是改善体能；动态课程需要重新查询。"
+
+
 def build_registry(calls: list[dict[str, Any]]) -> ToolRegistry:
     registry = ToolRegistry()
 
@@ -132,6 +142,45 @@ async def test_supervisor_runs_model_tool_model_cycle_and_returns_real_result() 
     assert len(models.tools_seen) == 2
     assert models.tools_seen[0]
     assert models.tools_seen[1] == []
+
+
+async def test_supervisor_uses_session_summary_after_checkpoint_compaction() -> None:
+    models = FakeModels(
+        [
+            ModelTurn(content="第一轮回答。", tool_calls=()),
+            ModelTurn(content="第二轮回答。", tool_calls=()),
+        ]
+    )
+    supervisor = Supervisor(
+        cast(ModelGateway, models),
+        build_registry([]),
+        checkpointer=InMemorySaver(),
+        session_summary_service=FakeSessionSummaryService(),  # type: ignore[arg-type]
+    )
+    identity = AgentIdentity(
+        subject="student-summary",
+        organization_ids=frozenset({"org-1"}),
+        roles=frozenset({"STUDENT"}),
+        issued_at=1,
+        expires_at=2,
+    )
+
+    first = await supervisor.invoke(
+        SupervisorRequest(
+            "我想改善体能", request().gateway_context, "conversation-1", identity=identity
+        )
+    )
+    second = await supervisor.invoke(
+        SupervisorRequest(
+            "继续给我建议", request().gateway_context, "conversation-1", identity=identity
+        )
+    )
+
+    assert first.answer == "第一轮回答。"
+    assert second.answer == "第二轮回答。"
+    second_round_messages = models.messages_seen[1]
+    assert any("当前会话短期摘要" in str(message) for message in second_round_messages)
+    assert any(message.get("content") == "我想改善体能" for message in second_round_messages)
 
 
 async def test_supervisor_passes_unconfirmed_memory_candidate_to_model_context() -> None:

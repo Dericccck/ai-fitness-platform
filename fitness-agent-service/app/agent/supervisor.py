@@ -39,6 +39,11 @@ from app.memory.candidate_service import (
 )
 from app.rag.models import RetrievalScope
 from app.rag.service import RagSearchError, RagService
+from app.session_summary import (
+    SessionSummaryError,
+    SessionSummaryService,
+    build_compacted_messages,
+)
 
 from .tool_registry import ToolContext, ToolRegistry, ToolRegistryError
 
@@ -144,6 +149,7 @@ class Supervisor:
         rag_service: RagService | None = None,
         confirmation_service: ConfirmationService | None = None,
         memory_candidate_service: MemoryCandidateService | None = None,
+        session_summary_service: SessionSummaryService | None = None,
         # 保留此参数是为了兼容当前单元测试和旧的内嵌装配；正式应用使用上面的
         # Service，因为它还负责跨请求持久化和用户批准/拒绝。
         memory_candidate_extractor: MemoryCandidateExtractionService | None = None,
@@ -156,6 +162,7 @@ class Supervisor:
         self.rag_service = rag_service
         self.confirmation_service = confirmation_service
         self.memory_candidate_service = memory_candidate_service
+        self.session_summary_service = session_summary_service
         self.memory_candidate_extractor = memory_candidate_extractor
         self._graph = self._build_graph()
 
@@ -280,7 +287,29 @@ class Supervisor:
                 )
             previous_messages = previous_values.get("messages", [])
             if previous_messages:
-                current_messages = list(previous_messages)
+                session_summary = None
+                if self.session_summary_service is not None and request.identity is not None:
+                    try:
+                        session_summary = await self.session_summary_service.load_for_subject(
+                            thread_id, request.identity.subject
+                        )
+                    except Exception:
+                        # 摘要是上下文增强能力，读取失败不能让已具备 Checkpoint 的普通
+                        # 健身问答直接不可用；安全边界是“失败时不使用摘要”，不是猜测摘要。
+                        _logger.exception(
+                            "session_summary_load_failed",
+                            request_id=request.gateway_context.request_id,
+                        )
+                current_messages = (
+                    build_compacted_messages(
+                        system_prompt=system_prompt,
+                        summary=session_summary,
+                        previous_messages=previous_messages,
+                        keep_recent_messages=self.session_summary_service.keep_recent_messages,
+                    )
+                    if session_summary and self.session_summary_service is not None
+                    else list(previous_messages)
+                )
                 if candidate_message is not None:
                     current_messages.append(candidate_message)
                 current_messages.append({"role": "user", "content": request.user_message})
@@ -331,13 +360,20 @@ class Supervisor:
         answer = final_state.get("final_answer", "").strip()
         if not answer:
             raise SupervisorRuntimeError("supervisor produced an empty answer")
-        return SupervisorResponse(
+        response = SupervisorResponse(
             answer=answer,
             route=final_state["route"],
             tool_steps=final_state.get("tool_steps", 0),
             input_tokens=_optional_int(final_state.get("input_tokens")),
             output_tokens=_optional_int(final_state.get("output_tokens")),
         )
+        await self._persist_session_summary(
+            final_state,
+            config={"configurable": {"thread_id": thread_id}},
+            thread_id=thread_id,
+            identity=request.identity,
+        )
+        return response
 
     async def resume_confirmation(
         self,
@@ -388,7 +424,57 @@ class Supervisor:
             ToolRegistryError,
         ) as exc:
             raise SupervisorRuntimeError("confirmation execution failed") from exc
-        return self._response_from_state(final_state)
+        response = self._response_from_state(final_state)
+        await self._persist_session_summary(
+            final_state,
+            config=config,
+            thread_id=thread_id,
+            identity=identity,
+        )
+        return response
+
+    async def _persist_session_summary(
+        self,
+        final_state: dict[str, Any],
+        *,
+        config: dict[str, Any],
+        thread_id: str,
+        identity: AgentIdentity | None,
+    ) -> None:
+        """生成摘要并压缩 Checkpoint；摘要故障不覆盖已经完成的业务响应。"""
+
+        if self.session_summary_service is None or identity is None:
+            return
+        messages = final_state.get("messages", [])
+        if not isinstance(messages, list):
+            return
+        try:
+            summary = await self.session_summary_service.maybe_summarize(
+                thread_id=thread_id,
+                subject_user_id=identity.subject,
+                messages=messages,
+            )
+            if not summary or self._checkpointer is None:
+                return
+            # 当前 State 的 messages 是完整列表覆盖语义，因此 aupdate_state 会真正替换
+            # Checkpoint 中的历史，而不是再追加一份压缩内容。下一轮请求会重新注入最新
+            # system prompt、RAG 上下文和候选上下文，历史只保留摘要与最近用户/助手消息。
+            compacted = build_compacted_messages(
+                system_prompt="当前系统规则将在下一轮请求中重新注入。",
+                summary=summary,
+                previous_messages=messages,
+                keep_recent_messages=self.session_summary_service.keep_recent_messages,
+            )
+            await self._graph.aupdate_state(
+                config,
+                {"messages": compacted},
+                as_node="model",
+            )
+        except (SessionSummaryError, ModelConfigurationError, ModelResponseError):
+            _logger.warning("session_summary_generation_failed", thread_id=thread_id)
+        except Exception:
+            # 摘要是可恢复的辅助维护动作，不能把已经完成的训练查询或确认执行变成失败。
+            _logger.exception("session_summary_persist_failed", thread_id=thread_id)
 
     @staticmethod
     def _response_from_state(final_state: dict[str, Any]) -> SupervisorResponse:
