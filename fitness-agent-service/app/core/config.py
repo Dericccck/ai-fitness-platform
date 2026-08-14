@@ -132,6 +132,10 @@ class Settings(BaseSettings):
     memory_candidate_expiry_batch_size: int = Field(default=500, ge=1, le=5000)
     memory_candidate_expiry_poll_seconds: float = Field(default=60.0, ge=1, le=3600)
     memory_candidate_worker_metrics_port: int = Field(default=8092, ge=1, le=65535)
+    # 站内通知由独立 Outbox Worker 发布，避免 API 进程重启造成通知任务滞留。
+    notification_worker_batch_size: int = Field(default=100, ge=1, le=500)
+    notification_worker_poll_seconds: float = Field(default=5.0, ge=1, le=3600)
+    notification_worker_metrics_port: int = Field(default=8093, ge=1, le=65535)
     # 页面路由阈值由部署配置统一控制，上传者和 LLM 无权覆盖。默认值偏保守，
     # 用于把可能承载健身动作、姿态或风险信息的图片密集页送入专业审核。
     rag_pdf_min_image_area_ratio: float = Field(default=0.45, ge=0, le=1)

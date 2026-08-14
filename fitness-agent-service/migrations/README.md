@@ -22,6 +22,8 @@ AES-GCM 加密，支持去重、机构隔离和过期状态。0018 增加 `agent
 0020 增加 `agent_notification_outbox` 事务性通知 Outbox。Memory 候选进入 `PENDING` 时，候选状态、候选审计
 事件和通知任务在同一个事务中提交；Outbox 只保存候选 ID 等路由参数，不保存候选正文。下游发布器通过
 `FOR UPDATE SKIP LOCKED` 抢占任务，并使用 `PUBLISHED`、`RETRYABLE_FAILED`、`DEAD` 状态和有限重试控制可靠投递。
+0021 增加 `agent_in_app_notifications` 站内通知收件箱。Outbox Worker 将待发布任务原子写入收件箱并标记为
+`PUBLISHED`，收件箱使用相同去重键避免重复通知；用户只能读取和标记自己签名机构范围内的通知。
 
 训练计划领域表仍由 Java/MySQL 业务迁移管理。
 

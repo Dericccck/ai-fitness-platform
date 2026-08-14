@@ -16,6 +16,7 @@ from app.infrastructure.database import Database
 from app.memory.candidate import MemoryCandidate
 from app.memory.candidate_repository import MemoryCandidateNotFound, MemoryCandidateRepository
 from app.notifications.outbox import NotificationOutboxRepository
+from app.notifications.worker import NotificationOutboxWorker
 
 pytestmark = pytest.mark.skipif(
     os.getenv("AGENT_RUN_POSTGRES_TESTS") != "1",
@@ -78,17 +79,46 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
             assert len(outbox_rows) == 1
             assert outbox_rows[0]["status"] == "PENDING"
             assert outbox_rows[0]["payload"] == {"candidate_id": first.id}
-            outbox_repository = NotificationOutboxRepository()
-            claimed = await outbox_repository.claim_batch(
-                connection, worker_id="notification-test-worker", limit=10
+        notification_worker = NotificationOutboxWorker(
+            database,
+            NotificationOutboxRepository(),
+            worker_id="notification-test-worker",
+        )
+        worker_result = await notification_worker.run_once()
+        assert (worker_result.claimed, worker_result.published, worker_result.retried) == (1, 1, 0)
+        async with database.engine.begin() as connection:
+            notification_rows = (
+                (
+                    await connection.execute(
+                        text(
+                            "SELECT * FROM agent_in_app_notifications "
+                            "WHERE aggregate_id = :candidate_id"
+                        ),
+                        {"candidate_id": first.id},
+                    )
+                )
+                .mappings()
+                .all()
             )
-            assert len(claimed) == 1
-            assert claimed[0].status == "PROCESSING"
-            assert await outbox_repository.mark_published(
+            assert len(notification_rows) == 1
+            assert notification_rows[0]["status"] == "UNREAD"
+            inbox = NotificationOutboxRepository()
+            listed = await inbox.list_in_app(
                 connection,
-                outbox_id=claimed[0].id,
-                worker_id="notification-test-worker",
+                subject_user_id=identity.subject,
+                organization_id="org-1",
+                status="UNREAD",
+                limit=10,
             )
+            assert [notification.aggregate_id for notification in listed] == [first.id]
+            marked = await inbox.mark_in_app_read(
+                connection,
+                notification_id=str(notification_rows[0]["id"]),
+                subject_user_id=identity.subject,
+                organization_ids=["org-1"],
+            )
+            assert marked is not None
+            assert marked.status == "READ"
         created_events = await repository.list_events(first.id, identity=identity)
         assert [(event.event_type, event.actor_type) for event in created_events] == [
             ("CREATED", "AGENT")

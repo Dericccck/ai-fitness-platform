@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 
 @dataclass(frozen=True)
@@ -37,6 +37,21 @@ class NotificationOutboxRecord:
     published_at: datetime | None
     created_at: datetime
     updated_at: datetime
+
+
+@dataclass(frozen=True)
+class InAppNotificationRecord:
+    """站内通知收件箱视图，不返回通知正文或内部幂等参数。"""
+
+    id: str
+    notification_type: str
+    subject_user_id: str
+    organization_id: str
+    aggregate_type: str
+    aggregate_id: str
+    status: str
+    created_at: datetime
+    read_at: datetime | None
 
 
 class NotificationOutboxRepository:
@@ -189,6 +204,131 @@ class NotificationOutboxRepository:
         )
         return int(result.rowcount or 0) == 1
 
+    async def publish_to_inbox(
+        self,
+        connection: Any,
+        *,
+        record: NotificationOutboxRecord,
+        worker_id: str,
+    ) -> bool:
+        """把已领取 Outbox 事件写入站内通知收件箱并原子标记为已发布。
+
+        收件箱使用 Outbox 的 ``dedupe_key`` 做唯一约束，即使发布器在写入收件箱后
+        进程崩溃并重试，也不会为用户创建两条相同的站内通知。
+        """
+
+        await connection.execute(
+            text(
+                """
+                INSERT INTO agent_in_app_notifications (
+                    id, notification_type, subject_user_id, organization_id,
+                    aggregate_type, aggregate_id, dedupe_key
+                ) VALUES (
+                    :id, :notification_type, :subject_user_id, :organization_id,
+                    :aggregate_type, :aggregate_id, :dedupe_key
+                )
+                ON CONFLICT (dedupe_key) DO NOTHING
+                """
+            ),
+            {
+                "id": _new_id(),
+                "notification_type": record.notification_type,
+                "subject_user_id": record.subject_user_id,
+                "organization_id": record.organization_id,
+                "aggregate_type": record.aggregate_type,
+                "aggregate_id": record.aggregate_id,
+                "dedupe_key": record.dedupe_key,
+            },
+        )
+        result = await connection.execute(
+            text(
+                """
+                UPDATE agent_notification_outbox
+                SET status = 'PUBLISHED', published_at = CURRENT_TIMESTAMP,
+                    locked_by = NULL, locked_at = NULL, updated_at = CURRENT_TIMESTAMP
+                WHERE id = :id AND status = 'PROCESSING' AND locked_by = :worker_id
+                """
+            ),
+            {"id": record.id, "worker_id": worker_id},
+        )
+        return int(result.rowcount or 0) == 1
+
+    async def list_in_app(
+        self,
+        connection: Any,
+        *,
+        subject_user_id: str,
+        organization_id: str,
+        status: str | None,
+        limit: int,
+    ) -> list[InAppNotificationRecord]:
+        """按签名主体和机构读取站内通知，不允许调用方传入任意用户 ID。"""
+
+        if limit < 1 or limit > 100:
+            raise ValueError("notification list limit must be between 1 and 100")
+        statement = text(
+            """
+            SELECT * FROM agent_in_app_notifications
+            WHERE subject_user_id = :subject_user_id
+              AND organization_id = :organization_id
+              AND (CAST(:status AS TEXT) IS NULL OR status = CAST(:status AS TEXT))
+            ORDER BY created_at DESC, id DESC
+            LIMIT :limit
+            """
+        )
+        rows = (
+            (
+                await connection.execute(
+                    statement,
+                    {
+                        "subject_user_id": subject_user_id,
+                        "organization_id": organization_id,
+                        "status": status,
+                        "limit": limit,
+                    },
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [_in_app_from_row(row) for row in rows]
+
+    async def mark_in_app_read(
+        self,
+        connection: Any,
+        *,
+        notification_id: str,
+        subject_user_id: str,
+        organization_ids: list[str],
+    ) -> InAppNotificationRecord | None:
+        """标记本人通知已读；重复标记是幂等的。"""
+
+        row = (
+            (
+                await connection.execute(
+                    text(
+                        """
+                        UPDATE agent_in_app_notifications
+                        SET status = 'READ', read_at = COALESCE(read_at, CURRENT_TIMESTAMP),
+                            updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :id
+                          AND subject_user_id = :subject_user_id
+                          AND organization_id IN :organization_ids
+                        RETURNING *
+                        """
+                    ).bindparams(bindparam("organization_ids", expanding=True)),
+                    {
+                        "id": notification_id,
+                        "subject_user_id": subject_user_id,
+                        "organization_ids": organization_ids,
+                    },
+                )
+            )
+            .mappings()
+            .first()
+        )
+        return _in_app_from_row(row) if row is not None else None
+
 
 def _from_row(row: Any) -> NotificationOutboxRecord:
     """把数据库行映射成下游发布器使用的稳定对象。"""
@@ -211,6 +351,22 @@ def _from_row(row: Any) -> NotificationOutboxRecord:
         published_at=_as_utc(row["published_at"]),
         created_at=_required_utc(row["created_at"]),
         updated_at=_required_utc(row["updated_at"]),
+    )
+
+
+def _in_app_from_row(row: Any) -> InAppNotificationRecord:
+    """把站内通知行映射为安全的用户视图。"""
+
+    return InAppNotificationRecord(
+        id=str(row["id"]),
+        notification_type=str(row["notification_type"]),
+        subject_user_id=str(row["subject_user_id"]),
+        organization_id=str(row["organization_id"]),
+        aggregate_type=str(row["aggregate_type"]),
+        aggregate_id=str(row["aggregate_id"]),
+        status=str(row["status"]),
+        created_at=_required_utc(row["created_at"]),
+        read_at=_as_utc(row["read_at"]),
     )
 
 

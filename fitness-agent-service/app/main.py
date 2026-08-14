@@ -16,6 +16,7 @@ from app.api.routes.health import router as health_router
 from app.api.routes.knowledge_review import router as knowledge_review_router
 from app.api.routes.memories import router as memories_router
 from app.api.routes.memory_candidates import router as memory_candidates_router
+from app.api.routes.notifications import router as notifications_router
 from app.api.routes.rag import router as rag_router
 from app.confirmation.cipher import AesGcmPayloadCipher
 from app.confirmation.repository import ConfirmationRepository
@@ -37,6 +38,7 @@ from app.memory.candidate_service import MemoryCandidateService
 from app.memory.candidate_worker import MemoryCandidateExpiryWorker
 from app.memory.repository import MemoryRepository
 from app.memory.service import MemoryService
+from app.notifications.outbox import NotificationOutboxRepository
 from app.rag.admin_repository import KnowledgeIngestionRepository
 from app.rag.admin_service import KnowledgeAdminService
 from app.rag.document_quality import DocumentQualityThresholds
@@ -169,6 +171,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Memory 属于 Agent 的长期上下文，不是 Java/MySQL 的健身业务事实。通过独立仓储和
     # Service 装配，后续可以单独增加过期 Worker、审计和数据保留策略。
     app.state.memory_service = MemoryService(MemoryRepository(app.state.database))
+    app.state.notification_outbox = NotificationOutboxRepository()
     app.state.memory_candidate_extractor = MemoryCandidateExtractionService(
         app.state.models, metrics=http_metrics
     )
@@ -264,6 +267,7 @@ app.include_router(agent_router)
 app.include_router(confirmations_router)
 app.include_router(memory_candidates_router)
 app.include_router(memories_router)
+app.include_router(notifications_router)
 app.include_router(admin_knowledge_router)
 app.include_router(knowledge_review_router)
 app.include_router(rag_router)

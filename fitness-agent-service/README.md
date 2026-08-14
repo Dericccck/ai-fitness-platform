@@ -265,6 +265,11 @@ Prometheus 指标。数据库使用 `FOR UPDATE SKIP LOCKED`，多个 Worker 实
 `claim_batch`、`mark_published` 和 `mark_retry` 接入 RabbitMQ、站内信或其他通知渠道。当前仓库完成的是可靠出站基础，
 尚未把任何供应商发送结果伪装成已送达。
 
+当前已落地无需外部供应商的站内通知渠道：`make agent-notification-worker` 启动独立 Outbox Worker，
+将任务发布到 `agent_in_app_notifications` 收件箱。用户可以通过 `GET /api/v1/agent/notifications` 查询本人通知，
+通过 `POST /api/v1/agent/notifications/{notification_id}/read` 标记已读；已读只改变界面状态，不需要
+`interrupt()`。通知接口仍按签名 AgentContext 校验用户和机构范围。
+
 检索引用接口为 `POST /api/v1/agent/knowledge/search`，只返回已完成权限过滤的来源引用，
 包括来源 URI、版本、章节、PDF 页码、Excel 工作表、表格序号/行范围和命中片段。离线评测
 样例位于 `evals/rag_smoke.json`，阈值位于 `evals/rag_thresholds.json`。本地执行
