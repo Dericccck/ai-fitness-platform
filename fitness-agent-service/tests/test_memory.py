@@ -177,5 +177,6 @@ async def test_memory_expiry_must_be_in_the_future_and_revoke_is_version_bound()
         organization_id="org-1",
         memory_id=item.id,
         expected_version=item.version,
+        source_request_id="revoke-request-1",
     )
     assert revoked.status == "REVOKED"

@@ -16,6 +16,8 @@ MemoryType = Literal[
     "COMMUNICATION_PREFERENCE",
 ]
 MemoryStatus = Literal["ACTIVE", "REVOKED", "EXPIRED"]
+MemoryEventType = Literal["SAVED", "REVOKED", "EXPIRED"]
+MemoryEventActorType = Literal["AGENT", "USER", "SYSTEM"]
 
 
 class MemoryValidationError(ValueError):
@@ -56,6 +58,29 @@ class FitnessMemory:
         unit = self.content.get("unit")
         suffix = f"{unit}" if isinstance(unit, str) and unit else ""
         return f"- {self.memory_type}/{self.memory_key}: {value}{suffix}"
+
+
+@dataclass(frozen=True)
+class MemoryEventRecord:
+    """正式 Memory 的生命周期审计摘要。
+
+    事件表只记录状态变化和版本快照，不复制 Memory 正文。这样用户可以追踪某条
+    记忆何时被确认保存、撤销或自动过期，同时避免审计日志扩大低敏用户偏好的泄露面。
+    ``operation_id`` 还是写操作的幂等键，用于网络重试时复用同一结果。
+    """
+
+    id: int
+    memory_id: str
+    subject_user_id: str
+    organization_id: str
+    event_type: MemoryEventType
+    actor_type: MemoryEventActorType
+    actor_user_id: str | None
+    status_after: MemoryStatus
+    version_after: int
+    request_id: str
+    operation_id: str
+    created_at: datetime
 
 
 def validate_memory_owner(identity: AgentIdentity, organization_id: str) -> None:

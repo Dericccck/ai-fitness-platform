@@ -252,6 +252,12 @@ Prometheus 指标。数据库使用 `FOR UPDATE SKIP LOCKED`，多个 Worker 实
 响应不会返回候选密文、正文摘要或内部请求标识。候选提取、过滤、持久化失败和状态流转使用固定枚举指标，避免
 把用户 ID、候选 ID 等高基数信息放进 Prometheus 标签。
 
+正式 Memory 的生命周期事件保存在 `agent_memory_events`，保存、撤销和自动过期与状态变更在同一事务内写入。
+用户可以通过 `GET /api/v1/agent/memories?organization_id=...` 查看本人有效 Memory，通过
+`POST /api/v1/agent/memories/{memory_id}/revocations` 明确撤销，并通过同路径的 `/events` 查看状态摘要。
+撤销请求必须携带 `expected_version` 和稳定 `decision_request_id`；接口从签名主体反查机构，不接受调用方注入
+任意用户或机构。管理页面的点击撤销本身就是确认动作，不再重复触发 `interrupt()`；对话工具仍保留原有确认单。
+
 检索引用接口为 `POST /api/v1/agent/knowledge/search`，只返回已完成权限过滤的来源引用，
 包括来源 URI、版本、章节、PDF 页码、Excel 工作表、表格序号/行范围和命中片段。离线评测
 样例位于 `evals/rag_smoke.json`，阈值位于 `evals/rag_thresholds.json`。本地执行
@@ -264,8 +270,8 @@ Prometheus 指标。数据库使用 `FOR UPDATE SKIP LOCKED`，多个 Worker 实
 业务库；若要创建草案，必须继续调用 `fitness.training.plan.create_draft.v1`，由 LangGraph `interrupt()`
 展示确认卡并签发窄范围凭证，之后仍要经过教练审核和发布。模型不能生成或决定组织权限、计划状态和审核结论。
 当前已通过 Supervisor 集成测试验证“生成预览 → 调用创建工具 → `interrupt()` 拦截 → 用户批准后恢复执行”
-链路；确认前不会调用 Java Gateway 的创建接口。Memory 尚未接入训练计划生成，不能把本次生成结果描述为已完成
-个性化记忆能力。
+链路；确认前不会调用 Java Gateway 的创建接口。训练计划生成只读取已确认且未过期的结构化 Memory，不能把
+模型候选或当前对话临时文本描述为已完成个性化记忆。
 
 本地连接默认使用 Docker Compose 创建的 `fitness-agent-postgres`：宿主机
 `127.0.0.1:5433` 映射到容器 `5432`，数据库 `fitness_agent`，用户 `fitness_agent`。

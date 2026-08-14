@@ -7,7 +7,13 @@ from typing import Any, cast
 
 from app.infrastructure.agent_context import AgentIdentity
 
-from .models import FitnessMemory, MemoryType, MemoryValidationError, validate_memory_owner
+from .models import (
+    FitnessMemory,
+    MemoryEventRecord,
+    MemoryType,
+    MemoryValidationError,
+    validate_memory_owner,
+)
 from .repository import MemoryRepository
 
 _MEMORY_TYPES: frozenset[str] = frozenset(
@@ -54,6 +60,7 @@ class MemoryService:
         unit: str | None,
         expires_at: datetime | None,
         source_request_id: str,
+        request_id: str | None = None,
     ) -> FitnessMemory:
         """保存用户明确确认的结构化偏好；同一键再次保存表示纠正旧记忆。"""
 
@@ -85,6 +92,7 @@ class MemoryService:
             content=content,
             expires_at=expires_at,
             source_request_id=source_request_id,
+            request_id=request_id,
         )
 
     async def list_active(
@@ -95,6 +103,13 @@ class MemoryService:
         validate_memory_owner(identity, organization_id)
         return await self.repository.list_active(identity=identity, organization_id=organization_id)
 
+    async def get_for_subject(self, *, identity: AgentIdentity, memory_id: str) -> FitnessMemory:
+        """读取本人 Memory 的完整领域对象，机构由数据库主体范围决定。"""
+
+        if not memory_id.strip():
+            raise MemoryValidationError("memory id is required")
+        return await self.repository.get_for_subject(memory_id, identity=identity)
+
     async def revoke(
         self,
         *,
@@ -102,18 +117,36 @@ class MemoryService:
         organization_id: str,
         memory_id: str,
         expected_version: int,
+        source_request_id: str,
+        request_id: str | None = None,
     ) -> FitnessMemory:
         """撤销本人 Memory；撤销后不再进入 Prompt，但保留审计事实。"""
 
         validate_memory_owner(identity, organization_id)
-        if not memory_id.strip() or expected_version < 1:
-            raise MemoryValidationError("memory id and positive expected version are required")
+        if not memory_id.strip() or expected_version < 1 or not source_request_id.strip():
+            raise MemoryValidationError(
+                "memory id, positive expected version, and source request id are required"
+            )
         return await self.repository.revoke(
             identity=identity,
             organization_id=organization_id,
             memory_id=memory_id,
             expected_version=expected_version,
+            source_request_id=source_request_id,
+            request_id=request_id,
         )
+
+    async def list_events(
+        self, *, identity: AgentIdentity, memory_id: str, limit: int = 50
+    ) -> list[MemoryEventRecord]:
+        """返回本人 Memory 的生命周期摘要，并对不存在/越权统一按不存在处理。"""
+
+        if not memory_id.strip():
+            raise MemoryValidationError("memory id is required")
+        # 先读主体范围内的 Memory，避免越权 ID 因“没有事件”泄露存在性差异。
+        memory = await self.repository.get_for_subject(memory_id, identity=identity)
+        validate_memory_owner(identity, memory.organization_id)
+        return await self.repository.list_events(memory_id, identity=identity, limit=limit)
 
     async def expire_due(self, *, limit: int = 500) -> int:
         """执行一批到期标记，后续由独立 Worker/定时任务触发。"""

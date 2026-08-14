@@ -14,6 +14,7 @@ from app.api.routes.agent import router as agent_router
 from app.api.routes.confirmations import router as confirmations_router
 from app.api.routes.health import router as health_router
 from app.api.routes.knowledge_review import router as knowledge_review_router
+from app.api.routes.memories import router as memories_router
 from app.api.routes.memory_candidates import router as memory_candidates_router
 from app.api.routes.rag import router as rag_router
 from app.confirmation.cipher import AesGcmPayloadCipher
@@ -262,6 +263,7 @@ app.add_middleware(RequestContextMiddleware, service_name=runtime_settings.servi
 app.include_router(agent_router)
 app.include_router(confirmations_router)
 app.include_router(memory_candidates_router)
+app.include_router(memories_router)
 app.include_router(admin_knowledge_router)
 app.include_router(knowledge_review_router)
 app.include_router(rag_router)

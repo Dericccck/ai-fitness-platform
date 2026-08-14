@@ -16,6 +16,9 @@ make agent-migrate
 0017 迁移增加 `agent_memory_candidates`，模型提取的候选在用户批准前以 PENDING 状态保存，正文使用
 AES-GCM 加密，支持去重、机构隔离和过期状态。0018 增加 `agent_memory_candidate_events` 不可变事件表，
 在同一事务内记录候选创建、批准、拒绝和过期；事件只保存状态和正文摘要，不保存候选明文或确认凭证。
+0019 增加 `agent_memory_events` 正式 Memory 不可变事件表，在同一事务内记录保存、撤销和自动过期；
+事件只保存主体/机构快照、状态和版本，不保存 Memory 正文。保存和撤销均以 `operation_id` 做幂等，
+支持管理页面重试而不重复递增版本或产生重复审计事件。
 
 训练计划领域表仍由 Java/MySQL 业务迁移管理。
 

@@ -551,6 +551,7 @@ def build_fitness_tool_registry(
             unit=data.unit,
             expires_at=data.expires_at,
             source_request_id=request_id,
+            request_id=request_id,
         )
         return _memory_view(memory)
 
@@ -560,11 +561,16 @@ def build_fitness_tool_registry(
         if memory_service is None or context.identity is None:
             raise RuntimeError("Memory service and verified AgentContext are required")
         data = cast(RevokeMemoryToolInput, raw)
+        request_id = context.gateway_context.request_id
+        if not request_id:
+            raise RuntimeError("confirmed Memory revoke requires request_id")
         memory = await memory_service.revoke(
             identity=context.identity,
             organization_id=data.organization_id,
             memory_id=data.memory_id,
             expected_version=data.expected_version,
+            source_request_id=request_id,
+            request_id=request_id,
         )
         return _memory_view(memory)
 
