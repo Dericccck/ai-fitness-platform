@@ -6,6 +6,7 @@ import com.shuyiwa.fitness.booking.api.BookingCancelRequest;
 import com.shuyiwa.fitness.booking.api.BookingCancelledView;
 import com.shuyiwa.fitness.booking.api.BookingCreateRequest;
 import com.shuyiwa.fitness.booking.api.BookingRescheduleRequest;
+import com.shuyiwa.fitness.booking.config.BookingDatabaseSchema;
 import com.shuyiwa.fitness.booking.security.BookingActor;
 import com.shuyiwa.fitness.booking.security.BookingConfirmation;
 import com.shuyiwa.fitness.booking.service.BookingService;
@@ -14,7 +15,6 @@ import org.junit.Test;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.jdbc.datasource.DataSourceTransactionManager;
 import org.springframework.jdbc.datasource.DriverManagerDataSource;
-import org.springframework.jdbc.datasource.init.ResourceDatabasePopulator;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
@@ -167,6 +167,8 @@ public class BookingRepositoryIntegrationTest {
         private final String organizationId = "it-org-" + suffix;
         private final String studentId = "it-student-" + suffix;
         private final String coachId = "it-coach-" + suffix;
+        private final String studentPhone = "138" + suffix;
+        private final String coachPhone = "139" + suffix;
         private final String courseId = "it-course-" + suffix;
         private final String contractId = "it-contract-" + suffix;
         private final String relationId = "it-relation-" + suffix;
@@ -176,15 +178,21 @@ public class BookingRepositoryIntegrationTest {
                 required("BOOKING_IT_DB_PASSWORD"));
 
         private void createSchema(JdbcTemplate jdbc) {
-            ResourceDatabasePopulator populator = new ResourceDatabasePopulator();
-            populator.addScript(new org.springframework.core.io.ClassPathResource(
-                    "db/migration/V20260815_001__create_booking_agent_tables.sql"));
-            populator.addScript(new org.springframework.core.io.ClassPathResource(
-                    "db/migration/V20260815_002__extend_booking_outbox.sql"));
-            populator.execute(dataSource);
+            BookingDatabaseSchema.initialize(dataSource, jdbc);
         }
 
         private void insertBusinessFacts(JdbcTemplate jdbc) {
+            // 旧业务表存在真实外键，测试夹具必须按“用户 -> 组织 -> 课程/关系 -> 合同”的顺序造数。
+            // 手机号使用随机后缀，避免和本地已有账号的唯一索引冲突；连接 URL 已显式指定 UTF-8，
+            // 这里的中文课程名会作为一次真实的中文写入链路参与验证。
+            jdbc.update("INSERT INTO login_user (id, name, phone, daily_votes, enabled, version) "
+                            + "VALUES (?, ?, ?, 0, 1, 0)",
+                    studentId, "集成测试学员-" + suffix, studentPhone);
+            jdbc.update("INSERT INTO login_user (id, name, phone, daily_votes, enabled, version) "
+                            + "VALUES (?, ?, ?, 0, 1, 0)",
+                    coachId, "集成测试教练-" + suffix, coachPhone);
+            jdbc.update("INSERT INTO organization (id, name, priority, version) VALUES (?, ?, 0, 0)",
+                    organizationId, "集成测试门店-" + suffix);
             jdbc.update("INSERT INTO course (id, name, status, organization_id, create_time) "
                             + "VALUES (?, ?, 1, ?, CURRENT_TIMESTAMP)",
                     courseId, "集成测试力量训练", organizationId);
@@ -277,6 +285,8 @@ public class BookingRepositoryIntegrationTest {
             jdbc.update("DELETE FROM user_and_coach WHERE id = ?", relationId);
             jdbc.update("DELETE FROM login_user_authority WHERE id = ?", authorityId);
             jdbc.update("DELETE FROM course WHERE id = ?", courseId);
+            jdbc.update("DELETE FROM organization WHERE id = ?", organizationId);
+            jdbc.update("DELETE FROM login_user WHERE id IN (?, ?)", studentId, coachId);
         }
     }
 
