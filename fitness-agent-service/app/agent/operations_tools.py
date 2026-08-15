@@ -37,12 +37,6 @@ _METRICS = Literal[
 _TIME_BUCKETS = Literal["NONE", "DAY", "WEEK"]
 _COMPARISONS = Literal["NONE", "PREVIOUS_PERIOD"]
 _BUSINESS_ZONE = ZoneInfo("Asia/Shanghai")
-_BUCKET_METRICS = frozenset(
-    {"APPOINTMENT_COUNT", "COURSE_APPOINTMENT_COUNT", "COACH_APPOINTMENT_COUNT"}
-)
-_COMPARISON_METRICS = frozenset(
-    {"APPOINTMENT_COUNT", "COURSE_APPOINTMENT_COUNT", "COACH_APPOINTMENT_COUNT"}
-)
 
 
 @dataclass(frozen=True)
@@ -66,13 +60,109 @@ class OperationsQueryPolicyDecision:
     message: str
 
 
-_METRIC_LABELS = {
-    "APPOINTMENT_COUNT": "预约总量",
-    "APPOINTMENT_STATUS_BREAKDOWN": "预约状态分布",
-    "COURSE_APPOINTMENT_COUNT": "课程预约量",
-    "COACH_APPOINTMENT_COUNT": "教练预约量",
-    "REMAINING_CLASS_HOURS": "课程剩余课时",
+@dataclass(frozen=True)
+class OperationsMetricDefinition:
+    """固定经营指标的业务口径和可用能力。"""
+
+    metric: _METRICS
+    label: str
+    description: str
+    dimension_description: str
+    supported_buckets: frozenset[_TIME_BUCKETS]
+    supports_previous_period: bool
+
+
+# 这是 Agent、Gateway 和前端可共享的受控口径目录。新增指标必须同时补充数据范围、
+# 维度含义和能力边界，不能只在自然语言解析器里增加一个关键词。
+OPERATIONS_METRIC_CATALOG: tuple[OperationsMetricDefinition, ...] = (
+    OperationsMetricDefinition(
+        "APPOINTMENT_COUNT",
+        "预约总量",
+        "指定机构和时间范围内的预约记录总数。",
+        "总量维度，不返回预约明细。",
+        frozenset({"NONE", "DAY", "WEEK"}),
+        True,
+    ),
+    OperationsMetricDefinition(
+        "APPOINTMENT_STATUS_BREAKDOWN",
+        "预约状态分布",
+        "按预约状态统计数量，用于观察待确认、成功、完成和取消等状态构成。",
+        "预约状态编码和脱敏后的状态名称。",
+        frozenset({"NONE"}),
+        False,
+    ),
+    OperationsMetricDefinition(
+        "COURSE_APPOINTMENT_COUNT",
+        "课程预约量",
+        "按课程统计有课程 ID 的预约数量，用于观察课程使用规模。",
+        "课程 ID 和课程名称，不返回学员明细。",
+        frozenset({"NONE", "DAY", "WEEK"}),
+        True,
+    ),
+    OperationsMetricDefinition(
+        "COACH_APPOINTMENT_COUNT",
+        "教练预约量",
+        "按教练统计有教练 ID 的预约数量，用于观察教练预约工作量。",
+        "教练 ID 及其展示标签，不返回学员明细。",
+        frozenset({"NONE", "DAY", "WEEK"}),
+        True,
+    ),
+    OperationsMetricDefinition(
+        "REMAINING_CLASS_HOURS",
+        "课程剩余课时",
+        "按课程汇总当前合同中的剩余课时。",
+        "课程 ID 和课程名称，不返回合同明细。",
+        frozenset({"NONE"}),
+        False,
+    ),
+)
+_METRIC_CATALOG_BY_ID: dict[str, OperationsMetricDefinition] = {
+    item.metric: item for item in OPERATIONS_METRIC_CATALOG
 }
+
+
+def get_operations_metric_definition(metric: str) -> OperationsMetricDefinition | None:
+    """按稳定指标 ID 获取业务口径定义。"""
+
+    return _METRIC_CATALOG_BY_ID.get(metric)
+
+
+def _metric_definition_view(metric: str) -> dict[str, object]:
+    """生成可交给模型和管理端的非敏感指标口径说明。"""
+
+    definition = get_operations_metric_definition(metric)
+    if definition is None:
+        return {
+            "id": metric,
+            "label": metric,
+            "description": "未识别的指标定义，禁止据此生成业务解释。",
+            "dimension_description": "未知",
+            "supported_buckets": [],
+            "supports_previous_period": False,
+        }
+    return {
+        "id": definition.metric,
+        "label": definition.label,
+        "description": definition.description,
+        "dimension_description": definition.dimension_description,
+        "supported_buckets": sorted(definition.supported_buckets),
+        "supports_previous_period": definition.supports_previous_period,
+    }
+
+
+def operations_metric_catalog_prompt() -> str:
+    """生成不含数据的指标目录提示，用于歧义问题澄清。"""
+
+    entries = "；".join(
+        f"{item.label}（{item.metric}）：{item.description.rstrip('。')}"
+        for item in OPERATIONS_METRIC_CATALOG
+    )
+    return (
+        "当前可查询的固定经营指标包括："
+        + entries
+        + "。预约总量、课程预约量和教练预约量支持按日/周趋势及上一等长周期环比；"
+        + "预约状态分布和课程剩余课时当前只支持汇总查询；同比暂不自动执行。"
+    )
 
 
 def build_operations_report(result: GatewayOperationsMetric) -> dict[str, object]:
@@ -97,9 +187,11 @@ def build_operations_report(result: GatewayOperationsMetric) -> dict[str, object
     elif top_share is not None and len(rows) > 1 and top_share >= 80:
         warnings.append(f"结果集中度较高，第一维度占汇总值 {top_share:.2f}%。")
 
+    metric_definition = get_operations_metric_definition(result.metric)
     report: dict[str, object] = {
         "metric": result.metric,
-        "metric_label": _METRIC_LABELS.get(result.metric, result.metric),
+        "metric_label": metric_definition.label if metric_definition is not None else result.metric,
+        "metric_definition": _metric_definition_view(result.metric),
         "bucket": result.bucket,
         "period": {"from": result.from_date.isoformat(), "to": result.to_date.isoformat()},
         "row_count": len(rows),
@@ -291,14 +383,17 @@ def operations_prompt_hint(user_message: str) -> str:
     hint = parse_operations_intent(user_message)
     if hint is None:
         return (
-            "经营问题暂未安全映射到唯一指标。请先向用户澄清指标和时间范围；"
+            "经营问题暂未安全映射到唯一指标。"
+            + operations_metric_catalog_prompt()
+            + "请先向用户澄清一个明确的指标和时间范围；"
             "不要调用经营指标工具，也不要生成或执行任意 SQL。"
         )
     bucket_note = ""
     if hint.bucket != "NONE":
-        if hint.metric not in _BUCKET_METRICS:
+        definition = get_operations_metric_definition(hint.metric)
+        if definition is None or hint.bucket not in definition.supported_buckets:
             return (
-                "当前仅支持预约、课程预约量和教练预约量按日或按周查询趋势。请先向用户澄清，"
+                operations_metric_catalog_prompt() + "请先向用户澄清，"
                 "不要调用不支持时间桶的经营指标工具，也不要生成任意 SQL。"
             )
         bucket_note = "，时间分组=" + hint.bucket
@@ -392,14 +487,13 @@ class OperationsMetricToolInput(BaseModel):
             raise ValueError("from must be earlier than or equal to to")
         if self.from_date and self.to_date and (self.to_date - self.from_date).days > 92:
             raise ValueError("operations time range must not exceed 92 days")
-        if self.bucket != "NONE" and self.metric not in _BUCKET_METRICS:
-            raise ValueError(
-                "DAY/WEEK buckets currently support appointment, course and coach metrics"
-            )
-        if self.comparison != "NONE" and self.metric not in _COMPARISON_METRICS:
-            raise ValueError(
-                "PREVIOUS_PERIOD comparison currently supports appointment, course and coach metrics"
-            )
+        definition = get_operations_metric_definition(self.metric)
+        if definition is None:
+            raise ValueError("unsupported operations metric definition")
+        if self.bucket not in definition.supported_buckets:
+            raise ValueError(f"metric {self.metric} does not support bucket {self.bucket}")
+        if self.comparison != "NONE" and not definition.supports_previous_period:
+            raise ValueError(f"metric {self.metric} does not support PREVIOUS_PERIOD comparison")
         return self
 
 

@@ -2,6 +2,7 @@ from datetime import date
 
 from app.agent.operations_tools import (
     OperationsMetricToolInput,
+    operations_metric_catalog_prompt,
     operations_prompt_hint,
     parse_operations_intent,
     validate_operations_query_policy,
@@ -70,6 +71,15 @@ def test_mixed_day_and_week_trend_requires_clarification() -> None:
 def test_ambiguous_metric_requires_clarification() -> None:
     assert parse_operations_intent("查看本月经营情况", today=date(2026, 8, 15)) is None
     assert "先向用户澄清" in operations_prompt_hint("查看本月经营情况")
+
+
+def test_ambiguous_metric_clarification_lists_fixed_catalog() -> None:
+    prompt = operations_prompt_hint("查看本月经营情况")
+
+    assert "预约总量（APPOINTMENT_COUNT）" in prompt
+    assert "课程预约量（COURSE_APPOINTMENT_COUNT）" in prompt
+    assert "同比暂不自动执行" in prompt
+    assert operations_metric_catalog_prompt() in prompt
 
 
 def test_cross_metric_request_is_not_guessed() -> None:

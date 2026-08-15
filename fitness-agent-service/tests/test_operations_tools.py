@@ -8,6 +8,7 @@ from app.agent.operations_tools import (
     build_operations_report,
     build_operations_tool_definitions,
     build_operations_tool_result,
+    get_operations_metric_definition,
 )
 from app.agent.tool_registry import ToolContext, ToolExecutionError, ToolRegistry
 from app.infrastructure.gateway_client import (
@@ -94,6 +95,34 @@ def test_operations_report_calculates_summary_without_inventing_trend() -> None:
         {"label": "已取消", "value": 2, "share_percent": 20.0},
     ]
     assert report["warnings"] == ["结果集中度较高，第一维度占汇总值 80.00%。"]
+
+
+def test_operations_report_includes_metric_definition() -> None:
+    definition = get_operations_metric_definition("COURSE_APPOINTMENT_COUNT")
+    assert definition is not None
+    assert definition.supports_previous_period is True
+
+    result = GatewayOperationsMetric(
+        metric="COURSE_APPOINTMENT_COUNT",
+        organizationId="org-1",
+        **{
+            "from": date(2026, 8, 1),
+            "to": date(2026, 8, 15),
+            "rows": [],
+            "generatedAt": "2026-08-15T12:00:00Z",
+        },
+    )
+
+    report = build_operations_report(result)
+
+    assert report["metric_definition"] == {
+        "id": "COURSE_APPOINTMENT_COUNT",
+        "label": "课程预约量",
+        "description": "按课程统计有课程 ID 的预约数量，用于观察课程使用规模。",
+        "dimension_description": "课程 ID 和课程名称，不返回学员明细。",
+        "supported_buckets": ["DAY", "NONE", "WEEK"],
+        "supports_previous_period": True,
+    }
 
 
 def test_operations_report_calculates_qualified_daily_trend() -> None:

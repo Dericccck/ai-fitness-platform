@@ -336,6 +336,10 @@ Operations 查询前策略评测样例位于 `evals/operations_policy_smoke.json
 指标、日期、时间桶、环比口径和组织范围一致；同比、歧义问题、指标漂移、日期扩大和组织越权会在访问 Java Gateway
 之前被拦截。策略校验只提供 fail-closed 的前置保护，最终权限仍由 Java Gateway 根据签名 AgentContext 决定。
 
+固定指标目录由 `OPERATIONS_METRIC_CATALOG` 集中维护。每个指标定义都包含稳定 ID、中文名称、业务口径、维度含义、
+支持的时间桶和是否支持上一等长周期环比；报表的 `metric_definition` 会返回这些非敏感元数据，帮助模型和管理员正确
+解释结果。新增经营指标时必须先补齐目录定义、Gateway 固定 SQL、权限/审计和评测，不能只增加一个自然语言关键词。
+
 短期会话摘要的确定性安全评测样例位于 `fitness-agent-service/evals/session_summary_samples.json`，阈值位于
 `fitness-agent-service/evals/session_summary_thresholds.json`。执行 `make agent-session-summary-eval` 会检查摘要 JSON、
 非空、长度、必需上下文、凭证脱敏、禁止越权表达和通过率；禁止表达用于拦截动态事实、权限、医疗诊断和训练计划状态
