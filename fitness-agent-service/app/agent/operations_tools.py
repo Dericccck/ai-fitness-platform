@@ -31,6 +31,7 @@ _METRICS = Literal[
     "REMAINING_CLASS_HOURS",
 ]
 _TIME_BUCKETS = Literal["NONE", "DAY", "WEEK"]
+_COMPARISONS = Literal["NONE", "PREVIOUS_PERIOD"]
 _BUSINESS_ZONE = ZoneInfo("Asia/Shanghai")
 
 
@@ -43,6 +44,7 @@ class OperationsQueryHint:
     to_date: date
     matched_terms: tuple[str, ...]
     bucket: _TIME_BUCKETS
+    comparison: _COMPARISONS
 
 
 _METRIC_LABELS = {
@@ -169,6 +171,63 @@ def build_operations_tool_result(result: GatewayOperationsMetric) -> dict[str, o
     }
 
 
+def build_operations_comparison_report(
+    current: GatewayOperationsMetric,
+    previous: GatewayOperationsMetric,
+) -> dict[str, object]:
+    """比较当前周期与上一等长周期，只根据程序计算的汇总值生成环比摘要。"""
+
+    current_total = sum(row.value for row in current.rows)
+    previous_total = sum(row.value for row in previous.rows)
+    delta = current_total - previous_total
+    change_percent = (
+        round(delta / previous_total * 100, 2) if previous_total else None
+    )
+    direction = "UP" if delta > 0 else "DOWN" if delta < 0 else "FLAT"
+    return {
+        "type": "PREVIOUS_PERIOD",
+        "current_period": {
+            "from": current.from_date.isoformat(),
+            "to": current.to_date.isoformat(),
+        },
+        "previous_period": {
+            "from": previous.from_date.isoformat(),
+            "to": previous.to_date.isoformat(),
+        },
+        "current_total": current_total,
+        "previous_total": previous_total,
+        "delta": delta,
+        "change_percent": change_percent,
+        "direction": direction,
+        "note": (
+            "变化百分比仅在上一周期非 0 时计算；上一周期为 0 时只报告差值，"
+            "不伪造百分比。"
+        ),
+    }
+
+
+def _previous_period_bounds(result: GatewayOperationsMetric) -> tuple[date, date]:
+    """按当前查询的自然日长度计算上一等长周期。"""
+
+    period_days = (result.to_date - result.from_date).days + 1
+    previous_to = result.from_date - timedelta(days=1)
+    previous_from = previous_to - timedelta(days=period_days - 1)
+    return previous_from, previous_to
+
+
+def build_operations_comparison_tool_result(
+    current: GatewayOperationsMetric,
+    previous: GatewayOperationsMetric,
+) -> dict[str, object]:
+    """保留两个周期的真实聚合结果，并附加确定性的环比摘要。"""
+
+    return {
+        "current": build_operations_tool_result(current),
+        "previous": build_operations_tool_result(previous),
+        "comparison": build_operations_comparison_report(current, previous),
+    }
+
+
 def parse_operations_intent(
     user_message: str,
     *,
@@ -213,7 +272,10 @@ def parse_operations_intent(
     bucket = _parse_time_bucket(text)
     if bucket is None:
         return None
-    return OperationsQueryHint(metric, start, end, matched_terms, bucket)
+    comparison = _parse_comparison(text)
+    if comparison is None:
+        return None
+    return OperationsQueryHint(metric, start, end, matched_terms, bucket, comparison)
 
 
 def operations_prompt_hint(user_message: str) -> str:
@@ -233,11 +295,13 @@ def operations_prompt_hint(user_message: str) -> str:
                 "不要调用不支持时间桶的经营指标工具，也不要生成任意 SQL。"
             )
         bucket_note = "，时间分组=" + hint.bucket
+    comparison_note = "，对比上一等长周期" if hint.comparison != "NONE" else ""
     return (
         "经营查询安全提示：可优先使用固定指标工具，指标=" + hint.metric
         + "，开始日期=" + hint.from_date.isoformat()
         + "，结束日期=" + hint.to_date.isoformat()
         + bucket_note
+        + comparison_note
         + "。该提示不代表已授权，不能改写为 SQL；工具参数仍须严格使用指标白名单。"
         + "工具返回的 report 是程序根据真实聚合结果计算的摘要；回答时优先引用 report，"
         + "只能陈述返回数据，不得把集中度提示说成因果结论。当前没有日/周时间桶时，"
@@ -262,12 +326,12 @@ def _parse_date_range(text: str, today: date) -> tuple[date, date]:
             return today - timedelta(days=days - 1), today
     if "本周" in text:
         return today - timedelta(days=today.weekday()), today
+    if "本月" in text:
+        return today.replace(day=1), today
     if "上月" in text:
         first_this_month = today.replace(day=1)
         last_previous_month = first_this_month - timedelta(days=1)
         return last_previous_month.replace(day=1), last_previous_month
-    if "本月" in text:
-        return today.replace(day=1), today
     return today - timedelta(days=29), today
 
 
@@ -287,6 +351,18 @@ def _parse_time_bucket(text: str) -> _TIME_BUCKETS | None:
     return "NONE"
 
 
+def _parse_comparison(text: str) -> _COMPARISONS | None:
+    """只识别上一等长周期环比；同比和任意对比周期暂不自动猜测。"""
+
+    if "同比" in text:
+        return None
+    if any(term in text for term in ("环比", "较上期", "与上期", "和上期", "对比上期")):
+        return "PREVIOUS_PERIOD"
+    if any(term in text for term in ("和上月比", "与上月比", "相比上月", "较上月")):
+        return "PREVIOUS_PERIOD"
+    return "NONE"
+
+
 class OperationsMetricToolInput(BaseModel):
     """固定指标查询参数；不允许出现 SQL、表名或任意字段名。"""
 
@@ -298,6 +374,7 @@ class OperationsMetricToolInput(BaseModel):
     to_date: date | None = Field(default=None, alias="to")
     limit: int = Field(default=20, ge=1, le=100)
     bucket: _TIME_BUCKETS = "NONE"
+    comparison: _COMPARISONS = "NONE"
 
     @model_validator(mode="after")
     def validate_range(self) -> OperationsMetricToolInput:
@@ -307,44 +384,63 @@ class OperationsMetricToolInput(BaseModel):
             raise ValueError("operations time range must not exceed 92 days")
         if self.bucket != "NONE" and self.metric != "APPOINTMENT_COUNT":
             raise ValueError("DAY/WEEK buckets currently support APPOINTMENT_COUNT only")
+        if self.comparison != "NONE" and self.metric != "APPOINTMENT_COUNT":
+            raise ValueError("PREVIOUS_PERIOD comparison currently supports APPOINTMENT_COUNT only")
         return self
 
 
 def build_operations_tool_definitions(gateway: GatewayClient) -> tuple[ToolDefinition, ...]:
     async def query_metric(raw: BaseModel, context: ToolContext) -> object:
         data = cast(OperationsMetricToolInput, raw)
-        try:
-            result = await gateway.query_operations_metric(
-                context.gateway_context,
-                data.organization_id,
-                data.metric,
-                from_date=data.from_date,
-                to_date=data.to_date,
-                limit=data.limit,
-                bucket=data.bucket,
-            )
-            # 经营查询审计只保留“谁在什么范围查询了哪个固定指标以及结果规模”，
-            # 不记录 SQL、Prompt、明细数据或模型原始输出，避免日志变成第二个数据出口。
-            _logger.info(
-                "operations_query_completed",
-                metric=data.metric,
-                organization_id=data.organization_id,
-                from_date=data.from_date.isoformat() if data.from_date else None,
-                to_date=data.to_date.isoformat() if data.to_date else None,
-                row_count=len(result.rows),
-                request_id=context.gateway_context.request_id,
-                trace_id=context.gateway_context.trace_id,
-            )
+        async def query_period(
+            *, from_date: date | None, to_date: date | None, role: str
+        ) -> GatewayOperationsMetric:
+            try:
+                result = await gateway.query_operations_metric(
+                    context.gateway_context,
+                    data.organization_id,
+                    data.metric,
+                    from_date=from_date,
+                    to_date=to_date,
+                    limit=data.limit,
+                    bucket=data.bucket,
+                )
+                # 经营查询审计只保留“谁在什么范围查询了哪个固定指标以及结果规模”，
+                # 不记录 SQL、Prompt、明细数据或模型原始输出，避免日志变成第二个数据出口。
+                _logger.info(
+                    "operations_query_completed",
+                    metric=data.metric,
+                    comparison_role=role,
+                    organization_id=data.organization_id,
+                    from_date=result.from_date.isoformat(),
+                    to_date=result.to_date.isoformat(),
+                    bucket=data.bucket,
+                    row_count=len(result.rows),
+                    request_id=context.gateway_context.request_id,
+                    trace_id=context.gateway_context.trace_id,
+                )
+                return result
+            except Exception:
+                _logger.warning(
+                    "operations_query_failed",
+                    metric=data.metric,
+                    comparison_role=role,
+                    organization_id=data.organization_id,
+                    request_id=context.gateway_context.request_id,
+                    trace_id=context.gateway_context.trace_id,
+                )
+                raise
+
+        result = await query_period(
+            from_date=data.from_date, to_date=data.to_date, role="CURRENT"
+        )
+        if data.comparison == "NONE":
             return build_operations_tool_result(result)
-        except Exception:
-            _logger.warning(
-                "operations_query_failed",
-                metric=data.metric,
-                organization_id=data.organization_id,
-                request_id=context.gateway_context.request_id,
-                trace_id=context.gateway_context.trace_id,
-            )
-            raise
+        previous_from, previous_to = _previous_period_bounds(result)
+        previous = await query_period(
+            from_date=previous_from, to_date=previous_to, role="PREVIOUS_PERIOD"
+        )
+        return build_operations_comparison_tool_result(result, previous)
 
     return (
         ToolDefinition(

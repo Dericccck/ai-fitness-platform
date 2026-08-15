@@ -4,10 +4,17 @@ import pytest
 
 from app.agent.operations_tools import (
     OperationsMetricToolInput,
+    build_operations_comparison_report,
     build_operations_report,
+    build_operations_tool_definitions,
     build_operations_tool_result,
 )
-from app.infrastructure.gateway_client import GatewayOperationsMetric, GatewayOperationsMetricRow
+from app.agent.tool_registry import ToolContext, ToolRegistry
+from app.infrastructure.gateway_client import (
+    GatewayOperationsMetric,
+    GatewayOperationsMetricRow,
+    GatewayRequestContext,
+)
 
 
 def test_operations_input_only_accepts_metric_catalog() -> None:
@@ -38,6 +45,15 @@ def test_operations_input_rejects_long_range() -> None:
             metric="APPOINTMENT_COUNT",
             from_date=date(2026, 1, 1),
             to_date=date(2026, 4, 10),
+        )
+
+
+def test_operations_input_rejects_comparison_for_non_total_metric() -> None:
+    with pytest.raises(ValueError):
+        OperationsMetricToolInput(
+            organization_id="org-1",
+            metric="COURSE_APPOINTMENT_COUNT",
+            comparison="PREVIOUS_PERIOD",
         )
 
 
@@ -150,6 +166,120 @@ def test_operations_report_marks_empty_result_as_non_conclusive() -> None:
     assert report["total_value"] == 0
     assert report["top_dimension"] is None
     assert report["warnings"] == ["该时间范围没有可统计的有效记录，不能据此判断业务异常。"]
+
+
+def test_operations_comparison_report_calculates_previous_period_delta() -> None:
+    current = GatewayOperationsMetric(
+        metric="APPOINTMENT_COUNT",
+        organizationId="org-1",
+        **{
+            "from": date(2026, 8, 1),
+            "to": date(2026, 8, 15),
+            "rows": [GatewayOperationsMetricRow(dimension="TOTAL", label="预约总量", value=120)],
+            "generatedAt": "2026-08-15T12:00:00Z",
+        },
+    )
+    previous = GatewayOperationsMetric(
+        metric="APPOINTMENT_COUNT",
+        organizationId="org-1",
+        **{
+            "from": date(2026, 7, 17),
+            "to": date(2026, 7, 31),
+            "rows": [GatewayOperationsMetricRow(dimension="TOTAL", label="预约总量", value=100)],
+            "generatedAt": "2026-08-15T12:00:00Z",
+        },
+    )
+
+    report = build_operations_comparison_report(current, previous)
+
+    assert report["current_total"] == 120
+    assert report["previous_total"] == 100
+    assert report["delta"] == 20
+    assert report["change_percent"] == 20.0
+    assert report["direction"] == "UP"
+
+
+def test_operations_comparison_does_not_divide_by_zero() -> None:
+    current = GatewayOperationsMetric(
+        metric="APPOINTMENT_COUNT",
+        organizationId="org-1",
+        **{
+            "from": date(2026, 8, 1),
+            "to": date(2026, 8, 15),
+            "rows": [GatewayOperationsMetricRow(dimension="TOTAL", label="预约总量", value=5)],
+            "generatedAt": "2026-08-15T12:00:00Z",
+        },
+    )
+    previous = GatewayOperationsMetric(
+        metric="APPOINTMENT_COUNT",
+        organizationId="org-1",
+        **{
+            "from": date(2026, 7, 17),
+            "to": date(2026, 7, 31),
+            "rows": [],
+            "generatedAt": "2026-08-15T12:00:00Z",
+        },
+    )
+
+    report = build_operations_comparison_report(current, previous)
+
+    assert report["delta"] == 5
+    assert report["change_percent"] is None
+
+
+class FakeOperationsGateway:
+    def __init__(self) -> None:
+        self.calls: list[tuple[date | None, date | None]] = []
+
+    async def query_operations_metric(
+        self, context: GatewayRequestContext, organization_id: str, metric: str, **kwargs: object
+    ) -> GatewayOperationsMetric:
+        from_date = kwargs.get("from_date")
+        to_date = kwargs.get("to_date")
+        assert isinstance(from_date, date)
+        assert isinstance(to_date, date)
+        self.calls.append((from_date, to_date))
+        value = 120 if from_date == date(2026, 8, 1) else 100
+        return GatewayOperationsMetric(
+            metric=metric,
+            organizationId=organization_id,
+            **{
+                "from": from_date,
+                "to": to_date,
+                "rows": [GatewayOperationsMetricRow(dimension="TOTAL", label="预约总量", value=value)],
+                "generatedAt": "2026-08-15T12:00:00Z",
+            },
+        )
+
+
+@pytest.mark.asyncio
+async def test_operations_tool_queries_current_and_previous_period() -> None:
+    gateway = FakeOperationsGateway()
+    registry = ToolRegistry()
+    for definition in build_operations_tool_definitions(gateway):  # type: ignore[arg-type]
+        registry.register(definition)
+
+    result = await registry.invoke(
+        "fitness.operations.metric.query.v1",
+        {
+            "organization_id": "org-1",
+            "metric": "APPOINTMENT_COUNT",
+            "from": "2026-08-01",
+            "to": "2026-08-15",
+            "comparison": "PREVIOUS_PERIOD",
+        },
+        ToolContext(
+            gateway_context=GatewayRequestContext(
+                signed_context="signed-context", request_id="request-1", trace_id="trace-1"
+            )
+        ),
+    )
+
+    assert gateway.calls == [
+        (date(2026, 8, 1), date(2026, 8, 15)),
+        (date(2026, 7, 17), date(2026, 7, 31)),
+    ]
+    assert result["comparison"]["change_percent"] == 20.0
 
 
 def test_operations_tool_result_keeps_data_and_adds_report() -> None:

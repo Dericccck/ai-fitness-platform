@@ -34,6 +34,22 @@ def test_parses_daily_appointment_trend() -> None:
     assert hint.bucket == "DAY"
 
 
+def test_parses_previous_period_comparison() -> None:
+    hint = parse_operations_intent(
+        "查看本月预约量，和上月比变化多少", today=date(2026, 8, 15)
+    )
+
+    assert hint is not None
+    assert hint.metric == "APPOINTMENT_COUNT"
+    assert hint.comparison == "PREVIOUS_PERIOD"
+    assert hint.from_date == date(2026, 8, 1)
+    assert hint.to_date == date(2026, 8, 15)
+
+
+def test_year_over_year_requires_clarification() -> None:
+    assert parse_operations_intent("预约量同比变化", today=date(2026, 8, 15)) is None
+
+
 def test_mixed_day_and_week_trend_requires_clarification() -> None:
     assert parse_operations_intent("预约量按日和按周趋势", today=date(2026, 8, 15)) is None
 
