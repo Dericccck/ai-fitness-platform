@@ -108,6 +108,27 @@ async def test_platform_admin_can_query_operations_audits() -> None:
     assert repository.filters["offset"] == 10
 
 
+async def test_admin_can_load_metric_catalog_without_querying_business_data() -> None:
+    app, repository = build_app(frozenset({"ADMIN"}))
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/admin/operations/metric-catalog",
+            headers={"X-Agent-Context": "signed-context"},
+        )
+
+    assert response.status_code == 200
+    items = response.json()["items"]
+    assert len(items) == 5
+    course = next(item for item in items if item["id"] == "COURSE_APPOINTMENT_COUNT")
+    assert course["label"] == "课程预约量"
+    assert course["supported_buckets"] == ["DAY", "NONE", "WEEK"]
+    assert course["supports_previous_period"] is True
+    assert repository.filters == {}
+    assert "organization_id" not in course
+    assert "sql" not in course
+
+
 async def test_organization_admin_is_restricted_to_signed_organizations() -> None:
     app, repository = build_app(frozenset({"ORGANIZATION_ADMIN"}))
     transport = ASGITransport(app=app)
@@ -133,6 +154,18 @@ async def test_student_cannot_query_operations_audits() -> None:
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get(
             "/api/v1/admin/operations/query-audits",
+            headers={"X-Agent-Context": "signed-context"},
+        )
+
+    assert response.status_code == 403
+
+
+async def test_student_cannot_load_metric_catalog() -> None:
+    app, _ = build_app(frozenset({"STUDENT"}))
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/admin/operations/metric-catalog",
             headers={"X-Agent-Context": "signed-context"},
         )
 

@@ -9,7 +9,11 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
 from app.agent.operations_audit import OperationsAuditRecord, OperationsAuditRepository
-from app.agent.operations_tools import get_operations_metric_definition
+from app.agent.operations_tools import (
+    OPERATIONS_METRIC_CATALOG,
+    OperationsMetricDefinition,
+    get_operations_metric_definition,
+)
 from app.infrastructure.agent_context import AgentContextVerificationError, AgentIdentity
 
 router = APIRouter(prefix="/api/v1/admin/operations", tags=["admin-operations"])
@@ -63,6 +67,32 @@ class OperationsAuditPageResponse(BaseModel):
     limit: int
     offset: int
     has_more: bool
+
+
+class OperationsMetricCatalogResponse(BaseModel):
+    """管理员前端使用的固定经营指标目录，不包含任何业务数据。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: tuple[OperationsMetricDefinitionResponse, ...]
+
+
+@router.get("/metric-catalog", response_model=OperationsMetricCatalogResponse)
+async def get_operations_metric_catalog(
+    request: Request,
+    x_agent_context: str | None = Header(default=None),
+) -> OperationsMetricCatalogResponse:
+    """返回管理员可配置的固定经营指标及其能力边界。
+
+    指标目录是代码维护的公开能力元数据，不查询组织业务数据；仍要求管理员签名身份，
+    让普通用户不能通过管理员接口枚举后台能力。组织范围不参与过滤，因为目录本身不
+    包含任何组织专属数据，真正的组织权限仍在查询时由 AgentContext 和 Gateway 校验。
+    """
+
+    _verify_operations_admin(request, x_agent_context)
+    return OperationsMetricCatalogResponse(
+        items=tuple(_to_metric_definition_response(item) for item in OPERATIONS_METRIC_CATALOG)
+    )
 
 
 @router.get("/query-audits", response_model=OperationsAuditPageResponse)
@@ -159,34 +189,15 @@ def _verify_operations_admin(request: Request, token: str | None) -> AgentIdenti
 
 
 def _to_response(record: OperationsAuditRecord) -> OperationsAuditResponse:
-    definition = get_operations_metric_definition(record.metric)
-    if definition is None:
-        # 审计仓储会拦截未知指标；这里保留兼容兜底，避免历史异常数据导致管理员
-        # 无法打开整页记录，同时明确告诉前端该口径不能用于业务解释。
-        metric_definition = OperationsMetricDefinitionResponse(
-            id=record.metric,
-            label=record.metric,
-            description="未识别的历史指标定义，禁止据此生成业务解释。",
-            dimension_description="未知",
-            supported_buckets=(),
-            supports_previous_period=False,
-        )
-    else:
-        metric_definition = OperationsMetricDefinitionResponse(
-            id=definition.metric,
-            label=definition.label,
-            description=definition.description,
-            dimension_description=definition.dimension_description,
-            supported_buckets=tuple(sorted(definition.supported_buckets)),
-            supports_previous_period=definition.supports_previous_period,
-        )
     return OperationsAuditResponse(
         id=record.id,
         subject_user_id=record.subject_user_id,
         actor_roles=record.actor_roles,
         organization_id=record.organization_id,
         metric=record.metric,
-        metric_definition=metric_definition,
+        metric_definition=_to_metric_definition_response(
+            get_operations_metric_definition(record.metric), metric=record.metric
+        ),
         bucket=record.bucket,
         comparison_role=record.comparison_role,
         from_date=record.from_date,
@@ -197,4 +208,31 @@ def _to_response(record: OperationsAuditRecord) -> OperationsAuditResponse:
         request_id=record.request_id,
         trace_id=record.trace_id,
         created_at=record.created_at,
+    )
+
+
+def _to_metric_definition_response(
+    definition: OperationsMetricDefinition | None,
+    *,
+    metric: str | None = None,
+) -> OperationsMetricDefinitionResponse:
+    """把内部目录模型转换成稳定 API 响应，并兼容异常历史指标。"""
+
+    if definition is None:
+        unknown_metric = metric or "UNKNOWN"
+        return OperationsMetricDefinitionResponse(
+            id=unknown_metric,
+            label=unknown_metric,
+            description="未识别的历史指标定义，禁止据此生成业务解释。",
+            dimension_description="未知",
+            supported_buckets=(),
+            supports_previous_period=False,
+        )
+    return OperationsMetricDefinitionResponse(
+        id=definition.metric,
+        label=definition.label,
+        description=definition.description,
+        dimension_description=definition.dimension_description,
+        supported_buckets=tuple(sorted(definition.supported_buckets)),
+        supports_previous_period=definition.supports_previous_period,
     )
