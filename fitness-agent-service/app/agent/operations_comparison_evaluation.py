@@ -25,6 +25,7 @@ class OperationsComparisonEvalCase:
     """一条带有明确当前周期和上一周期期望值的环比评测用例。"""
 
     case_id: str
+    metric: str
     current_from: date
     current_to: date
     previous_from: date
@@ -79,11 +80,13 @@ def evaluate_case(case: OperationsComparisonEvalCase) -> OperationsComparisonEva
 
     try:
         current = _build_metric(
+            metric=case.metric,
             from_date=case.current_from,
             to_date=case.current_to,
             values=case.current_values,
         )
         previous = _build_metric(
+            metric=case.metric,
             from_date=case.previous_from,
             to_date=case.previous_to,
             values=case.previous_values,
@@ -148,6 +151,7 @@ def case_from_mapping(data: dict[str, Any]) -> OperationsComparisonEvalCase:
 
     return OperationsComparisonEvalCase(
         case_id=str(data["case_id"]),
+        metric=str(data.get("metric", "APPOINTMENT_COUNT")),
         current_from=date.fromisoformat(str(data["current_from"])),
         current_to=date.fromisoformat(str(data["current_to"])),
         previous_from=date.fromisoformat(str(data["previous_from"])),
@@ -219,13 +223,13 @@ def main(argv: list[str] | None = None) -> int:
 
 
 def _build_metric(
-    *, from_date: date, to_date: date, values: tuple[int, ...]
+    *, metric: str, from_date: date, to_date: date, values: tuple[int, ...]
 ) -> GatewayOperationsMetric:
     """把黄金样例中的聚合值包装成 Gateway 真实返回模型。"""
 
     return GatewayOperationsMetric.model_validate(
         {
-            "metric": "APPOINTMENT_COUNT",
+            "metric": metric,
             "organizationId": "evaluation-org",
             "from": from_date,
             "to": to_date,

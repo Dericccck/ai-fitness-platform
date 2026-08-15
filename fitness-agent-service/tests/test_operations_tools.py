@@ -48,11 +48,22 @@ def test_operations_input_rejects_long_range() -> None:
         )
 
 
-def test_operations_input_rejects_comparison_for_non_total_metric() -> None:
+def test_operations_input_allows_comparison_for_course_and_coach_metrics() -> None:
+    for metric in ("COURSE_APPOINTMENT_COUNT", "COACH_APPOINTMENT_COUNT"):
+        data = OperationsMetricToolInput(
+            organization_id="org-1",
+            metric=metric,
+            comparison="PREVIOUS_PERIOD",
+        )
+
+        assert data.comparison == "PREVIOUS_PERIOD"
+
+
+def test_operations_input_rejects_comparison_for_non_count_metric() -> None:
     with pytest.raises(ValueError):
         OperationsMetricToolInput(
             organization_id="org-1",
-            metric="COURSE_APPOINTMENT_COUNT",
+            metric="APPOINTMENT_STATUS_BREAKDOWN",
             comparison="PREVIOUS_PERIOD",
         )
 
@@ -348,6 +359,48 @@ async def test_operations_tool_rejects_metric_drift_before_gateway_call() -> Non
         )
 
     assert gateway.calls == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("metric", "metric_label"),
+    [
+        ("COURSE_APPOINTMENT_COUNT", "课程预约量"),
+        ("COACH_APPOINTMENT_COUNT", "教练预约量"),
+    ],
+)
+async def test_operations_tool_queries_course_and_coach_comparison(
+    metric: str, metric_label: str
+) -> None:
+    gateway = FakeOperationsGateway()
+    registry = ToolRegistry()
+    for definition in build_operations_tool_definitions(gateway):  # type: ignore[arg-type]
+        registry.register(definition)
+
+    result = await registry.invoke(
+        "fitness.operations.metric.query.v1",
+        {
+            "organization_id": "org-1",
+            "metric": metric,
+            "from": "2026-08-01",
+            "to": "2026-08-15",
+            "comparison": "PREVIOUS_PERIOD",
+        },
+        ToolContext(
+            gateway_context=GatewayRequestContext(
+                signed_context="signed-context",
+                request_id="request-comparison",
+                trace_id="trace-comparison",
+            ),
+            user_message=f"查看 2026-08-01 到 2026-08-15 的{metric_label}和上期相比变化",
+        ),
+    )
+
+    assert gateway.calls == [
+        (date(2026, 8, 1), date(2026, 8, 15)),
+        (date(2026, 7, 17), date(2026, 7, 31)),
+    ]
+    assert result["comparison"]["change_percent"] == 20.0
 
 
 @pytest.mark.asyncio

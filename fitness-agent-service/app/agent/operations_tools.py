@@ -40,6 +40,9 @@ _BUSINESS_ZONE = ZoneInfo("Asia/Shanghai")
 _BUCKET_METRICS = frozenset(
     {"APPOINTMENT_COUNT", "COURSE_APPOINTMENT_COUNT", "COACH_APPOINTMENT_COUNT"}
 )
+_COMPARISON_METRICS = frozenset(
+    {"APPOINTMENT_COUNT", "COURSE_APPOINTMENT_COUNT", "COACH_APPOINTMENT_COUNT"}
+)
 
 
 @dataclass(frozen=True)
@@ -393,8 +396,10 @@ class OperationsMetricToolInput(BaseModel):
             raise ValueError(
                 "DAY/WEEK buckets currently support appointment, course and coach metrics"
             )
-        if self.comparison != "NONE" and self.metric != "APPOINTMENT_COUNT":
-            raise ValueError("PREVIOUS_PERIOD comparison currently supports APPOINTMENT_COUNT only")
+        if self.comparison != "NONE" and self.metric not in _COMPARISON_METRICS:
+            raise ValueError(
+                "PREVIOUS_PERIOD comparison currently supports appointment, course and coach metrics"
+            )
         return self
 
 

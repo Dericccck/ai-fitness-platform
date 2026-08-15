@@ -327,7 +327,8 @@ Operations 趋势摘要的离线评测样例位于 `evals/operations_trend_smoke
 
 Operations 环比摘要的离线评测样例位于 `evals/operations_comparison_smoke.json`，阈值位于
 `evals/operations_comparison_thresholds.json`。执行 `make agent-operations-comparison-eval` 会验证当前周期与上一等长
-周期的总量、差值、方向、百分比和跨月/跨年的日期边界，并覆盖上一周期为 0、两周期都为 0 和当前周期为 0 的除零场景。
+周期的总量、差值、方向、百分比和跨月/跨年的日期边界，并覆盖预约总量、课程预约量和教练预约量，以及上一周期为 0、
+两周期都为 0 和当前周期为 0 的除零场景。
 当前同比仍不自动猜测，用户提出同比时会要求澄清统计口径；本门禁不会把尚未实现的同比能力伪装成已支持。
 
 Operations 查询前策略评测样例位于 `evals/operations_policy_smoke.json`，阈值位于

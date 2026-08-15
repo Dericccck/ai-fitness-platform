@@ -71,8 +71,8 @@ claim。Agent 服务会 fail-closed，因此这一外部依赖未落地时专业
 Agent 解释层会根据 `from`、`to` 和 `bucket` 补齐 Gateway 没有返回的零值时间桶；这只是对已授权
 聚合结果的确定性补全，不会制造预约明细，也不会改变 Gateway 的权限和查询范围。
 环比由 Agent 在同一固定指标下发起当前周期和上一等长周期两次只读查询后计算；`PREVIOUS_PERIOD`
-只表示上一等长周期，不等同于同比。当前环比仅开放 `APPOINTMENT_COUNT`，上一周期为 0 时只返回差值，
-不生成无意义的百分比。
+只表示上一等长周期，不等同于同比。当前环比开放 `APPOINTMENT_COUNT`、`COURSE_APPOINTMENT_COUNT`
+和 `COACH_APPOINTMENT_COUNT`，上一周期为 0 时只返回差值，不生成无意义的百分比。
 
 Agent 侧会把每次当前周期或上一等长周期查询追加写入 PostgreSQL 表 `agent_operations_query_audits`，用于管理员查询追溯。
 审计只保存签名主体、角色快照、机构、固定指标、时间桶、日期范围、聚合行数、状态和 request/trace ID，不保存 SQL、Prompt、

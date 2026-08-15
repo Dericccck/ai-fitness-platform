@@ -103,5 +103,37 @@
     "expected_direction": "UP",
     "expected_change_percent": 20.0,
     "expected_note_fragments": []
+  },
+  {
+    "case_id": "course-appointment-increase",
+    "metric": "COURSE_APPOINTMENT_COUNT",
+    "current_from": "2026-08-01",
+    "current_to": "2026-08-15",
+    "previous_from": "2026-07-17",
+    "previous_to": "2026-07-31",
+    "current_values": [30],
+    "previous_values": [20],
+    "expected_current_total": 30,
+    "expected_previous_total": 20,
+    "expected_delta": 10,
+    "expected_direction": "UP",
+    "expected_change_percent": 50.0,
+    "expected_note_fragments": []
+  },
+  {
+    "case_id": "coach-appointment-previous-zero",
+    "metric": "COACH_APPOINTMENT_COUNT",
+    "current_from": "2026-08-01",
+    "current_to": "2026-08-15",
+    "previous_from": "2026-07-17",
+    "previous_to": "2026-07-31",
+    "current_values": [4],
+    "previous_values": [],
+    "expected_current_total": 4,
+    "expected_previous_total": 0,
+    "expected_delta": 4,
+    "expected_direction": "UP",
+    "expected_change_percent": null,
+    "expected_note_fragments": ["上一周期为 0"]
   }
 ]
