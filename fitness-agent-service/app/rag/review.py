@@ -24,7 +24,8 @@ ReviewFindingSeverity = Literal["WARNING", "REVIEW_REQUIRED", "BLOCKING"]
 
 # 版本号是审核证据的一部分。解析或路由规则改变后必须递增，不能覆盖旧报告，
 # 否则无法说明某个知识版本当时究竟使用了哪套门禁规则。
-PARSER_PIPELINE_VERSION = "2026.08.13.1"
+# PDF 清洗和质量指标发生变化后必须提升管线版本，使历史审核报告/发布凭证失效并重新审核。
+PARSER_PIPELINE_VERSION = "2026.08.15.1"
 REVIEW_POLICY_VERSION = "fitness-knowledge-review-2026.08.13.1"
 
 _COACH_REVIEW_DOCUMENT_TYPES = frozenset({"EXERCISE_SAFETY", "TRAINING_GUIDE"})

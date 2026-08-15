@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 import unicodedata
 from collections import Counter
+from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any
 
@@ -23,6 +24,32 @@ _NOISE_MARKERS = (
 )
 _TABLE_SEPARATOR = re.compile(r"^\s*:?-{3,}:?\s*$")
 
+# 这些指标用于比较两次解析管线的变化。block_count、parent_count 等规模指标不直接
+# 表示质量好坏，不能简单地因为数字变大或变小就判定回归。
+_COMPARISON_METRICS = (
+    "noise_rate",
+    "fragment_rate",
+    "duplicate_rate",
+    "duplicate_glyph_block_count",
+    "parent_integrity",
+    "table_integrity",
+    "page_coverage",
+    "missing_pages",
+    "ocr_required_pages",
+)
+_LOWER_IS_BETTER = frozenset(
+    {
+        "noise_rate",
+        "fragment_rate",
+        "duplicate_rate",
+        "duplicate_glyph_block_count",
+        "missing_pages",
+        "ocr_required_pages",
+    }
+)
+_HIGHER_IS_BETTER = frozenset({"parent_integrity", "table_integrity", "page_coverage"})
+_STATUS_RANK = {"BLOCKED": 0, "REVIEW_REQUIRED": 1, "PASS": 2}
+
 
 @dataclass(frozen=True)
 class DocumentQualityMetrics:
@@ -32,6 +59,7 @@ class DocumentQualityMetrics:
     noise_block_count: int
     fragment_block_count: int
     duplicate_block_count: int
+    duplicate_glyph_block_count: int
     parent_count: int
     parent_complete_count: int
     table_count: int
@@ -93,6 +121,7 @@ class DocumentQualityMetrics:
             "fragment_rate": round(self.fragment_rate, 6),
             "duplicate_block_count": self.duplicate_block_count,
             "duplicate_rate": round(self.duplicate_rate, 6),
+            "duplicate_glyph_block_count": self.duplicate_glyph_block_count,
             "parent_count": self.parent_count,
             "parent_complete_count": self.parent_complete_count,
             "parent_integrity": round(self.parent_integrity, 6),
@@ -186,6 +215,138 @@ class DocumentQualityThresholds:
         return failures
 
 
+def compare_quality_reports(before: Mapping[str, Any], after: Mapping[str, Any]) -> dict[str, Any]:
+    """比较两份同一批原始资料的质量报告，并显式报告回归。
+
+    比较器只接受相同来源路径和相同 SHA-256 的报告。这样可以避免把“换了一批资料”
+    误认为“解析器变好了”。比例类指标使用 ``after - before`` 计算增量；其中噪声、
+    碎片、重复、缺页和 OCR 页数越小越好，父节点、表格和页面覆盖率越大越好。
+    该函数不决定文档能否发布，发布仍由 ``DocumentQualityThresholds`` 负责。
+    """
+
+    before_entries = _report_entries(before)
+    after_entries = _report_entries(after)
+    before_paths = set(before_entries)
+    after_paths = set(after_entries)
+    if before_paths != after_paths:
+        missing = sorted(before_paths - after_paths)
+        added = sorted(after_paths - before_paths)
+        raise ValueError(
+            f"quality reports cover different sources: missing={missing}, added={added}"
+        )
+
+    entries: list[dict[str, Any]] = []
+    for relative_path in sorted(before_paths):
+        old_entry = before_entries[relative_path]
+        new_entry = after_entries[relative_path]
+        _ensure_same_source_hash(relative_path, old_entry, new_entry)
+        old_metrics = _metrics_mapping(old_entry)
+        new_metrics = _metrics_mapping(new_entry)
+        deltas: dict[str, float | None] = {}
+        improvements: list[str] = []
+        regressions: list[str] = []
+        for metric in _COMPARISON_METRICS:
+            old_value = _metric_value(old_metrics, metric)
+            new_value = _metric_value(new_metrics, metric)
+            if old_value is None or new_value is None:
+                deltas[metric] = None
+                continue
+            delta = new_value - old_value
+            deltas[metric] = round(delta, 6)
+            if abs(delta) <= 1e-9:
+                continue
+            if metric in _LOWER_IS_BETTER:
+                (improvements if delta < 0 else regressions).append(metric)
+            elif metric in _HIGHER_IS_BETTER:
+                (improvements if delta > 0 else regressions).append(metric)
+
+        old_status = str(old_entry.get("status", "UNKNOWN"))
+        new_status = str(new_entry.get("status", "UNKNOWN"))
+        status_regressed = (
+            old_status in _STATUS_RANK
+            and new_status in _STATUS_RANK
+            and _STATUS_RANK[new_status] < _STATUS_RANK[old_status]
+        )
+        if status_regressed:
+            regressions.append("status")
+        entries.append(
+            {
+                "relative_path": relative_path,
+                "before_status": old_status,
+                "after_status": new_status,
+                "status_changed": old_status != new_status,
+                "metric_deltas": deltas,
+                "improvements": improvements,
+                "regressions": regressions,
+            }
+        )
+
+    regressed_entries = [entry for entry in entries if entry["regressions"]]
+    improved_entries = [entry for entry in entries if entry["improvements"]]
+    unchanged_entries = [
+        entry for entry in entries if not entry["improvements"] and not entry["regressions"]
+    ]
+    return {
+        "schema_version": 1,
+        "before_label": before.get("label", "before"),
+        "after_label": after.get("label", "after"),
+        "source_count": len(entries),
+        "improved_count": len(improved_entries),
+        "regressed_count": len(regressed_entries),
+        "unchanged_count": len(unchanged_entries),
+        "status_change_count": sum(entry["status_changed"] for entry in entries),
+        "entries": entries,
+    }
+
+
+def _report_entries(report: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
+    raw_entries = report.get("results")
+    if not isinstance(raw_entries, list):
+        raise TypeError("quality report results must be a list")
+    entries: dict[str, Mapping[str, Any]] = {}
+    for raw_entry in raw_entries:
+        if not isinstance(raw_entry, Mapping):
+            raise TypeError("quality report entry must be an object")
+        relative_path = raw_entry.get("relative_path")
+        if not isinstance(relative_path, str) or not relative_path:
+            raise ValueError("quality report entry requires relative_path")
+        if relative_path in entries:
+            raise ValueError(f"quality report contains duplicate source: {relative_path}")
+        entries[relative_path] = raw_entry
+    return entries
+
+
+def _ensure_same_source_hash(
+    relative_path: str,
+    before: Mapping[str, Any],
+    after: Mapping[str, Any],
+) -> None:
+    before_hash = before.get("source_sha256")
+    after_hash = after.get("source_sha256")
+    if before_hash and after_hash and before_hash != after_hash:
+        raise ValueError(f"source SHA-256 changed for {relative_path}")
+
+
+def _metrics_mapping(entry: Mapping[str, Any]) -> Mapping[str, Any]:
+    metrics = entry.get("metrics", {})
+    if not isinstance(metrics, Mapping):
+        raise TypeError("quality report metrics must be an object")
+    return metrics
+
+
+def _metric_value(metrics: Mapping[str, Any], metric: str) -> float | None:
+    value = metrics.get(metric)
+    if metric in {"missing_pages", "ocr_required_pages"}:
+        if not isinstance(value, list):
+            return None
+        return float(len(value))
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise TypeError(f"quality metric {metric} must be numeric or null")
+    return float(value)
+
+
 def measure_document_quality(
     blocks: tuple[ParsedBlock, ...] | list[ParsedBlock],
     drafts: list[ChunkDraft],
@@ -203,6 +364,7 @@ def measure_document_quality(
         if block.kind == "TEXT"
     )
     duplicate_count = _duplicate_count(blocks)
+    duplicate_glyph_count = sum(_contains_duplicate_glyphs(block.content) for block in blocks)
     parent_count = len(drafts)
     parent_complete_count = sum(_draft_has_complete_parent(draft) for draft in drafts)
     tables = [block for block in blocks if block.kind == "TABLE"]
@@ -236,6 +398,7 @@ def measure_document_quality(
         noise_block_count=noise_count,
         fragment_block_count=fragment_count,
         duplicate_block_count=duplicate_count,
+        duplicate_glyph_block_count=duplicate_glyph_count,
         parent_count=parent_count,
         parent_complete_count=parent_complete_count,
         table_count=len(tables),
@@ -300,6 +463,24 @@ def _duplicate_count(blocks: tuple[ParsedBlock, ...] | list[ParsedBlock]) -> int
         else:
             duplicate_count += sum(max(0, count - 1) for count in page_counts.values())
     return duplicate_count
+
+
+def _contains_duplicate_glyphs(content: str) -> bool:
+    """检测字体映射导致的整词重复字形，规则与 PDF 清洗器保持一致。
+
+    这里仅用于质量观测，不负责修复内容；修复仍由 PDF 解析器执行。把它单独记录下来，
+    才能在解析器升级前后证明噪声确实下降，而不是只看到总体状态没有变化。
+    """
+
+    for match in re.finditer(r"[A-Za-z0-9]+", content):
+        token = match.group(0)
+        if (
+            len(token) >= 4
+            and len(token) % 2 == 0
+            and all(token[index] == token[index + 1] for index in range(0, len(token), 2))
+        ):
+            return True
+    return False
 
 
 def _compact(content: str) -> str:

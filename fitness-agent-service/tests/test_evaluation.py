@@ -29,6 +29,7 @@ def test_document_quality_calculates_noise_duplicates_tables_and_parents() -> No
 
     assert metrics.noise_rate == 0.25
     assert metrics.duplicate_rate == 0.25
+    assert metrics.duplicate_glyph_block_count == 0
     assert metrics.parent_integrity == 1.0
     assert metrics.table_integrity == 1.0
     assert metrics.missing_pages == ()
@@ -47,6 +48,21 @@ def test_document_quality_thresholds_block_bad_metrics() -> None:
 
     assert "noise_rate" in " ".join(failures)
     assert "missing_pages" in " ".join(failures)
+
+
+def test_document_quality_counts_duplicate_glyph_residue_without_flagging_normal_words() -> None:
+    from app.rag.document_quality import measure_document_quality
+    from app.rag.formats import ParsedBlock
+
+    metrics = measure_document_quality(
+        [
+            ParsedBlock(kind="TEXT", content="IInnffoorrmmaattiioonn adapted."),
+            ParsedBlock(kind="TEXT", content="Coffee and letter remain normal."),
+        ],
+        [],
+    )
+
+    assert metrics.duplicate_glyph_block_count == 1
 
 
 def test_document_quality_ignores_repeated_titles_and_cross_page_guidance() -> None:
@@ -86,6 +102,99 @@ def test_document_quality_reports_ocr_and_visual_review_pages() -> None:
     assert metrics.visual_review_required_pages == (2,)
     assert metrics.max_image_area_ratio == 1.0
     assert "ocr_required_pages" in " ".join(DocumentQualityThresholds().validate(metrics))
+
+
+def test_quality_report_comparison_requires_same_source_and_marks_directions() -> None:
+    from app.rag.document_quality import compare_quality_reports
+
+    before = {
+        "label": "before",
+        "results": [
+            {
+                "relative_path": "data/a.pdf",
+                "source_sha256": "same",
+                "status": "BLOCKED",
+                "metrics": {
+                    "noise_rate": 0.2,
+                    "fragment_rate": 0.4,
+                    "duplicate_rate": 0.1,
+                    "duplicate_glyph_block_count": 2,
+                    "parent_integrity": 0.8,
+                    "table_integrity": 0.8,
+                    "page_coverage": 0.8,
+                    "missing_pages": [2],
+                    "ocr_required_pages": [1],
+                },
+            }
+        ],
+    }
+    after = {
+        "label": "after",
+        "results": [
+            {
+                "relative_path": "data/a.pdf",
+                "source_sha256": "same",
+                "status": "PASS",
+                "metrics": {
+                    "noise_rate": 0.0,
+                    "fragment_rate": 0.3,
+                    "duplicate_rate": 0.02,
+                    "duplicate_glyph_block_count": 0,
+                    "parent_integrity": 1.0,
+                    "table_integrity": 1.0,
+                    "page_coverage": 1.0,
+                    "missing_pages": [],
+                    "ocr_required_pages": [],
+                },
+            }
+        ],
+    }
+
+    comparison = compare_quality_reports(before, after)
+
+    entry = comparison["entries"][0]
+    assert comparison["regressed_count"] == 0
+    assert comparison["improved_count"] == 1
+    assert entry["after_status"] == "PASS"
+    assert set(entry["improvements"]) == {
+        "noise_rate",
+        "fragment_rate",
+        "duplicate_rate",
+        "duplicate_glyph_block_count",
+        "parent_integrity",
+        "table_integrity",
+        "page_coverage",
+        "missing_pages",
+        "ocr_required_pages",
+    }
+
+
+def test_quality_report_comparison_rejects_changed_source_hash() -> None:
+    from app.rag.document_quality import compare_quality_reports
+
+    report = {
+        "results": [
+            {
+                "relative_path": "data/a.pdf",
+                "source_sha256": "before",
+                "metrics": {},
+            }
+        ]
+    }
+    changed = {
+        "results": [
+            {
+                "relative_path": "data/a.pdf",
+                "source_sha256": "after",
+                "metrics": {},
+            }
+        ]
+    }
+
+    import pytest
+
+    with pytest.raises(ValueError, match="SHA-256"):
+        compare_quality_reports(report, changed)
 
 
 def test_retrieval_evaluation_calculates_recall_and_mrr() -> None:

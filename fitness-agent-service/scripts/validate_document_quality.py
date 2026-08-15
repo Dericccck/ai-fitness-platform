@@ -57,16 +57,18 @@ def _validate_entry(
     result: dict[str, Any] = {
         "relative_path": entry["relative_path"],
         "indexable": bool(entry["indexable"]),
+        "source_sha256": None,
         "status": "REFERENCE_ONLY" if not entry["indexable"] else "PASS",
         "failures": [],
         "warnings": [],
     }
     if not entry["indexable"]:
         result["warnings"] = ["清单标记为仅供参考，不进入索引"]
-        return result
     try:
         path = _source_path(str(entry["relative_path"]))
-        if _sha256(path) != str(entry["sha256"]):
+        source_sha256 = _sha256(path)
+        result["source_sha256"] = source_sha256
+        if source_sha256 != str(entry["sha256"]):
             result["status"] = "BLOCKED"
             result["failures"] = ["文件哈希与 manifest 不一致"]
             return result
@@ -87,7 +89,11 @@ def _validate_entry(
                 "warnings": list(parsed.warnings),
             }
         )
-        if failures:
+        if not entry["indexable"]:
+            # 参考资料也要产出解析指标，便于评估解析器升级；REFERENCE_ONLY 仍不可进入索引。
+            result["status"] = "REFERENCE_ONLY"
+            result["warnings"] = ["清单标记为仅供参考，不进入索引", *parsed.warnings]
+        elif failures:
             result["status"] = "BLOCKED"
         elif (
             parsed.warnings
@@ -98,8 +104,13 @@ def _validate_entry(
         else:
             result["status"] = "PASS"
     except (DocumentParseError, OSError, ValueError) as exc:
-        result["status"] = "BLOCKED"
-        result["failures"] = [str(exc)]
+        if not entry["indexable"]:
+            # 参考资料解析失败仍保持 REFERENCE_ONLY；它不能进入索引，但不应污染可发布资料的门禁统计。
+            result["status"] = "REFERENCE_ONLY"
+            result["warnings"] = ["清单标记为仅供参考，不进入索引", str(exc)]
+        else:
+            result["status"] = "BLOCKED"
+            result["failures"] = [str(exc)]
     return result
 
 
@@ -109,6 +120,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, default=MANIFEST_PATH)
     parser.add_argument("--thresholds", type=Path, default=DEFAULT_THRESHOLDS_PATH)
+    parser.add_argument("--label", default="current", help="写入报告的解析管线标签")
+    parser.add_argument("--output", type=Path, help="可选：同时将 JSON 报告写入该文件")
     args = parser.parse_args(argv)
     manifest = json.loads(args.manifest.read_text(encoding="utf-8"))
     thresholds = DocumentQualityThresholds.from_mapping(
@@ -117,6 +130,8 @@ def main(argv: list[str] | None = None) -> int:
     registry = DocumentParserRegistry()
     results = [_validate_entry(registry, thresholds, entry) for entry in manifest["entries"]]
     summary = {
+        "schema_version": 2,
+        "label": args.label,
         "manifest": str(args.manifest),
         "thresholds": str(args.thresholds),
         "total": len(results),
@@ -126,7 +141,11 @@ def main(argv: list[str] | None = None) -> int:
         "blocked": sum(item["status"] == "BLOCKED" for item in results),
         "results": results,
     }
-    print(json.dumps(summary, ensure_ascii=False, indent=2))
+    serialized = json.dumps(summary, ensure_ascii=False, indent=2)
+    if args.output:
+        args.output.parent.mkdir(parents=True, exist_ok=True)
+        args.output.write_text(serialized + "\n", encoding="utf-8")
+    print(serialized)
     # REVIEW_REQUIRED 也不能作为“可自动发布”通过，只能等待人工审核或 OCR 复核。
     return 1 if summary["blocked"] or summary["review_required"] else 0
 

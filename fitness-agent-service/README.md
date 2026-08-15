@@ -115,6 +115,14 @@ make knowledge-quality-gate
 PDF 缺失页。它不会调用 LLM、生成 Embedding 或写入 PostgreSQL；出现 `BLOCKED` 时必须先修复、
 OCR 或人工审核，不能直接执行知识库重建。
 
+质量报告支持保存和前后版本比较：`python scripts/validate_document_quality.py --label <label>
+--output /tmp/quality.json` 会保存来源 SHA-256、页面画像和重复字形残留等指标；
+`python scripts/compare_document_quality.py --before before.json --after after.json` 要求两份报告覆盖
+相同来源，并在指标方向变化或状态降级时返回非零。`REFERENCE_ONLY` 文档也会生成解析指标，便于评估
+解析器升级，但始终不会因为质量通过而进入索引。
+解析清洗规则或质量指标变化时会提升解析管线版本，历史审核报告和发布凭证自动失效，必须重新解析、
+审核后才能发布或重建索引。
+
 历史 Java 项目是不完整的旧源码快照，不属于 Agent 服务质量门禁。阶段 2 新增的健身核心
 Tool Gateway 会拥有独立、可复现的 Java 构建和自动化测试，且不会恢复赛事、作品或活动代码。
 

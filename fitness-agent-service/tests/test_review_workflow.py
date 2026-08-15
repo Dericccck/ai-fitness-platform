@@ -6,7 +6,7 @@ import pytest
 from app.infrastructure.agent_context import AgentIdentity
 from app.rag.admin_models import KnowledgeAdminForbidden, KnowledgeIngestionJob
 from app.rag.formats import PdfPageProfile
-from app.rag.review import KnowledgeReviewFinding, KnowledgeReviewReport
+from app.rag.review import PARSER_PIPELINE_VERSION, KnowledgeReviewFinding, KnowledgeReviewReport
 from app.rag.review_workflow import (
     CLINICAL_REVIEW_CAPABILITY,
     FITNESS_REVIEW_CAPABILITY,
@@ -100,7 +100,7 @@ def report(*, document_level: bool = False, clinical: bool = False) -> Knowledge
         document_sha256="a" * 64,
         parser_name="pdfplumber",
         parser_version="test",
-        parser_pipeline_version="2026.08.13.1",
+        parser_pipeline_version=PARSER_PIPELINE_VERSION,
         review_policy_version="fitness-knowledge-review-2026.08.13.1",
         media_type="application/pdf",
         declared_risk_level="MEDICAL" if clinical else "CAUTION",
@@ -214,7 +214,7 @@ def test_publication_credential_is_bound_to_hash_report_and_policy(
         report_id="report-1",
         report_version=1,
         document_sha256="a" * 64,
-        parser_pipeline_version="2026.08.13.1",
+        parser_pipeline_version=PARSER_PIPELINE_VERSION,
         review_policy_version="fitness-knowledge-review-2026.08.13.1",
         decision_ids=("decision-1",),
         approved_visual_pages=(2, 4),
