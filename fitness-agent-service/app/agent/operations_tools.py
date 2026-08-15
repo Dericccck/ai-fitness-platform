@@ -16,7 +16,7 @@ from zoneinfo import ZoneInfo
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.infrastructure.gateway_client import GatewayClient
+from app.infrastructure.gateway_client import GatewayClient, GatewayOperationsMetric
 
 from .tool_registry import ToolContext, ToolDefinition
 
@@ -41,6 +41,75 @@ class OperationsQueryHint:
     from_date: date
     to_date: date
     matched_terms: tuple[str, ...]
+
+
+_METRIC_LABELS = {
+    "APPOINTMENT_COUNT": "预约总量",
+    "APPOINTMENT_STATUS_BREAKDOWN": "预约状态分布",
+    "COURSE_APPOINTMENT_COUNT": "课程预约量",
+    "COACH_APPOINTMENT_COUNT": "教练预约量",
+    "REMAINING_CLASS_HOURS": "课程剩余课时",
+}
+
+
+def build_operations_report(result: GatewayOperationsMetric) -> dict[str, object]:
+    """把固定指标结果转换成可供模型解释的确定性报表摘要。
+
+    <p>摘要由程序根据 Gateway 返回的聚合结果计算，不让模型自行计算总量或百分比。
+    当前 Gateway 返回的是整个时间段的聚合值，没有按日/周拆分，因此这里明确标记
+    “暂不判断趋势”，避免模型把区间汇总误说成增长或下降。</p>
+    """
+
+    rows = list(result.rows)
+    total_value = sum(row.value for row in rows)
+    top_row = max(rows, key=lambda row: row.value, default=None)
+    top_share = (
+        round(top_row.value / total_value * 100, 2)
+        if top_row is not None and total_value > 0
+        else None
+    )
+    warnings: list[str] = []
+    if not rows or total_value == 0:
+        warnings.append("该时间范围没有可统计的有效记录，不能据此判断业务异常。")
+    elif top_share is not None and len(rows) > 1 and top_share >= 80:
+        warnings.append(f"结果集中度较高，第一维度占汇总值 {top_share:.2f}%。")
+
+    report: dict[str, object] = {
+        "metric": result.metric,
+        "metric_label": _METRIC_LABELS.get(result.metric, result.metric),
+        "period": {"from": result.from_date.isoformat(), "to": result.to_date.isoformat()},
+        "row_count": len(rows),
+        "total_value": total_value,
+        "top_dimension": top_row.label if top_row is not None else None,
+        "top_value": top_row.value if top_row is not None else None,
+        "top_share_percent": top_share,
+        "warnings": warnings,
+        "trend_available": False,
+        "trend_note": "当前结果是时间段汇总，未返回日/周时间桶，暂不判断趋势。",
+    }
+    if result.metric == "APPOINTMENT_STATUS_BREAKDOWN" and total_value > 0:
+        report["breakdown"] = [
+            {
+                "label": row.label,
+                "value": row.value,
+                "share_percent": round(row.value / total_value * 100, 2),
+            }
+            for row in rows
+        ]
+    return report
+
+
+def build_operations_tool_result(result: GatewayOperationsMetric) -> dict[str, object]:
+    """保留 Gateway 原始聚合结果，同时附加程序计算的解释摘要。
+
+    <p>原始结果用于追溯和回答具体维度，report 用于让模型稳定地生成中文解释；两者
+    都不包含预约、合同或用户明细记录。</p>
+    """
+
+    return {
+        "data": result.model_dump(mode="json", by_alias=True),
+        "report": build_operations_report(result),
+    }
 
 
 def parse_operations_intent(
@@ -101,6 +170,9 @@ def operations_prompt_hint(user_message: str) -> str:
         + "，开始日期=" + hint.from_date.isoformat()
         + "，结束日期=" + hint.to_date.isoformat()
         + "。该提示不代表已授权，不能改写为 SQL；工具参数仍须严格使用指标白名单。"
+        + "工具返回的 report 是程序根据真实聚合结果计算的摘要；回答时优先引用 report，"
+        + "只能陈述返回数据，不得把集中度提示说成因果结论。当前没有日/周时间桶时，"
+        + "不得声称趋势增长或下降。"
     )
 
 
@@ -174,7 +246,7 @@ def build_operations_tool_definitions(gateway: GatewayClient) -> tuple[ToolDefin
                 request_id=context.gateway_context.request_id,
                 trace_id=context.gateway_context.trace_id,
             )
-            return result
+            return build_operations_tool_result(result)
         except Exception:
             _logger.warning(
                 "operations_query_failed",
