@@ -53,6 +53,9 @@ jobs:
       - name: RAG evaluation quality gate
         run: uv run python -m app.rag.evaluation_cli --cases evals/rag_smoke.json --thresholds evals/rag_thresholds.json
 
+      - name: Operations trend evaluation quality gate
+        run: uv run python -m app.agent.operations_evaluation --cases evals/operations_trend_smoke.json --thresholds evals/operations_trend_thresholds.json
+
       - name: Build production container image
         run: docker build --file Dockerfile --tag fitness-agent-service:${{ github.sha }} .
 

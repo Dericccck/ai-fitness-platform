@@ -713,10 +713,23 @@ def classify_route(user_message: str) -> SupervisorRoute:
     text = user_message.lower()
     if any(keyword in text for keyword in ("赛事", "比赛", "作品", "活动运营", "报名活动")):
         return "UNSUPPORTED_LEGACY"
-    if any(keyword in text for keyword in (
-        "营收", "收入", "经营", "报表", "sql", "预约量", "预约数", "预约状态",
-        "课程利用", "教练表现", "剩余课时", "课时余额",
-    )):
+    if any(
+        keyword in text
+        for keyword in (
+            "营收",
+            "收入",
+            "经营",
+            "报表",
+            "sql",
+            "预约量",
+            "预约数",
+            "预约状态",
+            "课程利用",
+            "教练表现",
+            "剩余课时",
+            "课时余额",
+        )
+    ):
         return "OPERATIONS"
     if any(keyword in text for keyword in ("预约", "改约", "取消预约", "课表", "课程")):
         return "BOOKING"

@@ -1,0 +1,131 @@
+[
+  {
+    "case_id": "daily-appointment-missing-middle-bucket",
+    "metric": "APPOINTMENT_COUNT",
+    "bucket": "DAY",
+    "from": "2026-08-01",
+    "to": "2026-08-03",
+    "rows": [
+      {"dimension": "2026-08-01", "label": "2026-08-01", "value": 5},
+      {"dimension": "2026-08-03", "label": "2026-08-03", "value": 8}
+    ],
+    "expected_trend_available": true,
+    "expected_direction": "UP",
+    "expected_series": [
+      {"bucket": "2026-08-01", "value": 5},
+      {"bucket": "2026-08-02", "value": 0},
+      {"bucket": "2026-08-03", "value": 8}
+    ],
+    "expected_warning_fragments": ["已将 1 个无记录时间桶按 0 计入"]
+  },
+  {
+    "case_id": "daily-leading-zero-does-not-invent-percent",
+    "metric": "APPOINTMENT_COUNT",
+    "bucket": "DAY",
+    "from": "2026-08-01",
+    "to": "2026-08-03",
+    "rows": [
+      {"dimension": "2026-08-01", "label": "2026-08-01", "value": 0},
+      {"dimension": "2026-08-03", "label": "2026-08-03", "value": 8}
+    ],
+    "expected_trend_available": true,
+    "expected_direction": "UP",
+    "expected_series": [
+      {"bucket": "2026-08-01", "value": 0},
+      {"bucket": "2026-08-02", "value": 0},
+      {"bucket": "2026-08-03", "value": 8}
+    ],
+    "expected_warning_fragments": ["已将 1 个无记录时间桶按 0 计入"],
+    "expected_change_percent_null": true
+  },
+  {
+    "case_id": "daily-empty-result-is-not-a-trend",
+    "metric": "APPOINTMENT_COUNT",
+    "bucket": "DAY",
+    "from": "2026-08-01",
+    "to": "2026-08-03",
+    "rows": [],
+    "expected_trend_available": false,
+    "expected_direction": null,
+    "expected_series": [
+      {"bucket": "2026-08-01", "value": 0},
+      {"bucket": "2026-08-02", "value": 0},
+      {"bucket": "2026-08-03", "value": 0}
+    ],
+    "expected_warning_fragments": ["没有可统计的有效记录", "已将 3 个无记录时间桶按 0 计入"]
+  },
+  {
+    "case_id": "weekly-cross-month-boundaries",
+    "metric": "APPOINTMENT_COUNT",
+    "bucket": "WEEK",
+    "from": "2026-08-04",
+    "to": "2026-08-19",
+    "rows": [
+      {"dimension": "2026-08-10", "label": "2026-08-10", "value": 4},
+      {"dimension": "2026-08-17", "label": "2026-08-17", "value": 6}
+    ],
+    "expected_trend_available": true,
+    "expected_direction": "UP",
+    "expected_series": [
+      {"bucket": "2026-08-03", "value": 0},
+      {"bucket": "2026-08-10", "value": 4},
+      {"bucket": "2026-08-17", "value": 6}
+    ],
+    "expected_warning_fragments": ["已将 1 个无记录时间桶按 0 计入"],
+    "expected_change_percent_null": true
+  },
+  {
+    "case_id": "course-daily-trend",
+    "metric": "COURSE_APPOINTMENT_COUNT",
+    "bucket": "DAY",
+    "from": "2026-08-01",
+    "to": "2026-08-03",
+    "rows": [
+      {"dimension": "2026-08-01", "label": "2026-08-01", "value": 2},
+      {"dimension": "2026-08-03", "label": "2026-08-03", "value": 5}
+    ],
+    "expected_trend_available": true,
+    "expected_direction": "UP",
+    "expected_series": [
+      {"bucket": "2026-08-01", "value": 2},
+      {"bucket": "2026-08-02", "value": 0},
+      {"bucket": "2026-08-03", "value": 5}
+    ],
+    "expected_warning_fragments": ["已将 1 个无记录时间桶按 0 计入"]
+  },
+  {
+    "case_id": "coach-weekly-trend",
+    "metric": "COACH_APPOINTMENT_COUNT",
+    "bucket": "WEEK",
+    "from": "2026-08-03",
+    "to": "2026-08-16",
+    "rows": [
+      {"dimension": "2026-08-03", "label": "2026-08-03", "value": 2},
+      {"dimension": "2026-08-10", "label": "2026-08-10", "value": 4}
+    ],
+    "expected_trend_available": true,
+    "expected_direction": "UP",
+    "expected_series": [
+      {"bucket": "2026-08-03", "value": 2},
+      {"bucket": "2026-08-10", "value": 4}
+    ],
+    "expected_warning_fragments": []
+  },
+  {
+    "case_id": "single-raw-bucket-does-not-claim-trend",
+    "metric": "COACH_APPOINTMENT_COUNT",
+    "bucket": "WEEK",
+    "from": "2026-08-03",
+    "to": "2026-08-16",
+    "rows": [
+      {"dimension": "2026-08-10", "label": "2026-08-10", "value": 4}
+    ],
+    "expected_trend_available": false,
+    "expected_direction": null,
+    "expected_series": [
+      {"bucket": "2026-08-03", "value": 0},
+      {"bucket": "2026-08-10", "value": 4}
+    ],
+    "expected_warning_fragments": ["已将 1 个无记录时间桶按 0 计入"]
+  }
+]

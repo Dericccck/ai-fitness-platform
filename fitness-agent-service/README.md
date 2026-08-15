@@ -319,6 +319,12 @@ Prometheus 指标 `fitness_agent_notification_delivery_attempts_total`，用于�
 `make agent-eval` 会校验 Recall@K、MRR 和禁止 ID 命中数；CI 会把同一命令作为质量门禁。
 当前是稳定的黄金结果回归集，不使用线上用户数据；后续接入真实评测数据库时复用相同指标和阈值模型。
 
+Operations 趋势摘要的离线评测样例位于 `evals/operations_trend_smoke.json`，阈值位于
+`evals/operations_trend_thresholds.json`。执行 `make agent-operations-eval` 会调用真实的
+`build_operations_report`，验证 DAY/WEEK 时间桶补零、首桶为 0 时不伪造变化百分比、空结果不判断趋势、
+单个原始桶不宣称趋势，以及课程/教练预约量的固定指标过滤结果。该门禁不访问数据库、LLM 或在线数据，
+只验证聚合结果进入解释层后的确定性安全边界；CI 通过率低于阈值或出现失败用例时直接失败。
+
 短期会话摘要的确定性安全评测样例位于 `fitness-agent-service/evals/session_summary_samples.json`，阈值位于
 `fitness-agent-service/evals/session_summary_thresholds.json`。执行 `make agent-session-summary-eval` 会检查摘要 JSON、
 非空、长度、必需上下文、凭证脱敏、禁止越权表达和通过率；禁止表达用于拦截动态事实、权限、医疗诊断和训练计划状态

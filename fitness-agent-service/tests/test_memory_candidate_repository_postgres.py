@@ -189,7 +189,7 @@ async def test_candidate_repository_encrypts_deduplicates_and_scopes_decisions()
 
         expiring = await repository.create_pending(
             identity=identity,
-                organization_id=organization_id,
+            organization_id=organization_id,
             candidate=MemoryCandidate(
                 memory_type="SCHEDULE_PREFERENCE",
                 memory_key="training_time",

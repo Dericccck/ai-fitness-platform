@@ -4,7 +4,7 @@ AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-session-summary-eval agent-security-check agent-run agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run training-check training-run booking-check booking-it booking-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-session-summary-eval agent-security-check agent-run agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run training-check training-run booking-check booking-it booking-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
@@ -21,6 +21,7 @@ help:
 	@echo "  agent-format Format Python code"
 	@echo "  agent-check  Run Python lint, type checks, and tests"
 	@echo "  agent-eval   Run deterministic RAG quality and permission gates"
+	@echo "  agent-operations-eval Run deterministic Operations trend explanation gates"
 	@echo "  agent-session-summary-eval Run deterministic session summary security gates"
 	@echo "  agent-run    Start the Agent API locally"
 	@echo "  agent-reindex-worker Start the knowledge index rebuild worker locally"
@@ -85,6 +86,10 @@ agent-check:
 agent-eval:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.rag.evaluation_cli \
 		--cases evals/rag_smoke.json --thresholds evals/rag_thresholds.json
+
+agent-operations-eval:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.agent.operations_evaluation \
+		--cases evals/operations_trend_smoke.json --thresholds evals/operations_trend_thresholds.json
 
 agent-session-summary-eval:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.session_summary_evaluation \
