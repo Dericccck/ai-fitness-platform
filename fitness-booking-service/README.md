@@ -58,9 +58,9 @@ export BOOKING_IT_DB_PASSWORD='请替换为测试库密码'
 make booking-it
 ```
 
-该测试验证真实旧业务表字段、事务提交、合同课时扣减、同一请求幂等、MySQL 命名锁以及确认
-JTI 重复时的事务回滚。未配置这些变量时，Maven 会将该测试标记为 skipped，而不是误连本地
-开发库。
+该测试验证真实旧业务表字段、事务提交、合同课时扣减、改约、取消、课时恢复、后续预约 `amount`
+快照修正、同一请求幂等、MySQL 命名锁以及确认 JTI 重复时的事务回滚。未配置这些变量时，Maven
+会将该测试标记为 skipped，而不是误连本地开发库。
 
 ## Outbox 与 RabbitMQ
 

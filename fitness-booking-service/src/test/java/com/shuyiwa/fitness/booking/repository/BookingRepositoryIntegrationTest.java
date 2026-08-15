@@ -2,7 +2,10 @@ package com.shuyiwa.fitness.booking.repository;
 
 import com.shuyiwa.fitness.booking.api.BookingApiException;
 import com.shuyiwa.fitness.booking.api.BookingAppointmentView;
+import com.shuyiwa.fitness.booking.api.BookingCancelRequest;
+import com.shuyiwa.fitness.booking.api.BookingCancelledView;
 import com.shuyiwa.fitness.booking.api.BookingCreateRequest;
+import com.shuyiwa.fitness.booking.api.BookingRescheduleRequest;
 import com.shuyiwa.fitness.booking.security.BookingActor;
 import com.shuyiwa.fitness.booking.security.BookingConfirmation;
 import com.shuyiwa.fitness.booking.service.BookingService;
@@ -31,14 +34,14 @@ import static org.junit.Assert.assertNotNull;
  * <p>该测试默认跳过，只有显式设置 BOOKING_IT_ENABLED=true 并提供独立测试库连接时才执行。
  * 测试会使用随机业务 ID 写入现有健身表，结束后删除自身数据，不会依赖 mock，也不会默认连接
  * 开发库。它重点验证单元测试无法覆盖的数据库行为：真实旧表字段、事务提交、合同版本扣减、
- * MySQL GET_LOCK、幂等记录和确认 JTI 冲突回滚。</p>
+ * MySQL GET_LOCK、幂等记录、改约、取消、课时恢复和确认 JTI 冲突回滚。</p>
  */
 public class BookingRepositoryIntegrationTest {
     private static final String HASH =
             "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 
     @Test
-    public void createsOnceAndRollsBackWhenConfirmationJtiIsReused() {
+    public void createsReschedulesCancelsAndRollsBackWhenConfirmationJtiIsReused() {
         Assume.assumeTrue("true".equalsIgnoreCase(System.getenv("BOOKING_IT_ENABLED")));
 
         Fixture fixture = new Fixture();
@@ -83,6 +86,41 @@ public class BookingRepositoryIntegrationTest {
                     remainingHours(jdbc, fixture.contractId));
             assertEquals("JTI conflict must roll back appointment insert", 1,
                     countAppointments(jdbc, fixture.contractId, fixture.studentId));
+
+            BookingAppointmentView rescheduled = transaction.execute(status ->
+                    service.reschedule(fixture.rescheduleActor("request-3", first.getId()),
+                            fixture.rescheduleRequest(first.getId(),
+                                    Instant.parse("2026-09-01T04:00:00Z"),
+                                    Instant.parse("2026-09-01T05:00:00Z"))));
+            assertEquals(first.getId(), rescheduled.getId());
+            assertEquals(Instant.parse("2026-09-01T04:00:00Z"), rescheduled.getStartTime());
+            assertEquals(1, remainingHours(jdbc, fixture.contractId));
+
+            // 第二个预约用于验证取消第一个预约时，旧系统后续预约的 amount 快照同步加回 1。
+            BookingAppointmentView second = transaction.execute(status ->
+                    service.create(fixture.createActor("request-5", "it-create-jti-2-" + fixture.suffix),
+                            fixture.request(Instant.parse("2026-09-01T06:00:00Z"),
+                                    Instant.parse("2026-09-01T07:00:00Z"))));
+            assertEquals(0, remainingHours(jdbc, fixture.contractId));
+            assertEquals("0", appointmentAmount(jdbc, second.getId()));
+
+            BookingCancelledView cancelled = transaction.execute(status ->
+                    service.cancel(fixture.cancelActor("request-4", rescheduled.getId()),
+                            fixture.cancelRequest(rescheduled.getId(), rescheduled.getStartTime())));
+            assertEquals(rescheduled.getId(), cancelled.getId());
+            assertEquals(1, cancelled.getRemainingClassHours().intValue());
+            assertEquals(1, remainingHours(jdbc, fixture.contractId));
+            assertEquals(1, countActiveAppointments(jdbc, fixture.contractId, fixture.studentId));
+            assertEquals("1", appointmentAmount(jdbc, second.getId()));
+            assertEquals(1, countOutboxEvents(jdbc, "APPOINTMENT_CANCELLED", rescheduled.getId()));
+
+            // 相同 request_id 重试取消只复用第一次结果，不会再次退回课时。
+            BookingCancelledView cancelRetry = transaction.execute(status ->
+                    service.cancel(fixture.cancelActor("request-4", rescheduled.getId()),
+                            fixture.cancelRequest(rescheduled.getId(), rescheduled.getStartTime())));
+            assertEquals(cancelled.getId(), cancelRetry.getId());
+            assertEquals(1, remainingHours(jdbc, fixture.contractId));
+            assertEquals(1, countActiveAppointments(jdbc, fixture.contractId, fixture.studentId));
         } finally {
             fixture.cleanup(jdbc);
         }
@@ -99,6 +137,24 @@ public class BookingRepositoryIntegrationTest {
         Integer value = jdbc.queryForObject(
                 "SELECT COUNT(1) FROM appointment WHERE contract_id = ? AND user_id = ?",
                 Integer.class, contractId, studentId);
+        return value == null ? 0 : value;
+    }
+
+    private static int countActiveAppointments(JdbcTemplate jdbc, String contractId, String studentId) {
+        Integer value = jdbc.queryForObject(
+                "SELECT COUNT(1) FROM appointment WHERE contract_id = ? AND user_id = ? AND deleted = 0",
+                Integer.class, contractId, studentId);
+        return value == null ? 0 : value;
+    }
+
+    private static String appointmentAmount(JdbcTemplate jdbc, String appointmentId) {
+        return jdbc.queryForObject("SELECT amount FROM appointment WHERE id = ?", String.class, appointmentId);
+    }
+
+    private static int countOutboxEvents(JdbcTemplate jdbc, String eventType, String aggregateId) {
+        Integer value = jdbc.queryForObject(
+                "SELECT COUNT(1) FROM agent_booking_outbox WHERE event_type = ? AND aggregate_id = ?",
+                Integer.class, eventType, aggregateId);
         return value == null ? 0 : value;
     }
 
@@ -123,6 +179,8 @@ public class BookingRepositoryIntegrationTest {
             ResourceDatabasePopulator populator = new ResourceDatabasePopulator();
             populator.addScript(new org.springframework.core.io.ClassPathResource(
                     "db/migration/V20260815_001__create_booking_agent_tables.sql"));
+            populator.addScript(new org.springframework.core.io.ClassPathResource(
+                    "db/migration/V20260815_002__extend_booking_outbox.sql"));
             populator.execute(dataSource);
         }
 
@@ -130,11 +188,11 @@ public class BookingRepositoryIntegrationTest {
             jdbc.update("INSERT INTO course (id, name, status, organization_id, create_time) "
                             + "VALUES (?, ?, 1, ?, CURRENT_TIMESTAMP)",
                     courseId, "集成测试力量训练", organizationId);
-                    jdbc.update("INSERT INTO login_user_authority "
+            jdbc.update("INSERT INTO login_user_authority "
                             + "(id, login_user_id, authority, entity_id, create_time) "
                             + "VALUES (?, ?, 'COACH', ?, CURRENT_TIMESTAMP)",
                     authorityId, coachId, organizationId);
-                    jdbc.update("INSERT INTO user_and_coach "
+            jdbc.update("INSERT INTO user_and_coach "
                             + "(id, user_id, coach_id, organization_id, status, deleted, head_coach_ids) "
                             + "VALUES (?, ?, ?, ?, 1, 0, ?)",
                     relationId, studentId, coachId, organizationId, coachId);
@@ -159,10 +217,47 @@ public class BookingRepositoryIntegrationTest {
         }
 
         private BookingActor actor(String requestId) {
+            return createActor(requestId, "it-create-jti-" + suffix);
+        }
+
+        private BookingActor createActor(String requestId, String jti) {
             return new BookingActor(studentId, set(BookingActor.STUDENT), set(organizationId), requestId,
-                    new BookingConfirmation("it-confirmation-" + suffix, "it-jti-" + suffix,
+                    new BookingConfirmation("it-confirmation-" + requestId + "-" + suffix, jti,
                             "fitness.booking.create.v1", "CREATE_APPOINTMENT", organizationId,
                             contractId, HASH));
+        }
+
+        private BookingActor rescheduleActor(String requestId, String appointmentId) {
+            return new BookingActor(studentId, set(BookingActor.STUDENT), set(organizationId), requestId,
+                    new BookingConfirmation("it-reschedule-confirmation-" + suffix,
+                            "it-reschedule-jti-" + suffix, "fitness.booking.reschedule.v1",
+                            "RESCHEDULE_APPOINTMENT", organizationId, appointmentId, HASH));
+        }
+
+        private BookingActor cancelActor(String requestId, String appointmentId) {
+            return new BookingActor(studentId, set(BookingActor.STUDENT), set(organizationId), requestId,
+                    new BookingConfirmation("it-cancel-confirmation-" + suffix,
+                            "it-cancel-jti-" + suffix, "fitness.booking.cancel.v1",
+                            "CANCEL_APPOINTMENT", organizationId, appointmentId, HASH));
+        }
+
+        private BookingRescheduleRequest rescheduleRequest(String appointmentId, Instant start, Instant end) {
+            BookingRescheduleRequest request = new BookingRescheduleRequest();
+            request.setOrganizationId(organizationId);
+            request.setAppointmentId(appointmentId);
+            request.setCoachId(coachId);
+            request.setExpectedStartTime(Instant.parse("2026-09-01T02:00:00Z"));
+            request.setStartTime(start);
+            request.setEndTime(end);
+            return request;
+        }
+
+        private BookingCancelRequest cancelRequest(String appointmentId, Instant expectedStart) {
+            BookingCancelRequest request = new BookingCancelRequest();
+            request.setOrganizationId(organizationId);
+            request.setAppointmentId(appointmentId);
+            request.setExpectedStartTime(expectedStart);
+            return request;
         }
 
         private void cleanup(JdbcTemplate jdbc) {
@@ -170,9 +265,12 @@ public class BookingRepositoryIntegrationTest {
                     + "(SELECT id FROM appointment WHERE contract_id = ? AND user_id = ?)",
                     contractId, studentId);
             jdbc.update("DELETE FROM agent_booking_audit WHERE request_id IN ('request-1', 'request-2')");
+            jdbc.update("DELETE FROM agent_booking_audit WHERE request_id IN ('request-3', 'request-4', 'request-5')");
             jdbc.update("DELETE FROM agent_booking_confirmation_consumption WHERE request_id IN "
-                    + "('request-1', 'request-2')");
-            jdbc.update("DELETE FROM agent_booking_operation WHERE request_id IN ('request-1', 'request-2')");
+                    + "('request-1', 'request-2', 'request-3', 'request-4', 'request-5')");
+            jdbc.update("DELETE FROM agent_booking_operation WHERE request_id IN ('request-1', 'request-2', 'request-5')");
+            jdbc.update("DELETE FROM agent_booking_reschedule_operation WHERE request_id = 'request-3'");
+            jdbc.update("DELETE FROM agent_booking_cancel_operation WHERE request_id = 'request-4'");
             jdbc.update("DELETE FROM appointment WHERE contract_id = ? AND user_id = ?",
                     contractId, studentId);
             jdbc.update("DELETE FROM contract WHERE id = ?", contractId);

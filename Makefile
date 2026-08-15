@@ -38,7 +38,7 @@ help:
 	@echo "  training-check Build and test the structured training service"
 	@echo "  training-run  Start the structured training service locally"
 	@echo "  booking-check Build and test the appointment write service"
-	@echo "  booking-it    Run the opt-in real MySQL appointment integration test"
+	@echo "  booking-it    Run the opt-in real MySQL Booking create/reschedule/cancel integration test"
 	@echo "  booking-run  Start the appointment write service locally"
 	@echo "  legacy-java-diagnostic Reproduce the incomplete legacy Java build (expected to fail)"
 	@echo "  check        Run Agent and fitness core Gateway quality gates"
