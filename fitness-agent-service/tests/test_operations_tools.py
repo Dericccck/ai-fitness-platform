@@ -246,10 +246,22 @@ class FakeOperationsGateway:
             **{
                 "from": from_date,
                 "to": to_date,
-                "rows": [GatewayOperationsMetricRow(dimension="TOTAL", label="预约总量", value=value)],
+                "rows": [
+                    GatewayOperationsMetricRow(dimension="TOTAL", label="预约总量", value=value)
+                ],
                 "generatedAt": "2026-08-15T12:00:00Z",
             },
         )
+
+
+class RecordingOperationsAudit:
+    def __init__(self) -> None:
+        self.events: list[dict[str, object]] = []
+
+    async def record(self, **kwargs: object) -> None:
+        # 这个测试替身只记录仓储收到的元数据，确保工具层没有把 rows、SQL 或 Prompt
+        # 作为审计参数传入持久化边界。
+        self.events.append(kwargs)
 
 
 @pytest.mark.asyncio
@@ -280,6 +292,44 @@ async def test_operations_tool_queries_current_and_previous_period() -> None:
         (date(2026, 7, 17), date(2026, 7, 31)),
     ]
     assert result["comparison"]["change_percent"] == 20.0
+
+
+@pytest.mark.asyncio
+async def test_operations_tool_persists_current_and_previous_audit_metadata() -> None:
+    gateway = FakeOperationsGateway()
+    audit = RecordingOperationsAudit()
+    registry = ToolRegistry()
+    for definition in build_operations_tool_definitions(  # type: ignore[arg-type]
+        gateway,
+        audit_repository=audit,  # type: ignore[arg-type]
+    ):
+        registry.register(definition)
+
+    await registry.invoke(
+        "fitness.operations.metric.query.v1",
+        {
+            "organization_id": "org-1",
+            "metric": "APPOINTMENT_COUNT",
+            "from": "2026-08-01",
+            "to": "2026-08-15",
+            "comparison": "PREVIOUS_PERIOD",
+        },
+        ToolContext(
+            gateway_context=GatewayRequestContext(
+                signed_context="signed-context", request_id="request-2", trace_id="trace-2"
+            )
+        ),
+    )
+
+    assert [(event["comparison_role"], event["status"]) for event in audit.events] == [
+        ("CURRENT", "SUCCEEDED"),
+        ("PREVIOUS_PERIOD", "SUCCEEDED"),
+    ]
+    assert audit.events[0]["row_count"] == 1
+    assert audit.events[0]["request_id"] == "request-2"
+    assert "rows" not in audit.events[0]
+    assert "sql" not in audit.events[0]
+    assert "prompt" not in audit.events[0]
 
 
 def test_operations_tool_result_keeps_data_and_adds_report() -> None:

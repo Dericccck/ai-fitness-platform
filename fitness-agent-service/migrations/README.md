@@ -41,6 +41,11 @@ Worker 在发布事务内执行授权、安静时间和频率限制判断；未�
 `RETRYABLE_FAILED` 或 `FINAL_FAILED`，并保存受控错误码和渠道消息 ID；该表通过外键保护 Outbox，清理 Outbox 前必须先
 按保留策略处理投递尝试，不能无审计删除父事件。
 
+0028 增加 `agent_operations_query_audits` 管理员经营查询审计表。每次固定指标查询的当前周期和上一等长周期分别记录
+主体、角色快照、机构、指标、时间桶、日期范围、聚合行数、成功/失败状态和请求链路；失败时日期或行数可以为空。表中
+禁止保存 SQL、Prompt、模型输出、预约明细和签名上下文，查询成功但审计写入失败时 Agent 采用 fail-closed，不向模型返回
+未形成持久化审计的经营结果。
+
 0023 增加正式 Memory 和候选的正文保留期限字段、脱敏标记和 `REDACTED` 审计事件。正式 Memory 进入
 `REVOKED/EXPIRED` 后默认保留 90 天，候选进入 `APPROVED/REJECTED/EXPIRED` 后默认保留 30 天；期限到达后，
 独立 Memory Retention Worker 将正式 Memory 内容替换为脱敏标记、清空候选密文，但不删除类型、状态、主体范围

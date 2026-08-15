@@ -6,6 +6,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.responses import Response
 
 from app.agent.fitness_tools import build_fitness_tool_registry
+from app.agent.operations_audit import OperationsAuditRepository
 from app.agent.supervisor import Supervisor
 from app.agent.training_plan_generation import TrainingPlanGenerationService
 from app.api.middleware.request_context import RequestContextMiddleware
@@ -172,6 +173,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         batch_size=settings.rag_reindex_worker_batch_size,
     )
     app.state.gateway = GatewayClient(settings)
+    # Operations 审计属于 Agent 的可追溯事实，不写入 Java/MySQL 业务库。工具注册时
+    # 注入同一个 PostgreSQL 仓储，保证管理员查询成功或失败都能形成持久化审计记录。
+    app.state.operations_audit = OperationsAuditRepository(app.state.database)
     # Memory 属于 Agent 的长期上下文，不是 Java/MySQL 的健身业务事实。通过独立仓储和
     # Service 装配，后续可以单独增加过期 Worker、审计和数据保留策略。
     app.state.memory_service = MemoryService(
@@ -201,6 +205,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.gateway,
         plan_generator=app.state.training_plan_generator,
         memory_service=app.state.memory_service,
+        operations_audit_repository=app.state.operations_audit,
     )
     # 确认参数进入 PostgreSQL 前必须经过应用层加密；密钥缺失时拒绝启动，避免形成
     # “看似持久化、实际明文落库”的不安全降级路径。

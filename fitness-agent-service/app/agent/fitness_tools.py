@@ -17,6 +17,7 @@ from app.confirmation.normalization import ConfirmationPolicy
 from app.infrastructure.gateway_client import GatewayClient
 from app.memory.service import MemoryService
 
+from .operations_audit import OperationsAuditRepository
 from .operations_tools import build_operations_tool_definitions
 from .tool_registry import (
     EmptyToolInput,
@@ -668,6 +669,7 @@ def build_fitness_tool_registry(
     *,
     plan_generator: Any | None = None,
     memory_service: MemoryService | None = None,
+    operations_audit_repository: OperationsAuditRepository | None = None,
 ) -> ToolRegistry:
     """创建进程级健身工具注册表。
 
@@ -1070,7 +1072,10 @@ def build_fitness_tool_registry(
             read_only=True,
             requires_confirmation=False,
         ),
-    ) + build_operations_tool_definitions(gateway)
+    ) + build_operations_tool_definitions(
+        gateway,
+        audit_repository=operations_audit_repository,
+    )
     for definition in definitions:
         registry.register(definition)
     return registry

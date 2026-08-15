@@ -72,6 +72,10 @@ Agent 解释层会根据 `from`、`to` 和 `bucket` 补齐 Gateway 没有返回�
 只表示上一等长周期，不等同于同比。当前环比仅开放 `APPOINTMENT_COUNT`，上一周期为 0 时只返回差值，
 不生成无意义的百分比。
 
+Agent 侧会把每次当前周期或上一等长周期查询追加写入 PostgreSQL 表 `agent_operations_query_audits`，用于管理员查询追溯。
+审计只保存签名主体、角色快照、机构、固定指标、时间桶、日期范围、聚合行数、状态和 request/trace ID，不保存 SQL、Prompt、
+模型输出或预约明细。查询成功但审计无法写入时，Agent 不向模型返回该经营结果；这不改变 Java Gateway 的业务权限判断。
+
 ## 错误语义
 
 ```json

@@ -18,6 +18,10 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.infrastructure.gateway_client import GatewayClient, GatewayOperationsMetric
 
+from .operations_audit import (
+    OperationsAuditPersistenceError,
+    OperationsAuditRepository,
+)
 from .tool_registry import ToolContext, ToolDefinition
 
 _logger = structlog.get_logger("agent.operations")
@@ -108,12 +112,10 @@ def build_operations_report(result: GatewayOperationsMetric) -> dict[str, object
             warnings.append(f"已将 {missing_bucket_count} 个无记录时间桶按 0 计入趋势计算。")
         if len(rows) >= 2 and len(series) >= 2:
             first_bucket, last_bucket = series[0], series[-1]
-            first_value = int(first_bucket["value"])
-            last_value = int(last_bucket["value"])
+            first_value = cast(int, first_bucket["value"])
+            last_value = cast(int, last_bucket["value"])
             delta = last_value - first_value
-            change_percent = (
-                round(delta / first_value * 100, 2) if first_value else None
-            )
+            change_percent = round(delta / first_value * 100, 2) if first_value else None
             direction = "UP" if delta > 0 else "DOWN" if delta < 0 else "FLAT"
             report["trend_available"] = True
             report["trend"] = {
@@ -180,9 +182,7 @@ def build_operations_comparison_report(
     current_total = sum(row.value for row in current.rows)
     previous_total = sum(row.value for row in previous.rows)
     delta = current_total - previous_total
-    change_percent = (
-        round(delta / previous_total * 100, 2) if previous_total else None
-    )
+    change_percent = round(delta / previous_total * 100, 2) if previous_total else None
     direction = "UP" if delta > 0 else "DOWN" if delta < 0 else "FLAT"
     return {
         "type": "PREVIOUS_PERIOD",
@@ -199,10 +199,7 @@ def build_operations_comparison_report(
         "delta": delta,
         "change_percent": change_percent,
         "direction": direction,
-        "note": (
-            "变化百分比仅在上一周期非 0 时计算；上一周期为 0 时只报告差值，"
-            "不伪造百分比。"
-        ),
+        "note": ("变化百分比仅在上一周期非 0 时计算；上一周期为 0 时只报告差值，不伪造百分比。"),
     }
 
 
@@ -247,12 +244,7 @@ def parse_operations_intent(
         ("COACH_APPOINTMENT_COUNT", ("教练预约量", "教练预约", "教练表现", "教练工作量")),
         ("APPOINTMENT_COUNT", ("预约量", "预约数", "预约总量", "预约多少")),
     ]
-    matches = [
-        (metric, term)
-        for metric, terms in metric_terms
-        for term in terms
-        if term in text
-    ]
+    matches = [(metric, term) for metric, terms in metric_terms for term in terms if term in text]
     if not matches:
         return None
     # 如果一个短词完整包含在同一问题命中的长词中，则短词只是泛化别名；例如
@@ -297,9 +289,12 @@ def operations_prompt_hint(user_message: str) -> str:
         bucket_note = "，时间分组=" + hint.bucket
     comparison_note = "，对比上一等长周期" if hint.comparison != "NONE" else ""
     return (
-        "经营查询安全提示：可优先使用固定指标工具，指标=" + hint.metric
-        + "，开始日期=" + hint.from_date.isoformat()
-        + "，结束日期=" + hint.to_date.isoformat()
+        "经营查询安全提示：可优先使用固定指标工具，指标="
+        + hint.metric
+        + "，开始日期="
+        + hint.from_date.isoformat()
+        + "，结束日期="
+        + hint.to_date.isoformat()
         + bucket_note
         + comparison_note
         + "。该提示不代表已授权，不能改写为 SQL；工具参数仍须严格使用指标白名单。"
@@ -389,9 +384,21 @@ class OperationsMetricToolInput(BaseModel):
         return self
 
 
-def build_operations_tool_definitions(gateway: GatewayClient) -> tuple[ToolDefinition, ...]:
+def build_operations_tool_definitions(
+    gateway: GatewayClient,
+    *,
+    audit_repository: OperationsAuditRepository | None = None,
+) -> tuple[ToolDefinition, ...]:
+    """注册固定经营查询工具，并可选接入 PostgreSQL 持久化审计。
+
+    ``audit_repository`` 保持可选是为了让纯单元测试和离线工具组合不必启动数据库；
+    正式 FastAPI 进程始终注入仓储。仓储注入后，查询成功但审计写入失败会 fail-closed，
+    不把已经失去审计保护的经营结果返回给模型。
+    """
+
     async def query_metric(raw: BaseModel, context: ToolContext) -> object:
         data = cast(OperationsMetricToolInput, raw)
+
         async def query_period(
             *, from_date: date | None, to_date: date | None, role: str
         ) -> GatewayOperationsMetric:
@@ -405,22 +412,34 @@ def build_operations_tool_definitions(gateway: GatewayClient) -> tuple[ToolDefin
                     limit=data.limit,
                     bucket=data.bucket,
                 )
-                # 经营查询审计只保留“谁在什么范围查询了哪个固定指标以及结果规模”，
-                # 不记录 SQL、Prompt、明细数据或模型原始输出，避免日志变成第二个数据出口。
-                _logger.info(
-                    "operations_query_completed",
-                    metric=data.metric,
-                    comparison_role=role,
-                    organization_id=data.organization_id,
-                    from_date=result.from_date.isoformat(),
-                    to_date=result.to_date.isoformat(),
-                    bucket=data.bucket,
-                    row_count=len(result.rows),
-                    request_id=context.gateway_context.request_id,
-                    trace_id=context.gateway_context.trace_id,
-                )
-                return result
-            except Exception:
+            except Exception as exc:
+                if audit_repository is not None:
+                    try:
+                        await audit_repository.record(
+                            identity=context.identity,
+                            organization_id=data.organization_id,
+                            metric=data.metric,
+                            bucket=data.bucket,
+                            comparison_role=role,
+                            from_date=from_date,
+                            to_date=to_date,
+                            row_count=None,
+                            status="FAILED",
+                            error_code=type(exc).__name__[:100],
+                            request_id=context.gateway_context.request_id,
+                            trace_id=context.gateway_context.trace_id,
+                        )
+                    except Exception:  # noqa: BLE001 - 保留 Gateway 原始失败，审计失败只记日志
+                        # 原始 Gateway 错误仍然是业务调用的真实失败原因；审计失败只记录
+                        # 受控事件，不把数据库异常正文暴露给模型或用户。
+                        _logger.error(
+                            "operations_query_failure_audit_persistence_failed",
+                            metric=data.metric,
+                            comparison_role=role,
+                            organization_id=data.organization_id,
+                            request_id=context.gateway_context.request_id,
+                            trace_id=context.gateway_context.trace_id,
+                        )
                 _logger.warning(
                     "operations_query_failed",
                     metric=data.metric,
@@ -431,9 +450,53 @@ def build_operations_tool_definitions(gateway: GatewayClient) -> tuple[ToolDefin
                 )
                 raise
 
-        result = await query_period(
-            from_date=data.from_date, to_date=data.to_date, role="CURRENT"
-        )
+            if audit_repository is not None:
+                try:
+                    await audit_repository.record(
+                        identity=context.identity,
+                        organization_id=data.organization_id,
+                        metric=data.metric,
+                        bucket=data.bucket,
+                        comparison_role=role,
+                        from_date=result.from_date,
+                        to_date=result.to_date,
+                        row_count=len(result.rows),
+                        status="SUCCEEDED",
+                        error_code=None,
+                        request_id=context.gateway_context.request_id,
+                        trace_id=context.gateway_context.trace_id,
+                    )
+                except Exception as exc:
+                    # 经营结果已经从 Gateway 返回，但没有形成完整审计事实。生产环境不
+                    # 允许继续返回，以免出现“用户看到了数据、平台却无法追溯”的窗口。
+                    _logger.error(
+                        "operations_query_audit_persistence_failed",
+                        metric=data.metric,
+                        comparison_role=role,
+                        organization_id=data.organization_id,
+                        request_id=context.gateway_context.request_id,
+                        trace_id=context.gateway_context.trace_id,
+                    )
+                    raise OperationsAuditPersistenceError(
+                        "operations query audit persistence failed"
+                    ) from exc
+            # 经营查询审计只保留“谁在什么范围查询了哪个固定指标以及结果规模”，
+            # 不记录 SQL、Prompt、明细数据或模型原始输出，避免日志变成第二个数据出口。
+            _logger.info(
+                "operations_query_completed",
+                metric=data.metric,
+                comparison_role=role,
+                organization_id=data.organization_id,
+                from_date=result.from_date.isoformat(),
+                to_date=result.to_date.isoformat(),
+                bucket=data.bucket,
+                row_count=len(result.rows),
+                request_id=context.gateway_context.request_id,
+                trace_id=context.gateway_context.trace_id,
+            )
+            return result
+
+        result = await query_period(from_date=data.from_date, to_date=data.to_date, role="CURRENT")
         if data.comparison == "NONE":
             return build_operations_tool_result(result)
         previous_from, previous_to = _previous_period_bounds(result)
