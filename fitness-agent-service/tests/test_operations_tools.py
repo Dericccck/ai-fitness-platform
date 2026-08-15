@@ -168,6 +168,33 @@ def test_operations_report_marks_empty_result_as_non_conclusive() -> None:
     assert report["warnings"] == ["该时间范围没有可统计的有效记录，不能据此判断业务异常。"]
 
 
+def test_operations_report_supports_course_time_bucket_trend() -> None:
+    result = GatewayOperationsMetric(
+        metric="COURSE_APPOINTMENT_COUNT",
+        bucket="DAY",
+        organizationId="org-1",
+        **{
+            "from": date(2026, 8, 1),
+            "to": date(2026, 8, 3),
+            "rows": [
+                GatewayOperationsMetricRow(dimension="2026-08-01", label="2026-08-01", value=2),
+                GatewayOperationsMetricRow(dimension="2026-08-03", label="2026-08-03", value=5),
+            ],
+            "generatedAt": "2026-08-15T12:00:00Z",
+        },
+    )
+
+    report = build_operations_report(result)
+
+    assert report["trend_available"] is True
+    assert report["trend"]["direction"] == "UP"
+    assert report["series"] == [
+        {"bucket": "2026-08-01", "value": 2},
+        {"bucket": "2026-08-02", "value": 0},
+        {"bucket": "2026-08-03", "value": 5},
+    ]
+
+
 def test_operations_comparison_report_calculates_previous_period_delta() -> None:
     current = GatewayOperationsMetric(
         metric="APPOINTMENT_COUNT",

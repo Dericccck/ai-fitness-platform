@@ -53,31 +53,28 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
                 .addValue("toTime", Timestamp.from(to))
                 .addValue("limit", limit);
         if (bucket != OperationsTimeBucket.NONE) {
-            if (metric != OperationsMetric.APPOINTMENT_COUNT) {
+            if (!supportsTimeBucket(metric)) {
                 throw new IllegalArgumentException(
-                        "DAY/WEEK time buckets currently support APPOINTMENT_COUNT only");
+                        "DAY/WEEK time buckets currently support appointment, course and coach metrics");
             }
-            return jdbcTemplate.query(
-                    bucket == OperationsTimeBucket.DAY
-                            ? "SELECT DATE_FORMAT(DATE(course_start_time), '%Y-%m-%d') AS dimension, "
-                            + "DATE_FORMAT(DATE(course_start_time), '%Y-%m-%d') AS label, "
-                            + "COUNT(1) AS value FROM appointment "
-                            + "WHERE organization_id = :organizationId AND deleted = 0 "
-                            + "AND course_start_time >= :fromTime AND course_start_time < :toTime "
-                            + "GROUP BY DATE_FORMAT(DATE(course_start_time), '%Y-%m-%d') "
-                            + "ORDER BY DATE_FORMAT(DATE(course_start_time), '%Y-%m-%d') ASC LIMIT :limit"
-                            : "SELECT DATE_FORMAT(DATE_SUB(DATE(course_start_time), "
-                            + "INTERVAL WEEKDAY(course_start_time) DAY), '%Y-%m-%d') AS dimension, "
-                            + "DATE_FORMAT(DATE_SUB(DATE(course_start_time), "
-                            + "INTERVAL WEEKDAY(course_start_time) DAY), '%Y-%m-%d') AS label, "
-                            + "COUNT(1) AS value FROM appointment "
-                            + "WHERE organization_id = :organizationId AND deleted = 0 "
-                            + "AND course_start_time >= :fromTime AND course_start_time < :toTime "
-                            + "GROUP BY DATE_FORMAT(DATE_SUB(DATE(course_start_time), "
-                            + "INTERVAL WEEKDAY(course_start_time) DAY), '%Y-%m-%d') "
-                            + "ORDER BY DATE_FORMAT(DATE_SUB(DATE(course_start_time), "
-                            + "INTERVAL WEEKDAY(course_start_time) DAY), '%Y-%m-%d') ASC LIMIT :limit",
-                    parameters, this::mapRow);
+            String bucketExpression = bucket == OperationsTimeBucket.DAY
+                    ? "DATE_FORMAT(DATE(course_start_time), '%Y-%m-%d')"
+                    : "DATE_FORMAT(DATE_SUB(DATE(course_start_time), "
+                    + "INTERVAL WEEKDAY(course_start_time) DAY), '%Y-%m-%d')";
+            String metricFilter = metric == OperationsMetric.COURSE_APPOINTMENT_COUNT
+                    ? " AND course_id IS NOT NULL"
+                    : metric == OperationsMetric.COACH_APPOINTMENT_COUNT
+                    ? " AND coach_id IS NOT NULL"
+                    : "";
+            // bucketExpression 和 metricFilter 都来自 Java 枚举分支，不能由用户或模型注入；
+            // 实际机构和日期仍通过命名参数绑定，继续保留固定 SQL 的授权边界。
+            String sql = "SELECT " + bucketExpression + " AS dimension, "
+                    + bucketExpression + " AS label, COUNT(1) AS value FROM appointment "
+                    + "WHERE organization_id = :organizationId AND deleted = 0 "
+                    + "AND course_start_time >= :fromTime AND course_start_time < :toTime"
+                    + metricFilter + " GROUP BY " + bucketExpression
+                    + " ORDER BY " + bucketExpression + " ASC LIMIT :limit";
+            return jdbcTemplate.query(sql, parameters, this::mapRow);
         }
         switch (metric) {
             case APPOINTMENT_COUNT:
@@ -136,5 +133,11 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
                 resultSet.getString("label"),
                 resultSet.getLong("value")
         );
+    }
+
+    private boolean supportsTimeBucket(OperationsMetric metric) {
+        return metric == OperationsMetric.APPOINTMENT_COUNT
+                || metric == OperationsMetric.COURSE_APPOINTMENT_COUNT
+                || metric == OperationsMetric.COACH_APPOINTMENT_COUNT;
     }
 }

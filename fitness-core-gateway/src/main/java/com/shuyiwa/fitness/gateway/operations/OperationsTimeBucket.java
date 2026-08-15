@@ -4,7 +4,7 @@ package com.shuyiwa.fitness.gateway.operations;
  * Operations Agent 允许的时间分组粒度。
  *
  * <p>时间桶是固定契约，不接受模型传入任意 SQL 表达式。NONE 保持原来的整个区间
- * 汇总；DAY 和 WEEK 目前只开放给预约总量指标，用于后续趋势计算。</p>
+ * 汇总；DAY 和 WEEK 目前只开放给预约总量、课程预约量和教练预约量，用于趋势计算。</p>
  */
 public enum OperationsTimeBucket {
     NONE("NONE"),

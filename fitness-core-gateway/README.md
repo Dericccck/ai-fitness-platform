@@ -73,7 +73,7 @@ GET /internal/agent-tools/v1/courses?organizationId=...
 GET /internal/agent-tools/v1/contracts?organizationId=...&userId=...
 GET /internal/agent-tools/v1/appointments?organizationId=...&userId=...&from=...&to=...
 GET /internal/agent-tools/v1/booking/availability?organizationId=...&studentId=...&coachId=...&courseId=...&start=...&end=...
-GET /internal/agent-tools/v1/operations/metrics?organizationId=...&metric=APPOINTMENT_COUNT&from=2026-08-01&to=2026-08-15
+GET /internal/agent-tools/v1/operations/metrics?organizationId=...&metric=APPOINTMENT_COUNT&from=2026-08-01&to=2026-08-15&bucket=DAY
 POST /internal/agent-tools/v1/appointments
 POST /internal/agent-tools/v1/appointments/{appointmentId}/reschedule
 POST /internal/agent-tools/v1/appointments/{appointmentId}/cancel
@@ -99,3 +99,6 @@ REMAINING_CLASS_HOURS
 经营指标只允许 `SYSTEM_ADMIN` 和 `ORGANIZATION_ADMIN` 访问，查询会绑定签名上下文中的机构范围，
 时间范围最多 92 天，单次最多返回 100 行。当前阶段不接受 SQL、表名或任意字段名；后续 Text-to-SQL
 也必须先映射到这个指标目录，并继续由 Java Gateway 执行固定 SQL。
+
+`bucket=DAY` 或 `bucket=WEEK` 当前开放给预约总量、课程预约量和教练预约量；课程指标只统计有课程 ID 的预约，
+教练指标只统计有教练 ID 的预约。状态分布和剩余课时仍只能查询整个时间范围汇总。

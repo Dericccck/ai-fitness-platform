@@ -41,12 +41,18 @@ public class JdbcOperationsReadRepositoryIntegrationTest {
         for (OperationsTimeBucket bucket : new OperationsTimeBucket[]{
                 OperationsTimeBucket.DAY, OperationsTimeBucket.WEEK
         }) {
-            List<OperationsMetricRow> rows = repository.query(
-                    required("GATEWAY_IT_ORGANIZATION_ID"), OperationsMetric.APPOINTMENT_COUNT,
-                    bucket, Instant.parse("2026-01-01T00:00:00Z"),
-                    Instant.parse("2027-01-01T00:00:00Z"), 100
-            );
-            assertNotNull(bucket.getCode() + " must return a list", rows);
+            for (OperationsMetric metric : new OperationsMetric[]{
+                    OperationsMetric.APPOINTMENT_COUNT,
+                    OperationsMetric.COURSE_APPOINTMENT_COUNT,
+                    OperationsMetric.COACH_APPOINTMENT_COUNT
+            }) {
+                List<OperationsMetricRow> rows = repository.query(
+                        required("GATEWAY_IT_ORGANIZATION_ID"), metric, bucket,
+                        Instant.parse("2026-01-01T00:00:00Z"),
+                        Instant.parse("2027-01-01T00:00:00Z"), 100
+                );
+                assertNotNull(metric.getCode() + " " + bucket.getCode() + " must return a list", rows);
+            }
         }
     }
 

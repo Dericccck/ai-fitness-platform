@@ -70,9 +70,9 @@ public class OperationsToolService {
         }
         OperationsMetric metric = OperationsMetric.parse(metricCode);
         OperationsTimeBucket bucket = OperationsTimeBucket.parse(bucketCode);
-        if (bucket != OperationsTimeBucket.NONE && metric != OperationsMetric.APPOINTMENT_COUNT) {
+        if (bucket != OperationsTimeBucket.NONE && !supportsTimeBucket(metric)) {
             throw new IllegalArgumentException(
-                    "DAY/WEEK time buckets currently support APPOINTMENT_COUNT only");
+                    "DAY/WEEK time buckets currently support appointment, course and coach metrics");
         }
         int limit = normalizeLimit(requestedLimit);
         Instant fromInstant = start.atStartOfDay(BUSINESS_ZONE).toInstant();
@@ -93,6 +93,16 @@ public class OperationsToolService {
         if (!context.isSystemAdmin() && !context.isOrganizationAdmin()) {
             throw new GatewayForbiddenException("operations metrics require administrator role");
         }
+    }
+
+    /**
+     * 时间桶仍然只开放给固定的预约类指标；状态分布和剩余课时不允许被伪装成趋势。
+     * 该白名单与 Repository 的固定 SQL 分支保持一致，避免只改一层造成权限或口径漂移。
+     */
+    private boolean supportsTimeBucket(OperationsMetric metric) {
+        return metric == OperationsMetric.APPOINTMENT_COUNT
+                || metric == OperationsMetric.COURSE_APPOINTMENT_COUNT
+                || metric == OperationsMetric.COACH_APPOINTMENT_COUNT;
     }
 
     private int normalizeLimit(Integer requestedLimit) {

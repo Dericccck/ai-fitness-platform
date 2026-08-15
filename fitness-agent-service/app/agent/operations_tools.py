@@ -37,6 +37,9 @@ _METRICS = Literal[
 _TIME_BUCKETS = Literal["NONE", "DAY", "WEEK"]
 _COMPARISONS = Literal["NONE", "PREVIOUS_PERIOD"]
 _BUSINESS_ZONE = ZoneInfo("Asia/Shanghai")
+_BUCKET_METRICS = frozenset(
+    {"APPOINTMENT_COUNT", "COURSE_APPOINTMENT_COUNT", "COACH_APPOINTMENT_COUNT"}
+)
 
 
 @dataclass(frozen=True)
@@ -281,9 +284,9 @@ def operations_prompt_hint(user_message: str) -> str:
         )
     bucket_note = ""
     if hint.bucket != "NONE":
-        if hint.metric != "APPOINTMENT_COUNT":
+        if hint.metric not in _BUCKET_METRICS:
             return (
-                "当前仅支持对预约总量按日或按周查询趋势。请先向用户澄清，"
+                "当前仅支持预约、课程预约量和教练预约量按日或按周查询趋势。请先向用户澄清，"
                 "不要调用不支持时间桶的经营指标工具，也不要生成任意 SQL。"
             )
         bucket_note = "，时间分组=" + hint.bucket
@@ -377,8 +380,10 @@ class OperationsMetricToolInput(BaseModel):
             raise ValueError("from must be earlier than or equal to to")
         if self.from_date and self.to_date and (self.to_date - self.from_date).days > 92:
             raise ValueError("operations time range must not exceed 92 days")
-        if self.bucket != "NONE" and self.metric != "APPOINTMENT_COUNT":
-            raise ValueError("DAY/WEEK buckets currently support APPOINTMENT_COUNT only")
+        if self.bucket != "NONE" and self.metric not in _BUCKET_METRICS:
+            raise ValueError(
+                "DAY/WEEK buckets currently support appointment, course and coach metrics"
+            )
         if self.comparison != "NONE" and self.metric != "APPOINTMENT_COUNT":
             raise ValueError("PREVIOUS_PERIOD comparison currently supports APPOINTMENT_COUNT only")
         return self

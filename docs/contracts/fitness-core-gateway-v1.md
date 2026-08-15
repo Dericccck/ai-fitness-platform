@@ -63,8 +63,10 @@ claim。Agent 服务会 fail-closed，因此这一外部依赖未落地时专业
 不接受 SQL、表名或任意字段名；这条边界是后续受控 Text-to-SQL 的前置条件。
 
 `bucket` 只允许 `NONE`、`DAY`、`WEEK`。省略时默认为 `NONE`，返回整个时间范围的聚合；当前
-`DAY`/`WEEK` 仅允许指标 `APPOINTMENT_COUNT`，返回按业务时区（`Asia/Shanghai`）分组的预约量，
-其中 `dimension` 和 `label` 为时间桶起始日期。时间桶仍由 Gateway 执行固定 SQL，不接受任意分组字段。
+`DAY`/`WEEK` 仅允许指标 `APPOINTMENT_COUNT`、`COURSE_APPOINTMENT_COUNT` 和 `COACH_APPOINTMENT_COUNT`，返回按业务时区（`Asia/Shanghai`）
+分组的预约量，
+其中 `dimension` 和 `label` 为时间桶起始日期；`COURSE_APPOINTMENT_COUNT` 只统计有课程 ID 的预约，
+`COACH_APPOINTMENT_COUNT` 只统计有教练 ID 的预约。时间桶仍由 Gateway 执行固定 SQL，不接受任意分组字段。
 返回视图会额外携带实际生效的 `bucket`，便于 Agent 判断能否计算趋势。
 Agent 解释层会根据 `from`、`to` 和 `bucket` 补齐 Gateway 没有返回的零值时间桶；这只是对已授权
 聚合结果的确定性补全，不会制造预约明细，也不会改变 Gateway 的权限和查询范围。

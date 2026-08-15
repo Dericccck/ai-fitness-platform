@@ -4,9 +4,7 @@ from app.agent.operations_tools import operations_prompt_hint, parse_operations_
 
 
 def test_parses_monthly_course_metric() -> None:
-    hint = parse_operations_intent(
-        "查看本月课程预约量", today=date(2026, 8, 15)
-    )
+    hint = parse_operations_intent("查看本月课程预约量", today=date(2026, 8, 15))
 
     assert hint is not None
     assert hint.metric == "COURSE_APPOINTMENT_COUNT"
@@ -15,9 +13,7 @@ def test_parses_monthly_course_metric() -> None:
 
 
 def test_parses_recent_status_metric() -> None:
-    hint = parse_operations_intent(
-        "统计近7天预约状态", today=date(2026, 8, 15)
-    )
+    hint = parse_operations_intent("统计近7天预约状态", today=date(2026, 8, 15))
 
     assert hint is not None
     assert hint.metric == "APPOINTMENT_STATUS_BREAKDOWN"
@@ -25,19 +21,31 @@ def test_parses_recent_status_metric() -> None:
 
 
 def test_parses_daily_appointment_trend() -> None:
-    hint = parse_operations_intent(
-        "查看近30天预约量趋势", today=date(2026, 8, 15)
-    )
+    hint = parse_operations_intent("查看近30天预约量趋势", today=date(2026, 8, 15))
 
     assert hint is not None
     assert hint.metric == "APPOINTMENT_COUNT"
     assert hint.bucket == "DAY"
 
 
+def test_parses_daily_course_trend() -> None:
+    hint = parse_operations_intent("查看本月课程预约量趋势", today=date(2026, 8, 15))
+
+    assert hint is not None
+    assert hint.metric == "COURSE_APPOINTMENT_COUNT"
+    assert hint.bucket == "DAY"
+
+
+def test_parses_weekly_coach_trend() -> None:
+    hint = parse_operations_intent("查看近30天教练预约量按周趋势", today=date(2026, 8, 15))
+
+    assert hint is not None
+    assert hint.metric == "COACH_APPOINTMENT_COUNT"
+    assert hint.bucket == "WEEK"
+
+
 def test_parses_previous_period_comparison() -> None:
-    hint = parse_operations_intent(
-        "查看本月预约量，和上月比变化多少", today=date(2026, 8, 15)
-    )
+    hint = parse_operations_intent("查看本月预约量，和上月比变化多少", today=date(2026, 8, 15))
 
     assert hint is not None
     assert hint.metric == "APPOINTMENT_COUNT"

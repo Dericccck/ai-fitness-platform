@@ -78,11 +78,51 @@ public class OperationsToolServiceTest {
     }
 
     @Test
-    public void nonAppointmentMetricCannotRequestTimeBucket() {
+    public void organizationAdminCanRequestDailyCourseTrend() {
+        when(repository.query(
+                "org-1", OperationsMetric.COURSE_APPOINTMENT_COUNT, OperationsTimeBucket.DAY,
+                Instant.parse("2026-07-31T16:00:00Z"), Instant.parse("2026-08-15T16:00:00Z"), 20
+        )).thenReturn(Arrays.asList(
+                new OperationsMetricRow("2026-08-01", "2026-08-01", 4),
+                new OperationsMetricRow("2026-08-02", "2026-08-02", 6)
+        ));
+
+        OperationsViews.MetricView result = service.metric(
+                context(AgentContext.ROLE_ORGANIZATION_ADMIN), "org-1", "COURSE_APPOINTMENT_COUNT",
+                LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 15), 20, "DAY"
+        );
+
+        assertEquals("DAY", result.getBucket());
+        assertEquals(2, result.getRows().size());
+        assertEquals(6L, result.getRows().get(1).getValue());
+    }
+
+    @Test
+    public void organizationAdminCanRequestWeeklyCoachTrend() {
+        when(repository.query(
+                "org-1", OperationsMetric.COACH_APPOINTMENT_COUNT, OperationsTimeBucket.WEEK,
+                Instant.parse("2026-07-31T16:00:00Z"), Instant.parse("2026-08-15T16:00:00Z"), 20
+        )).thenReturn(Arrays.asList(
+                new OperationsMetricRow("2026-07-27", "2026-07-27", 9),
+                new OperationsMetricRow("2026-08-03", "2026-08-03", 12)
+        ));
+
+        OperationsViews.MetricView result = service.metric(
+                context(AgentContext.ROLE_ORGANIZATION_ADMIN), "org-1", "COACH_APPOINTMENT_COUNT",
+                LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 15), 20, "WEEK"
+        );
+
+        assertEquals("WEEK", result.getBucket());
+        assertEquals(2, result.getRows().size());
+        assertEquals(12L, result.getRows().get(1).getValue());
+    }
+
+    @Test
+    public void statusMetricCannotRequestTimeBucket() {
         try {
             service.metric(
                     context(AgentContext.ROLE_ORGANIZATION_ADMIN), "org-1",
-                    "COURSE_APPOINTMENT_COUNT", LocalDate.of(2026, 8, 1),
+                    "APPOINTMENT_STATUS_BREAKDOWN", LocalDate.of(2026, 8, 1),
                     LocalDate.of(2026, 8, 15), 20, "WEEK"
             );
         } catch (IllegalArgumentException expected) {
