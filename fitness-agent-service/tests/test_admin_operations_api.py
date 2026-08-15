@@ -91,6 +91,14 @@ async def test_platform_admin_can_query_operations_audits() -> None:
 
     assert response.status_code == 200
     assert response.json()["items"][0]["metric"] == "APPOINTMENT_COUNT"
+    assert response.json()["items"][0]["metric_definition"] == {
+        "id": "APPOINTMENT_COUNT",
+        "label": "预约总量",
+        "description": "指定机构和时间范围内的预约记录总数。",
+        "dimension_description": "总量维度，不返回预约明细。",
+        "supported_buckets": ["DAY", "NONE", "WEEK"],
+        "supports_previous_period": True,
+    }
     assert response.json()["has_more"] is True
     assert "sql" not in response.json()["items"][0]
     assert "prompt" not in response.json()["items"][0]

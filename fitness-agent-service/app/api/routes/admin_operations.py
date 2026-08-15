@@ -9,12 +9,26 @@ from fastapi import APIRouter, Header, HTTPException, Query, Request, status
 from pydantic import BaseModel, ConfigDict
 
 from app.agent.operations_audit import OperationsAuditRecord, OperationsAuditRepository
+from app.agent.operations_tools import get_operations_metric_definition
 from app.infrastructure.agent_context import AgentContextVerificationError, AgentIdentity
 
 router = APIRouter(prefix="/api/v1/admin/operations", tags=["admin-operations"])
 
 _OPERATIONS_ADMIN_ROLES = frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "ADMIN", "SUPER_ADMIN"})
 _PLATFORM_ADMIN_ROLES = frozenset({"SYSTEM_ADMIN", "ADMIN", "SUPER_ADMIN"})
+
+
+class OperationsMetricDefinitionResponse(BaseModel):
+    """管理员查看历史查询时使用的固定指标口径说明。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    label: str
+    description: str
+    dimension_description: str
+    supported_buckets: tuple[str, ...]
+    supports_previous_period: bool
 
 
 class OperationsAuditResponse(BaseModel):
@@ -27,6 +41,7 @@ class OperationsAuditResponse(BaseModel):
     actor_roles: str | None
     organization_id: str
     metric: str
+    metric_definition: OperationsMetricDefinitionResponse
     bucket: str
     comparison_role: str
     from_date: date | None
@@ -144,12 +159,34 @@ def _verify_operations_admin(request: Request, token: str | None) -> AgentIdenti
 
 
 def _to_response(record: OperationsAuditRecord) -> OperationsAuditResponse:
+    definition = get_operations_metric_definition(record.metric)
+    if definition is None:
+        # 审计仓储会拦截未知指标；这里保留兼容兜底，避免历史异常数据导致管理员
+        # 无法打开整页记录，同时明确告诉前端该口径不能用于业务解释。
+        metric_definition = OperationsMetricDefinitionResponse(
+            id=record.metric,
+            label=record.metric,
+            description="未识别的历史指标定义，禁止据此生成业务解释。",
+            dimension_description="未知",
+            supported_buckets=(),
+            supports_previous_period=False,
+        )
+    else:
+        metric_definition = OperationsMetricDefinitionResponse(
+            id=definition.metric,
+            label=definition.label,
+            description=definition.description,
+            dimension_description=definition.dimension_description,
+            supported_buckets=tuple(sorted(definition.supported_buckets)),
+            supports_previous_period=definition.supports_previous_period,
+        )
     return OperationsAuditResponse(
         id=record.id,
         subject_user_id=record.subject_user_id,
         actor_roles=record.actor_roles,
         organization_id=record.organization_id,
         metric=record.metric,
+        metric_definition=metric_definition,
         bucket=record.bucket,
         comparison_role=record.comparison_role,
         from_date=record.from_date,
