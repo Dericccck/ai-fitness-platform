@@ -96,8 +96,41 @@ def test_operations_report_calculates_qualified_daily_trend() -> None:
         "last_value": 8,
         "delta": 3,
         "change_percent": 60.0,
-        "note": "趋势基于首个和末个有记录的时间桶；没有预约的时间桶不会出现在当前结果中。",
+        "note": "趋势基于完整时间桶序列；没有预约的时间桶已按 0 计入。",
     }
+    assert report["series"] == [
+        {"bucket": "2026-08-01", "value": 5},
+        {"bucket": "2026-08-02", "value": 0},
+        {"bucket": "2026-08-03", "value": 8},
+    ]
+    assert report["warnings"] == ["已将 1 个无记录时间桶按 0 计入趋势计算。"]
+
+
+def test_operations_report_fills_week_buckets_and_handles_leading_zero() -> None:
+    result = GatewayOperationsMetric(
+        metric="APPOINTMENT_COUNT",
+        bucket="WEEK",
+        organizationId="org-1",
+        **{
+            "from": date(2026, 8, 5),
+            "to": date(2026, 8, 19),
+            "rows": [
+                GatewayOperationsMetricRow(dimension="2026-08-10", label="2026-08-10", value=7),
+            ],
+            "generatedAt": "2026-08-19T12:00:00Z",
+        },
+    )
+
+    report = build_operations_report(result)
+
+    assert report["series"] == [
+        {"bucket": "2026-08-03", "value": 0},
+        {"bucket": "2026-08-10", "value": 7},
+        {"bucket": "2026-08-17", "value": 0},
+    ]
+    assert report["trend_available"] is False
+    assert report["trend_note"] == "有效数据桶少于 2 个，暂不判断趋势。"
+    assert report["warnings"] == ["已将 2 个无记录时间桶按 0 计入趋势计算。"]
 
 
 def test_operations_report_marks_empty_result_as_non_conclusive() -> None:

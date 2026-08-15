@@ -58,8 +58,8 @@ def build_operations_report(result: GatewayOperationsMetric) -> dict[str, object
     """把固定指标结果转换成可供模型解释的确定性报表摘要。
 
     <p>摘要由程序根据 Gateway 返回的聚合结果计算，不让模型自行计算总量或百分比。
-    当前 Gateway 返回的是整个时间段的聚合值，没有按日/周拆分，因此这里明确标记
-    “暂不判断趋势”，避免模型把区间汇总误说成增长或下降。</p>
+    DAY/WEEK 结果会在这里补齐查询范围内没有记录的时间桶并填充为 0；没有足够时间桶
+    时仍明确标记“暂不判断趋势”，避免模型把不完整的区间汇总误说成增长或下降。</p>
     """
 
     rows = list(result.rows)
@@ -100,27 +100,60 @@ def build_operations_report(result: GatewayOperationsMetric) -> dict[str, object
             for row in rows
         ]
     if result.bucket in {"DAY", "WEEK"}:
-        if len(rows) >= 2:
-            first_row, last_row = rows[0], rows[-1]
-            delta = last_row.value - first_row.value
+        series, missing_bucket_count = _build_complete_time_series(result)
+        report["series"] = series
+        if missing_bucket_count:
+            warnings.append(f"已将 {missing_bucket_count} 个无记录时间桶按 0 计入趋势计算。")
+        if len(rows) >= 2 and len(series) >= 2:
+            first_bucket, last_bucket = series[0], series[-1]
+            first_value = int(first_bucket["value"])
+            last_value = int(last_bucket["value"])
+            delta = last_value - first_value
             change_percent = (
-                round(delta / first_row.value * 100, 2) if first_row.value else None
+                round(delta / first_value * 100, 2) if first_value else None
             )
             direction = "UP" if delta > 0 else "DOWN" if delta < 0 else "FLAT"
             report["trend_available"] = True
             report["trend"] = {
                 "direction": direction,
-                "first_bucket": first_row.label,
-                "first_value": first_row.value,
-                "last_bucket": last_row.label,
-                "last_value": last_row.value,
+                "first_bucket": first_bucket["bucket"],
+                "first_value": first_value,
+                "last_bucket": last_bucket["bucket"],
+                "last_value": last_value,
                 "delta": delta,
                 "change_percent": change_percent,
-                "note": "趋势基于首个和末个有记录的时间桶；没有预约的时间桶不会出现在当前结果中。",
+                "note": "趋势基于完整时间桶序列；没有预约的时间桶已按 0 计入。",
             }
         else:
-            report["trend_note"] = "有效时间桶少于 2 个，暂不判断趋势。"
+            report["trend_note"] = "有效数据桶少于 2 个，暂不判断趋势。"
     return report
+
+
+def _build_complete_time_series(
+    result: GatewayOperationsMetric,
+) -> tuple[list[dict[str, object]], int]:
+    """按照查询边界补齐 DAY/WEEK 时间桶，避免缺失日期被模型误解为数据缺失。"""
+
+    if result.bucket == "DAY":
+        first_bucket = result.from_date
+        last_bucket = result.to_date
+        step = timedelta(days=1)
+    else:
+        # WEEK 的桶起点统一为周一，并覆盖 from/to 所在的完整周桶。
+        first_bucket = result.from_date - timedelta(days=result.from_date.weekday())
+        last_bucket = result.to_date - timedelta(days=result.to_date.weekday())
+        step = timedelta(days=7)
+    values = {row.dimension: row.value for row in result.rows}
+    series: list[dict[str, object]] = []
+    missing_count = 0
+    current = first_bucket
+    while current <= last_bucket:
+        bucket = current.isoformat()
+        if bucket not in values:
+            missing_count += 1
+        series.append({"bucket": bucket, "value": values.get(bucket, 0)})
+        current += step
+    return series, missing_count
 
 
 def build_operations_tool_result(result: GatewayOperationsMetric) -> dict[str, object]:
