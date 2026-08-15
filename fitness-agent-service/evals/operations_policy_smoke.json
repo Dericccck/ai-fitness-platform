@@ -1,0 +1,102 @@
+[
+  {
+    "case_id": "matching-appointment-query",
+    "user_message": "查看 2026-08-01 到 2026-08-15 的预约量",
+    "query": {
+      "organization_id": "org-1",
+      "metric": "APPOINTMENT_COUNT",
+      "from": "2026-08-01",
+      "to": "2026-08-15"
+    },
+    "today": "2026-08-15",
+    "allowed_organization_ids": ["org-1"],
+    "expected_allowed": true,
+    "expected_reason_code": "ALLOWED"
+  },
+  {
+    "case_id": "metric-drift-is-rejected",
+    "user_message": "查看 2026-08-01 到 2026-08-15 的预约量",
+    "query": {
+      "organization_id": "org-1",
+      "metric": "COURSE_APPOINTMENT_COUNT",
+      "from": "2026-08-01",
+      "to": "2026-08-15"
+    },
+    "today": "2026-08-15",
+    "allowed_organization_ids": ["org-1"],
+    "expected_allowed": false,
+    "expected_reason_code": "METRIC_MISMATCH"
+  },
+  {
+    "case_id": "expanded-date-range-is-rejected",
+    "user_message": "查看 2026-08-01 到 2026-08-15 的预约量",
+    "query": {
+      "organization_id": "org-1",
+      "metric": "APPOINTMENT_COUNT",
+      "from": "2026-08-01",
+      "to": "2026-08-31"
+    },
+    "today": "2026-08-15",
+    "allowed_organization_ids": ["org-1"],
+    "expected_allowed": false,
+    "expected_reason_code": "DATE_RANGE_MISMATCH"
+  },
+  {
+    "case_id": "year-over-year-requires-clarification",
+    "user_message": "查看预约量同比变化",
+    "query": {
+      "organization_id": "org-1",
+      "metric": "APPOINTMENT_COUNT",
+      "from": "2026-08-01",
+      "to": "2026-08-15"
+    },
+    "today": "2026-08-15",
+    "allowed_organization_ids": ["org-1"],
+    "expected_allowed": false,
+    "expected_reason_code": "INTENT_REQUIRES_CLARIFICATION"
+  },
+  {
+    "case_id": "organization-scope-is-enforced",
+    "user_message": "查看 2026-08-01 到 2026-08-15 的预约量",
+    "query": {
+      "organization_id": "org-2",
+      "metric": "APPOINTMENT_COUNT",
+      "from": "2026-08-01",
+      "to": "2026-08-15"
+    },
+    "today": "2026-08-15",
+    "allowed_organization_ids": ["org-1"],
+    "expected_allowed": false,
+    "expected_reason_code": "ORGANIZATION_SCOPE_MISMATCH"
+  },
+  {
+    "case_id": "bucket-drift-is-rejected",
+    "user_message": "查看 2026-08-01 到 2026-08-15 的预约量按周趋势",
+    "query": {
+      "organization_id": "org-1",
+      "metric": "APPOINTMENT_COUNT",
+      "from": "2026-08-01",
+      "to": "2026-08-15",
+      "bucket": "DAY"
+    },
+    "today": "2026-08-15",
+    "allowed_organization_ids": ["org-1"],
+    "expected_allowed": false,
+    "expected_reason_code": "BUCKET_MISMATCH"
+  },
+  {
+    "case_id": "comparison-drift-is-rejected",
+    "user_message": "查看 2026-08-01 到 2026-08-15 的预约量和上期相比变化",
+    "query": {
+      "organization_id": "org-1",
+      "metric": "APPOINTMENT_COUNT",
+      "from": "2026-08-01",
+      "to": "2026-08-15",
+      "comparison": "NONE"
+    },
+    "today": "2026-08-15",
+    "allowed_organization_ids": ["org-1"],
+    "expected_allowed": false,
+    "expected_reason_code": "COMPARISON_MISMATCH"
+  }
+]

@@ -1,6 +1,11 @@
 from datetime import date
 
-from app.agent.operations_tools import operations_prompt_hint, parse_operations_intent
+from app.agent.operations_tools import (
+    OperationsMetricToolInput,
+    operations_prompt_hint,
+    parse_operations_intent,
+    validate_operations_query_policy,
+)
 
 
 def test_parses_monthly_course_metric() -> None:
@@ -69,3 +74,60 @@ def test_ambiguous_metric_requires_clarification() -> None:
 
 def test_cross_metric_request_is_not_guessed() -> None:
     assert parse_operations_intent("查看课程预约和剩余课时", today=date(2026, 8, 15)) is None
+
+
+def test_query_policy_allows_matching_metric_and_range() -> None:
+    query = OperationsMetricToolInput(
+        organization_id="org-1",
+        metric="APPOINTMENT_COUNT",
+        from_date=date(2026, 8, 1),
+        to_date=date(2026, 8, 15),
+    )
+
+    decision = validate_operations_query_policy(
+        "查看 2026-08-01 到 2026-08-15 的预约量",
+        query,
+        today=date(2026, 8, 15),
+        allowed_organization_ids=frozenset({"org-1"}),
+    )
+
+    assert decision.allowed is True
+    assert decision.reason_code == "ALLOWED"
+
+
+def test_query_policy_rejects_metric_drift_and_expanded_range() -> None:
+    query = OperationsMetricToolInput(
+        organization_id="org-1",
+        metric="COURSE_APPOINTMENT_COUNT",
+        from_date=date(2026, 1, 1),
+        to_date=date(2026, 3, 31),
+    )
+
+    decision = validate_operations_query_policy(
+        "查看 2026-08-01 到 2026-08-15 的预约量",
+        query,
+        today=date(2026, 8, 15),
+        allowed_organization_ids=frozenset({"org-1"}),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "METRIC_MISMATCH"
+
+
+def test_query_policy_rejects_unsupported_year_over_year_and_wrong_organization() -> None:
+    query = OperationsMetricToolInput(
+        organization_id="org-2",
+        metric="APPOINTMENT_COUNT",
+        from_date=date(2026, 8, 1),
+        to_date=date(2026, 8, 15),
+    )
+
+    decision = validate_operations_query_policy(
+        "查看预约量同比变化",
+        query,
+        today=date(2026, 8, 15),
+        allowed_organization_ids=frozenset({"org-1"}),
+    )
+
+    assert decision.allowed is False
+    assert decision.reason_code == "ORGANIZATION_SCOPE_MISMATCH"

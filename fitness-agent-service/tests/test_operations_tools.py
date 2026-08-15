@@ -9,7 +9,7 @@ from app.agent.operations_tools import (
     build_operations_tool_definitions,
     build_operations_tool_result,
 )
-from app.agent.tool_registry import ToolContext, ToolRegistry
+from app.agent.tool_registry import ToolContext, ToolExecutionError, ToolRegistry
 from app.infrastructure.gateway_client import (
     GatewayOperationsMetric,
     GatewayOperationsMetricRow,
@@ -319,6 +319,35 @@ async def test_operations_tool_queries_current_and_previous_period() -> None:
         (date(2026, 7, 17), date(2026, 7, 31)),
     ]
     assert result["comparison"]["change_percent"] == 20.0
+
+
+@pytest.mark.asyncio
+async def test_operations_tool_rejects_metric_drift_before_gateway_call() -> None:
+    gateway = FakeOperationsGateway()
+    registry = ToolRegistry()
+    for definition in build_operations_tool_definitions(gateway):  # type: ignore[arg-type]
+        registry.register(definition)
+
+    with pytest.raises(ToolExecutionError):
+        await registry.invoke(
+            "fitness.operations.metric.query.v1",
+            {
+                "organization_id": "org-1",
+                "metric": "COURSE_APPOINTMENT_COUNT",
+                "from": "2026-08-01",
+                "to": "2026-08-15",
+            },
+            ToolContext(
+                gateway_context=GatewayRequestContext(
+                    signed_context="signed-context",
+                    request_id="request-policy",
+                    trace_id="trace-policy",
+                ),
+                user_message="查看 2026-08-01 到 2026-08-15 的预约量",
+            ),
+        )
+
+    assert gateway.calls == []
 
 
 @pytest.mark.asyncio

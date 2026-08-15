@@ -85,6 +85,9 @@ class ToolContext:
     # 只读 Agent 工具在需要按当前用户做 RAG 权限过滤时使用。该身份来自已验证的
     # AgentContext，不是模型参数；写工具仍由 Gateway 再次完成最终权限判断。
     identity: AgentIdentity | None = None
+    # 仅用于查询前的“用户问题-工具参数”一致性校验；不会写入 State、Checkpoint
+    # 或工具审计，也不能作为权限依据。
+    user_message: str | None = None
 
 
 @dataclass(frozen=True)

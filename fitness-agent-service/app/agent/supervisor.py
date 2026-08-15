@@ -106,6 +106,8 @@ class SupervisorRuntimeContext:
     # 签名身份和 thread 只通过 LangGraph runtime context 注入，不能写入 State。
     identity: AgentIdentity | None = None
     thread_id: str | None = None
+    # 当前问题只传给需要做查询前策略校验的工具，不进入 State 或 Checkpoint。
+    user_message: str | None = None
 
 
 @dataclass(frozen=True)
@@ -326,6 +328,7 @@ class Supervisor:
                     gateway_context=request.gateway_context,
                     identity=request.identity,
                     thread_id=thread_id,
+                    user_message=request.user_message,
                 ),
             )
 
@@ -678,6 +681,7 @@ class Supervisor:
         context = ToolContext(
             gateway_context=runtime.context.gateway_context,
             identity=runtime.context.identity,
+            user_message=runtime.context.user_message,
         )
         tool_messages: list[dict[str, Any]] = []
         calls = state.get("model_tool_calls", [])

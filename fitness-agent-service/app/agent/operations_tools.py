@@ -54,6 +54,15 @@ class OperationsQueryHint:
     comparison: _COMPARISONS
 
 
+@dataclass(frozen=True)
+class OperationsQueryPolicyDecision:
+    """自然语言问题与模型工具参数的一致性校验结果。"""
+
+    allowed: bool
+    reason_code: str
+    message: str
+
+
 _METRIC_LABELS = {
     "APPOINTMENT_COUNT": "预约总量",
     "APPOINTMENT_STATUS_BREAKDOWN": "预约状态分布",
@@ -389,6 +398,65 @@ class OperationsMetricToolInput(BaseModel):
         return self
 
 
+def validate_operations_query_policy(
+    user_message: str,
+    query: OperationsMetricToolInput,
+    *,
+    today: date | None = None,
+    allowed_organization_ids: frozenset[str] | None = None,
+) -> OperationsQueryPolicyDecision:
+    """校验模型提出的经营查询是否忠实于用户问题和签名组织范围。
+
+    <p>模型可能生成一个格式合法但语义不同的工具参数，例如用户问“本月预约量”，
+    模型却改查课程预约量，或者把查询时间扩大到全年。Pydantic 只能验证参数格式，
+    不能验证这种语义偏移，因此这里再次把工具参数和确定性意图提示逐项比对。该函数
+    不授予权限；组织范围仍由签名 AgentContext 和 Java Gateway 最终确认。</p>
+    """
+
+    if (
+        allowed_organization_ids is not None
+        and query.organization_id not in allowed_organization_ids
+    ):
+        return OperationsQueryPolicyDecision(
+            False,
+            "ORGANIZATION_SCOPE_MISMATCH",
+            "经营查询组织不在当前签名身份的组织范围内，不能执行查询。",
+        )
+
+    hint = parse_operations_intent(user_message, today=today)
+    if hint is None:
+        return OperationsQueryPolicyDecision(
+            False,
+            "INTENT_REQUIRES_CLARIFICATION",
+            "经营问题未能安全映射到唯一指标、时间范围或对比口径，请先澄清后再查询。",
+        )
+    if query.metric != hint.metric:
+        return OperationsQueryPolicyDecision(
+            False,
+            "METRIC_MISMATCH",
+            f"工具指标 {query.metric} 与用户问题识别出的指标 {hint.metric} 不一致。",
+        )
+    if query.bucket != hint.bucket:
+        return OperationsQueryPolicyDecision(
+            False,
+            "BUCKET_MISMATCH",
+            f"工具时间桶 {query.bucket} 与用户问题识别出的时间桶 {hint.bucket} 不一致。",
+        )
+    if query.comparison != hint.comparison:
+        return OperationsQueryPolicyDecision(
+            False,
+            "COMPARISON_MISMATCH",
+            f"工具对比口径 {query.comparison} 与用户问题识别出的口径 {hint.comparison} 不一致。",
+        )
+    if query.from_date != hint.from_date or query.to_date != hint.to_date:
+        return OperationsQueryPolicyDecision(
+            False,
+            "DATE_RANGE_MISMATCH",
+            "工具时间范围与用户问题识别出的时间范围不一致，不能擅自扩大或缩小查询范围。",
+        )
+    return OperationsQueryPolicyDecision(True, "ALLOWED", "经营查询参数与用户问题和组织范围一致。")
+
+
 def build_operations_tool_definitions(
     gateway: GatewayClient,
     *,
@@ -403,6 +471,18 @@ def build_operations_tool_definitions(
 
     async def query_metric(raw: BaseModel, context: ToolContext) -> object:
         data = cast(OperationsMetricToolInput, raw)
+        if context.user_message is not None:
+            decision = validate_operations_query_policy(
+                context.user_message,
+                data,
+                allowed_organization_ids=(
+                    context.identity.organization_ids if context.identity is not None else None
+                ),
+            )
+            if not decision.allowed:
+                # 在 Gateway 调用前 fail-closed；ToolRegistry 会把内部原因收敛成稳定
+                # 的工具失败，不把用户原文或组织权限细节写入 Agent 审计。
+                raise ValueError(f"operations query policy rejected: {decision.reason_code}")
 
         async def query_period(
             *, from_date: date | None, to_date: date | None, role: str

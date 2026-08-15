@@ -59,6 +59,9 @@ jobs:
       - name: Operations comparison evaluation quality gate
         run: uv run python -m app.agent.operations_comparison_evaluation --cases evals/operations_comparison_smoke.json --thresholds evals/operations_comparison_thresholds.json
 
+      - name: Operations query policy evaluation quality gate
+        run: uv run python -m app.agent.operations_policy_evaluation --cases evals/operations_policy_smoke.json --thresholds evals/operations_policy_thresholds.json
+
       - name: Build production container image
         run: docker build --file Dockerfile --tag fitness-agent-service:${{ github.sha }} .
 

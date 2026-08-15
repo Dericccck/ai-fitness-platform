@@ -330,6 +330,11 @@ Operations 环比摘要的离线评测样例位于 `evals/operations_comparison_
 周期的总量、差值、方向、百分比和跨月/跨年的日期边界，并覆盖上一周期为 0、两周期都为 0 和当前周期为 0 的除零场景。
 当前同比仍不自动猜测，用户提出同比时会要求澄清统计口径；本门禁不会把尚未实现的同比能力伪装成已支持。
 
+Operations 查询前策略评测样例位于 `evals/operations_policy_smoke.json`，阈值位于
+`evals/operations_policy_thresholds.json`。执行 `make agent-operations-policy-eval` 会验证用户问题与模型工具参数的
+指标、日期、时间桶、环比口径和组织范围一致；同比、歧义问题、指标漂移、日期扩大和组织越权会在访问 Java Gateway
+之前被拦截。策略校验只提供 fail-closed 的前置保护，最终权限仍由 Java Gateway 根据签名 AgentContext 决定。
+
 短期会话摘要的确定性安全评测样例位于 `fitness-agent-service/evals/session_summary_samples.json`，阈值位于
 `fitness-agent-service/evals/session_summary_thresholds.json`。执行 `make agent-session-summary-eval` 会检查摘要 JSON、
 非空、长度、必需上下文、凭证脱敏、禁止越权表达和通过率；禁止表达用于拦截动态事实、权限、医疗诊断和训练计划状态
