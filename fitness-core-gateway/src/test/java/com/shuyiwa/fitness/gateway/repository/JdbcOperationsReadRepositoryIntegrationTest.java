@@ -2,6 +2,7 @@ package com.shuyiwa.fitness.gateway.repository;
 
 import com.shuyiwa.fitness.gateway.operations.OperationsMetric;
 import com.shuyiwa.fitness.gateway.operations.OperationsMetricRow;
+import com.shuyiwa.fitness.gateway.operations.OperationsTimeBucket;
 import org.junit.Assume;
 import org.junit.Test;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
@@ -36,6 +37,16 @@ public class JdbcOperationsReadRepositoryIntegrationTest {
                     Instant.parse("2027-01-01T00:00:00Z"), 20
             );
             assertNotNull(metric.getCode() + " must return a list", rows);
+        }
+        for (OperationsTimeBucket bucket : new OperationsTimeBucket[]{
+                OperationsTimeBucket.DAY, OperationsTimeBucket.WEEK
+        }) {
+            List<OperationsMetricRow> rows = repository.query(
+                    required("GATEWAY_IT_ORGANIZATION_ID"), OperationsMetric.APPOINTMENT_COUNT,
+                    bucket, Instant.parse("2026-01-01T00:00:00Z"),
+                    Instant.parse("2027-01-01T00:00:00Z"), 100
+            );
+            assertNotNull(bucket.getCode() + " must return a list", rows);
         }
     }
 

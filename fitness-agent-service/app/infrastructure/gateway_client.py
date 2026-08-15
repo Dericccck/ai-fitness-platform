@@ -151,6 +151,7 @@ class GatewayOperationsMetric(_GatewayModel):
     """组织管理员可读取的固定指标查询结果。"""
 
     metric: str
+    bucket: Literal["NONE", "DAY", "WEEK"] = "NONE"
     organization_id: str = Field(alias="organizationId")
     from_date: date = Field(alias="from")
     to_date: date = Field(alias="to")
@@ -359,6 +360,7 @@ class GatewayClient:
         from_date: date | None = None,
         to_date: date | None = None,
         limit: int | None = None,
+        bucket: Literal["NONE", "DAY", "WEEK"] = "NONE",
     ) -> GatewayOperationsMetric:
         """查询 Java Gateway 的固定经营指标目录。
 
@@ -375,6 +377,7 @@ class GatewayClient:
                 "from": from_date.isoformat() if from_date else None,
                 "to": to_date.isoformat() if to_date else None,
                 "limit": limit,
+                "bucket": bucket,
             },
             GatewayOperationsMetric,
         )

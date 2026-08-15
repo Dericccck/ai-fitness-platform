@@ -24,6 +24,20 @@ def test_parses_recent_status_metric() -> None:
     assert hint.from_date == date(2026, 8, 9)
 
 
+def test_parses_daily_appointment_trend() -> None:
+    hint = parse_operations_intent(
+        "查看近30天预约量趋势", today=date(2026, 8, 15)
+    )
+
+    assert hint is not None
+    assert hint.metric == "APPOINTMENT_COUNT"
+    assert hint.bucket == "DAY"
+
+
+def test_mixed_day_and_week_trend_requires_clarification() -> None:
+    assert parse_operations_intent("预约量按日和按周趋势", today=date(2026, 8, 15)) is None
+
+
 def test_ambiguous_metric_requires_clarification() -> None:
     assert parse_operations_intent("查看本月经营情况", today=date(2026, 8, 15)) is None
     assert "先向用户澄清" in operations_prompt_hint("查看本月经营情况")

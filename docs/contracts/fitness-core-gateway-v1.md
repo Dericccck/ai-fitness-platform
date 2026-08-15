@@ -53,7 +53,7 @@ claim。Agent 服务会 fail-closed，因此这一外部依赖未落地时专业
 | GET | `/internal/agent-tools/v1/contracts?organizationId=...&userId=...&limit=...` | 查询合同和剩余课时 |
 | GET | `/internal/agent-tools/v1/appointments?organizationId=...&userId=...&from=...&to=...&limit=...` | 查询时间范围内预约 |
 | GET | `/internal/agent-tools/v1/booking/availability?organizationId=...&studentId=...&coachId=...&courseId=...&start=...&end=...` | 预约写入前的只读可用性预检 |
-| GET | `/internal/agent-tools/v1/operations/metrics?organizationId=...&metric=...&from=...&to=...&limit=...` | 管理员固定经营指标查询 |
+| GET | `/internal/agent-tools/v1/operations/metrics?organizationId=...&metric=...&from=...&to=...&limit=...&bucket=...` | 管理员固定经营指标查询 |
 
 学生只能读取本人数据；教练读取其他学员时必须存在有效的机构教练关系；机构管理员只能读取签名上下文授权的机构范围。所有列表默认最多 20 条，单次最多 100 条；预约时间范围最多 92 天。
 
@@ -61,6 +61,11 @@ claim。Agent 服务会 fail-closed，因此这一外部依赖未落地时专业
 `APPOINTMENT_COUNT`、`APPOINTMENT_STATUS_BREAKDOWN`、`COURSE_APPOINTMENT_COUNT`、
 `COACH_APPOINTMENT_COUNT`、`REMAINING_CLASS_HOURS`。Gateway 执行固定 SQL 并强制绑定机构和时间范围，
 不接受 SQL、表名或任意字段名；这条边界是后续受控 Text-to-SQL 的前置条件。
+
+`bucket` 只允许 `NONE`、`DAY`、`WEEK`。省略时默认为 `NONE`，返回整个时间范围的聚合；当前
+`DAY`/`WEEK` 仅允许指标 `APPOINTMENT_COUNT`，返回按业务时区（`Asia/Shanghai`）分组的预约量，
+其中 `dimension` 和 `label` 为时间桶起始日期。时间桶仍由 Gateway 执行固定 SQL，不接受任意分组字段。
+返回视图会额外携带实际生效的 `bucket`，便于 Agent 判断能否计算趋势。
 
 ## 错误语义
 

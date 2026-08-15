@@ -2,6 +2,7 @@ package com.shuyiwa.fitness.gateway.repository;
 
 import com.shuyiwa.fitness.gateway.operations.OperationsMetric;
 import com.shuyiwa.fitness.gateway.operations.OperationsMetricRow;
+import com.shuyiwa.fitness.gateway.operations.OperationsTimeBucket;
 import org.springframework.jdbc.core.namedparam.MapSqlParameterSource;
 import org.springframework.jdbc.core.namedparam.NamedParameterJdbcTemplate;
 import org.springframework.stereotype.Repository;
@@ -34,11 +35,50 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
             Instant to,
             int limit
     ) {
+        return query(organizationId, metric, OperationsTimeBucket.NONE, from, to, limit);
+    }
+
+    @Override
+    public List<OperationsMetricRow> query(
+            String organizationId,
+            OperationsMetric metric,
+            OperationsTimeBucket bucket,
+            Instant from,
+            Instant to,
+            int limit
+    ) {
         MapSqlParameterSource parameters = new MapSqlParameterSource()
                 .addValue("organizationId", organizationId)
                 .addValue("fromTime", Timestamp.from(from))
                 .addValue("toTime", Timestamp.from(to))
                 .addValue("limit", limit);
+        if (bucket != OperationsTimeBucket.NONE) {
+            if (metric != OperationsMetric.APPOINTMENT_COUNT) {
+                throw new IllegalArgumentException(
+                        "DAY/WEEK time buckets currently support APPOINTMENT_COUNT only");
+            }
+            return jdbcTemplate.query(
+                    bucket == OperationsTimeBucket.DAY
+                            ? "SELECT DATE_FORMAT(DATE(course_start_time), '%Y-%m-%d') AS dimension, "
+                            + "DATE_FORMAT(DATE(course_start_time), '%Y-%m-%d') AS label, "
+                            + "COUNT(1) AS value FROM appointment "
+                            + "WHERE organization_id = :organizationId AND deleted = 0 "
+                            + "AND course_start_time >= :fromTime AND course_start_time < :toTime "
+                            + "GROUP BY DATE_FORMAT(DATE(course_start_time), '%Y-%m-%d') "
+                            + "ORDER BY DATE_FORMAT(DATE(course_start_time), '%Y-%m-%d') ASC LIMIT :limit"
+                            : "SELECT DATE_FORMAT(DATE_SUB(DATE(course_start_time), "
+                            + "INTERVAL WEEKDAY(course_start_time) DAY), '%Y-%m-%d') AS dimension, "
+                            + "DATE_FORMAT(DATE_SUB(DATE(course_start_time), "
+                            + "INTERVAL WEEKDAY(course_start_time) DAY), '%Y-%m-%d') AS label, "
+                            + "COUNT(1) AS value FROM appointment "
+                            + "WHERE organization_id = :organizationId AND deleted = 0 "
+                            + "AND course_start_time >= :fromTime AND course_start_time < :toTime "
+                            + "GROUP BY DATE_FORMAT(DATE_SUB(DATE(course_start_time), "
+                            + "INTERVAL WEEKDAY(course_start_time) DAY), '%Y-%m-%d') "
+                            + "ORDER BY DATE_FORMAT(DATE_SUB(DATE(course_start_time), "
+                            + "INTERVAL WEEKDAY(course_start_time) DAY), '%Y-%m-%d') ASC LIMIT :limit",
+                    parameters, this::mapRow);
+        }
         switch (metric) {
             case APPOINTMENT_COUNT:
                 return jdbcTemplate.query(

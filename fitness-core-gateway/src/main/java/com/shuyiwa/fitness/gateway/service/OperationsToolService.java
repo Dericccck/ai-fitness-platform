@@ -2,6 +2,8 @@ package com.shuyiwa.fitness.gateway.service;
 
 import com.shuyiwa.fitness.gateway.api.OperationsViews;
 import com.shuyiwa.fitness.gateway.operations.OperationsMetric;
+import com.shuyiwa.fitness.gateway.operations.OperationsMetricRow;
+import com.shuyiwa.fitness.gateway.operations.OperationsTimeBucket;
 import com.shuyiwa.fitness.gateway.repository.OperationsReadRepository;
 import com.shuyiwa.fitness.gateway.security.AgentContext;
 import com.shuyiwa.fitness.gateway.security.GatewayForbiddenException;
@@ -34,6 +36,7 @@ public class OperationsToolService {
         this.repository = repository;
     }
 
+    /** 保留 v1 调用方式；未指定时间桶时继续返回整个区间汇总。 */
     public OperationsViews.MetricView metric(
             AgentContext context,
             String organizationId,
@@ -41,6 +44,18 @@ public class OperationsToolService {
             LocalDate from,
             LocalDate to,
             Integer requestedLimit
+    ) {
+        return metric(context, organizationId, metricCode, from, to, requestedLimit, null);
+    }
+
+    public OperationsViews.MetricView metric(
+            AgentContext context,
+            String organizationId,
+            String metricCode,
+            LocalDate from,
+            LocalDate to,
+            Integer requestedLimit,
+            String bucketCode
     ) {
         requireOperationsRole(context);
         if (organizationId == null || organizationId.trim().isEmpty()
@@ -54,16 +69,23 @@ public class OperationsToolService {
             throw new IllegalArgumentException("operations time range must be 0 to 92 days");
         }
         OperationsMetric metric = OperationsMetric.parse(metricCode);
+        OperationsTimeBucket bucket = OperationsTimeBucket.parse(bucketCode);
+        if (bucket != OperationsTimeBucket.NONE && metric != OperationsMetric.APPOINTMENT_COUNT) {
+            throw new IllegalArgumentException(
+                    "DAY/WEEK time buckets currently support APPOINTMENT_COUNT only");
+        }
         int limit = normalizeLimit(requestedLimit);
         Instant fromInstant = start.atStartOfDay(BUSINESS_ZONE).toInstant();
         Instant toInstant = end.plusDays(1).atStartOfDay(BUSINESS_ZONE).toInstant();
-        List<OperationsViews.MetricRowView> rows = repository.query(
-                        organizationId, metric, fromInstant, toInstant, limit
-                ).stream()
+        List<OperationsMetricRow> rawRows =
+                bucket == OperationsTimeBucket.NONE
+                        ? repository.query(organizationId, metric, fromInstant, toInstant, limit)
+                        : repository.query(organizationId, metric, bucket, fromInstant, toInstant, limit);
+        List<OperationsViews.MetricRowView> rows = rawRows.stream()
                 .map(OperationsViews.MetricRowView::new)
                 .collect(Collectors.toList());
         return new OperationsViews.MetricView(
-                metric.getCode(), organizationId, start, end, rows, Instant.now()
+                metric.getCode(), bucket.getCode(), organizationId, start, end, rows, Instant.now()
         );
     }
 

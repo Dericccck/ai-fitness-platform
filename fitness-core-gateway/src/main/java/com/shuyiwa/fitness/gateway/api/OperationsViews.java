@@ -16,15 +16,18 @@ public final class OperationsViews {
 
     public static final class MetricView {
         private final String metric;
+        private final String bucket;
         private final String organizationId;
         private final LocalDate from;
         private final LocalDate to;
         private final List<MetricRowView> rows;
         private final Instant generatedAt;
 
-        public MetricView(String metric, String organizationId, LocalDate from, LocalDate to,
+        public MetricView(String metric, String bucket, String organizationId,
+                          LocalDate from, LocalDate to,
                           List<MetricRowView> rows, Instant generatedAt) {
             this.metric = metric;
+            this.bucket = bucket;
             this.organizationId = organizationId;
             this.from = from;
             this.to = to;
@@ -33,6 +36,7 @@ public final class OperationsViews {
         }
 
         public String getMetric() { return metric; }
+        public String getBucket() { return bucket; }
         public String getOrganizationId() { return organizationId; }
         public LocalDate getFrom() { return from; }
         public LocalDate getTo() { return to; }

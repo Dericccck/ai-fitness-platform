@@ -140,8 +140,9 @@ public class AgentToolController {
             @RequestParam String metric,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
             @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
-            @RequestParam(required = false) Integer limit
+            @RequestParam(required = false) Integer limit,
+            @RequestParam(required = false) String bucket
     ) {
-        return operationsService.metric(context, organizationId, metric, from, to, limit);
+        return operationsService.metric(context, organizationId, metric, from, to, limit, bucket);
     }
 }

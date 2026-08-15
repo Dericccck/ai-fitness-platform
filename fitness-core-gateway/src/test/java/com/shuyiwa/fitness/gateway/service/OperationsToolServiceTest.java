@@ -3,6 +3,7 @@ package com.shuyiwa.fitness.gateway.service;
 import com.shuyiwa.fitness.gateway.api.OperationsViews;
 import com.shuyiwa.fitness.gateway.operations.OperationsMetric;
 import com.shuyiwa.fitness.gateway.operations.OperationsMetricRow;
+import com.shuyiwa.fitness.gateway.operations.OperationsTimeBucket;
 import com.shuyiwa.fitness.gateway.repository.OperationsReadRepository;
 import com.shuyiwa.fitness.gateway.security.AgentContext;
 import com.shuyiwa.fitness.gateway.security.GatewayForbiddenException;
@@ -53,6 +54,41 @@ public class OperationsToolServiceTest {
         assertEquals("APPOINTMENT_STATUS_BREAKDOWN", result.getMetric());
         assertEquals(1, result.getRows().size());
         assertEquals(12L, result.getRows().get(0).getValue());
+        assertEquals("NONE", result.getBucket());
+    }
+
+    @Test
+    public void organizationAdminCanRequestDailyAppointmentTrend() {
+        when(repository.query(
+                "org-1", OperationsMetric.APPOINTMENT_COUNT, OperationsTimeBucket.DAY,
+                Instant.parse("2026-07-31T16:00:00Z"), Instant.parse("2026-08-15T16:00:00Z"), 20
+        )).thenReturn(Arrays.asList(
+                new OperationsMetricRow("2026-08-01", "2026-08-01", 5),
+                new OperationsMetricRow("2026-08-02", "2026-08-02", 8)
+        ));
+
+        OperationsViews.MetricView result = service.metric(
+                context(AgentContext.ROLE_ORGANIZATION_ADMIN), "org-1", "APPOINTMENT_COUNT",
+                LocalDate.of(2026, 8, 1), LocalDate.of(2026, 8, 15), 20, "DAY"
+        );
+
+        assertEquals("DAY", result.getBucket());
+        assertEquals(2, result.getRows().size());
+        assertEquals(8L, result.getRows().get(1).getValue());
+    }
+
+    @Test
+    public void nonAppointmentMetricCannotRequestTimeBucket() {
+        try {
+            service.metric(
+                    context(AgentContext.ROLE_ORGANIZATION_ADMIN), "org-1",
+                    "COURSE_APPOINTMENT_COUNT", LocalDate.of(2026, 8, 1),
+                    LocalDate.of(2026, 8, 15), 20, "WEEK"
+            );
+        } catch (IllegalArgumentException expected) {
+            return;
+        }
+        throw new AssertionError("unsupported metric bucket must be rejected");
     }
 
     @Test

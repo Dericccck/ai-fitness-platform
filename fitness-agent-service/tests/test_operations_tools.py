@@ -69,6 +69,37 @@ def test_operations_report_calculates_summary_without_inventing_trend() -> None:
     assert report["warnings"] == ["结果集中度较高，第一维度占汇总值 80.00%。"]
 
 
+def test_operations_report_calculates_qualified_daily_trend() -> None:
+    result = GatewayOperationsMetric(
+        metric="APPOINTMENT_COUNT",
+        bucket="DAY",
+        organizationId="org-1",
+        **{
+            "from": date(2026, 8, 1),
+            "to": date(2026, 8, 3),
+            "rows": [
+                GatewayOperationsMetricRow(dimension="2026-08-01", label="2026-08-01", value=5),
+                GatewayOperationsMetricRow(dimension="2026-08-03", label="2026-08-03", value=8),
+            ],
+            "generatedAt": "2026-08-15T12:00:00Z",
+        },
+    )
+
+    report = build_operations_report(result)
+
+    assert report["trend_available"] is True
+    assert report["trend"] == {
+        "direction": "UP",
+        "first_bucket": "2026-08-01",
+        "first_value": 5,
+        "last_bucket": "2026-08-03",
+        "last_value": 8,
+        "delta": 3,
+        "change_percent": 60.0,
+        "note": "趋势基于首个和末个有记录的时间桶；没有预约的时间桶不会出现在当前结果中。",
+    }
+
+
 def test_operations_report_marks_empty_result_as_non_conclusive() -> None:
     result = GatewayOperationsMetric(
         metric="COURSE_APPOINTMENT_COUNT",

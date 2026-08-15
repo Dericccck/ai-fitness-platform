@@ -30,6 +30,7 @@ _METRICS = Literal[
     "COACH_APPOINTMENT_COUNT",
     "REMAINING_CLASS_HOURS",
 ]
+_TIME_BUCKETS = Literal["NONE", "DAY", "WEEK"]
 _BUSINESS_ZONE = ZoneInfo("Asia/Shanghai")
 
 
@@ -41,6 +42,7 @@ class OperationsQueryHint:
     from_date: date
     to_date: date
     matched_terms: tuple[str, ...]
+    bucket: _TIME_BUCKETS
 
 
 _METRIC_LABELS = {
@@ -77,6 +79,7 @@ def build_operations_report(result: GatewayOperationsMetric) -> dict[str, object
     report: dict[str, object] = {
         "metric": result.metric,
         "metric_label": _METRIC_LABELS.get(result.metric, result.metric),
+        "bucket": result.bucket,
         "period": {"from": result.from_date.isoformat(), "to": result.to_date.isoformat()},
         "row_count": len(rows),
         "total_value": total_value,
@@ -85,7 +88,7 @@ def build_operations_report(result: GatewayOperationsMetric) -> dict[str, object
         "top_share_percent": top_share,
         "warnings": warnings,
         "trend_available": False,
-        "trend_note": "当前结果是时间段汇总，未返回日/周时间桶，暂不判断趋势。",
+        "trend_note": "当前结果未返回足够的日/周时间桶，暂不判断趋势。",
     }
     if result.metric == "APPOINTMENT_STATUS_BREAKDOWN" and total_value > 0:
         report["breakdown"] = [
@@ -96,6 +99,27 @@ def build_operations_report(result: GatewayOperationsMetric) -> dict[str, object
             }
             for row in rows
         ]
+    if result.bucket in {"DAY", "WEEK"}:
+        if len(rows) >= 2:
+            first_row, last_row = rows[0], rows[-1]
+            delta = last_row.value - first_row.value
+            change_percent = (
+                round(delta / first_row.value * 100, 2) if first_row.value else None
+            )
+            direction = "UP" if delta > 0 else "DOWN" if delta < 0 else "FLAT"
+            report["trend_available"] = True
+            report["trend"] = {
+                "direction": direction,
+                "first_bucket": first_row.label,
+                "first_value": first_row.value,
+                "last_bucket": last_row.label,
+                "last_value": last_row.value,
+                "delta": delta,
+                "change_percent": change_percent,
+                "note": "趋势基于首个和末个有记录的时间桶；没有预约的时间桶不会出现在当前结果中。",
+            }
+        else:
+            report["trend_note"] = "有效时间桶少于 2 个，暂不判断趋势。"
     return report
 
 
@@ -153,7 +177,10 @@ def parse_operations_intent(
     metric = next(iter(metrics))
     matched_terms = tuple(term for _, term in matches)
     start, end = _parse_date_range(text, today or datetime.now(_BUSINESS_ZONE).date())
-    return OperationsQueryHint(metric, start, end, matched_terms)
+    bucket = _parse_time_bucket(text)
+    if bucket is None:
+        return None
+    return OperationsQueryHint(metric, start, end, matched_terms, bucket)
 
 
 def operations_prompt_hint(user_message: str) -> str:
@@ -165,10 +192,19 @@ def operations_prompt_hint(user_message: str) -> str:
             "经营问题暂未安全映射到唯一指标。请先向用户澄清指标和时间范围；"
             "不要调用经营指标工具，也不要生成或执行任意 SQL。"
         )
+    bucket_note = ""
+    if hint.bucket != "NONE":
+        if hint.metric != "APPOINTMENT_COUNT":
+            return (
+                "当前仅支持对预约总量按日或按周查询趋势。请先向用户澄清，"
+                "不要调用不支持时间桶的经营指标工具，也不要生成任意 SQL。"
+            )
+        bucket_note = "，时间分组=" + hint.bucket
     return (
         "经营查询安全提示：可优先使用固定指标工具，指标=" + hint.metric
         + "，开始日期=" + hint.from_date.isoformat()
         + "，结束日期=" + hint.to_date.isoformat()
+        + bucket_note
         + "。该提示不代表已授权，不能改写为 SQL；工具参数仍须严格使用指标白名单。"
         + "工具返回的 report 是程序根据真实聚合结果计算的摘要；回答时优先引用 report，"
         + "只能陈述返回数据，不得把集中度提示说成因果结论。当前没有日/周时间桶时，"
@@ -202,6 +238,22 @@ def _parse_date_range(text: str, today: date) -> tuple[date, date]:
     return today - timedelta(days=29), today
 
 
+def _parse_time_bucket(text: str) -> _TIME_BUCKETS | None:
+    """识别趋势问题的固定时间桶；同时出现日和周时拒绝猜测。"""
+
+    day_requested = any(term in text for term in ("每天", "每日", "按日", "日趋势"))
+    week_requested = any(term in text for term in ("每周", "按周", "周趋势"))
+    if day_requested and week_requested:
+        return None
+    if day_requested:
+        return "DAY"
+    if week_requested:
+        return "WEEK"
+    if "趋势" in text:
+        return "DAY"
+    return "NONE"
+
+
 class OperationsMetricToolInput(BaseModel):
     """固定指标查询参数；不允许出现 SQL、表名或任意字段名。"""
 
@@ -212,6 +264,7 @@ class OperationsMetricToolInput(BaseModel):
     from_date: date | None = Field(default=None, alias="from")
     to_date: date | None = Field(default=None, alias="to")
     limit: int = Field(default=20, ge=1, le=100)
+    bucket: _TIME_BUCKETS = "NONE"
 
     @model_validator(mode="after")
     def validate_range(self) -> OperationsMetricToolInput:
@@ -219,6 +272,8 @@ class OperationsMetricToolInput(BaseModel):
             raise ValueError("from must be earlier than or equal to to")
         if self.from_date and self.to_date and (self.to_date - self.from_date).days > 92:
             raise ValueError("operations time range must not exceed 92 days")
+        if self.bucket != "NONE" and self.metric != "APPOINTMENT_COUNT":
+            raise ValueError("DAY/WEEK buckets currently support APPOINTMENT_COUNT only")
         return self
 
 
@@ -233,6 +288,7 @@ def build_operations_tool_definitions(gateway: GatewayClient) -> tuple[ToolDefin
                 from_date=data.from_date,
                 to_date=data.to_date,
                 limit=data.limit,
+                bucket=data.bucket,
             )
             # 经营查询审计只保留“谁在什么范围查询了哪个固定指标以及结果规模”，
             # 不记录 SQL、Prompt、明细数据或模型原始输出，避免日志变成第二个数据出口。
