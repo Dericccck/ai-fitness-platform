@@ -4,7 +4,7 @@ AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-session-summary-eval agent-security-check agent-run agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run training-check training-run booking-check booking-it booking-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-session-summary-eval agent-security-check agent-run agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run training-check training-run booking-check booking-it booking-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
@@ -12,6 +12,7 @@ help:
 	@echo "  infra-up-storage Start PostgreSQL/Redis and optional MinIO object storage"
 	@echo "  infra-up-security Start PostgreSQL/Redis and ClamAV security service"
 	@echo "  infra-up-ocr  Build/start the independent PaddleOCR service"
+	@echo "  infra-up-messaging Start local RabbitMQ for cross-service Outbox events"
 	@echo "  infra-down   Stop local Agent infrastructure without deleting data"
 	@echo "  observability-up Start the local OpenTelemetry Collector"
 	@echo "  agent-lock   Resolve and update the Python dependency lock file"
@@ -53,6 +54,9 @@ infra-up-security:
 
 infra-up-ocr:
 	docker compose -f $(COMPOSE_FILE) --profile ocr up -d --build agent-ocr
+
+infra-up-messaging:
+	docker compose -f $(COMPOSE_FILE) --profile messaging up -d agent-rabbitmq
 
 infra-down:
 	docker compose -f $(COMPOSE_FILE) down

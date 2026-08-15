@@ -42,3 +42,20 @@ make booking-it
 该测试验证真实旧业务表字段、事务提交、合同课时扣减、同一请求幂等、MySQL 命名锁以及确认
 JTI 重复时的事务回滚。未配置这些变量时，Maven 会将该测试标记为 skipped，而不是误连本地
 开发库。
+
+## Outbox 与 RabbitMQ
+
+预约事务会先把 `APPOINTMENT_CREATED` 写入 `agent_booking_outbox`。开启发布器后，服务会定时
+领取待发布事件，发送到 RabbitMQ，并等待 publisher confirm；只有收到 broker 的 ack 才把事件
+标记为 `PUBLISHED`。连接失败、nack 或超时会保留重试信息，超过最大次数进入 `DEAD`，不会静默丢失。
+
+本地启动 RabbitMQ：
+
+```bash
+make infra-up-messaging
+export BOOKING_OUTBOX_PUBLISHER_ENABLED=true
+./mvnw --batch-mode -f fitness-booking-service/pom.xml spring-boot:run
+```
+
+RabbitMQ 管理页面为 `http://127.0.0.1:15672`，账号 `fitness_agent`，密码
+`fitness_agent_secret`。当前只发布预约领域事件，不接入 Push 和短信，也没有假装下游通知已经完成。

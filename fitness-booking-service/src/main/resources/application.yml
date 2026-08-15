@@ -12,10 +12,30 @@ spring:
     hikari:
       maximum-pool-size: ${BOOKING_DB_MAX_POOL_SIZE:10}
       connection-timeout: ${BOOKING_DB_CONNECTION_TIMEOUT_MS:3000}
+  rabbitmq:
+    host: ${BOOKING_RABBITMQ_HOST:127.0.0.1}
+    port: ${BOOKING_RABBITMQ_PORT:5672}
+    username: ${BOOKING_RABBITMQ_USERNAME:fitness_agent}
+    password: ${BOOKING_RABBITMQ_PASSWORD:fitness_agent_secret}
+    publisher-confirms: ${BOOKING_RABBITMQ_PUBLISHER_CONFIRMS:true}
+    publisher-returns: true
+    template:
+      mandatory: true
 
 booking:
   internal-service-token: ${BOOKING_INTERNAL_SERVICE_TOKEN:}
   schema-init-enabled: ${BOOKING_SCHEMA_INIT_ENABLED:true}
+  outbox:
+    publisher-enabled: ${BOOKING_OUTBOX_PUBLISHER_ENABLED:false}
+    fixed-delay-ms: ${BOOKING_OUTBOX_FIXED_DELAY_MS:1000}
+    batch-size: ${BOOKING_OUTBOX_BATCH_SIZE:20}
+    max-attempts: ${BOOKING_OUTBOX_MAX_ATTEMPTS:8}
+    claim-lease-seconds: ${BOOKING_OUTBOX_CLAIM_LEASE_SECONDS:60}
+    retry-base-seconds: ${BOOKING_OUTBOX_RETRY_BASE_SECONDS:5}
+    confirm-timeout-ms: ${BOOKING_OUTBOX_CONFIRM_TIMEOUT_MS:5000}
+    exchange: ${BOOKING_OUTBOX_EXCHANGE:fitness.booking.events}
+    queue: ${BOOKING_OUTBOX_QUEUE:fitness.booking.events}
+    routing-key: ${BOOKING_OUTBOX_ROUTING_KEY:appointment.created}
 
 logging:
   level:

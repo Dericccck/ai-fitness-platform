@@ -22,6 +22,20 @@ services:
     volumes:
       - fitness-agent-redis-data:/data
 
+  agent-rabbitmq:
+    image: rabbitmq:3.13-management-alpine
+    container_name: fitness-agent-rabbitmq
+    restart: unless-stopped
+    profiles: ["messaging"]
+    environment:
+      RABBITMQ_DEFAULT_USER: fitness_agent
+      RABBITMQ_DEFAULT_PASS: fitness_agent_secret
+    ports:
+      - "5672:5672"
+      - "15672:15672"
+    volumes:
+      - fitness-agent-rabbitmq-data:/var/lib/rabbitmq
+
   agent-otel-collector:
     image: otel/opentelemetry-collector-contrib:0.157.0
     container_name: fitness-agent-otel-collector
@@ -95,3 +109,4 @@ volumes:
   fitness-agent-minio-data:
   fitness-agent-clamav-data:
   fitness-agent-ocr-models:
+  fitness-agent-rabbitmq-data:
