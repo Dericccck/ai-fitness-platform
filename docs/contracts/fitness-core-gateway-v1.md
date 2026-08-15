@@ -75,6 +75,8 @@ Agent 解释层会根据 `from`、`to` 和 `bucket` 补齐 Gateway 没有返回�
 Agent 侧会把每次当前周期或上一等长周期查询追加写入 PostgreSQL 表 `agent_operations_query_audits`，用于管理员查询追溯。
 审计只保存签名主体、角色快照、机构、固定指标、时间桶、日期范围、聚合行数、状态和 request/trace ID，不保存 SQL、Prompt、
 模型输出或预约明细。查询成功但审计无法写入时，Agent 不向模型返回该经营结果；这不改变 Java Gateway 的业务权限判断。
+管理员控制面可通过 `GET /api/v1/admin/operations/query-audits` 分页读取这些摘要，平台管理员可按机构查询，组织管理员
+只能读取签名 `AgentContext` 中的机构；该接口不是经营数据查询入口，也不会绕过 Gateway 的业务权限。
 
 ## 错误语义
 

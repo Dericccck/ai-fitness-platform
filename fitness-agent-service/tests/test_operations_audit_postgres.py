@@ -62,6 +62,24 @@ async def test_operations_audit_persists_success_and_failure_without_payloads() 
         )
 
         async with database.engine.connect() as connection:
+            records, has_more = await repository.list(
+                connection,
+                organization_id=None,
+                organization_ids=("org-1",),
+                metric="APPOINTMENT_COUNT",
+                bucket=None,
+                comparison_role=None,
+                status=None,
+                created_from=None,
+                created_to=None,
+                limit=1,
+                offset=0,
+            )
+        assert len(records) == 1
+        assert records[0].organization_id == "org-1"
+        assert has_more is True
+
+        async with database.engine.connect() as connection:
             rows = (
                 (
                     await connection.execute(

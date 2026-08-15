@@ -7,7 +7,8 @@ Operations 查询返回的是机构经营聚合数据，不能只依赖结构化
 
 from __future__ import annotations
 
-from datetime import date
+from dataclasses import dataclass
+from datetime import date, datetime
 from typing import Literal
 from uuid import uuid4
 
@@ -41,6 +42,27 @@ class OperationsAuditPersistenceError(RuntimeError):
     """查询成功但审计无法持久化，调用方必须拒绝返回未审计结果。"""
 
 
+@dataclass(frozen=True)
+class OperationsAuditRecord:
+    """管理员可查看的经营查询审计摘要，不包含查询正文或业务明细。"""
+
+    id: str
+    subject_user_id: str | None
+    actor_roles: str | None
+    organization_id: str
+    metric: str
+    bucket: str
+    comparison_role: str
+    from_date: date | None
+    to_date: date | None
+    row_count: int | None
+    status: str
+    error_code: str | None
+    request_id: str | None
+    trace_id: str | None
+    created_at: datetime
+
+
 class OperationsAuditRepository:
     """把 Operations 查询元数据追加写入 Agent PostgreSQL。
 
@@ -51,6 +73,86 @@ class OperationsAuditRepository:
 
     def __init__(self, database: Database) -> None:
         self._database = database
+
+    async def list(
+        self,
+        connection: object,
+        *,
+        organization_id: str | None,
+        organization_ids: tuple[str, ...] | None,
+        metric: str | None,
+        bucket: str | None,
+        comparison_role: str | None,
+        status: str | None,
+        created_from: datetime | None,
+        created_to: datetime | None,
+        limit: int,
+        offset: int,
+    ) -> tuple[list[OperationsAuditRecord], bool]:
+        """按管理员授权组织范围分页读取审计摘要。
+
+        ``organization_ids`` 是从签名上下文得到的服务端范围，不来自模型或客户端；
+        当组织管理员未指定机构时，只能看到自己 Token 中的机构。返回多取一条以判断
+        是否还有下一页，避免额外的 count 查询和不必要的全表扫描。
+        """
+
+        if limit < 1 or limit > 100 or offset < 0 or offset > 100_000:
+            raise ValueError("operations audit pagination is out of range")
+        if created_from is not None and created_to is not None and created_from > created_to:
+            raise ValueError("created_from must be earlier than or equal to created_to")
+        if organization_id is not None and not organization_id:
+            raise ValueError("organization_id must not be empty")
+        if organization_ids is not None and not organization_ids:
+            return [], False
+
+        where_clauses = ["1 = 1"]
+        params: dict[str, object] = {
+            "limit_plus_one": limit + 1,
+            "offset": offset,
+        }
+        if organization_id is not None:
+            where_clauses.append("organization_id = :organization_id")
+            params["organization_id"] = organization_id
+        if organization_ids is not None:
+            where_clauses.append("organization_id = ANY(CAST(:organization_ids AS TEXT[]))")
+            params["organization_ids"] = list(organization_ids)
+        if metric is not None:
+            where_clauses.append("metric = :metric")
+            params["metric"] = metric
+        if bucket is not None:
+            where_clauses.append("bucket = :bucket")
+            params["bucket"] = bucket
+        if comparison_role is not None:
+            where_clauses.append("comparison_role = :comparison_role")
+            params["comparison_role"] = comparison_role
+        if status is not None:
+            where_clauses.append("status = :status")
+            params["status"] = status
+        if created_from is not None:
+            where_clauses.append("created_at >= :created_from")
+            params["created_from"] = created_from
+        if created_to is not None:
+            where_clauses.append("created_at <= :created_to")
+            params["created_to"] = created_to
+
+        statement = text(
+            f"""
+            SELECT id, subject_user_id, actor_roles, organization_id, metric, bucket,
+                   comparison_role, from_date, to_date, row_count, status, error_code,
+                   request_id, trace_id, created_at
+            FROM agent_operations_query_audits
+            WHERE {" AND ".join(where_clauses)}
+            ORDER BY created_at DESC, id DESC
+            LIMIT :limit_plus_one OFFSET :offset
+            """
+        )
+        result = await connection.execute(  # type: ignore[attr-defined]
+            statement,
+            params,
+        )
+        rows = result.mappings().all()
+        has_more = len(rows) > limit
+        return [_audit_record_from_row(row) for row in rows[:limit]], has_more
 
     async def record(
         self,
@@ -114,6 +216,29 @@ class OperationsAuditRepository:
         }
         async with self._database.engine.begin() as connection:
             await connection.execute(statement, params)
+
+
+def _audit_record_from_row(row: object) -> OperationsAuditRecord:
+    """把数据库行转换为 API/服务层稳定的只读审计模型。"""
+
+    data = row  # SQLAlchemy Mapping 在这里保持结构化字段，不转成任意 JSON。
+    return OperationsAuditRecord(
+        id=str(data["id"]),  # type: ignore[index]
+        subject_user_id=data["subject_user_id"],  # type: ignore[index]
+        actor_roles=data["actor_roles"],  # type: ignore[index]
+        organization_id=str(data["organization_id"]),  # type: ignore[index]
+        metric=str(data["metric"]),  # type: ignore[index]
+        bucket=str(data["bucket"]),  # type: ignore[index]
+        comparison_role=str(data["comparison_role"]),  # type: ignore[index]
+        from_date=data["from_date"],  # type: ignore[index]
+        to_date=data["to_date"],  # type: ignore[index]
+        row_count=data["row_count"],  # type: ignore[index]
+        status=str(data["status"]),  # type: ignore[index]
+        error_code=data["error_code"],  # type: ignore[index]
+        request_id=data["request_id"],  # type: ignore[index]
+        trace_id=data["trace_id"],  # type: ignore[index]
+        created_at=data["created_at"],  # type: ignore[index]
+    )
 
 
 def _validate_event(

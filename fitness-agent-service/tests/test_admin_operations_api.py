@@ -1,0 +1,131 @@
+from datetime import UTC, date, datetime
+from typing import Any
+
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+
+from app.agent.operations_audit import OperationsAuditRecord
+from app.api.routes.admin_operations import router
+from app.infrastructure.agent_context import AgentIdentity
+
+
+class FakeVerifier:
+    def __init__(self, roles: frozenset[str]) -> None:
+        self.roles = roles
+
+    def verify(self, token: str) -> AgentIdentity:
+        return AgentIdentity("admin-1", frozenset({"org-1", "org-2"}), self.roles, 1, 2)
+
+
+class FakeConnectionContext:
+    async def __aenter__(self) -> object:
+        return object()
+
+    async def __aexit__(self, *args: object) -> None:
+        return None
+
+
+class FakeEngine:
+    def connect(self) -> FakeConnectionContext:
+        return FakeConnectionContext()
+
+
+class FakeDatabase:
+    engine = FakeEngine()
+
+
+class FakeOperationsAuditRepository:
+    def __init__(self) -> None:
+        self.filters: dict[str, Any] = {}
+
+    async def list(
+        self, connection: object, **kwargs: Any
+    ) -> tuple[list[OperationsAuditRecord], bool]:
+        self.filters = kwargs
+        return [
+            OperationsAuditRecord(
+                id="audit-1",
+                subject_user_id="admin-1",
+                actor_roles="ADMIN",
+                organization_id="org-1",
+                metric="APPOINTMENT_COUNT",
+                bucket="NONE",
+                comparison_role="CURRENT",
+                from_date=date(2026, 8, 1),
+                to_date=date(2026, 8, 15),
+                row_count=5,
+                status="SUCCEEDED",
+                error_code=None,
+                request_id="request-1",
+                trace_id="trace-1",
+                created_at=datetime(2026, 8, 15, 10, 0, tzinfo=UTC),
+            )
+        ], True
+
+
+def build_app(roles: frozenset[str]) -> tuple[FastAPI, FakeOperationsAuditRepository]:
+    app = FastAPI()
+    app.state.context_verifier = FakeVerifier(roles)
+    app.state.database = FakeDatabase()
+    repository = FakeOperationsAuditRepository()
+    app.state.operations_audit = repository
+    app.include_router(router)
+    return app, repository
+
+
+async def test_platform_admin_can_query_operations_audits() -> None:
+    app, repository = build_app(frozenset({"ADMIN"}))
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/admin/operations/query-audits",
+            headers={"X-Agent-Context": "signed-context"},
+            params={
+                "organization_id": "org-1",
+                "metric": "APPOINTMENT_COUNT",
+                "audit_status": "SUCCEEDED",
+                "limit": "20",
+                "offset": "10",
+            },
+        )
+
+    assert response.status_code == 200
+    assert response.json()["items"][0]["metric"] == "APPOINTMENT_COUNT"
+    assert response.json()["has_more"] is True
+    assert "sql" not in response.json()["items"][0]
+    assert "prompt" not in response.json()["items"][0]
+    assert repository.filters["organization_id"] == "org-1"
+    assert repository.filters["organization_ids"] is None
+    assert repository.filters["status"] == "SUCCEEDED"
+    assert repository.filters["offset"] == 10
+
+
+async def test_organization_admin_is_restricted_to_signed_organizations() -> None:
+    app, repository = build_app(frozenset({"ORGANIZATION_ADMIN"}))
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        allowed = await client.get(
+            "/api/v1/admin/operations/query-audits",
+            headers={"X-Agent-Context": "signed-context"},
+        )
+        forbidden = await client.get(
+            "/api/v1/admin/operations/query-audits",
+            headers={"X-Agent-Context": "signed-context"},
+            params={"organization_id": "org-9"},
+        )
+
+    assert allowed.status_code == 200
+    assert repository.filters["organization_ids"] == ("org-1", "org-2")
+    assert forbidden.status_code == 403
+
+
+async def test_student_cannot_query_operations_audits() -> None:
+    app, _ = build_app(frozenset({"STUDENT"}))
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/admin/operations/query-audits",
+            headers={"X-Agent-Context": "signed-context"},
+        )
+
+    assert response.status_code == 403
