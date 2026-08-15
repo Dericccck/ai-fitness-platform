@@ -25,3 +25,20 @@ cd /Users/a1-6/Desktop/fitness-backend
 
 必须配置 `BOOKING_DB_URL`、`BOOKING_DB_USERNAME`、`BOOKING_DB_PASSWORD` 和
 `BOOKING_INTERNAL_SERVICE_TOKEN`。生产环境写账号不能复用 Gateway 的只读账号。
+
+## 真实 MySQL 集成测试
+
+仓库提供一条默认安全跳过的集成测试，只有显式打开开关才会连接数据库。测试需要连接
+专用测试库或测试 Schema，不要指向生产库；它会插入带随机后缀的测试数据，并在结束时清理。
+
+```bash
+export BOOKING_IT_ENABLED=true
+export BOOKING_IT_DB_URL='jdbc:mysql://127.0.0.1:3307/fitness_test?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia%2FShanghai'
+export BOOKING_IT_DB_USERNAME='fitness_booking_test'
+export BOOKING_IT_DB_PASSWORD='请替换为测试库密码'
+make booking-it
+```
+
+该测试验证真实旧业务表字段、事务提交、合同课时扣减、同一请求幂等、MySQL 命名锁以及确认
+JTI 重复时的事务回滚。未配置这些变量时，Maven 会将该测试标记为 skipped，而不是误连本地
+开发库。
