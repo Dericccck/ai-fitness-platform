@@ -114,6 +114,38 @@ public class BookingServiceClient {
         }
     }
 
+    public ToolViews.BookingCancelledView cancel(AgentContext context, String requestId, String confirmationToken,
+                                                BookingToolInputs.CancelInput input) {
+        if (properties.getInternalServiceToken() == null
+                || properties.getInternalServiceToken().trim().isEmpty()) {
+            throw new IllegalStateException("booking service internal token is not configured");
+        }
+        ConfirmationTokenClaims claims = tokenVerifier.verify(
+                confirmationToken, context, "fitness.booking.cancel.v1", "CANCEL_APPOINTMENT",
+                input.getAppointmentId(), requestId);
+        if (!input.getOrganizationId().equals(claims.getOrganizationId())
+                || !context.canAccessOrganization(input.getOrganizationId())) {
+            throw new GatewayForbiddenException("cancel request is outside the authorized scope");
+        }
+        HttpHeaders headers = bookingHeaders(context, requestId, claims);
+        try {
+            ResponseEntity<BookingServiceViews.CancelledAppointment> response = restTemplate.exchange(
+                    properties.getBaseUrl().replaceAll("/$", "") + "/internal/booking/v1/appointments/"
+                            + input.getAppointmentId() + "/cancel",
+                    HttpMethod.POST, new HttpEntity<>(input, headers), BookingServiceViews.CancelledAppointment.class);
+            if (response.getBody() == null) throw new IllegalStateException("booking service returned empty response");
+            return response.getBody().toToolView();
+        } catch (HttpClientErrorException exception) {
+            if (exception.getStatusCode().value() == 401) throw new GatewayForbiddenException("booking confirmation required");
+            if (exception.getStatusCode().value() == 403) throw new GatewayForbiddenException("booking resource is outside scope");
+            if (exception.getStatusCode().value() == 404) throw new GatewayResourceNotFoundException("booking resource not found");
+            if (exception.getStatusCode().value() == 409) throw new GatewayConflictException("booking cannot be cancelled under current business facts");
+            throw new IllegalArgumentException("booking service rejected the request");
+        } catch (RestClientException exception) {
+            throw new IllegalStateException("booking service is temporarily unavailable", exception);
+        }
+    }
+
     private HttpHeaders bookingHeaders(AgentContext context, String requestId, ConfirmationTokenClaims claims) {
         HttpHeaders headers = new HttpHeaders();
         headers.set("X-Internal-Service-Token", properties.getInternalServiceToken());

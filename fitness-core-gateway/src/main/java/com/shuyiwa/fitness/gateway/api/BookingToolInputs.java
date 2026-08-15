@@ -56,4 +56,18 @@ public final class BookingToolInputs {
         public Instant getEndTime() { return endTime; }
         public void setEndTime(Instant endTime) { this.endTime = endTime; }
     }
+
+    /** 取消稳定输入；v1 只接受未开始预约，并以原开始时间作为乐观并发条件。 */
+    public static class CancelInput {
+        private String organizationId;
+        private String appointmentId;
+        private Instant expectedStartTime;
+
+        public String getOrganizationId() { return organizationId; }
+        public void setOrganizationId(String organizationId) { this.organizationId = organizationId; }
+        public String getAppointmentId() { return appointmentId; }
+        public void setAppointmentId(String appointmentId) { this.appointmentId = appointmentId; }
+        public Instant getExpectedStartTime() { return expectedStartTime; }
+        public void setExpectedStartTime(Instant expectedStartTime) { this.expectedStartTime = expectedStartTime; }
+    }
 }

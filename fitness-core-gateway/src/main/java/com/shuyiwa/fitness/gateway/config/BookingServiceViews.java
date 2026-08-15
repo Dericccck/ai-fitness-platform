@@ -26,4 +26,24 @@ final class BookingServiceViews {
                     courseName, startTime, endTime, status, contractId, remainingClassHours);
         }
     }
+
+    static class CancelledAppointment {
+        public String id;
+        public String organizationId;
+        public String userId;
+        public String coachId;
+        public String courseId;
+        public String courseName;
+        public Instant startTime;
+        public Instant endTime;
+        public Integer status;
+        public String contractId;
+        public Integer remainingClassHours;
+        public boolean cancelled;
+
+        ToolViews.BookingCancelledView toToolView() {
+            return new ToolViews.BookingCancelledView(id, organizationId, userId, coachId, courseId,
+                    courseName, startTime, endTime, status, contractId, remainingClassHours, cancelled);
+        }
+    }
 }

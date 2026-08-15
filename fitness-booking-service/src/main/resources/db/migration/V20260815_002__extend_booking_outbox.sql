@@ -19,3 +19,13 @@ CREATE TABLE IF NOT EXISTS agent_booking_reschedule_operation (
     PRIMARY KEY (request_id),
     UNIQUE KEY uk_agent_booking_reschedule_appointment_request (appointment_id, request_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Booking Agent 改约幂等记录';
+
+CREATE TABLE IF NOT EXISTS agent_booking_cancel_operation (
+    request_id VARCHAR(128) NOT NULL,
+    appointment_id VARCHAR(32) NOT NULL,
+    organization_id VARCHAR(32) NOT NULL,
+    actor_id VARCHAR(32) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (request_id),
+    UNIQUE KEY uk_agent_booking_cancel_appointment (appointment_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Booking Agent 取消预约幂等记录';

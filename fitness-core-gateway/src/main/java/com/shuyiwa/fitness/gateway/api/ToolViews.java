@@ -270,6 +270,45 @@ public final class ToolViews {
         public Integer getRemainingClassHours() { return remainingClassHours; }
     }
 
+    /** 取消预约后的稳定 Tool View，明确区分旧预约 status 和 deleted 取消语义。 */
+    public static final class BookingCancelledView {
+        private final String id;
+        private final String organizationId;
+        private final String userId;
+        private final String coachId;
+        private final String courseId;
+        private final String courseName;
+        private final Instant startTime;
+        private final Instant endTime;
+        private final Integer status;
+        private final String contractId;
+        private final Integer remainingClassHours;
+        private final boolean cancelled;
+
+        public BookingCancelledView(String id, String organizationId, String userId, String coachId,
+                                     String courseId, String courseName, Instant startTime, Instant endTime,
+                                     Integer status, String contractId, Integer remainingClassHours,
+                                     boolean cancelled) {
+            this.id = id; this.organizationId = organizationId; this.userId = userId; this.coachId = coachId;
+            this.courseId = courseId; this.courseName = courseName; this.startTime = startTime; this.endTime = endTime;
+            this.status = status; this.contractId = contractId; this.remainingClassHours = remainingClassHours;
+            this.cancelled = cancelled;
+        }
+
+        public String getId() { return id; }
+        public String getOrganizationId() { return organizationId; }
+        public String getUserId() { return userId; }
+        public String getCoachId() { return coachId; }
+        public String getCourseId() { return courseId; }
+        public String getCourseName() { return courseName; }
+        public Instant getStartTime() { return startTime; }
+        public Instant getEndTime() { return endTime; }
+        public Integer getStatus() { return status; }
+        public String getContractId() { return contractId; }
+        public Integer getRemainingClassHours() { return remainingClassHours; }
+        public boolean isCancelled() { return cancelled; }
+    }
+
     /** 结构化训练计划的稳定 Tool View，不把训练服务内部 DTO 直接暴露给 Agent。 */
     public static final class TrainingPlanView {
         private final String id;

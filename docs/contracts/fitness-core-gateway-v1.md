@@ -70,7 +70,7 @@ claim。Agent 服务会 fail-closed，因此这一外部依赖未落地时专业
 | 404 | `NOT_FOUND` | 说明资源不存在，不泄露 SQL 细节 |
 | 408/429/5xx | 无固定 code 要求 | 有限指数退避，耗尽后转为不可用 |
 
-训练计划写工具、创建预约和改约预约都必须同时具备确认凭证、幂等请求 ID、事务和审计；取消预约仍未开放。
+训练计划写工具、创建预约、改约预约和取消预约都必须同时具备确认凭证、幂等请求 ID、事务和审计。
 创建预约已经通过独立预约业务服务执行，不能因为 Agent 已完成确认就跳过业务服务的最终校验。可用性预检也不等于预约成功：它只检查
 组织、学员、教练、时间范围、教练已有预约冲突、教练请假和已接入的非营业日规则，结果返回 `available`、
 `reasonCodes` 和冲突预约；真正写入时必须在同一业务事务内再次校验。
@@ -95,6 +95,17 @@ X-Confirmation-Token: <已批准确认凭证>
 改约 v1 只允许调整教练和时间，不更换课程或合同，也不重复扣减课时。写服务会锁定原预约、原合同和新教练业务日期，
 检查预约状态、合同有效期、课程状态、请假、非营业日和排班冲突，并用 `expectedStartTime` 防止确认后原预约被并发修改；
 成功后记录审计并写入 `APPOINTMENT_RESCHEDULED` Outbox 事件。
+
+预约取消路径：
+
+```text
+POST /internal/agent-tools/v1/appointments/{appointmentId}/cancel
+X-Confirmation-Token: <已批准确认凭证>
+```
+
+取消 v1 只允许尚未开始且状态为预约中、预约成功或改课中的预约。实现沿用旧业务的 `appointment.deleted = 1` 语义，
+不新增状态编码；原合同剩余课时在同一事务中加回 1，并写入 `CANCEL_APPOINTMENT` 审计和 `APPOINTMENT_CANCELLED` Outbox 事件。
+返回结果包含 `cancelled=true` 和恢复后的剩余课时。已开始、已核销或已取消的预约不会被 Agent 接口取消。
 
 训练计划工具路径：
 
@@ -130,6 +141,7 @@ fitness.appointment.list.v1
 fitness.booking.availability.check.v1
 fitness.booking.create.v1
 fitness.booking.reschedule.v1
+fitness.booking.cancel.v1
 ```
 
 每个工具必须固定定义输入 Pydantic Schema、版本、描述、允许角色、是否只读和是否需要

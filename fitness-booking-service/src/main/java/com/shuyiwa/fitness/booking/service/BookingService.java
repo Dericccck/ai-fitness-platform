@@ -2,6 +2,8 @@ package com.shuyiwa.fitness.booking.service;
 
 import com.shuyiwa.fitness.booking.api.BookingApiException;
 import com.shuyiwa.fitness.booking.api.BookingAppointmentView;
+import com.shuyiwa.fitness.booking.api.BookingCancelRequest;
+import com.shuyiwa.fitness.booking.api.BookingCancelledView;
 import com.shuyiwa.fitness.booking.api.BookingCreateRequest;
 import com.shuyiwa.fitness.booking.api.BookingRescheduleRequest;
 import com.shuyiwa.fitness.booking.domain.AppointmentStatusCodes;
@@ -175,6 +177,68 @@ public class BookingService {
         }
     }
 
+    @Transactional
+    public BookingCancelledView cancel(BookingActor actor, BookingCancelRequest request) {
+        validateCancelInput(request);
+        requireOrganization(actor, request.getOrganizationId());
+        requireCancelConfirmation(actor, request);
+        repository.acquireRequestLock(actor.getRequestId());
+        boolean coachLocked = false;
+        String lockedCoachId = null;
+        LocalDate lockedDate = null;
+        try {
+            BookingCancelledView applied = repository.findByCancelRequestId(actor.getRequestId())
+                    .orElse(null);
+            if (applied != null) return applied;
+
+            BookingAppointmentView observed = repository.findAppointment(
+                    request.getOrganizationId(), request.getAppointmentId()).orElseThrow(
+                    () -> new BookingApiException(HttpStatus.NOT_FOUND, "预约不存在或已经取消"));
+            if (!AppointmentStatusCodes.canCancel(observed.getStatus())) {
+                throw new BookingApiException(HttpStatus.CONFLICT, "当前预约状态不允许取消");
+            }
+            if (observed.getStartTime() == null || !observed.getStartTime().isAfter(Instant.now())) {
+                throw new BookingApiException(HttpStatus.CONFLICT, "课程已经开始，无法取消预约");
+            }
+            if (!request.getExpectedStartTime().equals(observed.getStartTime())) {
+                throw new BookingApiException(HttpStatus.CONFLICT, "预约已被其他操作修改，请重新查询");
+            }
+            requireStudentAccess(actor, request.getOrganizationId(), observed.getUserId());
+            if (!repository.isOrganizationMember(request.getOrganizationId(), observed.getUserId())) {
+                throw new BookingApiException(HttpStatus.FORBIDDEN, "学员不是当前机构成员");
+            }
+
+            LocalDate bookingDate = observed.getStartTime().atZone(BUSINESS_ZONE).toLocalDate();
+            lockedCoachId = observed.getCoachId();
+            lockedDate = bookingDate;
+            repository.acquireCoachDayLock(request.getOrganizationId(), lockedCoachId, lockedDate);
+            coachLocked = true;
+            // 创建/改约先拿教练日期锁再锁业务行；取消也遵循同样顺序，避免锁顺序反转造成死锁。
+            BookingAppointmentView current = repository.findAppointmentForUpdate(
+                    request.getOrganizationId(), request.getAppointmentId()).orElseThrow(
+                    () -> new BookingApiException(HttpStatus.NOT_FOUND, "预约不存在或已经取消"));
+            if (!AppointmentStatusCodes.canCancel(current.getStatus())
+                    || current.getStartTime() == null
+                    || !request.getExpectedStartTime().equals(current.getStartTime())
+                    || !java.util.Objects.equals(observed.getCoachId(), current.getCoachId())
+                    || !observed.getStartTime().atZone(BUSINESS_ZONE).toLocalDate()
+                    .equals(current.getStartTime().atZone(BUSINESS_ZONE).toLocalDate())) {
+                throw new BookingApiException(HttpStatus.CONFLICT, "预约已被其他操作修改，请重新查询");
+            }
+            BookingRepository.ContractRecord contract = repository.findContractForUpdate(
+                    request.getOrganizationId(), current.getUserId(), current.getContractId());
+            return repository.cancelBooking(request,
+                    new BookingRepository.BookingActorData(actor.getUserId(), actor.getRequestId()),
+                    contract, actor.getConfirmation());
+        } finally {
+            // 取消会释放教练时间段，同时恢复课时；需要与创建/改约共用同一业务日期锁。
+            if (coachLocked && lockedCoachId != null && lockedDate != null) {
+                repository.releaseCoachDayLock(request.getOrganizationId(), lockedCoachId, lockedDate);
+            }
+            repository.releaseRequestLock(actor.getRequestId());
+        }
+    }
+
     private void validateInput(BookingCreateRequest request) {
         if (request == null || blank(request.getOrganizationId()) || blank(request.getStudentId())
                 || blank(request.getContractId()) || blank(request.getCoachId()) || blank(request.getCourseId())
@@ -206,6 +270,13 @@ public class BookingService {
         }
         if (request.getStartTime().isBefore(Instant.now())) {
             throw new BookingApiException(HttpStatus.BAD_REQUEST, "预约开始时间不能早于当前时间");
+        }
+    }
+
+    private void validateCancelInput(BookingCancelRequest request) {
+        if (request == null || blank(request.getOrganizationId()) || blank(request.getAppointmentId())
+                || request.getExpectedStartTime() == null) {
+            throw new BookingApiException(HttpStatus.BAD_REQUEST, "取消预约参数不完整");
         }
     }
 
@@ -251,6 +322,21 @@ public class BookingService {
                 || !actor.canAccessOrganization(confirmation.getOrganizationId())
                 || !confirmation.getPayloadHash().matches("[0-9a-fA-F]{64}")) {
             throw new BookingApiException(HttpStatus.FORBIDDEN, "改约确认凭证范围与请求不匹配");
+        }
+    }
+
+    private void requireCancelConfirmation(BookingActor actor, BookingCancelRequest request) {
+        BookingConfirmation confirmation = actor.getConfirmation();
+        if (confirmation == null) {
+            throw new BookingApiException(HttpStatus.UNAUTHORIZED, "缺少取消预约确认凭证");
+        }
+        if (!"fitness.booking.cancel.v1".equals(confirmation.getToolId())
+                || !"CANCEL_APPOINTMENT".equals(confirmation.getAction())
+                || !request.getOrganizationId().equals(confirmation.getOrganizationId())
+                || !request.getAppointmentId().equals(confirmation.getResource())
+                || !actor.canAccessOrganization(confirmation.getOrganizationId())
+                || !confirmation.getPayloadHash().matches("[0-9a-fA-F]{64}")) {
+            throw new BookingApiException(HttpStatus.FORBIDDEN, "取消预约确认凭证范围与请求不匹配");
         }
     }
 

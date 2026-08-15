@@ -115,4 +115,16 @@ public class AgentToolController {
         input.setAppointmentId(appointmentId);
         return bookingServiceClient.reschedule(context, requestId, confirmationToken, input);
     }
+
+    @PostMapping("/appointments/{appointmentId}/cancel")
+    public ToolViews.BookingCancelledView cancelAppointment(
+            AgentContext context,
+            @PathVariable String appointmentId,
+            @RequestHeader("X-Request-ID") String requestId,
+            @RequestHeader("X-Confirmation-Token") String confirmationToken,
+            @RequestBody BookingToolInputs.CancelInput input
+    ) {
+        input.setAppointmentId(appointmentId);
+        return bookingServiceClient.cancel(context, requestId, confirmationToken, input);
+    }
 }

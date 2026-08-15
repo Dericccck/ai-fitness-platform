@@ -2,7 +2,7 @@
 
 预约业务写服务，属于健身业务范围；赛事、作品和活动运营不属于本服务。
 
-该服务不依赖旧 Java 项目的 JPA Entity 图，使用显式 SQL 访问现有健身业务表，当前负责创建预约和改约两条受控写路径。`fitness-core-gateway` 使用只读数据库账号，先验签和校验确认凭证，再调用本服务。
+该服务不依赖旧 Java 项目的 JPA Entity 图，使用显式 SQL 访问现有健身业务表，当前负责创建预约、改约和取消三条受控写路径。`fitness-core-gateway` 使用只读数据库账号，先验签和校验确认凭证，再调用本服务。
 
 ## 创建预约事务
 
@@ -25,6 +25,14 @@
 4. 在同一事务中更新预约、消费确认 JTI、记录审计和写入 `APPOINTMENT_RESCHEDULED` Outbox 事件。
 
 取消预约尚未开放；当前不会自动退课时，也不会为改约重复消耗课时。
+
+## 取消预约事务
+
+取消预约沿用旧系统的事实模型：不新增预约状态编码，而是将 `appointment.deleted` 标记为 `1`，并将原合同剩余课时原子加回 1。
+Agent v1 只允许取消尚未开始且处于预约中、预约成功或改课中的预约；已开始、已核销或已经取消的预约不能通过该接口取消。
+
+服务会锁定请求、预约、教练业务日期和合同，校验确认凭证、学员权限及 `expectedStartTime`，然后在同一事务中更新预约、恢复课时、
+消费确认 JTI、写审计和写入 `APPOINTMENT_CANCELLED` Outbox 事件。结果显式返回 `cancelled=true` 和恢复后的剩余课时。
 
 ## 本地启动
 
@@ -56,7 +64,7 @@ JTI 重复时的事务回滚。未配置这些变量时，Maven 会将该测试�
 
 ## Outbox 与 RabbitMQ
 
-预约事务会先把 `APPOINTMENT_CREATED` 或 `APPOINTMENT_RESCHEDULED` 写入 `agent_booking_outbox`。开启发布器后，服务会定时
+预约事务会先把 `APPOINTMENT_CREATED`、`APPOINTMENT_RESCHEDULED` 或 `APPOINTMENT_CANCELLED` 写入 `agent_booking_outbox`。开启发布器后，服务会定时
 领取待发布事件，发送到 RabbitMQ，并等待 publisher confirm；只有收到 broker 的 ack 才把事件
 标记为 `PUBLISHED`。连接失败、nack 或超时会保留重试信息，超过最大次数进入 `DEAD`，不会静默丢失。
 

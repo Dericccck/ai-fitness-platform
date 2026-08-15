@@ -1,6 +1,8 @@
 package com.shuyiwa.fitness.booking.service;
 
 import com.shuyiwa.fitness.booking.api.BookingAppointmentView;
+import com.shuyiwa.fitness.booking.api.BookingCancelRequest;
+import com.shuyiwa.fitness.booking.api.BookingCancelledView;
 import com.shuyiwa.fitness.booking.api.BookingCreateRequest;
 import com.shuyiwa.fitness.booking.api.BookingRescheduleRequest;
 import com.shuyiwa.fitness.booking.repository.BookingRepository;
@@ -129,6 +131,52 @@ public class BookingServiceTest {
         throw new AssertionError("missing reschedule confirmation must be rejected");
     }
 
+    @Test
+    public void studentCanCancelFutureBookingAndRestoreOneClassHour() {
+        BookingCancelRequest request = cancelRequest();
+        BookingAppointmentView current = new BookingAppointmentView(
+                "appointment-1", "org-1", "student-1", "coach-1", "course-1", "力量训练",
+                request.getExpectedStartTime(), Instant.parse("2026-08-20T11:00:00Z"),
+                1, "contract-1", 0
+        );
+        BookingCancelledView expected = new BookingCancelledView(
+                "appointment-1", "org-1", "student-1", "coach-1", "course-1", "力量训练",
+                request.getExpectedStartTime(), Instant.parse("2026-08-20T11:00:00Z"),
+                1, "contract-1", 1
+        );
+        when(repository.findByCancelRequestId("request-3")).thenReturn(Optional.empty());
+        when(repository.findAppointment("org-1", "appointment-1"))
+                .thenReturn(Optional.of(current));
+        when(repository.findAppointmentForUpdate("org-1", "appointment-1"))
+                .thenReturn(Optional.of(current));
+        when(repository.isOrganizationMember("org-1", "student-1")).thenReturn(true);
+        when(repository.findContractForUpdate("org-1", "student-1", "contract-1"))
+                .thenReturn(contract(0));
+        when(repository.cancelBooking(eq(request), any(), any(), any())).thenReturn(expected);
+
+        BookingCancelledView actual = service.cancel(cancelActor(), request);
+
+        assertEquals("appointment-1", actual.getId());
+        assertEquals(1, actual.getRemainingClassHours().intValue());
+        verify(repository).acquireCoachDayLock("org-1", "coach-1", LocalDate.of(2026, 8, 20));
+        verify(repository).releaseCoachDayLock("org-1", "coach-1", LocalDate.of(2026, 8, 20));
+        verify(repository).releaseRequestLock("request-3");
+    }
+
+    @Test
+    public void cancelWithoutConfirmationIsRejectedBeforeDatabaseWrite() {
+        BookingActor actor = new BookingActor("student-1", set(BookingActor.STUDENT), set("org-1"),
+                "request-3", null);
+
+        try {
+            service.cancel(actor, cancelRequest());
+        } catch (com.shuyiwa.fitness.booking.api.BookingApiException expected) {
+            assertEquals(401, expected.getStatus().value());
+            return;
+        }
+        throw new AssertionError("missing cancel confirmation must be rejected");
+    }
+
     private static BookingActor studentActor() {
         return new BookingActor("student-1", set(BookingActor.STUDENT), set("org-1"), "request-1",
                 new BookingConfirmation("confirmation-1", "jti-1", "fitness.booking.create.v1",
@@ -158,10 +206,24 @@ public class BookingServiceTest {
         return request;
     }
 
+    private static BookingCancelRequest cancelRequest() {
+        BookingCancelRequest request = new BookingCancelRequest();
+        request.setOrganizationId("org-1");
+        request.setAppointmentId("appointment-1");
+        request.setExpectedStartTime(Instant.parse("2026-08-20T10:00:00Z"));
+        return request;
+    }
+
     private static BookingActor rescheduleActor() {
         return new BookingActor("student-1", set(BookingActor.STUDENT), set("org-1"), "request-2",
                 new BookingConfirmation("confirmation-2", "jti-2", "fitness.booking.reschedule.v1",
                         "RESCHEDULE_APPOINTMENT", "org-1", "appointment-1", repeat("b", 64)));
+    }
+
+    private static BookingActor cancelActor() {
+        return new BookingActor("student-1", set(BookingActor.STUDENT), set("org-1"), "request-3",
+                new BookingConfirmation("confirmation-3", "jti-3", "fitness.booking.cancel.v1",
+                        "CANCEL_APPOINTMENT", "org-1", "appointment-1", repeat("c", 64)));
     }
 
     private static BookingRepository.ContractRecord contract(int remaining) {

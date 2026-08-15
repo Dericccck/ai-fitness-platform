@@ -29,4 +29,13 @@ public class BookingController {
         request.setAppointmentId(appointmentId);
         return service.reschedule(actor, request);
     }
+
+    @PostMapping("/appointments/{appointmentId}/cancel")
+    public BookingCancelledView cancel(BookingActor actor,
+                                       @PathVariable String appointmentId,
+                                       @RequestBody BookingCancelRequest request) {
+        // 路径 ID 是唯一资源来源，避免请求体中的预约 ID 与 URL 不一致。
+        request.setAppointmentId(appointmentId);
+        return service.cancel(actor, request);
+    }
 }

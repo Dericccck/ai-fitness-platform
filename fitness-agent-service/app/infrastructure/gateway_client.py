@@ -155,6 +155,12 @@ class GatewayBookingCreated(_GatewayModel):
     remaining_class_hours: int = Field(alias="remainingClassHours")
 
 
+class GatewayBookingCancelled(GatewayBookingCreated):
+    """取消预约后的稳定事实，明确表示旧预约已被删除标记并退回课时。"""
+
+    cancelled: bool
+
+
 class GatewayTrainingItem(_GatewayModel):
     id: str
     exercise_name: str = Field(alias="exerciseName")
@@ -349,6 +355,23 @@ class GatewayClient:
             context,
             payload,
             GatewayBookingCreated,
+        )
+
+    async def cancel_booking(
+        self,
+        context: GatewayRequestContext,
+        payload: dict[str, Any],
+    ) -> GatewayBookingCancelled:
+        """调用取消接口；预约 ID 必须来自经过 Schema 校验的稳定 Payload。"""
+
+        appointment_id = payload.get("appointmentId")
+        if not isinstance(appointment_id, str) or not appointment_id:
+            raise GatewayBadRequestError("取消请求缺少 appointmentId")
+        return await self._post(
+            f"/internal/agent-tools/v1/appointments/{appointment_id}/cancel",
+            context,
+            payload,
+            GatewayBookingCancelled,
         )
 
     async def get_training_plan(

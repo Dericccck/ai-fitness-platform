@@ -206,6 +206,27 @@ class BookingRescheduleToolInput(OrganizationToolInput):
         return self
 
 
+class BookingCancelToolInput(OrganizationToolInput):
+    """取消参数；v1 只允许取消尚未开始的预约，成功后退回一个课时。"""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    organization_id: str = Field(
+        alias="organizationId",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    appointment_id: str = Field(
+        alias="appointmentId",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    # 取消确认卡绑定用户查询到的原开始时间；如果确认后预约发生变化，Java 侧拒绝执行。
+    expected_start_time: datetime = Field(alias="expectedStartTime")
+
+
 class TrainingItemInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -288,6 +309,12 @@ def _reschedule_booking_payload(data: BookingRescheduleToolInput) -> dict[str, o
     return data.model_dump(mode="json", by_alias=True)
 
 
+def _cancel_booking_payload(data: BookingCancelToolInput) -> dict[str, object]:
+    """生成取消预约的唯一 Payload，确认摘要和真实 Gateway 请求共用。"""
+
+    return data.model_dump(mode="json", by_alias=True)
+
+
 def _review_training_plan_payload(data: ReviewTrainingPlanToolInput) -> dict[str, object]:
     """生成审核 Payload，避免摘要构造和 Gateway 调用各维护一份字段映射。"""
 
@@ -361,6 +388,20 @@ def _reschedule_booking_summary(
         "RESCHEDULE_APPOINTMENT",
         "APPOINTMENT_SUCCESS",
         _reschedule_booking_payload(typed),
+        None,
+        organization_id=typed.organization_id,
+        resource_type="appointment",
+        resource_id=typed.appointment_id,
+    )
+
+
+def _cancel_booking_summary(data: BaseModel, _: Mapping[str, object] | None) -> dict[str, object]:
+    typed = cast(BookingCancelToolInput, data)
+    return _summary(
+        "取消健身预约",
+        "CANCEL_APPOINTMENT",
+        "CANCELLED",
+        _cancel_booking_payload(typed),
         None,
         organization_id=typed.organization_id,
         resource_type="appointment",
@@ -513,6 +554,20 @@ def _reschedule_booking_policy() -> ConfirmationPolicy:
         summary_builder=_reschedule_booking_summary,
         resource_id_builder=lambda raw: cast(BookingRescheduleToolInput, raw).appointment_id,
         organization_id_builder=lambda raw: cast(BookingRescheduleToolInput, raw).organization_id,
+    )
+
+
+def _cancel_booking_policy() -> ConfirmationPolicy:
+    return ConfirmationPolicy(
+        action="CANCEL_APPOINTMENT",
+        resource_type="appointment",
+        risk_level="WRITE",
+        operation="取消健身预约",
+        target_status="CANCELLED",
+        payload_builder=lambda raw: _cancel_booking_payload(cast(BookingCancelToolInput, raw)),
+        summary_builder=_cancel_booking_summary,
+        resource_id_builder=lambda raw: cast(BookingCancelToolInput, raw).appointment_id,
+        organization_id_builder=lambda raw: cast(BookingCancelToolInput, raw).organization_id,
     )
 
 
@@ -704,6 +759,13 @@ def build_fitness_tool_registry(
             _reschedule_booking_payload(data),
         )
 
+    async def cancel_booking(raw: BaseModel, context: ToolContext) -> object:
+        data = cast(BookingCancelToolInput, raw)
+        return await gateway.cancel_booking(
+            context.gateway_context,
+            _cancel_booking_payload(data),
+        )
+
     async def submit_training_review(raw: BaseModel, context: ToolContext) -> object:
         data = cast(TrainingPlanToolInput, raw)
         return await gateway.submit_training_review(context.gateway_context, data.plan_id)
@@ -870,6 +932,16 @@ def build_fitness_tool_registry(
             read_only=False,
             requires_confirmation=True,
             confirmation_policy=_reschedule_booking_policy(),
+        ),
+        ToolDefinition(
+            tool_id="fitness.booking.cancel.v1",
+            description="取消尚未开始的健身预约并退回一个课时；执行前必须展示取消确认卡。",
+            input_model=BookingCancelToolInput,
+            handler=cancel_booking,
+            allowed_roles=_READ_ROLES,
+            read_only=False,
+            requires_confirmation=True,
+            confirmation_policy=_cancel_booking_policy(),
         ),
         ToolDefinition(
             tool_id="fitness.memory.list.v1",

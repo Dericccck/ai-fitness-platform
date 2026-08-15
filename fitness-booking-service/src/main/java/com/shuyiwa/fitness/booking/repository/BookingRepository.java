@@ -1,6 +1,8 @@
 package com.shuyiwa.fitness.booking.repository;
 
 import com.shuyiwa.fitness.booking.api.BookingApiException;
+import com.shuyiwa.fitness.booking.api.BookingCancelRequest;
+import com.shuyiwa.fitness.booking.api.BookingCancelledView;
 import com.shuyiwa.fitness.booking.api.BookingCreateRequest;
 import com.shuyiwa.fitness.booking.api.BookingAppointmentView;
 import com.shuyiwa.fitness.booking.api.BookingRescheduleRequest;
@@ -64,6 +66,18 @@ public class BookingRepository {
         return result.stream().findFirst();
     }
 
+    public Optional<BookingCancelledView> findByCancelRequestId(String requestId) {
+        List<BookingCancelledView> result = jdbc.query(
+                "SELECT a.id, a.organization_id, a.user_id, a.coach_id, a.course_id, a.course_name, "
+                        + "a.course_start_time, a.course_end_time, a.status, a.contract_id, "
+                        + "c.remaining_class_hours "
+                        + "FROM agent_booking_cancel_operation o JOIN appointment a "
+                        + "ON a.id = o.appointment_id LEFT JOIN contract c ON c.id = a.contract_id "
+                        + "WHERE o.request_id = ? LIMIT 1",
+                new Object[]{requestId}, (rs, rowNum) -> mapCancelledAppointment(rs));
+        return result.stream().findFirst();
+    }
+
     public Optional<BookingAppointmentView> findAppointmentForUpdate(
             String organizationId, String appointmentId
     ) {
@@ -73,6 +87,20 @@ public class BookingRepository {
                         + "c.remaining_class_hours FROM appointment a "
                         + "LEFT JOIN contract c ON c.id = a.contract_id "
                         + "WHERE a.id = ? AND a.organization_id = ? AND a.deleted = 0 FOR UPDATE",
+                new Object[]{appointmentId, organizationId}, (rs, rowNum) -> mapAppointment(rs));
+        return result.stream().findFirst();
+    }
+
+    /** 取消前的无锁快照；先据此定位教练日期锁，再重新 FOR UPDATE 读取并校验。 */
+    public Optional<BookingAppointmentView> findAppointment(
+            String organizationId, String appointmentId
+    ) {
+        List<BookingAppointmentView> result = jdbc.query(
+                "SELECT a.id, a.organization_id, a.user_id, a.coach_id, a.course_id, a.course_name, "
+                        + "a.course_start_time, a.course_end_time, a.status, a.contract_id, "
+                        + "c.remaining_class_hours FROM appointment a "
+                        + "LEFT JOIN contract c ON c.id = a.contract_id "
+                        + "WHERE a.id = ? AND a.organization_id = ? AND a.deleted = 0",
                 new Object[]{appointmentId, organizationId}, (rs, rowNum) -> mapAppointment(rs));
         return result.stream().findFirst();
     }
@@ -274,12 +302,70 @@ public class BookingRepository {
                 () -> new IllegalStateException("改约写入后无法读取"));
     }
 
+    @Transactional
+    public BookingCancelledView cancelBooking(BookingCancelRequest request, BookingActorData actor,
+                                              ContractRecord contract, BookingConfirmation confirmation) {
+        int contractChanged = jdbc.update("UPDATE contract SET remaining_class_hours = remaining_class_hours + 1, "
+                        + "version = version + 1 WHERE id = ? AND organization_id = ? AND user_id = ? "
+                        + "AND version = ?",
+                contract.id, request.getOrganizationId(), contract.studentId, contract.version);
+        if (contractChanged != 1) {
+            throw new BookingApiException(HttpStatus.CONFLICT, "合同课时已被其他请求修改，请重新查询");
+        }
+        String remark = "{\"operator\":\"" + escapeJson(actor.userId)
+                + "\",\"operatorTime\":" + System.currentTimeMillis()
+                + ",\"operation_type\":\"cancel\"}";
+        int appointmentChanged = jdbc.update("UPDATE appointment SET deleted = 1, "
+                        + "last_update_login_user_id = ?, last_update_time = CURRENT_TIMESTAMP, reamrk = ? "
+                        + "WHERE id = ? AND organization_id = ? AND deleted = 0 "
+                        + "AND course_start_time = ? AND status IN (0, 1, 3)",
+                actor.userId, remark, request.getAppointmentId(), request.getOrganizationId(),
+                Timestamp.from(request.getExpectedStartTime()));
+        if (appointmentChanged != 1) {
+            throw new BookingApiException(HttpStatus.CONFLICT, "预约已被修改或当前状态不允许取消");
+        }
+        // 旧系统会同步修正同一合同后续预约的 amount（当时它承载预约后的剩余课时快照）。
+        // 这里保留该兼容行为，避免 Agent 取消后旧管理端展示的后续课时快照少 1。
+        jdbc.update("UPDATE appointment future JOIN appointment cancelled ON cancelled.id = ? "
+                        + "SET future.amount = CAST(COALESCE(future.amount, '0') AS SIGNED) + 1 "
+                        + "WHERE future.contract_id = ? AND future.organization_id = ? "
+                        + "AND future.deleted = 0 AND future.create_time > cancelled.create_time",
+                request.getAppointmentId(), contract.id, request.getOrganizationId());
+        consumeConfirmation(confirmation, actor.requestId);
+        jdbc.update("INSERT INTO agent_booking_cancel_operation "
+                        + "(request_id, appointment_id, organization_id, actor_id) VALUES (?, ?, ?, ?)",
+                actor.requestId, request.getAppointmentId(), request.getOrganizationId(), actor.userId);
+        jdbc.update("INSERT INTO agent_booking_audit (appointment_id, organization_id, action, actor_id, request_id) "
+                        + "VALUES (?, ?, 'CANCEL_APPOINTMENT', ?, ?)", request.getAppointmentId(),
+                request.getOrganizationId(), actor.userId, actor.requestId);
+        String eventKey = "appointment-cancelled:" + UUID.randomUUID().toString().replace("-", "");
+        jdbc.update("INSERT INTO agent_booking_outbox "
+                        + "(event_key, event_type, aggregate_id, organization_id, payload) VALUES "
+                        + "(?, 'APPOINTMENT_CANCELLED', ?, ?, ?)", eventKey, request.getAppointmentId(),
+                request.getOrganizationId(), "{\"appointmentId\":\""
+                        + escapeJson(request.getAppointmentId()) + "\",\"contractId\":\""
+                        + escapeJson(contract.id) + "\",\"remainingClassHours\":"
+                        + (contract.remainingClassHours + 1) + "}");
+        return findCancelledByAppointmentId(request.getAppointmentId()).orElseThrow(
+                () -> new IllegalStateException("取消预约写入后无法读取"));
+    }
+
     private Optional<BookingAppointmentView> findByAppointmentId(String appointmentId) {
         List<BookingAppointmentView> result = jdbc.query(
                 "SELECT a.id, a.organization_id, a.user_id, a.coach_id, a.course_id, a.course_name, "
                         + "a.course_start_time, a.course_end_time, a.status, a.contract_id, c.remaining_class_hours "
                         + "FROM appointment a LEFT JOIN contract c ON c.id = a.contract_id WHERE a.id = ? LIMIT 1",
                 new Object[]{appointmentId}, (rs, rowNum) -> mapAppointment(rs));
+        return result.stream().findFirst();
+    }
+
+    private Optional<BookingCancelledView> findCancelledByAppointmentId(String appointmentId) {
+        List<BookingCancelledView> result = jdbc.query(
+                "SELECT a.id, a.organization_id, a.user_id, a.coach_id, a.course_id, a.course_name, "
+                        + "a.course_start_time, a.course_end_time, a.status, a.contract_id, c.remaining_class_hours "
+                        + "FROM appointment a LEFT JOIN contract c ON c.id = a.contract_id "
+                        + "WHERE a.id = ? AND a.deleted = 1 LIMIT 1",
+                new Object[]{appointmentId}, (rs, rowNum) -> mapCancelledAppointment(rs));
         return result.stream().findFirst();
     }
 
@@ -300,6 +386,16 @@ public class BookingRepository {
         Timestamp start = rs.getTimestamp("course_start_time");
         Timestamp end = rs.getTimestamp("course_end_time");
         return new BookingAppointmentView(rs.getString("id"), rs.getString("organization_id"),
+                rs.getString("user_id"), rs.getString("coach_id"), rs.getString("course_id"),
+                rs.getString("course_name"), start == null ? null : start.toInstant(),
+                end == null ? null : end.toInstant(), rs.getObject("status", Integer.class),
+                rs.getString("contract_id"), rs.getObject("remaining_class_hours", Integer.class));
+    }
+
+    private BookingCancelledView mapCancelledAppointment(java.sql.ResultSet rs) throws java.sql.SQLException {
+        Timestamp start = rs.getTimestamp("course_start_time");
+        Timestamp end = rs.getTimestamp("course_end_time");
+        return new BookingCancelledView(rs.getString("id"), rs.getString("organization_id"),
                 rs.getString("user_id"), rs.getString("coach_id"), rs.getString("course_id"),
                 rs.getString("course_name"), start == null ? null : start.toInstant(),
                 end == null ? null : end.toInstant(), rs.getObject("status", Integer.class),
