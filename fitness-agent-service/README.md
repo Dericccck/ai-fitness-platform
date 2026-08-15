@@ -325,6 +325,11 @@ Operations 趋势摘要的离线评测样例位于 `evals/operations_trend_smoke
 单个原始桶不宣称趋势，以及课程/教练预约量的固定指标过滤结果。该门禁不访问数据库、LLM 或在线数据，
 只验证聚合结果进入解释层后的确定性安全边界；CI 通过率低于阈值或出现失败用例时直接失败。
 
+Operations 环比摘要的离线评测样例位于 `evals/operations_comparison_smoke.json`，阈值位于
+`evals/operations_comparison_thresholds.json`。执行 `make agent-operations-comparison-eval` 会验证当前周期与上一等长
+周期的总量、差值、方向、百分比和跨月/跨年的日期边界，并覆盖上一周期为 0、两周期都为 0 和当前周期为 0 的除零场景。
+当前同比仍不自动猜测，用户提出同比时会要求澄清统计口径；本门禁不会把尚未实现的同比能力伪装成已支持。
+
 短期会话摘要的确定性安全评测样例位于 `fitness-agent-service/evals/session_summary_samples.json`，阈值位于
 `fitness-agent-service/evals/session_summary_thresholds.json`。执行 `make agent-session-summary-eval` 会检查摘要 JSON、
 非空、长度、必需上下文、凭证脱敏、禁止越权表达和通过率；禁止表达用于拦截动态事实、权限、医疗诊断和训练计划状态
