@@ -106,6 +106,30 @@ def test_booking_payload_uses_java_gateway_camel_case_contract() -> None:
     assert '"organization_id"' not in canonical
 
 
+def test_reschedule_payload_uses_java_gateway_camel_case_contract() -> None:
+    registry = build_fitness_tool_registry(cast(GatewayClient, FakeGateway()))
+    action = registry.normalize_confirmation(
+        "fitness.booking.reschedule.v1",
+        {
+            "organization_id": "org-1",
+            "appointment_id": "appointment-1",
+            "coach_id": "coach-2",
+            "expected_start_time": "2026-08-20T10:00:00Z",
+            "start_time": "2026-08-21T10:00:00Z",
+            "end_time": "2026-08-21T11:00:00Z",
+        },
+        context=context(),
+        organization_id="org-1",
+    )
+
+    canonical = action.canonical_payload.decode("utf-8")
+    assert action.action == "RESCHEDULE_APPOINTMENT"
+    assert action.resource_id == "appointment-1"
+    assert '"appointmentId":"appointment-1"' in canonical
+    assert '"expectedStartTime":"2026-08-20T10:00:00Z"' in canonical
+    assert '"appointment_id"' not in canonical
+
+
 def test_plan_action_requires_trusted_snapshot_and_binds_version() -> None:
     registry = build_fitness_tool_registry(cast(GatewayClient, FakeGateway()))
     with pytest.raises(ToolConfirmationNormalizationError):

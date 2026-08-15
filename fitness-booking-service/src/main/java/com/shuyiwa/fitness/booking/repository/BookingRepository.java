@@ -3,6 +3,7 @@ package com.shuyiwa.fitness.booking.repository;
 import com.shuyiwa.fitness.booking.api.BookingApiException;
 import com.shuyiwa.fitness.booking.api.BookingCreateRequest;
 import com.shuyiwa.fitness.booking.api.BookingAppointmentView;
+import com.shuyiwa.fitness.booking.api.BookingRescheduleRequest;
 import com.shuyiwa.fitness.booking.domain.AppointmentStatusCodes;
 import com.shuyiwa.fitness.booking.security.BookingConfirmation;
 import org.springframework.dao.DuplicateKeyException;
@@ -48,6 +49,31 @@ public class BookingRepository {
                         + "FROM agent_booking_operation o JOIN appointment a ON a.id = o.appointment_id "
                         + "LEFT JOIN contract c ON c.id = a.contract_id WHERE o.request_id = ? LIMIT 1",
                 new Object[]{requestId}, (rs, rowNum) -> mapAppointment(rs));
+        return result.stream().findFirst();
+    }
+
+    public Optional<BookingAppointmentView> findByRescheduleRequestId(String requestId) {
+        List<BookingAppointmentView> result = jdbc.query(
+                "SELECT a.id, a.organization_id, a.user_id, a.coach_id, a.course_id, a.course_name, "
+                        + "a.course_start_time, a.course_end_time, a.status, a.contract_id, "
+                        + "c.remaining_class_hours "
+                        + "FROM agent_booking_reschedule_operation o JOIN appointment a "
+                        + "ON a.id = o.appointment_id LEFT JOIN contract c ON c.id = a.contract_id "
+                        + "WHERE o.request_id = ? LIMIT 1",
+                new Object[]{requestId}, (rs, rowNum) -> mapAppointment(rs));
+        return result.stream().findFirst();
+    }
+
+    public Optional<BookingAppointmentView> findAppointmentForUpdate(
+            String organizationId, String appointmentId
+    ) {
+        List<BookingAppointmentView> result = jdbc.query(
+                "SELECT a.id, a.organization_id, a.user_id, a.coach_id, a.course_id, a.course_name, "
+                        + "a.course_start_time, a.course_end_time, a.status, a.contract_id, "
+                        + "c.remaining_class_hours FROM appointment a "
+                        + "LEFT JOIN contract c ON c.id = a.contract_id "
+                        + "WHERE a.id = ? AND a.organization_id = ? AND a.deleted = 0 FOR UPDATE",
+                new Object[]{appointmentId, organizationId}, (rs, rowNum) -> mapAppointment(rs));
         return result.stream().findFirst();
     }
 
@@ -99,13 +125,21 @@ public class BookingRepository {
     public List<BookingAppointmentView> findCoachConflicts(
             String organizationId, String coachId, Instant start, Instant end
     ) {
+        return findCoachConflicts(organizationId, coachId, start, end, null);
+    }
+
+    public List<BookingAppointmentView> findCoachConflicts(
+            String organizationId, String coachId, Instant start, Instant end, String excludeAppointmentId
+    ) {
         return jdbc.query(
                 "SELECT id, organization_id, user_id, coach_id, course_id, course_name, course_start_time, "
                         + "course_end_time, status, contract_id, NULL AS remaining_class_hours FROM appointment "
                         + "WHERE organization_id = ? AND deleted = 0 AND (coach_id = ? OR temp_coach_id = ?) "
                         + "AND status IN (0, 1, 3, 4, 5) AND course_start_time < ? "
-                        + "AND (course_end_time IS NULL OR course_end_time > ? ) ORDER BY course_start_time FOR UPDATE",
-                new Object[]{organizationId, coachId, coachId, Timestamp.from(end), Timestamp.from(start)},
+                        + "AND (course_end_time IS NULL OR course_end_time > ? ) "
+                        + "AND (? IS NULL OR id <> ?) ORDER BY course_start_time FOR UPDATE",
+                new Object[]{organizationId, coachId, coachId, Timestamp.from(end), Timestamp.from(start),
+                        excludeAppointmentId, excludeAppointmentId},
                 (rs, rowNum) -> mapAppointment(rs));
     }
 
@@ -204,6 +238,40 @@ public class BookingRepository {
                         + escapeJson(request.getStudentId()) + "\",\"coachId\":\"" + escapeJson(request.getCoachId()) + "\"}");
         return findByAppointmentId(appointmentId).orElseThrow(
                 () -> new IllegalStateException("预约写入后无法读取"));
+    }
+
+    @Transactional
+    public BookingAppointmentView rescheduleBooking(BookingRescheduleRequest request, BookingActorData actor,
+                                                    BookingConfirmation confirmation) {
+        int changed = jdbc.update("UPDATE appointment SET coach_id = ?, course_start_date = ?, "
+                        + "course_start_time = ?, course_end_time = ?, last_update_login_user_id = ?, "
+                        + "last_update_time = CURRENT_TIMESTAMP WHERE id = ? AND organization_id = ? "
+                        + "AND deleted = 0 AND course_start_time = ? AND status IN (0, 1, 3)",
+                request.getCoachId(),
+                Date.valueOf(request.getStartTime().atZone(BUSINESS_ZONE).toLocalDate()),
+                Timestamp.from(request.getStartTime()), Timestamp.from(request.getEndTime()), actor.userId,
+                request.getAppointmentId(), request.getOrganizationId(),
+                Timestamp.from(request.getExpectedStartTime()));
+        if (changed != 1) {
+            throw new BookingApiException(HttpStatus.CONFLICT, "预约已被修改或当前状态不允许改约");
+        }
+        consumeConfirmation(confirmation, actor.requestId);
+        jdbc.update("INSERT INTO agent_booking_reschedule_operation "
+                        + "(request_id, appointment_id, organization_id, actor_id) VALUES (?, ?, ?, ?)",
+                actor.requestId, request.getAppointmentId(), request.getOrganizationId(), actor.userId);
+        jdbc.update("INSERT INTO agent_booking_audit (appointment_id, organization_id, action, actor_id, request_id) "
+                        + "VALUES (?, ?, 'RESCHEDULE_APPOINTMENT', ?, ?)", request.getAppointmentId(),
+                request.getOrganizationId(), actor.userId, actor.requestId);
+        String eventKey = "appointment-rescheduled:" + UUID.randomUUID().toString().replace("-", "");
+        jdbc.update("INSERT INTO agent_booking_outbox "
+                        + "(event_key, event_type, aggregate_id, organization_id, payload) VALUES "
+                        + "(?, 'APPOINTMENT_RESCHEDULED', ?, ?, ?)", eventKey, request.getAppointmentId(),
+                request.getOrganizationId(), "{\"appointmentId\":\"" + escapeJson(request.getAppointmentId())
+                        + "\",\"coachId\":\"" + escapeJson(request.getCoachId())
+                        + "\",\"startTime\":\"" + request.getStartTime()
+                        + "\",\"endTime\":\"" + request.getEndTime() + "\"}");
+        return findByAppointmentId(request.getAppointmentId()).orElseThrow(
+                () -> new IllegalStateException("改约写入后无法读取"));
     }
 
     private Optional<BookingAppointmentView> findByAppointmentId(String appointmentId) {

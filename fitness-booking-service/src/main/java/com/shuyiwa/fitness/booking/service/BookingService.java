@@ -3,6 +3,8 @@ package com.shuyiwa.fitness.booking.service;
 import com.shuyiwa.fitness.booking.api.BookingApiException;
 import com.shuyiwa.fitness.booking.api.BookingAppointmentView;
 import com.shuyiwa.fitness.booking.api.BookingCreateRequest;
+import com.shuyiwa.fitness.booking.api.BookingRescheduleRequest;
+import com.shuyiwa.fitness.booking.domain.AppointmentStatusCodes;
 import com.shuyiwa.fitness.booking.repository.BookingRepository;
 import com.shuyiwa.fitness.booking.security.BookingActor;
 import com.shuyiwa.fitness.booking.security.BookingConfirmation;
@@ -103,11 +105,98 @@ public class BookingService {
         }
     }
 
+    @Transactional
+    public BookingAppointmentView reschedule(BookingActor actor, BookingRescheduleRequest request) {
+        validateRescheduleInput(request);
+        requireOrganization(actor, request.getOrganizationId());
+        requireRescheduleConfirmation(actor, request);
+        repository.acquireRequestLock(actor.getRequestId());
+        boolean coachLocked = false;
+        LocalDate bookingDate = request.getStartTime().atZone(BUSINESS_ZONE).toLocalDate();
+        try {
+            BookingAppointmentView applied = repository.findByRescheduleRequestId(actor.getRequestId())
+                    .orElse(null);
+            if (applied != null) return applied;
+
+            BookingAppointmentView current = repository.findAppointmentForUpdate(
+                    request.getOrganizationId(), request.getAppointmentId()).orElseThrow(
+                    () -> new BookingApiException(HttpStatus.NOT_FOUND, "预约不存在或不属于当前机构"));
+            if (!AppointmentStatusCodes.canReschedule(current.getStatus())) {
+                throw new BookingApiException(HttpStatus.CONFLICT, "当前预约状态不允许改约");
+            }
+            if (!request.getExpectedStartTime().equals(current.getStartTime())) {
+                throw new BookingApiException(HttpStatus.CONFLICT, "预约已被其他操作修改，请重新查询");
+            }
+            requireStudentAccess(actor, request.getOrganizationId(), current.getUserId());
+            if (!repository.isOrganizationMember(request.getOrganizationId(), current.getUserId())) {
+                throw new BookingApiException(HttpStatus.FORBIDDEN, "学员不是当前机构成员");
+            }
+            if (!repository.isCoachInOrganization(request.getOrganizationId(), request.getCoachId())) {
+                throw new BookingApiException(HttpStatus.NOT_FOUND, "教练不属于当前机构");
+            }
+
+            repository.acquireCoachDayLock(request.getOrganizationId(), request.getCoachId(), bookingDate);
+            coachLocked = true;
+            BookingRepository.ContractRecord contract = repository.findContractForUpdate(
+                    request.getOrganizationId(), current.getUserId(), current.getContractId());
+            if (contract.status != CONTRACT_NORMAL) {
+                throw new BookingApiException(HttpStatus.CONFLICT, "原预约合同已失效，无法改约");
+            }
+            if (contract.startDate == null || contract.endDate == null
+                    || bookingDate.isBefore(contract.startDate.toLocalDate())
+                    || bookingDate.isAfter(contract.endDate.toLocalDate())) {
+                throw new BookingApiException(HttpStatus.CONFLICT, "改约时间不在合同有效期内");
+            }
+            BookingRepository.CourseRecord course = repository.findActiveCourse(
+                    request.getOrganizationId(), current.getCourseId()).orElseThrow(
+                    () -> new BookingApiException(HttpStatus.NOT_FOUND, "原预约课程不存在"));
+            if (course.status != COURSE_ENABLED) {
+                throw new BookingApiException(HttpStatus.CONFLICT, "原预约课程已下线");
+            }
+            if (!repository.findNonBusinessDays(request.getOrganizationId(), bookingDate, bookingDate).isEmpty()) {
+                throw new BookingApiException(HttpStatus.CONFLICT, "机构当天不是营业日");
+            }
+            if (!repository.findCoachVacationDays(request.getOrganizationId(), request.getCoachId(),
+                    bookingDate, bookingDate).isEmpty()) {
+                throw new BookingApiException(HttpStatus.CONFLICT, "教练当天正在请假");
+            }
+            if (!repository.findCoachConflicts(request.getOrganizationId(), request.getCoachId(),
+                    request.getStartTime(), request.getEndTime(), request.getAppointmentId()).isEmpty()) {
+                throw new BookingApiException(HttpStatus.CONFLICT, "教练该时间段已有预约");
+            }
+            return repository.rescheduleBooking(request,
+                    new BookingRepository.BookingActorData(actor.getUserId(), actor.getRequestId()),
+                    actor.getConfirmation());
+        } finally {
+            if (coachLocked) {
+                repository.releaseCoachDayLock(request.getOrganizationId(), request.getCoachId(), bookingDate);
+            }
+            repository.releaseRequestLock(actor.getRequestId());
+        }
+    }
+
     private void validateInput(BookingCreateRequest request) {
         if (request == null || blank(request.getOrganizationId()) || blank(request.getStudentId())
                 || blank(request.getContractId()) || blank(request.getCoachId()) || blank(request.getCourseId())
                 || request.getStartTime() == null || request.getEndTime() == null) {
             throw new BookingApiException(HttpStatus.BAD_REQUEST, "预约参数不完整");
+        }
+        if (!request.getEndTime().isAfter(request.getStartTime())) {
+            throw new BookingApiException(HttpStatus.BAD_REQUEST, "预约结束时间必须晚于开始时间");
+        }
+        if (request.getEndTime().isAfter(request.getStartTime().plusSeconds(8 * 3600L))) {
+            throw new BookingApiException(HttpStatus.BAD_REQUEST, "单次预约时长不能超过 8 小时");
+        }
+        if (request.getStartTime().isBefore(Instant.now())) {
+            throw new BookingApiException(HttpStatus.BAD_REQUEST, "预约开始时间不能早于当前时间");
+        }
+    }
+
+    private void validateRescheduleInput(BookingRescheduleRequest request) {
+        if (request == null || blank(request.getOrganizationId()) || blank(request.getAppointmentId())
+                || blank(request.getCoachId()) || request.getExpectedStartTime() == null
+                || request.getStartTime() == null || request.getEndTime() == null) {
+            throw new BookingApiException(HttpStatus.BAD_REQUEST, "改约参数不完整");
         }
         if (!request.getEndTime().isAfter(request.getStartTime())) {
             throw new BookingApiException(HttpStatus.BAD_REQUEST, "预约结束时间必须晚于开始时间");
@@ -147,6 +236,21 @@ public class BookingService {
                 || !actor.canAccessOrganization(confirmation.getOrganizationId())
                 || !confirmation.getPayloadHash().matches("[0-9a-fA-F]{64}")) {
             throw new BookingApiException(HttpStatus.FORBIDDEN, "预约确认凭证范围与请求不匹配");
+        }
+    }
+
+    private void requireRescheduleConfirmation(BookingActor actor, BookingRescheduleRequest request) {
+        BookingConfirmation confirmation = actor.getConfirmation();
+        if (confirmation == null) {
+            throw new BookingApiException(HttpStatus.UNAUTHORIZED, "缺少改约确认凭证");
+        }
+        if (!"fitness.booking.reschedule.v1".equals(confirmation.getToolId())
+                || !"RESCHEDULE_APPOINTMENT".equals(confirmation.getAction())
+                || !request.getOrganizationId().equals(confirmation.getOrganizationId())
+                || !request.getAppointmentId().equals(confirmation.getResource())
+                || !actor.canAccessOrganization(confirmation.getOrganizationId())
+                || !confirmation.getPayloadHash().matches("[0-9a-fA-F]{64}")) {
+            throw new BookingApiException(HttpStatus.FORBIDDEN, "改约确认凭证范围与请求不匹配");
         }
     }
 

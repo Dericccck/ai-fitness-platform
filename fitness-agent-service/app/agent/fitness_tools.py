@@ -166,6 +166,46 @@ class BookingCreateToolInput(OrganizationToolInput):
         return self
 
 
+class BookingRescheduleToolInput(OrganizationToolInput):
+    """改约参数；v1 只允许调整原预约的教练和时间，不更换合同或课程。"""
+
+    # 改约同样以 Java Gateway 的 camelCase 作为跨服务稳定契约。模型可以使用
+    # snake_case 填参，但确认哈希和最终 HTTP 请求都必须基于 by_alias 后的 JSON。
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    organization_id: str = Field(
+        alias="organizationId",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    appointment_id: str = Field(
+        alias="appointmentId",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    coach_id: str = Field(
+        alias="coachId",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    # expected_start_time 是乐观并发前置条件：确认卡展示后，如果原预约已被修改，
+    # Java Booking Service 会拒绝本次改约，避免把用户确认的旧预约误改到新状态。
+    expected_start_time: datetime = Field(alias="expectedStartTime")
+    start_time: datetime = Field(alias="startTime")
+    end_time: datetime = Field(alias="endTime")
+
+    @model_validator(mode="after")
+    def validate_time_window(self) -> BookingRescheduleToolInput:
+        if self.start_time >= self.end_time:
+            raise ValueError("start_time must be earlier than end_time")
+        if self.end_time - self.start_time > timedelta(hours=8):
+            raise ValueError("booking duration must not exceed 8 hours")
+        return self
+
+
 class TrainingItemInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -242,6 +282,12 @@ def _create_booking_payload(data: BookingCreateToolInput) -> dict[str, object]:
     return data.model_dump(mode="json", by_alias=True, exclude_none=True)
 
 
+def _reschedule_booking_payload(data: BookingRescheduleToolInput) -> dict[str, object]:
+    """生成改约的唯一 Payload，确认展示、确认哈希和真实调用共用。"""
+
+    return data.model_dump(mode="json", by_alias=True)
+
+
 def _review_training_plan_payload(data: ReviewTrainingPlanToolInput) -> dict[str, object]:
     """生成审核 Payload，避免摘要构造和 Gateway 调用各维护一份字段映射。"""
 
@@ -303,6 +349,22 @@ def _create_booking_summary(data: BaseModel, _: Mapping[str, object] | None) -> 
         organization_id=typed.organization_id,
         resource_type="appointment",
         resource_id=typed.contract_id,
+    )
+
+
+def _reschedule_booking_summary(
+    data: BaseModel, _: Mapping[str, object] | None
+) -> dict[str, object]:
+    typed = cast(BookingRescheduleToolInput, data)
+    return _summary(
+        "改约健身预约",
+        "RESCHEDULE_APPOINTMENT",
+        "APPOINTMENT_SUCCESS",
+        _reschedule_booking_payload(typed),
+        None,
+        organization_id=typed.organization_id,
+        resource_type="appointment",
+        resource_id=typed.appointment_id,
     )
 
 
@@ -435,6 +497,22 @@ def _create_booking_policy() -> ConfirmationPolicy:
         summary_builder=_create_booking_summary,
         resource_id_builder=lambda raw: cast(BookingCreateToolInput, raw).contract_id,
         organization_id_builder=lambda raw: cast(BookingCreateToolInput, raw).organization_id,
+    )
+
+
+def _reschedule_booking_policy() -> ConfirmationPolicy:
+    return ConfirmationPolicy(
+        action="RESCHEDULE_APPOINTMENT",
+        resource_type="appointment",
+        risk_level="WRITE",
+        operation="改约健身预约",
+        target_status="APPOINTMENT_SUCCESS",
+        payload_builder=lambda raw: _reschedule_booking_payload(
+            cast(BookingRescheduleToolInput, raw)
+        ),
+        summary_builder=_reschedule_booking_summary,
+        resource_id_builder=lambda raw: cast(BookingRescheduleToolInput, raw).appointment_id,
+        organization_id_builder=lambda raw: cast(BookingRescheduleToolInput, raw).organization_id,
     )
 
 
@@ -619,6 +697,13 @@ def build_fitness_tool_registry(
             _create_booking_payload(data),
         )
 
+    async def reschedule_booking(raw: BaseModel, context: ToolContext) -> object:
+        data = cast(BookingRescheduleToolInput, raw)
+        return await gateway.reschedule_booking(
+            context.gateway_context,
+            _reschedule_booking_payload(data),
+        )
+
     async def submit_training_review(raw: BaseModel, context: ToolContext) -> object:
         data = cast(TrainingPlanToolInput, raw)
         return await gateway.submit_training_review(context.gateway_context, data.plan_id)
@@ -775,6 +860,16 @@ def build_fitness_tool_registry(
             read_only=False,
             requires_confirmation=True,
             confirmation_policy=_create_booking_policy(),
+        ),
+        ToolDefinition(
+            tool_id="fitness.booking.reschedule.v1",
+            description="改约健身预约；v1 只调整教练和时间，执行前必须展示改约确认卡。",
+            input_model=BookingRescheduleToolInput,
+            handler=reschedule_booking,
+            allowed_roles=_READ_ROLES,
+            read_only=False,
+            requires_confirmation=True,
+            confirmation_policy=_reschedule_booking_policy(),
         ),
         ToolDefinition(
             tool_id="fitness.memory.list.v1",

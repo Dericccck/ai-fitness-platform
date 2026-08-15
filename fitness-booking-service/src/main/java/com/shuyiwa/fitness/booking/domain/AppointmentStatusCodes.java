@@ -3,8 +3,8 @@ package com.shuyiwa.fitness.booking.domain;
 /**
  * 旧 appointment.status 的业务编码。
  *
- * <p>本次写服务只创建 {@link #APPOINTMENT_SUCCESS}。其他状态由旧的教练核销和
- * 预约处理流程维护，不能被 Agent 创建接口随意指定。</p>
+ * <p>本次写服务只创建 {@link #APPOINTMENT_SUCCESS}；Agent v1 改约仅允许预约中、预约成功和
+ * 改课中的状态，拒绝改动已进入核销流程的预约。其他状态由旧的教练核销流程维护。</p>
  */
 public final class AppointmentStatusCodes {
     private AppointmentStatusCodes() {}
@@ -17,4 +17,8 @@ public final class AppointmentStatusCodes {
     public static final int FINISHING = 5;              // 核销中
     public static final int FINISH_SUCCESS = 6;        // 已核销
     public static final int FINISH_FAIL = 7;            // 核销失败
+
+    public static boolean canReschedule(int status) {
+        return status == APPOINTING || status == APPOINTMENT_SUCCESS || status == APPOINTMENT_CHANGING;
+    }
 }

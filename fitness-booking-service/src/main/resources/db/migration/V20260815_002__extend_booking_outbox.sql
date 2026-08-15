@@ -9,3 +9,13 @@ ALTER TABLE agent_booking_outbox
     ADD COLUMN IF NOT EXISTS claimed_by VARCHAR(128) NULL AFTER claimed_at;
 
 -- 索引由 BookingDatabaseInitializer 查询元数据后幂等创建，避免不同 MySQL 版本的语法差异。
+
+CREATE TABLE IF NOT EXISTS agent_booking_reschedule_operation (
+    request_id VARCHAR(128) NOT NULL,
+    appointment_id VARCHAR(32) NOT NULL,
+    organization_id VARCHAR(32) NOT NULL,
+    actor_id VARCHAR(32) NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (request_id),
+    UNIQUE KEY uk_agent_booking_reschedule_appointment_request (appointment_id, request_id)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='Booking Agent 改约幂等记录';

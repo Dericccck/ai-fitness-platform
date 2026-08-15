@@ -334,6 +334,23 @@ class GatewayClient:
             "/internal/agent-tools/v1/appointments", context, payload, GatewayBookingCreated
         )
 
+    async def reschedule_booking(
+        self,
+        context: GatewayRequestContext,
+        payload: dict[str, Any],
+    ) -> GatewayBookingCreated:
+        """调用 Java Gateway 的改约写接口；预约 ID 由 payload 中的稳定字段绑定。"""
+
+        appointment_id = payload.get("appointmentId")
+        if not isinstance(appointment_id, str) or not appointment_id:
+            raise GatewayBadRequestError("改约请求缺少 appointmentId")
+        return await self._post(
+            f"/internal/agent-tools/v1/appointments/{appointment_id}/reschedule",
+            context,
+            payload,
+            GatewayBookingCreated,
+        )
+
     async def get_training_plan(
         self, context: GatewayRequestContext, plan_id: str
     ) -> GatewayTrainingPlan:

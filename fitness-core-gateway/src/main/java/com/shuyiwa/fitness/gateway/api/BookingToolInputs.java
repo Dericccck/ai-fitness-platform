@@ -33,4 +33,27 @@ public final class BookingToolInputs {
         public Integer getMark() { return mark; }
         public void setMark(Integer mark) { this.mark = mark; }
     }
+
+    /** 改约稳定输入；v1 只调整教练和时间，不修改合同或课程。 */
+    public static class RescheduleInput {
+        private String organizationId;
+        private String appointmentId;
+        private String coachId;
+        private Instant expectedStartTime;
+        private Instant startTime;
+        private Instant endTime;
+
+        public String getOrganizationId() { return organizationId; }
+        public void setOrganizationId(String organizationId) { this.organizationId = organizationId; }
+        public String getAppointmentId() { return appointmentId; }
+        public void setAppointmentId(String appointmentId) { this.appointmentId = appointmentId; }
+        public String getCoachId() { return coachId; }
+        public void setCoachId(String coachId) { this.coachId = coachId; }
+        public Instant getExpectedStartTime() { return expectedStartTime; }
+        public void setExpectedStartTime(Instant expectedStartTime) { this.expectedStartTime = expectedStartTime; }
+        public Instant getStartTime() { return startTime; }
+        public void setStartTime(Instant startTime) { this.startTime = startTime; }
+        public Instant getEndTime() { return endTime; }
+        public void setEndTime(Instant endTime) { this.endTime = endTime; }
+    }
 }
