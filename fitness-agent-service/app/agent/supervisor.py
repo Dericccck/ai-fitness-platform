@@ -45,6 +45,7 @@ from app.session_summary import (
     build_compacted_messages,
 )
 
+from .operations_tools import operations_prompt_hint
 from .tool_registry import ToolContext, ToolRegistry, ToolRegistryError
 
 # SupervisorRoute 是意图路由，不是业务执行状态：FITNESS_COACHING 健身指导；BOOKING 预约；
@@ -239,6 +240,8 @@ class Supervisor:
                 )
 
         system_prompt = _system_prompt(route, request.locale)
+        if route == "OPERATIONS":
+            system_prompt = f"{system_prompt}\n\n{operations_prompt_hint(request.user_message)}"
         if knowledge_context:
             system_prompt = f"{system_prompt}\n\n{knowledge_context}"
         candidate_message = (
@@ -710,10 +713,13 @@ def classify_route(user_message: str) -> SupervisorRoute:
     text = user_message.lower()
     if any(keyword in text for keyword in ("赛事", "比赛", "作品", "活动运营", "报名活动")):
         return "UNSUPPORTED_LEGACY"
+    if any(keyword in text for keyword in (
+        "营收", "收入", "经营", "报表", "sql", "预约量", "预约数", "预约状态",
+        "课程利用", "教练表现", "剩余课时", "课时余额",
+    )):
+        return "OPERATIONS"
     if any(keyword in text for keyword in ("预约", "改约", "取消预约", "课表", "课程")):
         return "BOOKING"
-    if any(keyword in text for keyword in ("营收", "收入", "经营", "报表", "sql")):
-        return "OPERATIONS"
     return "FITNESS_COACHING"
 
 

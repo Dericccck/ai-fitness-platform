@@ -309,5 +309,6 @@ async def test_supervisor_rejects_legacy_business_scope_before_model_call() -> N
 def test_supervisor_route_guard_covers_fitness_business_boundaries() -> None:
     assert classify_route("帮我安排下周课程预约") == "BOOKING"
     assert classify_route("查看本月经营报表") == "OPERATIONS"
+    assert classify_route("查看本月课程预约量") == "OPERATIONS"
     assert classify_route("我想制定减脂训练计划") == "FITNESS_COACHING"
     assert classify_route("查询比赛报名") == "UNSUPPORTED_LEGACY"

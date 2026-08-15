@@ -7,14 +7,20 @@
 
 from __future__ import annotations
 
-from datetime import date
+import re
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
 from typing import Literal, cast
+from zoneinfo import ZoneInfo
 
+import structlog
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.infrastructure.gateway_client import GatewayClient
 
 from .tool_registry import ToolContext, ToolDefinition
+
+_logger = structlog.get_logger("agent.operations")
 
 _ADMIN_ROLES = frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN"})
 _METRICS = Literal[
@@ -24,6 +30,104 @@ _METRICS = Literal[
     "COACH_APPOINTMENT_COUNT",
     "REMAINING_CLASS_HOURS",
 ]
+_BUSINESS_ZONE = ZoneInfo("Asia/Shanghai")
+
+
+@dataclass(frozen=True)
+class OperationsQueryHint:
+    """从自然语言提取的非授权查询提示；最终权限和 SQL 仍由 Gateway 决定。"""
+
+    metric: _METRICS
+    from_date: date
+    to_date: date
+    matched_terms: tuple[str, ...]
+
+
+def parse_operations_intent(
+    user_message: str,
+    *,
+    today: date | None = None,
+) -> OperationsQueryHint | None:
+    """把常见中文经营问题映射到固定指标目录。
+
+    <p>解析器只产生查询提示，不产生 SQL，也不接受用户提供的表名和字段名。无法
+    明确判断指标时返回 None，由 Supervisor 要求模型先向用户澄清，避免猜测统计口径。</p>
+    """
+
+    text = user_message.lower()
+    metric_terms: list[tuple[_METRICS, tuple[str, ...]]] = [
+        ("APPOINTMENT_STATUS_BREAKDOWN", ("预约状态", "预约成功率", "取消率", "完成率")),
+        ("REMAINING_CLASS_HOURS", ("剩余课时", "课时余额", "剩余课")),
+        ("COURSE_APPOINTMENT_COUNT", ("课程预约量", "课程预约", "课程利用", "课程使用")),
+        ("COACH_APPOINTMENT_COUNT", ("教练预约量", "教练预约", "教练表现", "教练工作量")),
+        ("APPOINTMENT_COUNT", ("预约量", "预约数", "预约总量", "预约多少")),
+    ]
+    matches = [
+        (metric, term)
+        for metric, terms in metric_terms
+        for term in terms
+        if term in text
+    ]
+    if not matches:
+        return None
+    # 如果一个短词完整包含在同一问题命中的长词中，则短词只是泛化别名；例如
+    # “预约量”包含在“课程预约量”里，应优先使用课程维度。不同指标之间没有这种
+    # 包含关系时必须保留全部命中，不能靠最长词擅自丢掉用户想查的第二个指标。
+    matches = [
+        (metric, term)
+        for metric, term in matches
+        if not any(term != other_term and term in other_term for _, other_term in matches)
+    ]
+    metrics = {metric for metric, _ in matches}
+    if len(metrics) != 1:
+        return None
+    metric = next(iter(metrics))
+    matched_terms = tuple(term for _, term in matches)
+    start, end = _parse_date_range(text, today or datetime.now(_BUSINESS_ZONE).date())
+    return OperationsQueryHint(metric, start, end, matched_terms)
+
+
+def operations_prompt_hint(user_message: str) -> str:
+    """生成只读的 Operations 提示，明确告诉模型不能退化为任意 SQL。"""
+
+    hint = parse_operations_intent(user_message)
+    if hint is None:
+        return (
+            "经营问题暂未安全映射到唯一指标。请先向用户澄清指标和时间范围；"
+            "不要调用经营指标工具，也不要生成或执行任意 SQL。"
+        )
+    return (
+        "经营查询安全提示：可优先使用固定指标工具，指标=" + hint.metric
+        + "，开始日期=" + hint.from_date.isoformat()
+        + "，结束日期=" + hint.to_date.isoformat()
+        + "。该提示不代表已授权，不能改写为 SQL；工具参数仍须严格使用指标白名单。"
+    )
+
+
+def _parse_date_range(text: str, today: date) -> tuple[date, date]:
+    explicit = re.search(
+        r"(20\d{2})[-年/](\d{1,2})[-月/](\d{1,2})\s*(?:到|至|-)\s*"
+        r"(20\d{2})[-年/](\d{1,2})[-月/](\d{1,2})",
+        text,
+    )
+    if explicit:
+        start = date(int(explicit.group(1)), int(explicit.group(2)), int(explicit.group(3)))
+        end = date(int(explicit.group(4)), int(explicit.group(5)), int(explicit.group(6)))
+        return start, end
+    recent = re.search(r"近\s*(\d{1,3})\s*天", text)
+    if recent:
+        days = int(recent.group(1))
+        if 1 <= days <= 92:
+            return today - timedelta(days=days - 1), today
+    if "本周" in text:
+        return today - timedelta(days=today.weekday()), today
+    if "上月" in text:
+        first_this_month = today.replace(day=1)
+        last_previous_month = first_this_month - timedelta(days=1)
+        return last_previous_month.replace(day=1), last_previous_month
+    if "本月" in text:
+        return today.replace(day=1), today
+    return today - timedelta(days=29), today
 
 
 class OperationsMetricToolInput(BaseModel):
@@ -49,14 +153,37 @@ class OperationsMetricToolInput(BaseModel):
 def build_operations_tool_definitions(gateway: GatewayClient) -> tuple[ToolDefinition, ...]:
     async def query_metric(raw: BaseModel, context: ToolContext) -> object:
         data = cast(OperationsMetricToolInput, raw)
-        return await gateway.query_operations_metric(
-            context.gateway_context,
-            data.organization_id,
-            data.metric,
-            from_date=data.from_date,
-            to_date=data.to_date,
-            limit=data.limit,
-        )
+        try:
+            result = await gateway.query_operations_metric(
+                context.gateway_context,
+                data.organization_id,
+                data.metric,
+                from_date=data.from_date,
+                to_date=data.to_date,
+                limit=data.limit,
+            )
+            # 经营查询审计只保留“谁在什么范围查询了哪个固定指标以及结果规模”，
+            # 不记录 SQL、Prompt、明细数据或模型原始输出，避免日志变成第二个数据出口。
+            _logger.info(
+                "operations_query_completed",
+                metric=data.metric,
+                organization_id=data.organization_id,
+                from_date=data.from_date.isoformat() if data.from_date else None,
+                to_date=data.to_date.isoformat() if data.to_date else None,
+                row_count=len(result.rows),
+                request_id=context.gateway_context.request_id,
+                trace_id=context.gateway_context.trace_id,
+            )
+            return result
+        except Exception:
+            _logger.warning(
+                "operations_query_failed",
+                metric=data.metric,
+                organization_id=data.organization_id,
+                request_id=context.gateway_context.request_id,
+                trace_id=context.gateway_context.trace_id,
+            )
+            raise
 
     return (
         ToolDefinition(
