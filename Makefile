@@ -4,7 +4,7 @@ AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-session-summary-eval agent-security-check agent-run agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run training-check training-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-session-summary-eval agent-security-check agent-run agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run training-check training-run booking-check booking-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
@@ -36,6 +36,8 @@ help:
 	@echo "  gateway-run  Start the fitness core Gateway locally"
 	@echo "  training-check Build and test the structured training service"
 	@echo "  training-run  Start the structured training service locally"
+	@echo "  booking-check Build and test the appointment write service"
+	@echo "  booking-run  Start the appointment write service locally"
 	@echo "  legacy-java-diagnostic Reproduce the incomplete legacy Java build (expected to fail)"
 	@echo "  check        Run Agent and fitness core Gateway quality gates"
 
@@ -157,7 +159,13 @@ training-check:
 training-run:
 	./mvnw --batch-mode -f fitness-training-service/pom.xml -s .mvn/settings.xml -Dmaven.repo.local=.mvn/repository spring-boot:run
 
+booking-check:
+	./mvnw --batch-mode -f fitness-booking-service/pom.xml -s .mvn/settings.xml -Dmaven.repo.local=.mvn/repository clean test
+
+booking-run:
+	./mvnw --batch-mode -f fitness-booking-service/pom.xml -s .mvn/settings.xml -Dmaven.repo.local=.mvn/repository spring-boot:run
+
 legacy-java-diagnostic:
 	./mvnw --batch-mode -DskipTests clean compile
 
-check: agent-check ocr-check gateway-check
+check: agent-check ocr-check gateway-check booking-check

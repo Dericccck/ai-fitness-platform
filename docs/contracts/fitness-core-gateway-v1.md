@@ -70,10 +70,20 @@ claim。Agent 服务会 fail-closed，因此这一外部依赖未落地时专业
 | 404 | `NOT_FOUND` | 说明资源不存在，不泄露 SQL 细节 |
 | 408/429/5xx | 无固定 code 要求 | 有限指数退避，耗尽后转为不可用 |
 
-训练计划写工具已按独立契约开放，但必须同时具备确认凭证、幂等请求 ID、事务和审计；预约、改约、
-取消预约仍未开放，不能因为训练工具已接入而放宽预约写权限。可用性预检也不等于预约成功：它只检查
+训练计划写工具和创建预约写工具都必须同时具备确认凭证、幂等请求 ID、事务和审计；改约、取消预约仍未开放。
+创建预约已经通过独立预约业务服务执行，不能因为 Agent 已完成确认就跳过业务服务的最终校验。可用性预检也不等于预约成功：它只检查
 组织、学员、教练、时间范围、教练已有预约冲突、教练请假和已接入的非营业日规则，结果返回 `available`、
 `reasonCodes` 和冲突预约；真正写入时必须在同一业务事务内再次校验。
+
+预约创建路径：
+
+```text
+POST /internal/agent-tools/v1/appointments
+X-Confirmation-Token: <已批准确认凭证>
+```
+
+预约写服务会锁定相同请求和教练业务日期，重新校验合同状态、有效期、剩余课时、课程状态、组织关系、
+请假、非营业日和时间冲突；成功后在同一事务中扣减课时、创建 `appointment`、记录审计、消费 JTI 并写入 Outbox。
 
 训练计划工具路径：
 
@@ -107,6 +117,7 @@ fitness.course.list.v1
 fitness.contract.list.v1
 fitness.appointment.list.v1
 fitness.booking.availability.check.v1
+fitness.booking.create.v1
 ```
 
 每个工具必须固定定义输入 Pydantic Schema、版本、描述、允许角色、是否只读和是否需要

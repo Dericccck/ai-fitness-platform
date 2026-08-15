@@ -1,6 +1,6 @@
 # Fitness Core Tool Gateway
 
-这是健身平台的独立 Java Tool Gateway，当前提供健身核心只读查询和结构化训练计划/训练日执行工具：用户/学员、教练、机构、课程、合同、课时和预约。
+这是健身平台的独立 Java Tool Gateway，当前提供健身核心查询、训练计划写工具和预约创建写工具：用户/学员、教练、机构、课程、合同、课时和预约。
 
 赛事、作品、活动运营及其历史代码不属于本服务范围。本服务不依赖根目录旧 Java 项目的 Entity、Service 或组件扫描，避免遗留模块污染新的 Agent 业务边界。
 
@@ -10,8 +10,8 @@
 - Gateway 使用数据库只读账号和显式 SQL，返回稳定的 Tool View，不暴露旧 Entity 图、密码或无关字段。
 - 每个请求同时需要 `X-Internal-Service-Token` 和签名的 `X-Agent-Context`。
 - `AgentContext` 包含用户主体、机构范围、角色、签发时间、过期时间和 nonce；Gateway 每次调用都会再次校验资源权限。
-- 当前已增加结构化训练计划 Tool；预约可用性预检已开放为只读工具，但创建预约、改约、取消预约仍未开放。
-  所有后续预约写工具必须具备确认凭证、幂等键、事务和审计。
+- 当前已增加结构化训练计划 Tool 和创建预约 Tool；预约可用性预检为只读工具，改约、取消预约仍未开放。
+  创建预约由独立 `fitness-booking-service` 持有业务 MySQL 写权限，必须具备确认凭证、幂等键、事务和审计。
 
 ## 本地配置
 
@@ -71,6 +71,7 @@ GET /internal/agent-tools/v1/courses?organizationId=...
 GET /internal/agent-tools/v1/contracts?organizationId=...&userId=...
 GET /internal/agent-tools/v1/appointments?organizationId=...&userId=...&from=...&to=...
 GET /internal/agent-tools/v1/booking/availability?organizationId=...&studentId=...&coachId=...&courseId=...&start=...&end=...
+POST /internal/agent-tools/v1/appointments
 GET /internal/agent-tools/v1/training/plans/{planId}
 POST /internal/agent-tools/v1/training/plans/drafts
 POST /internal/agent-tools/v1/training/plans/{planId}/submit-review

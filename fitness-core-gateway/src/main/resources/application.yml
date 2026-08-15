@@ -25,6 +25,10 @@ gateway:
     base-url: ${GATEWAY_TRAINING_SERVICE_BASE_URL:http://127.0.0.1:8082}
     internal-service-token: ${GATEWAY_TRAINING_SERVICE_TOKEN:}
     timeout-milliseconds: ${GATEWAY_TRAINING_SERVICE_TIMEOUT_MS:5000}
+  booking-service:
+    base-url: ${GATEWAY_BOOKING_SERVICE_BASE_URL:http://127.0.0.1:8083}
+    internal-service-token: ${GATEWAY_BOOKING_SERVICE_TOKEN:}
+    timeout-milliseconds: ${GATEWAY_BOOKING_SERVICE_TIMEOUT_MS:5000}
 
 logging:
   level:

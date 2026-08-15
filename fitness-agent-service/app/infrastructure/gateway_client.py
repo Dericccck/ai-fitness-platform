@@ -139,6 +139,22 @@ class GatewayBookingAvailability(_GatewayModel):
     conflicts: list[GatewayAppointment]
 
 
+class GatewayBookingCreated(_GatewayModel):
+    """创建预约后的稳定事实，包含扣减后的剩余课时。"""
+
+    id: str
+    organization_id: str = Field(alias="organizationId")
+    user_id: str = Field(alias="userId")
+    coach_id: str = Field(alias="coachId")
+    course_id: str = Field(alias="courseId")
+    course_name: str | None = Field(default=None, alias="courseName")
+    start_time: datetime = Field(alias="startTime")
+    end_time: datetime = Field(alias="endTime")
+    status: int
+    contract_id: str = Field(alias="contractId")
+    remaining_class_hours: int = Field(alias="remainingClassHours")
+
+
 class GatewayTrainingItem(_GatewayModel):
     id: str
     exercise_name: str = Field(alias="exerciseName")
@@ -307,6 +323,15 @@ class GatewayClient:
                 "excludeAppointmentId": exclude_appointment_id,
             },
             GatewayBookingAvailability,
+        )
+
+    async def create_booking(
+        self,
+        context: GatewayRequestContext,
+        payload: dict[str, Any],
+    ) -> GatewayBookingCreated:
+        return await self._post(
+            "/internal/agent-tools/v1/appointments", context, payload, GatewayBookingCreated
         )
 
     async def get_training_plan(

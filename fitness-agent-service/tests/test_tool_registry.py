@@ -95,6 +95,13 @@ class FakeGateway:
     ) -> dict[str, Any]:
         return {"organization_id": organization_id, "available": True}
 
+    async def create_booking(
+        self,
+        context: GatewayRequestContext,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        return {"id": "appointment-1", "payload": payload}
+
     async def get_training_plan(
         self, context: GatewayRequestContext, plan_id: str
     ) -> dict[str, Any]:
@@ -139,6 +146,7 @@ def test_fitness_registry_exposes_only_versioned_specs() -> None:
     assert [spec["name"] for spec in specs] == [
         "fitness.appointment.list.v1",
         "fitness.booking.availability.check.v1",
+        "fitness.booking.create.v1",
         "fitness.contract.list.v1",
         "fitness.course.list.v1",
         "fitness.memory.list.v1",
@@ -155,8 +163,8 @@ def test_fitness_registry_exposes_only_versioned_specs() -> None:
         "fitness.training.plan.submit_review.v1",
         "fitness.user.get_current.v1",
     ]
-    assert sum(spec["read_only"] is False for spec in specs) == 7
-    assert sum(spec["requires_confirmation"] is True for spec in specs) == 7
+    assert sum(spec["read_only"] is False for spec in specs) == 8
+    assert sum(spec["requires_confirmation"] is True for spec in specs) == 8
 
 
 async def test_registry_validates_input_calls_fixed_gateway_adapter_and_serializes_result() -> None:

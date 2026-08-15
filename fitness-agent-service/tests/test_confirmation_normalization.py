@@ -83,6 +83,29 @@ def test_create_draft_summary_contains_complete_payload_and_stable_hash() -> Non
     assert action.canonical_payload.decode("utf-8").find("深蹲") >= 0
 
 
+def test_booking_payload_uses_java_gateway_camel_case_contract() -> None:
+    registry = build_fitness_tool_registry(cast(GatewayClient, FakeGateway()))
+    action = registry.normalize_confirmation(
+        "fitness.booking.create.v1",
+        {
+            "organization_id": "org-1",
+            "student_id": "student-1",
+            "contract_id": "contract-1",
+            "coach_id": "coach-1",
+            "course_id": "course-1",
+            "start_time": "2026-08-20T10:00:00Z",
+            "end_time": "2026-08-20T11:00:00Z",
+        },
+        context=context(),
+        organization_id="org-1",
+    )
+
+    canonical = action.canonical_payload.decode("utf-8")
+    assert '"organizationId":"org-1"' in canonical
+    assert '"startTime":"2026-08-20T10:00:00Z"' in canonical
+    assert '"organization_id"' not in canonical
+
+
 def test_plan_action_requires_trusted_snapshot_and_binds_version() -> None:
     registry = build_fitness_tool_registry(cast(GatewayClient, FakeGateway()))
     with pytest.raises(ToolConfirmationNormalizationError):

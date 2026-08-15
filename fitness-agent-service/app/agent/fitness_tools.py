@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, cast
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -115,6 +115,57 @@ class BookingAvailabilityToolInput(OrganizationToolInput):
         return self
 
 
+class BookingCreateToolInput(OrganizationToolInput):
+    """创建预约参数；必须在确认恢复后才会真正调用 Gateway 写接口。"""
+
+    # LLM 使用 snake_case 生成参数，但 Java Gateway 的稳定契约是 camelCase。
+    # populate_by_name 允许模型输入继续使用 Python 字段名，最终 HTTP 请求通过
+    # model_dump(by_alias=True) 输出 Java 约定的字段名；确认摘要和真实请求因此保持完全一致。
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    organization_id: str = Field(
+        alias="organizationId",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    student_id: str = Field(
+        alias="studentId",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    contract_id: str = Field(
+        alias="contractId",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    coach_id: str = Field(
+        alias="coachId",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    course_id: str = Field(
+        alias="courseId",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    start_time: datetime = Field(alias="startTime")
+    end_time: datetime = Field(alias="endTime")
+    mark: int | None = Field(default=None, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def validate_time_window(self) -> BookingCreateToolInput:
+        if self.start_time >= self.end_time:
+            raise ValueError("start_time must be earlier than end_time")
+        if self.end_time - self.start_time > timedelta(hours=8):
+            raise ValueError("booking duration must not exceed 8 hours")
+        return self
+
+
 class TrainingItemInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -185,6 +236,12 @@ def _create_training_draft_payload(data: CreateTrainingDraftToolInput) -> dict[s
     return data.model_dump(mode="json", by_alias=True)
 
 
+def _create_booking_payload(data: BookingCreateToolInput) -> dict[str, object]:
+    """创建预约的唯一 Payload，确认摘要和最终 HTTP 请求共用。"""
+
+    return data.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
 def _review_training_plan_payload(data: ReviewTrainingPlanToolInput) -> dict[str, object]:
     """生成审核 Payload，避免摘要构造和 Gateway 调用各维护一份字段映射。"""
 
@@ -232,6 +289,20 @@ def _create_summary(data: BaseModel, _: Mapping[str, object] | None) -> dict[str
         payload,
         None,
         organization_id=typed.organization_id,
+    )
+
+
+def _create_booking_summary(data: BaseModel, _: Mapping[str, object] | None) -> dict[str, object]:
+    typed = cast(BookingCreateToolInput, data)
+    return _summary(
+        "创建健身预约",
+        "CREATE_APPOINTMENT",
+        "APPOINTMENT_SUCCESS",
+        _create_booking_payload(typed),
+        None,
+        organization_id=typed.organization_id,
+        resource_type="appointment",
+        resource_id=typed.contract_id,
     )
 
 
@@ -350,6 +421,20 @@ def _create_policy() -> ConfirmationPolicy:
         ),
         summary_builder=_create_summary,
         organization_id_builder=lambda raw: cast(CreateTrainingDraftToolInput, raw).organization_id,
+    )
+
+
+def _create_booking_policy() -> ConfirmationPolicy:
+    return ConfirmationPolicy(
+        action="CREATE_APPOINTMENT",
+        resource_type="appointment",
+        risk_level="WRITE",
+        operation="创建健身预约",
+        target_status="APPOINTMENT_SUCCESS",
+        payload_builder=lambda raw: _create_booking_payload(cast(BookingCreateToolInput, raw)),
+        summary_builder=_create_booking_summary,
+        resource_id_builder=lambda raw: cast(BookingCreateToolInput, raw).contract_id,
+        organization_id_builder=lambda raw: cast(BookingCreateToolInput, raw).organization_id,
     )
 
 
@@ -527,6 +612,13 @@ def build_fitness_tool_registry(
             _create_training_draft_payload(data),
         )
 
+    async def create_booking(raw: BaseModel, context: ToolContext) -> object:
+        data = cast(BookingCreateToolInput, raw)
+        return await gateway.create_booking(
+            context.gateway_context,
+            _create_booking_payload(data),
+        )
+
     async def submit_training_review(raw: BaseModel, context: ToolContext) -> object:
         data = cast(TrainingPlanToolInput, raw)
         return await gateway.submit_training_review(context.gateway_context, data.plan_id)
@@ -673,6 +765,16 @@ def build_fitness_tool_registry(
             read_only=False,
             requires_confirmation=True,
             confirmation_policy=_create_policy(),
+        ),
+        ToolDefinition(
+            tool_id="fitness.booking.create.v1",
+            description="创建健身课程预约；执行前必须展示预约时间、教练、课程、合同和扣减课时确认卡。",
+            input_model=BookingCreateToolInput,
+            handler=create_booking,
+            allowed_roles=_READ_ROLES,
+            read_only=False,
+            requires_confirmation=True,
+            confirmation_policy=_create_booking_policy(),
         ),
         ToolDefinition(
             tool_id="fitness.memory.list.v1",

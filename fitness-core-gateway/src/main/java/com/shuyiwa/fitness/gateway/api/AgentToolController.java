@@ -1,10 +1,14 @@
 package com.shuyiwa.fitness.gateway.api;
 
 import com.shuyiwa.fitness.gateway.security.AgentContext;
+import com.shuyiwa.fitness.gateway.config.BookingServiceClient;
 import com.shuyiwa.fitness.gateway.service.FitnessToolService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.PostMapping;
+import org.springframework.web.bind.annotation.RequestBody;
+import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
@@ -23,9 +27,11 @@ import java.util.List;
 public class AgentToolController {
 
     private final FitnessToolService service;
+    private final BookingServiceClient bookingServiceClient;
 
-    public AgentToolController(FitnessToolService service) {
+    public AgentToolController(FitnessToolService service, BookingServiceClient bookingServiceClient) {
         this.service = service;
+        this.bookingServiceClient = bookingServiceClient;
     }
 
     @GetMapping("/me")
@@ -86,5 +92,15 @@ public class AgentToolController {
         return service.bookingAvailability(
                 context, organizationId, studentId, coachId, courseId, start, end, excludeAppointmentId
         );
+    }
+
+    @PostMapping("/appointments")
+    public ToolViews.BookingCreatedView createAppointment(
+            AgentContext context,
+            @RequestHeader("X-Request-ID") String requestId,
+            @RequestHeader("X-Confirmation-Token") String confirmationToken,
+            @RequestBody BookingToolInputs.CreateInput input
+    ) {
+        return bookingServiceClient.create(context, requestId, confirmationToken, input);
     }
 }
