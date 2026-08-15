@@ -3,6 +3,7 @@ package com.shuyiwa.fitness.gateway.api;
 import com.shuyiwa.fitness.gateway.security.AgentContext;
 import com.shuyiwa.fitness.gateway.config.BookingServiceClient;
 import com.shuyiwa.fitness.gateway.service.FitnessToolService;
+import com.shuyiwa.fitness.gateway.service.OperationsToolService;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -14,6 +15,7 @@ import org.springframework.web.bind.annotation.RequestParam;
 import org.springframework.web.bind.annotation.RestController;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.List;
 
 /**
@@ -28,10 +30,13 @@ public class AgentToolController {
 
     private final FitnessToolService service;
     private final BookingServiceClient bookingServiceClient;
+    private final OperationsToolService operationsService;
 
-    public AgentToolController(FitnessToolService service, BookingServiceClient bookingServiceClient) {
+    public AgentToolController(FitnessToolService service, BookingServiceClient bookingServiceClient,
+                               OperationsToolService operationsService) {
         this.service = service;
         this.bookingServiceClient = bookingServiceClient;
+        this.operationsService = operationsService;
     }
 
     @GetMapping("/me")
@@ -126,5 +131,17 @@ public class AgentToolController {
     ) {
         input.setAppointmentId(appointmentId);
         return bookingServiceClient.cancel(context, requestId, confirmationToken, input);
+    }
+
+    @GetMapping("/operations/metrics")
+    public OperationsViews.MetricView operationsMetric(
+            AgentContext context,
+            @RequestParam String organizationId,
+            @RequestParam String metric,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate from,
+            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE) LocalDate to,
+            @RequestParam(required = false) Integer limit
+    ) {
+        return operationsService.metric(context, organizationId, metric, from, to, limit);
     }
 }

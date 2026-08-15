@@ -1,7 +1,7 @@
 import asyncio
 import uuid
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Any, Literal, TypeVar
 
 import httpx
@@ -137,6 +137,25 @@ class GatewayBookingAvailability(_GatewayModel):
     available: bool
     reason_codes: list[str] = Field(alias="reasonCodes")
     conflicts: list[GatewayAppointment]
+
+
+class GatewayOperationsMetricRow(_GatewayModel):
+    """Java Gateway 返回的一行已聚合经营指标，不包含明细业务记录。"""
+
+    dimension: str
+    label: str
+    value: int
+
+
+class GatewayOperationsMetric(_GatewayModel):
+    """组织管理员可读取的固定指标查询结果。"""
+
+    metric: str
+    organization_id: str = Field(alias="organizationId")
+    from_date: date = Field(alias="from")
+    to_date: date = Field(alias="to")
+    rows: list[GatewayOperationsMetricRow]
+    generated_at: datetime = Field(alias="generatedAt")
 
 
 class GatewayBookingCreated(_GatewayModel):
@@ -329,6 +348,35 @@ class GatewayClient:
                 "excludeAppointmentId": exclude_appointment_id,
             },
             GatewayBookingAvailability,
+        )
+
+    async def query_operations_metric(
+        self,
+        context: GatewayRequestContext,
+        organization_id: str,
+        metric: str,
+        *,
+        from_date: date | None = None,
+        to_date: date | None = None,
+        limit: int | None = None,
+    ) -> GatewayOperationsMetric:
+        """查询 Java Gateway 的固定经营指标目录。
+
+        Python Agent 只传递指标 ID 和日期范围；不接收 SQL，也不把模型生成的字段名
+        拼接进请求。Java Gateway 会再次根据签名 AgentContext 校验管理员角色和组织范围。
+        """
+
+        return await self._get(
+            "/internal/agent-tools/v1/operations/metrics",
+            context,
+            {
+                "organizationId": organization_id,
+                "metric": metric,
+                "from": from_date.isoformat() if from_date else None,
+                "to": to_date.isoformat() if to_date else None,
+                "limit": limit,
+            },
+            GatewayOperationsMetric,
         )
 
     async def create_booking(

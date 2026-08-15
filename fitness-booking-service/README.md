@@ -53,7 +53,7 @@ cd /Users/a1-6/Desktop/fitness-backend
 
 ```bash
 export BOOKING_IT_ENABLED=true
-export BOOKING_IT_DB_URL='jdbc:mysql://127.0.0.1:3307/fitness?useUnicode=true&characterEncoding=utf&connectionCollation=utf8mb4_0900_ai_ci&serverTimezone=Asia%2FShanghai'
+export BOOKING_IT_DB_URL='jdbc:mysql://127.0.0.1:3307/fitness?useUnicode=true&characterEncoding=utf8&connectionCollation=utf8mb4_0900_ai_ci&serverTimezone=Asia%2FShanghai'
 export BOOKING_IT_DB_USERNAME='fitness'
 export BOOKING_IT_DB_PASSWORD='fitness_dev_2026'
 make booking-it

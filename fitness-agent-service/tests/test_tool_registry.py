@@ -168,6 +168,7 @@ def test_fitness_registry_exposes_only_versioned_specs() -> None:
         "fitness.memory.list.v1",
         "fitness.memory.revoke.v1",
         "fitness.memory.save.v1",
+        "fitness.operations.metric.query.v1",
         "fitness.organization.get.v1",
         "fitness.training.day.executions.list.v1",
         "fitness.training.day.record_execution.v1",

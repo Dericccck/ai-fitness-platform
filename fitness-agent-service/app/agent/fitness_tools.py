@@ -17,6 +17,7 @@ from app.confirmation.normalization import ConfirmationPolicy
 from app.infrastructure.gateway_client import GatewayClient
 from app.memory.service import MemoryService
 
+from .operations_tools import build_operations_tool_definitions
 from .tool_registry import (
     EmptyToolInput,
     ToolContext,
@@ -1069,7 +1070,7 @@ def build_fitness_tool_registry(
             read_only=True,
             requires_confirmation=False,
         ),
-    )
+    ) + build_operations_tool_definitions(gateway)
     for definition in definitions:
         registry.register(definition)
     return registry

@@ -1,6 +1,6 @@
 # Fitness Core Tool Gateway
 
-这是健身平台的独立 Java Tool Gateway，当前提供健身核心查询、训练计划写工具、预约创建、预约改约和预约取消写工具：用户/学员、教练、机构、课程、合同、课时和预约。
+这是健身平台的独立 Java Tool Gateway，当前提供健身核心查询、训练计划写工具、预约创建、预约改约和预约取消写工具，以及管理员专用的固定经营指标查询：用户/学员、教练、机构、课程、合同、课时和预约。
 
 赛事、作品、活动运营及其历史代码不属于本服务范围。本服务不依赖根目录旧 Java 项目的 Entity、Service 或组件扫描，避免遗留模块污染新的 Agent 业务边界。
 
@@ -43,7 +43,9 @@ cd /Users/a1-6/Desktop/fitness-backend
 `GATEWAY_CONFIRMATION_SIGNING_SECRET` 必须与 Agent 的 `AGENT_CONFIRMATION_SIGNING_SECRET`
 逐字节一致；当前是兼容 Gateway v1 的 HMAC 过渡密钥，后续 v2 会切换为可轮换的非对称验签。
 
-真实数据库集成测试默认关闭。连接到专门的测试库并提供有效机构 ID 后显式执行：
+真实数据库集成测试默认关闭。连接到专门的测试库并提供有效机构 ID 后显式执行；本地开发也可以
+临时复用 Docker `fitness-mysql`（宿主机 `3307`、数据库 `fitness`），但生产和 CI 仍必须使用
+独立测试库与最小权限账号：
 
 ```bash
 GATEWAY_IT_ENABLED=true \
@@ -71,6 +73,7 @@ GET /internal/agent-tools/v1/courses?organizationId=...
 GET /internal/agent-tools/v1/contracts?organizationId=...&userId=...
 GET /internal/agent-tools/v1/appointments?organizationId=...&userId=...&from=...&to=...
 GET /internal/agent-tools/v1/booking/availability?organizationId=...&studentId=...&coachId=...&courseId=...&start=...&end=...
+GET /internal/agent-tools/v1/operations/metrics?organizationId=...&metric=APPOINTMENT_COUNT&from=2026-08-01&to=2026-08-15
 POST /internal/agent-tools/v1/appointments
 POST /internal/agent-tools/v1/appointments/{appointmentId}/reschedule
 POST /internal/agent-tools/v1/appointments/{appointmentId}/cancel
@@ -82,3 +85,17 @@ POST /internal/agent-tools/v1/training/plans/{planId}/publish
 GET /internal/agent-tools/v1/training/plans/{planId}/executions
 POST /internal/agent-tools/v1/training/plans/{planId}/days/{dayId}/execution
 ```
+
+Operations 指标第一阶段只允许以下目录项：
+
+```text
+APPOINTMENT_COUNT
+APPOINTMENT_STATUS_BREAKDOWN
+COURSE_APPOINTMENT_COUNT
+COACH_APPOINTMENT_COUNT
+REMAINING_CLASS_HOURS
+```
+
+经营指标只允许 `SYSTEM_ADMIN` 和 `ORGANIZATION_ADMIN` 访问，查询会绑定签名上下文中的机构范围，
+时间范围最多 92 天，单次最多返回 100 行。当前阶段不接受 SQL、表名或任意字段名；后续 Text-to-SQL
+也必须先映射到这个指标目录，并继续由 Java Gateway 执行固定 SQL。
