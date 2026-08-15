@@ -52,6 +52,7 @@ claim。Agent 服务会 fail-closed，因此这一外部依赖未落地时专业
 | GET | `/internal/agent-tools/v1/courses?organizationId=...&limit=...` | 查询机构课程 |
 | GET | `/internal/agent-tools/v1/contracts?organizationId=...&userId=...&limit=...` | 查询合同和剩余课时 |
 | GET | `/internal/agent-tools/v1/appointments?organizationId=...&userId=...&from=...&to=...&limit=...` | 查询时间范围内预约 |
+| GET | `/internal/agent-tools/v1/booking/availability?organizationId=...&studentId=...&coachId=...&courseId=...&start=...&end=...` | 预约写入前的只读可用性预检 |
 
 学生只能读取本人数据；教练读取其他学员时必须存在有效的机构教练关系；机构管理员只能读取签名上下文授权的机构范围。所有列表默认最多 20 条，单次最多 100 条；预约时间范围最多 92 天。
 
@@ -70,7 +71,9 @@ claim。Agent 服务会 fail-closed，因此这一外部依赖未落地时专业
 | 408/429/5xx | 无固定 code 要求 | 有限指数退避，耗尽后转为不可用 |
 
 训练计划写工具已按独立契约开放，但必须同时具备确认凭证、幂等请求 ID、事务和审计；预约、改约、
-取消预约仍未开放，不能因为训练工具已接入而放宽预约写权限。
+取消预约仍未开放，不能因为训练工具已接入而放宽预约写权限。可用性预检也不等于预约成功：它只检查
+组织、学员、教练、时间范围、教练已有预约冲突、教练请假和已接入的非营业日规则，结果返回 `available`、
+`reasonCodes` 和冲突预约；真正写入时必须在同一业务事务内再次校验。
 
 训练计划工具路径：
 
@@ -103,6 +106,7 @@ fitness.organization.get.v1
 fitness.course.list.v1
 fitness.contract.list.v1
 fitness.appointment.list.v1
+fitness.booking.availability.check.v1
 ```
 
 每个工具必须固定定义输入 Pydantic Schema、版本、描述、允许角色、是否只读和是否需要

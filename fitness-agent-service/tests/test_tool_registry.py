@@ -81,6 +81,20 @@ class FakeGateway:
     ) -> list[dict[str, str]]:
         return [{"id": "appointment-1"}]
 
+    async def check_booking_availability(
+        self,
+        context: GatewayRequestContext,
+        organization_id: str,
+        *,
+        student_id: str | None,
+        coach_id: str,
+        course_id: str | None,
+        start_time: Any,
+        end_time: Any,
+        exclude_appointment_id: str | None = None,
+    ) -> dict[str, Any]:
+        return {"organization_id": organization_id, "available": True}
+
     async def get_training_plan(
         self, context: GatewayRequestContext, plan_id: str
     ) -> dict[str, Any]:
@@ -124,6 +138,7 @@ def test_fitness_registry_exposes_only_versioned_specs() -> None:
 
     assert [spec["name"] for spec in specs] == [
         "fitness.appointment.list.v1",
+        "fitness.booking.availability.check.v1",
         "fitness.contract.list.v1",
         "fitness.course.list.v1",
         "fitness.memory.list.v1",

@@ -125,6 +125,20 @@ class GatewayAppointment(_GatewayModel):
     contract_id: str | None = Field(default=None, alias="contractId")
 
 
+class GatewayBookingAvailability(_GatewayModel):
+    """Java Gateway 的预约预检结果；available 不等于预约已创建。"""
+
+    organization_id: str = Field(alias="organizationId")
+    student_id: str = Field(alias="studentId")
+    coach_id: str = Field(alias="coachId")
+    course_id: str | None = Field(default=None, alias="courseId")
+    start_time: datetime = Field(alias="startTime")
+    end_time: datetime = Field(alias="endTime")
+    available: bool
+    reason_codes: list[str] = Field(alias="reasonCodes")
+    conflicts: list[GatewayAppointment]
+
+
 class GatewayTrainingItem(_GatewayModel):
     id: str
     exercise_name: str = Field(alias="exerciseName")
@@ -266,6 +280,33 @@ class GatewayClient:
                 "limit": limit,
             },
             GatewayAppointment,
+        )
+
+    async def check_booking_availability(
+        self,
+        context: GatewayRequestContext,
+        organization_id: str,
+        *,
+        student_id: str | None,
+        coach_id: str,
+        course_id: str | None,
+        start_time: datetime,
+        end_time: datetime,
+        exclude_appointment_id: str | None = None,
+    ) -> GatewayBookingAvailability:
+        return await self._get(
+            "/internal/agent-tools/v1/booking/availability",
+            context,
+            {
+                "organizationId": organization_id,
+                "studentId": student_id,
+                "coachId": coach_id,
+                "courseId": course_id,
+                "start": start_time.isoformat(),
+                "end": end_time.isoformat(),
+                "excludeAppointmentId": exclude_appointment_id,
+            },
+            GatewayBookingAvailability,
         )
 
     async def get_training_plan(

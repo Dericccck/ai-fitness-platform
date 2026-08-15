@@ -7,6 +7,7 @@ import com.shuyiwa.fitness.gateway.security.GatewayForbiddenException;
 import org.junit.Test;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Optional;
@@ -58,6 +59,46 @@ public class FitnessToolServiceTest {
         AgentContext context = context("user-1", AgentContext.ROLE_STUDENT);
 
         assertForbidden(() -> service.courses(context, "org-2", 20));
+    }
+
+    @Test
+    public void bookingAvailabilityReportsCoachConflictWithoutWriting() {
+        AgentContext context = context("student-1", AgentContext.ROLE_STUDENT);
+        when(repository.isOrganizationMember("org-1", "student-1")).thenReturn(true);
+        when(repository.isCoachInOrganization("org-1", "coach-1")).thenReturn(true);
+        when(repository.findCoachAppointments(
+                "org-1",
+                "coach-1",
+                Instant.parse("2026-08-20T10:00:00Z"),
+                Instant.parse("2026-08-20T11:00:00Z"),
+                null,
+                20
+        )).thenReturn(Collections.emptyList());
+        when(repository.findCoachVacationDays(
+                "org-1",
+                "coach-1",
+                LocalDate.of(2026, 8, 20),
+                LocalDate.of(2026, 8, 20)
+        )).thenReturn(Collections.emptyList());
+        when(repository.findNonBusinessDays(
+                "org-1",
+                LocalDate.of(2026, 8, 20),
+                LocalDate.of(2026, 8, 20)
+        )).thenReturn(Collections.emptyList());
+
+        ToolViews.BookingAvailabilityView result = service.bookingAvailability(
+                context,
+                "org-1",
+                null,
+                "coach-1",
+                "course-1",
+                Instant.parse("2026-08-20T10:00:00Z"),
+                Instant.parse("2026-08-20T11:00:00Z"),
+                null
+        );
+
+        assertEquals(true, result.isAvailable());
+        assertEquals(0, result.getConflicts().size());
     }
 
     private static void assertForbidden(Runnable action) {

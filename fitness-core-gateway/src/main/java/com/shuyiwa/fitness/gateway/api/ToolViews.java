@@ -178,6 +178,62 @@ public final class ToolViews {
         public String getContractId() { return contractId; }
     }
 
+    /**
+     * 预约可用性预检结果。
+     *
+     * <p>这个视图只表达“当前时段是否满足已接入的预约规则”，不代表预约已经创建。
+     * Agent 必须把它当作只读建议；真正创建预约时，Java 业务事务还要重新校验一次，
+     * 防止预检和写入之间发生并发变化。</p>
+     */
+    public static final class BookingAvailabilityView {
+        private final String organizationId;
+        private final String studentId;
+        private final String coachId;
+        private final String courseId;
+        private final Instant startTime;
+        private final Instant endTime;
+        private final boolean available;
+        private final java.util.List<String> reasonCodes;
+        private final java.util.List<AppointmentView> conflicts;
+
+        public BookingAvailabilityView(
+                String organizationId,
+                String studentId,
+                String coachId,
+                String courseId,
+                Instant startTime,
+                Instant endTime,
+                boolean available,
+                java.util.List<String> reasonCodes,
+                java.util.List<AppointmentView> conflicts
+        ) {
+            this.organizationId = organizationId;
+            this.studentId = studentId;
+            this.coachId = coachId;
+            this.courseId = courseId;
+            this.startTime = startTime;
+            this.endTime = endTime;
+            this.available = available;
+            // 项目 Gateway 按 Java 11 编译，不能使用 Java 10 的 List.copyOf。
+            this.reasonCodes = java.util.Collections.unmodifiableList(
+                    new java.util.ArrayList<>(reasonCodes)
+            );
+            this.conflicts = java.util.Collections.unmodifiableList(
+                    new java.util.ArrayList<>(conflicts)
+            );
+        }
+
+        public String getOrganizationId() { return organizationId; }
+        public String getStudentId() { return studentId; }
+        public String getCoachId() { return coachId; }
+        public String getCourseId() { return courseId; }
+        public Instant getStartTime() { return startTime; }
+        public Instant getEndTime() { return endTime; }
+        public boolean isAvailable() { return available; }
+        public java.util.List<String> getReasonCodes() { return reasonCodes; }
+        public java.util.List<AppointmentView> getConflicts() { return conflicts; }
+    }
+
     /** 结构化训练计划的稳定 Tool View，不把训练服务内部 DTO 直接暴露给 Agent。 */
     public static final class TrainingPlanView {
         private final String id;

@@ -83,6 +83,38 @@ class AppointmentListToolInput(ContractListToolInput):
         return self
 
 
+class BookingAvailabilityToolInput(OrganizationToolInput):
+    """预约写入前的只读预检参数；预检成功不代表预约已经创建。"""
+
+    student_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    coach_id: str = _ID_FIELD
+    course_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    start_time: datetime
+    end_time: datetime
+    exclude_appointment_id: str | None = Field(
+        default=None,
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+
+    @model_validator(mode="after")
+    def validate_time_window(self) -> BookingAvailabilityToolInput:
+        if self.start_time >= self.end_time:
+            raise ValueError("start_time must be earlier than end_time")
+        return self
+
+
 class TrainingItemInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -469,6 +501,19 @@ def build_fitness_tool_registry(
             limit=data.limit,
         )
 
+    async def check_booking_availability(raw: BaseModel, context: ToolContext) -> object:
+        data = cast(BookingAvailabilityToolInput, raw)
+        return await gateway.check_booking_availability(
+            context.gateway_context,
+            data.organization_id,
+            student_id=data.student_id,
+            coach_id=data.coach_id,
+            course_id=data.course_id,
+            start_time=data.start_time,
+            end_time=data.end_time,
+            exclude_appointment_id=data.exclude_appointment_id,
+        )
+
     async def get_training_plan(raw: BaseModel, context: ToolContext) -> object:
         data = cast(TrainingPlanToolInput, raw)
         return await gateway.get_training_plan(context.gateway_context, data.plan_id)
@@ -742,6 +787,15 @@ def build_fitness_tool_registry(
             description="查询指定机构中当前权限范围内的预约记录。",
             input_model=AppointmentListToolInput,
             handler=list_appointments,
+            allowed_roles=_READ_ROLES,
+            read_only=True,
+            requires_confirmation=False,
+        ),
+        ToolDefinition(
+            tool_id="fitness.booking.availability.check.v1",
+            description="检查指定教练和时间段是否满足当前已接入的预约规则；只读预检，不会创建预约或扣减课时。",
+            input_model=BookingAvailabilityToolInput,
+            handler=check_booking_availability,
             allowed_roles=_READ_ROLES,
             read_only=True,
             requires_confirmation=False,

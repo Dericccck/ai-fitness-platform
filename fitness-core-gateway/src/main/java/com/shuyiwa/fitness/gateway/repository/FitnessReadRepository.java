@@ -25,6 +25,30 @@ public interface FitnessReadRepository {
             int limit
     );
 
+    List<ToolViews.AppointmentView> findCoachAppointments(
+            String organizationId,
+            String coachId,
+            Instant from,
+            Instant to,
+            String excludeAppointmentId,
+            int limit
+    );
+
+    java.util.List<java.time.LocalDate> findNonBusinessDays(
+            String organizationId,
+            java.time.LocalDate from,
+            java.time.LocalDate to
+    );
+
+    java.util.List<java.time.LocalDate> findCoachVacationDays(
+            String organizationId,
+            String coachId,
+            java.time.LocalDate from,
+            java.time.LocalDate to
+    );
+
+    boolean isCoachInOrganization(String organizationId, String coachId);
+
     boolean isOrganizationMember(String organizationId, String userId);
 
     boolean isCoachForUser(String organizationId, String coachId, String userId);

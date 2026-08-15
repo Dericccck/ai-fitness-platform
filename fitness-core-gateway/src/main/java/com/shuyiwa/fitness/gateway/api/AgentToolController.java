@@ -71,4 +71,20 @@ public class AgentToolController {
     ) {
         return service.appointments(context, organizationId, userId, from, to, limit);
     }
+
+    @GetMapping("/booking/availability")
+    public ToolViews.BookingAvailabilityView bookingAvailability(
+            AgentContext context,
+            @RequestParam String organizationId,
+            @RequestParam(required = false) String studentId,
+            @RequestParam String coachId,
+            @RequestParam(required = false) String courseId,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant start,
+            @RequestParam @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant end,
+            @RequestParam(required = false) String excludeAppointmentId
+    ) {
+        return service.bookingAvailability(
+                context, organizationId, studentId, coachId, courseId, start, end, excludeAppointmentId
+        );
+    }
 }

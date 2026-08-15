@@ -9,7 +9,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
+import java.time.LocalDate;
 import java.time.temporal.ChronoUnit;
+import java.util.ArrayList;
 import java.util.List;
 
 /**
@@ -75,6 +77,66 @@ public class FitnessToolService {
             throw new IllegalArgumentException("appointment time range must be 0 to 92 days");
         }
         return repository.findAppointments(organizationId, userId, start, end, normalizeLimit(limit));
+    }
+
+    /**
+     * 预约写入前的只读预检。
+     *
+     * <p>预检包含组织、学员、教练、时间范围、教练冲突和非营业日判断。它不会锁定
+     * 数据、扣减课时或创建预约，所以结果只适合展示和生成确认摘要；写入事务必须
+     * 再次执行同等规则，不能把预检结果当成预约成功凭证。</p>
+     */
+    public ToolViews.BookingAvailabilityView bookingAvailability(
+            AgentContext context,
+            String organizationId,
+            String requestedStudentId,
+            String coachId,
+            String courseId,
+            Instant start,
+            Instant end,
+            String excludeAppointmentId
+    ) {
+        requireOrganization(context, organizationId);
+        String studentId = resolveUserForRead(context, organizationId, requestedStudentId);
+        if (coachId == null || coachId.trim().isEmpty() || !repository.isCoachInOrganization(organizationId, coachId)) {
+            throw new GatewayResourceNotFoundException("coach not found in organization");
+        }
+        if (start == null || end == null || !end.isAfter(start)) {
+            throw new IllegalArgumentException("booking end must be after start");
+        }
+        if (end.isAfter(start.plus(8, ChronoUnit.HOURS))) {
+            throw new IllegalArgumentException("booking duration must not exceed 8 hours");
+        }
+
+        List<String> reasons = new ArrayList<>();
+        if (start.isBefore(Instant.now())) {
+            reasons.add("START_TIME_IN_PAST");
+        }
+        List<ToolViews.AppointmentView> conflicts = repository.findCoachAppointments(
+                organizationId, coachId, start, end, excludeAppointmentId, 20
+        );
+        if (!conflicts.isEmpty()) {
+            reasons.add("COACH_TIME_CONFLICT");
+        }
+        LocalDate date = start.atZone(java.time.ZoneId.of("Asia/Shanghai")).toLocalDate();
+        if (repository.findNonBusinessDays(organizationId, date, date).contains(date)) {
+            reasons.add("ORGANIZATION_NON_BUSINESS_DAY");
+        }
+        if (repository.findCoachVacationDays(organizationId, coachId, date, date).contains(date)) {
+            reasons.add("COACH_ON_LEAVE");
+        }
+
+        return new ToolViews.BookingAvailabilityView(
+                organizationId,
+                studentId,
+                coachId,
+                courseId,
+                start,
+                end,
+                reasons.isEmpty(),
+                reasons,
+                conflicts
+        );
     }
 
     private String resolveUserForRead(AgentContext context, String organizationId, String requestedUserId) {
