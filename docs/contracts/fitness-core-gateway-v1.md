@@ -82,6 +82,8 @@ Agent 侧会把每次当前周期或上一等长周期查询追加写入 Postgre
 但该接口不是经营数据查询入口，也不会绕过 Gateway 的业务权限。
 管理员前端可通过 `GET /api/v1/admin/operations/metric-catalog` 获取完整固定指标能力目录；该接口不查询业务数据，
 但仍要求管理员签名身份，返回内容只用于筛选器和报表配置，不能替代真实查询权限。
+审计筛选接口会复用同一目录校验 `metric + bucket + comparison_role` 的能力组合；例如不支持趋势的指标
+传入 `bucket=DAY` 或不支持环比的指标传入 `comparison_role=PREVIOUS_PERIOD` 时返回 `422`，而不是返回容易误解的空结果。
 
 ## 错误语义
 

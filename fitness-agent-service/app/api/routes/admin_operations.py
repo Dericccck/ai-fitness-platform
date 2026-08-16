@@ -13,6 +13,7 @@ from app.agent.operations_tools import (
     OPERATIONS_METRIC_CATALOG,
     OperationsMetricDefinition,
     get_operations_metric_definition,
+    validate_operations_metric_capability,
 )
 from app.infrastructure.agent_context import AgentContextVerificationError, AgentIdentity
 
@@ -124,6 +125,20 @@ async def list_operations_query_audits(
     """
 
     identity = _verify_operations_admin(request, x_agent_context)
+    if metric is not None:
+        try:
+            validate_operations_metric_capability(
+                metric,
+                bucket=bucket,
+                comparison_role=comparison_role,
+            )
+        except ValueError as exc:
+            # 这是筛选条件与固定指标目录能力不一致，不是数据库查询失败；提前返回
+            # 422 能避免前端把“没有匹配审计记录”误解成真实的零结果。
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_CONTENT,
+                detail=str(exc),
+            ) from exc
     if (
         organization_id is not None
         and organization_id not in identity.organization_ids
@@ -156,7 +171,7 @@ async def list_operations_query_audits(
             )
     except ValueError as exc:
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
+            status_code=status.HTTP_422_UNPROCESSABLE_CONTENT, detail=str(exc)
         ) from exc
     return OperationsAuditPageResponse(
         items=tuple(_to_response(record) for record in records),

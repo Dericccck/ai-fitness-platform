@@ -127,6 +127,29 @@ def get_operations_metric_definition(metric: str) -> OperationsMetricDefinition 
     return _METRIC_CATALOG_BY_ID.get(metric)
 
 
+def validate_operations_metric_capability(
+    metric: str,
+    *,
+    bucket: str | None = None,
+    comparison_role: str | None = None,
+) -> None:
+    """校验指标与时间桶、对比角色是否是目录声明的合法组合。
+
+    这个校验同时服务于 Agent 工具输入和管理员审计筛选接口，避免两个入口各自
+    维护一套容易漂移的能力规则。例如“预约状态分布 + 按日”并不是一个支持的
+    组合；如果只依赖类型检查，接口虽然能接收参数，却会让前端得到一个语义上
+    不成立的筛选条件。这里只校验指标能力，不授予任何组织或角色权限。
+    """
+
+    definition = get_operations_metric_definition(metric)
+    if definition is None:
+        raise ValueError("unsupported operations metric definition")
+    if bucket is not None and bucket not in definition.supported_buckets:
+        raise ValueError(f"metric {metric} does not support bucket {bucket}")
+    if comparison_role == "PREVIOUS_PERIOD" and not definition.supports_previous_period:
+        raise ValueError(f"metric {metric} does not support PREVIOUS_PERIOD comparison")
+
+
 def _metric_definition_view(metric: str) -> dict[str, object]:
     """生成可交给模型和管理端的非敏感指标口径说明。"""
 
@@ -487,13 +510,11 @@ class OperationsMetricToolInput(BaseModel):
             raise ValueError("from must be earlier than or equal to to")
         if self.from_date and self.to_date and (self.to_date - self.from_date).days > 92:
             raise ValueError("operations time range must not exceed 92 days")
-        definition = get_operations_metric_definition(self.metric)
-        if definition is None:
-            raise ValueError("unsupported operations metric definition")
-        if self.bucket not in definition.supported_buckets:
-            raise ValueError(f"metric {self.metric} does not support bucket {self.bucket}")
-        if self.comparison != "NONE" and not definition.supports_previous_period:
-            raise ValueError(f"metric {self.metric} does not support PREVIOUS_PERIOD comparison")
+        validate_operations_metric_capability(
+            self.metric,
+            bucket=self.bucket,
+            comparison_role=("PREVIOUS_PERIOD" if self.comparison == "PREVIOUS_PERIOD" else None),
+        )
         return self
 
 
