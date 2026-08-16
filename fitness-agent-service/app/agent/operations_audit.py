@@ -18,7 +18,7 @@ from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.database import Database
 
 OperationsAuditStatus = Literal["SUCCEEDED", "FAILED"]
-OperationsAuditRole = Literal["CURRENT", "PREVIOUS_PERIOD"]
+OperationsAuditRole = Literal["CURRENT", "PREVIOUS_PERIOD", "SAME_PERIOD_LAST_YEAR"]
 
 _METRICS = frozenset(
     {
@@ -30,7 +30,7 @@ _METRICS = frozenset(
     }
 )
 _BUCKETS = frozenset({"NONE", "DAY", "WEEK"})
-_ROLES = frozenset({"CURRENT", "PREVIOUS_PERIOD"})
+_ROLES = frozenset({"CURRENT", "PREVIOUS_PERIOD", "SAME_PERIOD_LAST_YEAR"})
 _STATUSES = frozenset({"SUCCEEDED", "FAILED"})
 
 

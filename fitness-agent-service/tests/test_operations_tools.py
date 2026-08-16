@@ -4,6 +4,7 @@ import pytest
 
 from app.agent.operations_tools import (
     OperationsMetricToolInput,
+    _same_period_last_year_bounds,
     build_operations_comparison_report,
     build_operations_report,
     build_operations_tool_definitions,
@@ -60,6 +61,21 @@ def test_operations_input_allows_comparison_for_course_and_coach_metrics() -> No
         assert data.comparison == "PREVIOUS_PERIOD"
 
 
+def test_operations_input_allows_year_over_year_for_count_metrics() -> None:
+    for metric in (
+        "APPOINTMENT_COUNT",
+        "COURSE_APPOINTMENT_COUNT",
+        "COACH_APPOINTMENT_COUNT",
+    ):
+        data = OperationsMetricToolInput(
+            organization_id="org-1",
+            metric=metric,
+            comparison="SAME_PERIOD_LAST_YEAR",
+        )
+
+        assert data.comparison == "SAME_PERIOD_LAST_YEAR"
+
+
 def test_operations_input_rejects_comparison_for_non_count_metric() -> None:
     with pytest.raises(ValueError):
         OperationsMetricToolInput(
@@ -67,6 +83,30 @@ def test_operations_input_rejects_comparison_for_non_count_metric() -> None:
             metric="APPOINTMENT_STATUS_BREAKDOWN",
             comparison="PREVIOUS_PERIOD",
         )
+    with pytest.raises(ValueError):
+        OperationsMetricToolInput(
+            organization_id="org-1",
+            metric="REMAINING_CLASS_HOURS",
+            comparison="SAME_PERIOD_LAST_YEAR",
+        )
+
+
+def test_same_period_last_year_clamps_february_29_to_february_28() -> None:
+    result = GatewayOperationsMetric(
+        metric="APPOINTMENT_COUNT",
+        organizationId="org-1",
+        **{
+            "from": date(2024, 2, 29),
+            "to": date(2024, 3, 1),
+            "rows": [],
+            "generatedAt": "2024-03-01T12:00:00Z",
+        },
+    )
+
+    assert _same_period_last_year_bounds(result) == (
+        date(2023, 2, 28),
+        date(2023, 3, 1),
+    )
 
 
 def test_operations_report_calculates_summary_without_inventing_trend() -> None:
@@ -101,6 +141,7 @@ def test_operations_report_includes_metric_definition() -> None:
     definition = get_operations_metric_definition("COURSE_APPOINTMENT_COUNT")
     assert definition is not None
     assert definition.supports_previous_period is True
+    assert definition.supports_year_over_year is True
 
     result = GatewayOperationsMetric(
         metric="COURSE_APPOINTMENT_COUNT",
@@ -122,6 +163,7 @@ def test_operations_report_includes_metric_definition() -> None:
         "dimension_description": "课程 ID 和课程名称，不返回学员明细。",
         "supported_buckets": ["DAY", "NONE", "WEEK"],
         "supports_previous_period": True,
+        "supports_year_over_year": True,
     }
 
 
@@ -358,6 +400,38 @@ async def test_operations_tool_queries_current_and_previous_period() -> None:
         (date(2026, 8, 1), date(2026, 8, 15)),
         (date(2026, 7, 17), date(2026, 7, 31)),
     ]
+    assert result["comparison"]["change_percent"] == 20.0
+
+
+@pytest.mark.asyncio
+async def test_operations_tool_queries_same_period_last_year() -> None:
+    gateway = FakeOperationsGateway()
+    registry = ToolRegistry()
+    for definition in build_operations_tool_definitions(gateway):  # type: ignore[arg-type]
+        registry.register(definition)
+
+    result = await registry.invoke(
+        "fitness.operations.metric.query.v1",
+        {
+            "organization_id": "org-1",
+            "metric": "APPOINTMENT_COUNT",
+            "from": "2026-08-01",
+            "to": "2026-08-15",
+            "comparison": "SAME_PERIOD_LAST_YEAR",
+        },
+        ToolContext(
+            gateway_context=GatewayRequestContext(
+                signed_context="signed-context", request_id="request-yoy", trace_id="trace-yoy"
+            ),
+            user_message="查看 2026-08-01 到 2026-08-15 的预约量同比变化",
+        ),
+    )
+
+    assert gateway.calls == [
+        (date(2026, 8, 1), date(2026, 8, 15)),
+        (date(2025, 8, 1), date(2025, 8, 15)),
+    ]
+    assert result["comparison"]["type"] == "SAME_PERIOD_LAST_YEAR"
     assert result["comparison"]["change_percent"] == 20.0
 
 

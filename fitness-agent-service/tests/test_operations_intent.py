@@ -60,8 +60,11 @@ def test_parses_previous_period_comparison() -> None:
     assert hint.to_date == date(2026, 8, 15)
 
 
-def test_year_over_year_requires_clarification() -> None:
-    assert parse_operations_intent("预约量同比变化", today=date(2026, 8, 15)) is None
+def test_parses_year_over_year_comparison() -> None:
+    hint = parse_operations_intent("预约量同比变化", today=date(2026, 8, 15))
+
+    assert hint is not None
+    assert hint.comparison == "SAME_PERIOD_LAST_YEAR"
 
 
 def test_mixed_day_and_week_trend_requires_clarification() -> None:
@@ -78,7 +81,7 @@ def test_ambiguous_metric_clarification_lists_fixed_catalog() -> None:
 
     assert "预约总量（APPOINTMENT_COUNT）" in prompt
     assert "课程预约量（COURSE_APPOINTMENT_COUNT）" in prompt
-    assert "同比暂不自动执行" in prompt
+    assert "上一自然年同期同比" in prompt
     assert operations_metric_catalog_prompt() in prompt
 
 

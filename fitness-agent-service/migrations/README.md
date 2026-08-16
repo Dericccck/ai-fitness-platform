@@ -46,6 +46,9 @@ Worker 在发布事务内执行授权、安静时间和频率限制判断；未�
 禁止保存 SQL、Prompt、模型输出、预约明细和签名上下文，查询成功但审计写入失败时 Agent 采用 fail-closed，不向模型返回
 未形成持久化审计的经营结果。
 
+0029 增加 `SAME_PERIOD_LAST_YEAR` 审计角色，记录正式同比查询的上一自然年同期日期范围。同比边界由 Agent 按相同月日
+映射计算；2 月 29 日映射到非闰年的 2 月 28 日，实际范围仍写入审计，不能由模型自行推断。
+
 0023 增加正式 Memory 和候选的正文保留期限字段、脱敏标记和 `REDACTED` 审计事件。正式 Memory 进入
 `REVOKED/EXPIRED` 后默认保留 90 天，候选进入 `APPROVED/REJECTED/EXPIRED` 后默认保留 30 天；期限到达后，
 独立 Memory Retention Worker 将正式 Memory 内容替换为脱敏标记、清空候选密文，但不删除类型、状态、主体范围

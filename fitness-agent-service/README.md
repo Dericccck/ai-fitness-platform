@@ -20,7 +20,7 @@
 - Reranker：可配置的 HTTP 服务，不提供本地 mock 或静默降级。
 - Fitness Core Gateway：Java 只读业务 Tool 服务，查询用户、机构、课程、合同、课时和预约。
 - Tool Registry：版本化注册首批健身只读工具，校验输入 Schema、限制未知工具，并记录不含原始参数的调用审计。
-- Operations 管理审计：管理员可通过 `/api/v1/admin/operations/query-audits` 按机构、固定指标、时间桶、比较周期、状态和创建时间分页查询经营查询审计；响应同时附带固定指标口径元数据，组织管理员只能查看签名机构范围，接口不返回 SQL、Prompt 或业务明细；指标、时间桶和比较周期的组合会按固定目录校验，不支持的组合返回 `422`。`/api/v1/admin/operations/metric-catalog` 提供不含业务数据的指标能力目录，带有内容版本、ETag 和私有缓存语义，供前端动态生成筛选器和报表配置。
+- Operations 管理审计：管理员可通过 `/api/v1/admin/operations/query-audits` 按机构、固定指标、时间桶、比较周期、状态和创建时间分页查询经营查询审计；响应同时附带固定指标口径元数据，组织管理员只能查看签名机构范围，接口不返回 SQL、Prompt 或业务明细；指标、时间桶和比较周期的组合会按固定目录校验，不支持的组合返回 `422`。当前固定指标支持上一等长周期环比和上一自然年同期同比，日期边界与除零处理由程序确定。`/api/v1/admin/operations/metric-catalog` 提供不含业务数据的指标能力目录，带有内容版本、ETag 和私有缓存语义，供前端动态生成筛选器和报表配置。
 - Supervisor Runtime：基于 LangGraph 执行模型 Tool Calling、工具预算、真实结果回填和业务范围护栏。
 - 会话持久化：PostgreSQL 保存 LangGraph Checkpoint，Redis 负责会话互斥锁和短期状态。
 - RAG 基础：Alembic 管理版本化知识文档、切片、租户/角色权限字段和 pgvector HNSW 索引；
@@ -329,15 +329,15 @@ Operations 环比摘要的离线评测样例位于 `evals/operations_comparison_
 `evals/operations_comparison_thresholds.json`。执行 `make agent-operations-comparison-eval` 会验证当前周期与上一等长
 周期的总量、差值、方向、百分比和跨月/跨年的日期边界，并覆盖预约总量、课程预约量和教练预约量，以及上一周期为 0、
 两周期都为 0 和当前周期为 0 的除零场景。
-当前同比仍不自动猜测，用户提出同比时会要求澄清统计口径；本门禁不会把尚未实现的同比能力伪装成已支持。
+当前同比已固定为上一自然年同一月日区间，2 月 29 日在非闰年映射到 2 月 28 日；本门禁覆盖该边界及对比周期为 0 的除零处理。
 
 Operations 查询前策略评测样例位于 `evals/operations_policy_smoke.json`，阈值位于
 `evals/operations_policy_thresholds.json`。执行 `make agent-operations-policy-eval` 会验证用户问题与模型工具参数的
-指标、日期、时间桶、环比口径和组织范围一致；同比、歧义问题、指标漂移、日期扩大和组织越权会在访问 Java Gateway
+指标、日期、时间桶、环比/同比口径和组织范围一致；歧义问题、指标漂移、日期扩大和组织越权会在访问 Java Gateway
 之前被拦截。策略校验只提供 fail-closed 的前置保护，最终权限仍由 Java Gateway 根据签名 AgentContext 决定。
 
 固定指标目录由 `OPERATIONS_METRIC_CATALOG` 集中维护。每个指标定义都包含稳定 ID、中文名称、业务口径、维度含义、
-支持的时间桶和是否支持上一等长周期环比；报表的 `metric_definition` 会返回这些非敏感元数据，帮助模型和管理员正确
+支持的时间桶、是否支持上一等长周期环比和是否支持上一自然年同期同比；报表的 `metric_definition` 会返回这些非敏感元数据，帮助模型和管理员正确
 解释结果。新增经营指标时必须先补齐目录定义、Gateway 固定 SQL、权限/审计和评测，不能只增加一个自然语言关键词。
 
 短期会话摘要的确定性安全评测样例位于 `fitness-agent-service/evals/session_summary_samples.json`，阈值位于

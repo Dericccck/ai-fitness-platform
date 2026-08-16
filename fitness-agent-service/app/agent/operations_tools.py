@@ -37,7 +37,7 @@ _METRICS = Literal[
     "REMAINING_CLASS_HOURS",
 ]
 _TIME_BUCKETS = Literal["NONE", "DAY", "WEEK"]
-_COMPARISONS = Literal["NONE", "PREVIOUS_PERIOD"]
+_COMPARISONS = Literal["NONE", "PREVIOUS_PERIOD", "SAME_PERIOD_LAST_YEAR"]
 _BUSINESS_ZONE = ZoneInfo("Asia/Shanghai")
 
 
@@ -72,6 +72,7 @@ class OperationsMetricDefinition:
     dimension_description: str
     supported_buckets: frozenset[_TIME_BUCKETS]
     supports_previous_period: bool
+    supports_year_over_year: bool
 
 
 # 这是 Agent、Gateway 和前端可共享的受控口径目录。新增指标必须同时补充数据范围、
@@ -84,6 +85,7 @@ OPERATIONS_METRIC_CATALOG: tuple[OperationsMetricDefinition, ...] = (
         "总量维度，不返回预约明细。",
         frozenset({"NONE", "DAY", "WEEK"}),
         True,
+        True,
     ),
     OperationsMetricDefinition(
         "APPOINTMENT_STATUS_BREAKDOWN",
@@ -91,6 +93,7 @@ OPERATIONS_METRIC_CATALOG: tuple[OperationsMetricDefinition, ...] = (
         "按预约状态统计数量，用于观察待确认、成功、完成和取消等状态构成。",
         "预约状态编码和脱敏后的状态名称。",
         frozenset({"NONE"}),
+        False,
         False,
     ),
     OperationsMetricDefinition(
@@ -100,6 +103,7 @@ OPERATIONS_METRIC_CATALOG: tuple[OperationsMetricDefinition, ...] = (
         "课程 ID 和课程名称，不返回学员明细。",
         frozenset({"NONE", "DAY", "WEEK"}),
         True,
+        True,
     ),
     OperationsMetricDefinition(
         "COACH_APPOINTMENT_COUNT",
@@ -108,6 +112,7 @@ OPERATIONS_METRIC_CATALOG: tuple[OperationsMetricDefinition, ...] = (
         "教练 ID 及其展示标签，不返回学员明细。",
         frozenset({"NONE", "DAY", "WEEK"}),
         True,
+        True,
     ),
     OperationsMetricDefinition(
         "REMAINING_CLASS_HOURS",
@@ -115,6 +120,7 @@ OPERATIONS_METRIC_CATALOG: tuple[OperationsMetricDefinition, ...] = (
         "按课程汇总当前合同中的剩余课时。",
         "课程 ID 和课程名称，不返回合同明细。",
         frozenset({"NONE"}),
+        False,
         False,
     ),
 )
@@ -134,6 +140,7 @@ def _build_operations_metric_catalog_version() -> str:
             "dimension_description": item.dimension_description,
             "supported_buckets": sorted(item.supported_buckets),
             "supports_previous_period": item.supports_previous_period,
+            "supports_year_over_year": item.supports_year_over_year,
         }
         for item in OPERATIONS_METRIC_CATALOG
     ]
@@ -178,6 +185,8 @@ def validate_operations_metric_capability(
         raise ValueError(f"metric {metric} does not support bucket {bucket}")
     if comparison_role == "PREVIOUS_PERIOD" and not definition.supports_previous_period:
         raise ValueError(f"metric {metric} does not support PREVIOUS_PERIOD comparison")
+    if comparison_role == "SAME_PERIOD_LAST_YEAR" and not definition.supports_year_over_year:
+        raise ValueError(f"metric {metric} does not support SAME_PERIOD_LAST_YEAR comparison")
 
 
 def _metric_definition_view(metric: str) -> dict[str, object]:
@@ -192,6 +201,7 @@ def _metric_definition_view(metric: str) -> dict[str, object]:
             "dimension_description": "未知",
             "supported_buckets": [],
             "supports_previous_period": False,
+            "supports_year_over_year": False,
         }
     return {
         "id": definition.metric,
@@ -200,6 +210,7 @@ def _metric_definition_view(metric: str) -> dict[str, object]:
         "dimension_description": definition.dimension_description,
         "supported_buckets": sorted(definition.supported_buckets),
         "supports_previous_period": definition.supports_previous_period,
+        "supports_year_over_year": definition.supports_year_over_year,
     }
 
 
@@ -213,8 +224,8 @@ def operations_metric_catalog_prompt() -> str:
     return (
         "当前可查询的固定经营指标包括："
         + entries
-        + "。预约总量、课程预约量和教练预约量支持按日/周趋势及上一等长周期环比；"
-        + "预约状态分布和课程剩余课时当前只支持汇总查询；同比暂不自动执行。"
+        + "。预约总量、课程预约量和教练预约量支持按日/周趋势、上一等长周期环比及上一自然年同期同比；"
+        + "预约状态分布和课程剩余课时当前只支持汇总查询，不自动执行环比或同比。"
     )
 
 
@@ -336,8 +347,10 @@ def build_operations_tool_result(result: GatewayOperationsMetric) -> dict[str, o
 def build_operations_comparison_report(
     current: GatewayOperationsMetric,
     previous: GatewayOperationsMetric,
+    *,
+    comparison_type: Literal["PREVIOUS_PERIOD", "SAME_PERIOD_LAST_YEAR"] = "PREVIOUS_PERIOD",
 ) -> dict[str, object]:
-    """比较当前周期与上一等长周期，只根据程序计算的汇总值生成环比摘要。"""
+    """比较两个固定周期，只根据程序计算的汇总值生成环比或同比摘要。"""
 
     current_total = sum(row.value for row in current.rows)
     previous_total = sum(row.value for row in previous.rows)
@@ -345,7 +358,7 @@ def build_operations_comparison_report(
     change_percent = round(delta / previous_total * 100, 2) if previous_total else None
     direction = "UP" if delta > 0 else "DOWN" if delta < 0 else "FLAT"
     return {
-        "type": "PREVIOUS_PERIOD",
+        "type": comparison_type,
         "current_period": {
             "from": current.from_date.isoformat(),
             "to": current.to_date.isoformat(),
@@ -359,7 +372,7 @@ def build_operations_comparison_report(
         "delta": delta,
         "change_percent": change_percent,
         "direction": direction,
-        "note": ("变化百分比仅在上一周期非 0 时计算；上一周期为 0 时只报告差值，不伪造百分比。"),
+        "note": ("变化百分比仅在对比周期非 0 时计算；对比周期为 0 时只报告差值，不伪造百分比。"),
     }
 
 
@@ -372,16 +385,37 @@ def _previous_period_bounds(result: GatewayOperationsMetric) -> tuple[date, date
     return previous_from, previous_to
 
 
+def _same_period_last_year_bounds(result: GatewayOperationsMetric) -> tuple[date, date]:
+    """按相同月日映射到上一自然年，2 月 29 日在非闰年收敛到 2 月 28 日。
+
+    这是平台固定的同比口径，不使用 365 天减法：跨闰年时仍保持自然月日语义，
+    并把边界日期保存到审计中，让管理员可以看见实际比较的两个日期范围。
+    """
+
+    def shift_year(value: date) -> date:
+        try:
+            return value.replace(year=value.year - 1)
+        except ValueError:
+            # 只有 2 月 29 日映射到非闰年会触发；按业务口径归并到 2 月 28 日。
+            return value.replace(year=value.year - 1, day=28)
+
+    return shift_year(result.from_date), shift_year(result.to_date)
+
+
 def build_operations_comparison_tool_result(
     current: GatewayOperationsMetric,
     previous: GatewayOperationsMetric,
+    *,
+    comparison_type: Literal["PREVIOUS_PERIOD", "SAME_PERIOD_LAST_YEAR"] = "PREVIOUS_PERIOD",
 ) -> dict[str, object]:
-    """保留两个周期的真实聚合结果，并附加确定性的环比摘要。"""
+    """保留两个周期的真实聚合结果，并附加确定性的环比/同比摘要。"""
 
     return {
         "current": build_operations_tool_result(current),
         "previous": build_operations_tool_result(previous),
-        "comparison": build_operations_comparison_report(current, previous),
+        "comparison": build_operations_comparison_report(
+            current, previous, comparison_type=comparison_type
+        ),
     }
 
 
@@ -450,7 +484,19 @@ def operations_prompt_hint(user_message: str) -> str:
                 "不要调用不支持时间桶的经营指标工具，也不要生成任意 SQL。"
             )
         bucket_note = "，时间分组=" + hint.bucket
-    comparison_note = "，对比上一等长周期" if hint.comparison != "NONE" else ""
+    definition = get_operations_metric_definition(hint.metric)
+    if definition is None:
+        return operations_metric_catalog_prompt() + "请先澄清经营指标，不要调用工具。"
+    if hint.comparison == "PREVIOUS_PERIOD" and not definition.supports_previous_period:
+        return (
+            operations_metric_catalog_prompt() + "当前指标不支持上一等长周期环比，请先向用户澄清。"
+        )
+    if hint.comparison == "SAME_PERIOD_LAST_YEAR" and not definition.supports_year_over_year:
+        return operations_metric_catalog_prompt() + "当前指标不支持同比，请先向用户澄清。"
+    comparison_note = {
+        "PREVIOUS_PERIOD": "，对比上一等长周期（环比）",
+        "SAME_PERIOD_LAST_YEAR": "，对比上一自然年同一月日区间（同比）",
+    }.get(hint.comparison, "")
     return (
         "经营查询安全提示：可优先使用固定指标工具，指标="
         + hint.metric
@@ -510,10 +556,10 @@ def _parse_time_bucket(text: str) -> _TIME_BUCKETS | None:
 
 
 def _parse_comparison(text: str) -> _COMPARISONS | None:
-    """只识别上一等长周期环比；同比和任意对比周期暂不自动猜测。"""
+    """只识别固定环比和固定同比；任意自定义对比周期仍要求澄清。"""
 
     if "同比" in text:
-        return None
+        return "SAME_PERIOD_LAST_YEAR"
     if any(term in text for term in ("环比", "较上期", "与上期", "和上期", "对比上期")):
         return "PREVIOUS_PERIOD"
     if any(term in text for term in ("和上月比", "与上月比", "相比上月", "较上月")):
@@ -543,7 +589,7 @@ class OperationsMetricToolInput(BaseModel):
         validate_operations_metric_capability(
             self.metric,
             bucket=self.bucket,
-            comparison_role=("PREVIOUS_PERIOD" if self.comparison == "PREVIOUS_PERIOD" else None),
+            comparison_role=(self.comparison if self.comparison != "NONE" else None),
         )
         return self
 
@@ -734,11 +780,20 @@ def build_operations_tool_definitions(
         result = await query_period(from_date=data.from_date, to_date=data.to_date, role="CURRENT")
         if data.comparison == "NONE":
             return build_operations_tool_result(result)
-        previous_from, previous_to = _previous_period_bounds(result)
+        if data.comparison == "PREVIOUS_PERIOD":
+            previous_from, previous_to = _previous_period_bounds(result)
+            comparison_role = "PREVIOUS_PERIOD"
+        else:
+            previous_from, previous_to = _same_period_last_year_bounds(result)
+            comparison_role = "SAME_PERIOD_LAST_YEAR"
         previous = await query_period(
-            from_date=previous_from, to_date=previous_to, role="PREVIOUS_PERIOD"
+            from_date=previous_from, to_date=previous_to, role=comparison_role
         )
-        return build_operations_comparison_tool_result(result, previous)
+        return build_operations_comparison_tool_result(
+            result,
+            previous,
+            comparison_type=data.comparison,
+        )
 
     return (
         ToolDefinition(

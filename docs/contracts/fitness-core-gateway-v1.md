@@ -71,20 +71,22 @@ claim。Agent 服务会 fail-closed，因此这一外部依赖未落地时专业
 Agent 解释层会根据 `from`、`to` 和 `bucket` 补齐 Gateway 没有返回的零值时间桶；这只是对已授权
 聚合结果的确定性补全，不会制造预约明细，也不会改变 Gateway 的权限和查询范围。
 环比由 Agent 在同一固定指标下发起当前周期和上一等长周期两次只读查询后计算；`PREVIOUS_PERIOD`
-只表示上一等长周期，不等同于同比。当前环比开放 `APPOINTMENT_COUNT`、`COURSE_APPOINTMENT_COUNT`
-和 `COACH_APPOINTMENT_COUNT`，上一周期为 0 时只返回差值，不生成无意义的百分比。
+只表示上一等长周期，不等同于同比。同比使用 `SAME_PERIOD_LAST_YEAR`，按相同月日映射到上一自然年；
+2 月 29 日在非闰年映射为 2 月 28 日，实际日期范围会写入审计。当前环比和同比开放
+`APPOINTMENT_COUNT`、`COURSE_APPOINTMENT_COUNT` 和 `COACH_APPOINTMENT_COUNT`，对比周期为 0 时只返回差值，不生成无意义的百分比。
 
-Agent 侧会把每次当前周期或上一等长周期查询追加写入 PostgreSQL 表 `agent_operations_query_audits`，用于管理员查询追溯。
+Agent 侧会把每次当前周期、上一等长周期或上一自然年同期查询追加写入 PostgreSQL 表 `agent_operations_query_audits`，用于管理员查询追溯。
 审计只保存签名主体、角色快照、机构、固定指标、时间桶、日期范围、聚合行数、状态和 request/trace ID，不保存 SQL、Prompt、
 模型输出或预约明细。查询成功但审计无法写入时，Agent 不向模型返回该经营结果；这不改变 Java Gateway 的业务权限判断。
 管理员控制面可通过 `GET /api/v1/admin/operations/query-audits` 分页读取这些摘要，平台管理员可按机构查询，组织管理员
 只能读取签名 `AgentContext` 中的机构；响应附带固定指标目录中的 `metric_definition`（名称、业务口径、维度含义、支持桶和环比能力），
-但该接口不是经营数据查询入口，也不会绕过 Gateway 的业务权限。
+但该接口不是经营数据查询入口，也不会绕过 Gateway 的业务权限；指标目录响应会声明是否支持环比和同比。
 管理员前端可通过 `GET /api/v1/admin/operations/metric-catalog` 获取完整固定指标能力目录；响应包含由目录内容计算的
 `catalog_version`，并返回 `ETag` 和 `Cache-Control: private, max-age=300, must-revalidate`，客户端携带匹配的
 `If-None-Match` 时返回 `304`。该接口不查询业务数据，但仍要求管理员签名身份，返回内容只用于筛选器和报表配置，不能替代真实查询权限。
 审计筛选接口会复用同一目录校验 `metric + bucket + comparison_role` 的能力组合；例如不支持趋势的指标
-传入 `bucket=DAY` 或不支持环比的指标传入 `comparison_role=PREVIOUS_PERIOD` 时返回 `422`，而不是返回容易误解的空结果。
+传入 `bucket=DAY`、不支持环比的指标传入 `comparison_role=PREVIOUS_PERIOD`，或不支持同比的指标传入
+`comparison_role=SAME_PERIOD_LAST_YEAR` 时返回 `422`，而不是返回容易误解的空结果。
 
 ## 错误语义
 

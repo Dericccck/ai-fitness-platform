@@ -98,6 +98,7 @@ async def test_platform_admin_can_query_operations_audits() -> None:
         "dimension_description": "总量维度，不返回预约明细。",
         "supported_buckets": ["DAY", "NONE", "WEEK"],
         "supports_previous_period": True,
+        "supports_year_over_year": True,
     }
     assert response.json()["has_more"] is True
     assert "sql" not in response.json()["items"][0]
@@ -127,6 +128,7 @@ async def test_admin_can_load_metric_catalog_without_querying_business_data() ->
     assert course["label"] == "课程预约量"
     assert course["supported_buckets"] == ["DAY", "NONE", "WEEK"]
     assert course["supports_previous_period"] is True
+    assert course["supports_year_over_year"] is True
     assert repository.filters == {}
     assert "organization_id" not in course
     assert "sql" not in course
@@ -177,6 +179,24 @@ async def test_admin_audit_filters_reject_unsupported_comparison_combination() -
 
     assert response.status_code == 422
     assert "does not support PREVIOUS_PERIOD comparison" in response.json()["detail"]
+    assert repository.filters == {}
+
+
+async def test_admin_audit_filters_reject_unsupported_year_over_year_combination() -> None:
+    app, repository = build_app(frozenset({"ADMIN"}))
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.get(
+            "/api/v1/admin/operations/query-audits",
+            headers={"X-Agent-Context": "signed-context"},
+            params={
+                "metric": "REMAINING_CLASS_HOURS",
+                "comparison_role": "SAME_PERIOD_LAST_YEAR",
+            },
+        )
+
+    assert response.status_code == 422
+    assert "does not support SAME_PERIOD_LAST_YEAR comparison" in response.json()["detail"]
     assert repository.filters == {}
 
 

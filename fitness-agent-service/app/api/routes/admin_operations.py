@@ -35,6 +35,7 @@ class OperationsMetricDefinitionResponse(BaseModel):
     dimension_description: str
     supported_buckets: tuple[str, ...]
     supports_previous_period: bool
+    supports_year_over_year: bool
 
 
 class OperationsAuditResponse(BaseModel):
@@ -137,7 +138,9 @@ async def list_operations_query_audits(
     ]
     | None = Query(default=None),
     bucket: Literal["NONE", "DAY", "WEEK"] | None = Query(default=None),
-    comparison_role: Literal["CURRENT", "PREVIOUS_PERIOD"] | None = Query(default=None),
+    comparison_role: Literal["CURRENT", "PREVIOUS_PERIOD", "SAME_PERIOD_LAST_YEAR"] | None = Query(
+        default=None
+    ),
     audit_status: Literal["SUCCEEDED", "FAILED"] | None = Query(default=None),
     created_from: datetime | None = Query(default=None),  # noqa: B008
     created_to: datetime | None = Query(default=None),  # noqa: B008
@@ -270,6 +273,7 @@ def _to_metric_definition_response(
             dimension_description="未知",
             supported_buckets=(),
             supports_previous_period=False,
+            supports_year_over_year=False,
         )
     return OperationsMetricDefinitionResponse(
         id=definition.metric,
@@ -278,4 +282,5 @@ def _to_metric_definition_response(
         dimension_description=definition.dimension_description,
         supported_buckets=tuple(sorted(definition.supported_buckets)),
         supports_previous_period=definition.supports_previous_period,
+        supports_year_over_year=definition.supports_year_over_year,
     )

@@ -42,18 +42,19 @@
     "expected_reason_code": "DATE_RANGE_MISMATCH"
   },
   {
-    "case_id": "year-over-year-requires-clarification",
-    "user_message": "查看预约量同比变化",
+    "case_id": "year-over-year-uses-fixed-period",
+    "user_message": "查看 2026-08-01 到 2026-08-15 的预约量同比变化",
     "query": {
       "organization_id": "org-1",
       "metric": "APPOINTMENT_COUNT",
       "from": "2026-08-01",
-      "to": "2026-08-15"
+      "to": "2026-08-15",
+      "comparison": "SAME_PERIOD_LAST_YEAR"
     },
     "today": "2026-08-15",
     "allowed_organization_ids": ["org-1"],
-    "expected_allowed": false,
-    "expected_reason_code": "INTENT_REQUIRES_CLARIFICATION"
+    "expected_allowed": true,
+    "expected_reason_code": "ALLOWED"
   },
   {
     "case_id": "organization-scope-is-enforced",

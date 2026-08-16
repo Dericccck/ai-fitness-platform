@@ -1,8 +1,7 @@
-"""Operations Agent 环比摘要的确定性离线评测。
+"""Operations Agent 环比/同比摘要的确定性离线评测。
 
-当前生产工具只支持“当前周期 vs 上一等长周期”的受控环比；同比会继续要求澄清，
-不会因为用户提到“同比”就猜测口径。本模块只验证已经进入摘要函数的两个聚合结果，
-不访问数据库、LLM 或线上数据，重点保护差值、方向和除零边界。
+本模块只验证已经进入摘要函数的两个聚合结果，不访问数据库、LLM 或线上数据，重点
+保护固定对比类型、日期边界、差值、方向和除零边界。
 """
 
 from __future__ import annotations
@@ -13,7 +12,7 @@ import sys
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from app.infrastructure.gateway_client import GatewayOperationsMetric, GatewayOperationsMetricRow
 
@@ -22,7 +21,7 @@ from .operations_tools import build_operations_comparison_report
 
 @dataclass(frozen=True)
 class OperationsComparisonEvalCase:
-    """一条带有明确当前周期和上一周期期望值的环比评测用例。"""
+    """一条带有明确当前周期和对比周期期望值的环比/同比评测用例。"""
 
     case_id: str
     metric: str
@@ -38,11 +37,12 @@ class OperationsComparisonEvalCase:
     expected_direction: str
     expected_change_percent: float | None
     expected_note_fragments: tuple[str, ...]
+    comparison_type: Literal["PREVIOUS_PERIOD", "SAME_PERIOD_LAST_YEAR"] = "PREVIOUS_PERIOD"
 
 
 @dataclass(frozen=True)
 class OperationsComparisonEvalResult:
-    """单条环比评测的可审计结果。"""
+    """单条环比/同比评测的可审计结果。"""
 
     case_id: str
     passed: bool
@@ -76,7 +76,7 @@ class OperationsComparisonEvalThresholds:
 
 
 def evaluate_case(case: OperationsComparisonEvalCase) -> OperationsComparisonEvalResult:
-    """用真实环比摘要函数校验当前/上一周期的确定性结果。"""
+    """用真实比较摘要函数校验当前/对比周期的确定性结果。"""
 
     try:
         current = _build_metric(
@@ -91,7 +91,14 @@ def evaluate_case(case: OperationsComparisonEvalCase) -> OperationsComparisonEva
             to_date=case.previous_to,
             values=case.previous_values,
         )
-        report = cast(dict[str, Any], build_operations_comparison_report(current, previous))
+        report = cast(
+            dict[str, Any],
+            build_operations_comparison_report(
+                current,
+                previous,
+                comparison_type=case.comparison_type,
+            ),
+        )
     except (TypeError, ValueError) as exc:
         return OperationsComparisonEvalResult(
             case.case_id,
@@ -149,6 +156,9 @@ def aggregate_results(results: list[OperationsComparisonEvalResult]) -> dict[str
 def case_from_mapping(data: dict[str, Any]) -> OperationsComparisonEvalCase:
     """从 JSON 读取用例，并转换成固定日期和聚合值结构。"""
 
+    comparison_type = str(data.get("comparison_type", "PREVIOUS_PERIOD"))
+    if comparison_type not in {"PREVIOUS_PERIOD", "SAME_PERIOD_LAST_YEAR"}:
+        raise ValueError(f"unsupported comparison_type: {comparison_type}")
     return OperationsComparisonEvalCase(
         case_id=str(data["case_id"]),
         metric=str(data.get("metric", "APPOINTMENT_COUNT")),
@@ -170,6 +180,7 @@ def case_from_mapping(data: dict[str, Any]) -> OperationsComparisonEvalCase:
         expected_note_fragments=tuple(
             str(item) for item in data.get("expected_note_fragments", [])
         ),
+        comparison_type=cast(Literal["PREVIOUS_PERIOD", "SAME_PERIOD_LAST_YEAR"], comparison_type),
     )
 
 
