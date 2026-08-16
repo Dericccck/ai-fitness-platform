@@ -5,12 +5,13 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal, cast
 
-from fastapi import APIRouter, Header, HTTPException, Query, Request, status
+from fastapi import APIRouter, Header, HTTPException, Query, Request, Response, status
 from pydantic import BaseModel, ConfigDict
 
 from app.agent.operations_audit import OperationsAuditRecord, OperationsAuditRepository
 from app.agent.operations_tools import (
     OPERATIONS_METRIC_CATALOG,
+    OPERATIONS_METRIC_CATALOG_VERSION,
     OperationsMetricDefinition,
     get_operations_metric_definition,
     validate_operations_metric_capability,
@@ -75,14 +76,21 @@ class OperationsMetricCatalogResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    catalog_version: str
     items: tuple[OperationsMetricDefinitionResponse, ...]
 
 
-@router.get("/metric-catalog", response_model=OperationsMetricCatalogResponse)
+@router.get(
+    "/metric-catalog",
+    response_model=OperationsMetricCatalogResponse,
+    responses={304: {"description": "指标目录未发生变化"}},
+)
 async def get_operations_metric_catalog(
     request: Request,
+    response: Response,
     x_agent_context: str | None = Header(default=None),
-) -> OperationsMetricCatalogResponse:
+    if_none_match: str | None = Header(default=None),
+) -> OperationsMetricCatalogResponse | Response:
     """返回管理员可配置的固定经营指标及其能力边界。
 
     指标目录是代码维护的公开能力元数据，不查询组织业务数据；仍要求管理员签名身份，
@@ -91,8 +99,28 @@ async def get_operations_metric_catalog(
     """
 
     _verify_operations_admin(request, x_agent_context)
+    etag = f'"{OPERATIONS_METRIC_CATALOG_VERSION}"'
+    cache_headers = {
+        "ETag": etag,
+        # 目录不含业务数据，但接口需要管理员身份，所以只允许浏览器/客户端私有缓存。
+        "Cache-Control": "private, max-age=300, must-revalidate",
+    }
+    if _if_none_match_matches(if_none_match, etag):
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=cache_headers)
+    response.headers.update(cache_headers)
     return OperationsMetricCatalogResponse(
-        items=tuple(_to_metric_definition_response(item) for item in OPERATIONS_METRIC_CATALOG)
+        catalog_version=OPERATIONS_METRIC_CATALOG_VERSION,
+        items=tuple(_to_metric_definition_response(item) for item in OPERATIONS_METRIC_CATALOG),
+    )
+
+
+def _if_none_match_matches(if_none_match: str | None, etag: str) -> bool:
+    """判断客户端缓存是否仍对应当前目录版本，支持逗号分隔和弱 ETag。"""
+
+    if not if_none_match:
+        return False
+    return any(
+        candidate.strip().removeprefix("W/") == etag for candidate in if_none_match.split(",")
     )
 
 

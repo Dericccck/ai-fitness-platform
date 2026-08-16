@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import json
 import re
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -119,6 +121,34 @@ OPERATIONS_METRIC_CATALOG: tuple[OperationsMetricDefinition, ...] = (
 _METRIC_CATALOG_BY_ID: dict[str, OperationsMetricDefinition] = {
     item.metric: item for item in OPERATIONS_METRIC_CATALOG
 }
+
+
+def _build_operations_metric_catalog_version() -> str:
+    """根据指标定义内容生成稳定版本，避免修改口径后忘记手工更新版本号。"""
+
+    payload = [
+        {
+            "metric": item.metric,
+            "label": item.label,
+            "description": item.description,
+            "dimension_description": item.dimension_description,
+            "supported_buckets": sorted(item.supported_buckets),
+            "supports_previous_period": item.supports_previous_period,
+        }
+        for item in OPERATIONS_METRIC_CATALOG
+    ]
+    serialized = json.dumps(
+        payload,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return f"sha256:{hashlib.sha256(serialized).hexdigest()}"
+
+
+# 版本由完整目录内容计算得到。只要指标名称、口径或能力边界变化，版本和 ETag
+# 就会自动变化，前端不会继续使用旧筛选规则；它不包含任何机构或业务数据。
+OPERATIONS_METRIC_CATALOG_VERSION = _build_operations_metric_catalog_version()
 
 
 def get_operations_metric_definition(metric: str) -> OperationsMetricDefinition | None:

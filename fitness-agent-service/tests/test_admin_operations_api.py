@@ -118,6 +118,9 @@ async def test_admin_can_load_metric_catalog_without_querying_business_data() ->
         )
 
     assert response.status_code == 200
+    assert response.json()["catalog_version"].startswith("sha256:")
+    assert response.headers["cache-control"] == "private, max-age=300, must-revalidate"
+    etag = response.headers["etag"]
     items = response.json()["items"]
     assert len(items) == 5
     course = next(item for item in items if item["id"] == "COURSE_APPOINTMENT_COUNT")
@@ -127,6 +130,18 @@ async def test_admin_can_load_metric_catalog_without_querying_business_data() ->
     assert repository.filters == {}
     assert "organization_id" not in course
     assert "sql" not in course
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        cached_response = await client.get(
+            "/api/v1/admin/operations/metric-catalog",
+            headers={
+                "X-Agent-Context": "signed-context",
+                "If-None-Match": etag,
+            },
+        )
+    assert cached_response.status_code == 304
+    assert cached_response.content == b""
+    assert cached_response.headers["etag"] == etag
+    assert repository.filters == {}
 
 
 async def test_admin_audit_filters_reject_unsupported_metric_capability_combination() -> None:

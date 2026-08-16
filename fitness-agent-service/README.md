@@ -20,7 +20,7 @@
 - Reranker：可配置的 HTTP 服务，不提供本地 mock 或静默降级。
 - Fitness Core Gateway：Java 只读业务 Tool 服务，查询用户、机构、课程、合同、课时和预约。
 - Tool Registry：版本化注册首批健身只读工具，校验输入 Schema、限制未知工具，并记录不含原始参数的调用审计。
-- Operations 管理审计：管理员可通过 `/api/v1/admin/operations/query-audits` 按机构、固定指标、时间桶、比较周期、状态和创建时间分页查询经营查询审计；响应同时附带固定指标口径元数据，组织管理员只能查看签名机构范围，接口不返回 SQL、Prompt 或业务明细；指标、时间桶和比较周期的组合会按固定目录校验，不支持的组合返回 `422`。`/api/v1/admin/operations/metric-catalog` 提供不含业务数据的指标能力目录，供前端动态生成筛选器和报表配置。
+- Operations 管理审计：管理员可通过 `/api/v1/admin/operations/query-audits` 按机构、固定指标、时间桶、比较周期、状态和创建时间分页查询经营查询审计；响应同时附带固定指标口径元数据，组织管理员只能查看签名机构范围，接口不返回 SQL、Prompt 或业务明细；指标、时间桶和比较周期的组合会按固定目录校验，不支持的组合返回 `422`。`/api/v1/admin/operations/metric-catalog` 提供不含业务数据的指标能力目录，带有内容版本、ETag 和私有缓存语义，供前端动态生成筛选器和报表配置。
 - Supervisor Runtime：基于 LangGraph 执行模型 Tool Calling、工具预算、真实结果回填和业务范围护栏。
 - 会话持久化：PostgreSQL 保存 LangGraph Checkpoint，Redis 负责会话互斥锁和短期状态。
 - RAG 基础：Alembic 管理版本化知识文档、切片、租户/角色权限字段和 pgvector HNSW 索引；
