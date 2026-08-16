@@ -1,3 +1,4 @@
+import asyncio
 from datetime import date
 
 import pytest
@@ -363,6 +364,30 @@ class FakeOperationsGateway:
         )
 
 
+class SlowOperationsGateway(FakeOperationsGateway):
+    async def query_operations_metric(
+        self, context: GatewayRequestContext, organization_id: str, metric: str, **kwargs: object
+    ) -> GatewayOperationsMetric:
+        await asyncio.sleep(0.02)
+        return await super().query_operations_metric(context, organization_id, metric, **kwargs)
+
+
+class FakeRateLimitCache:
+    def __init__(self, allowed: bool) -> None:
+        self.allowed = allowed
+        self.calls: list[tuple[str, int, int]] = []
+
+    async def consume_fixed_window(
+        self,
+        key: str,
+        *,
+        limit: int,
+        window_seconds: int,
+    ) -> bool:
+        self.calls.append((key, limit, window_seconds))
+        return self.allowed
+
+
 class RecordingOperationsAudit:
     def __init__(self) -> None:
         self.events: list[dict[str, object]] = []
@@ -433,6 +458,62 @@ async def test_operations_tool_queries_same_period_last_year() -> None:
     ]
     assert result["comparison"]["type"] == "SAME_PERIOD_LAST_YEAR"
     assert result["comparison"]["change_percent"] == 20.0
+
+
+@pytest.mark.asyncio
+async def test_operations_tool_rejects_rate_limited_organization_before_gateway() -> None:
+    gateway = FakeOperationsGateway()
+    cache = FakeRateLimitCache(allowed=False)
+    registry = ToolRegistry()
+    for definition in build_operations_tool_definitions(
+        gateway,
+        rate_limit_cache=cache,  # type: ignore[arg-type]
+        rate_limit_requests=2,
+        rate_limit_window_seconds=30,
+    ):
+        registry.register(definition)
+
+    with pytest.raises(ToolExecutionError):
+        await registry.invoke(
+            "fitness.operations.metric.query.v1",
+            {"organization_id": "org-1", "metric": "APPOINTMENT_COUNT"},
+            ToolContext(
+                gateway_context=GatewayRequestContext(
+                    signed_context="signed-context",
+                    request_id="request-rate",
+                    trace_id="trace-rate",
+                )
+            ),
+        )
+
+    assert gateway.calls == []
+    assert cache.calls[0][1:] == (2, 30)
+
+
+@pytest.mark.asyncio
+async def test_operations_tool_times_out_before_returning_gateway_result() -> None:
+    gateway = SlowOperationsGateway()
+    registry = ToolRegistry()
+    for definition in build_operations_tool_definitions(
+        gateway,
+        query_timeout_seconds=0.001,
+    ):
+        registry.register(definition)
+
+    with pytest.raises(ToolExecutionError):
+        await registry.invoke(
+            "fitness.operations.metric.query.v1",
+            {"organization_id": "org-1", "metric": "APPOINTMENT_COUNT"},
+            ToolContext(
+                gateway_context=GatewayRequestContext(
+                    signed_context="signed-context",
+                    request_id="request-timeout",
+                    trace_id="trace-timeout",
+                )
+            ),
+        )
+
+    assert gateway.calls == []
 
 
 @pytest.mark.asyncio

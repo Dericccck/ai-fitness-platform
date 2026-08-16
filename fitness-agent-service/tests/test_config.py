@@ -20,6 +20,9 @@ def test_provider_configuration_is_explicit() -> None:
     assert settings.llm_model == "fitness-chat-model"
     assert settings.otel_configured is False
     assert settings.gateway_configured is False
+    assert settings.operations_query_timeout_seconds == 5
+    assert settings.operations_rate_limit_requests == 60
+    assert settings.operations_rate_limit_window_seconds == 60
     assert settings.rag_candidate_limit == 20
     assert settings.rag_top_k == 5
     assert settings.rag_chunk_max_chars == 1200

@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import re
@@ -18,6 +19,7 @@ from zoneinfo import ZoneInfo
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.infrastructure.cache import Cache
 from app.infrastructure.gateway_client import GatewayClient, GatewayOperationsMetric
 
 from .operations_audit import (
@@ -39,6 +41,7 @@ _METRICS = Literal[
 _TIME_BUCKETS = Literal["NONE", "DAY", "WEEK"]
 _COMPARISONS = Literal["NONE", "PREVIOUS_PERIOD", "SAME_PERIOD_LAST_YEAR"]
 _BUSINESS_ZONE = ZoneInfo("Asia/Shanghai")
+OPERATIONS_MAX_GATEWAY_CALLS = 2
 
 
 @dataclass(frozen=True)
@@ -657,6 +660,10 @@ def build_operations_tool_definitions(
     gateway: GatewayClient,
     *,
     audit_repository: OperationsAuditRepository | None = None,
+    rate_limit_cache: Cache | None = None,
+    rate_limit_requests: int = 60,
+    rate_limit_window_seconds: int = 60,
+    query_timeout_seconds: float | None = None,
 ) -> tuple[ToolDefinition, ...]:
     """注册固定经营查询工具，并可选接入 PostgreSQL 持久化审计。
 
@@ -664,6 +671,16 @@ def build_operations_tool_definitions(
     正式 FastAPI 进程始终注入仓储。仓储注入后，查询成功但审计写入失败会 fail-closed，
     不把已经失去审计保护的经营结果返回给模型。
     """
+
+    effective_timeout_seconds = query_timeout_seconds
+    if effective_timeout_seconds is None:
+        effective_timeout_seconds = getattr(
+            getattr(gateway, "settings", None), "gateway_timeout_seconds", 5.0
+        )
+    if effective_timeout_seconds <= 0:
+        raise ValueError("operations query timeout must be positive")
+    if rate_limit_requests < 1 or rate_limit_window_seconds < 1:
+        raise ValueError("operations rate limit configuration is invalid")
 
     async def query_metric(raw: BaseModel, context: ToolContext) -> object:
         data = cast(OperationsMetricToolInput, raw)
@@ -680,19 +697,53 @@ def build_operations_tool_definitions(
                 # 的工具失败，不把用户原文或组织权限细节写入 Agent 审计。
                 raise ValueError(f"operations query policy rejected: {decision.reason_code}")
 
+        if rate_limit_cache is not None:
+            # 频率限制按机构聚合，避免平台管理员通过切换主体绕过单机构保护；Redis Key
+            # 只保存不可逆摘要，不把机构 ID 原文写进缓存键。
+            rate_limit_key = _operations_rate_limit_key(data.organization_id)
+            try:
+                allowed = await rate_limit_cache.consume_fixed_window(
+                    rate_limit_key,
+                    limit=rate_limit_requests,
+                    window_seconds=rate_limit_window_seconds,
+                )
+            except Exception as exc:
+                _logger.error(
+                    "operations_rate_limiter_unavailable",
+                    organization_id=data.organization_id,
+                    request_id=context.gateway_context.request_id,
+                    trace_id=context.gateway_context.trace_id,
+                )
+                raise ValueError("operations resource limiter unavailable") from exc
+            if not allowed:
+                _logger.warning(
+                    "operations_rate_limit_exceeded",
+                    organization_id=data.organization_id,
+                    request_id=context.gateway_context.request_id,
+                    trace_id=context.gateway_context.trace_id,
+                )
+                raise ValueError("operations query rate limit exceeded")
+
+        gateway_call_count = 0
+
         async def query_period(
             *, from_date: date | None, to_date: date | None, role: str
         ) -> GatewayOperationsMetric:
+            nonlocal gateway_call_count
+            gateway_call_count += 1
+            if gateway_call_count > OPERATIONS_MAX_GATEWAY_CALLS:
+                raise ValueError("operations gateway call budget exceeded")
             try:
-                result = await gateway.query_operations_metric(
-                    context.gateway_context,
-                    data.organization_id,
-                    data.metric,
-                    from_date=from_date,
-                    to_date=to_date,
-                    limit=data.limit,
-                    bucket=data.bucket,
-                )
+                async with asyncio.timeout(effective_timeout_seconds):
+                    result = await gateway.query_operations_metric(
+                        context.gateway_context,
+                        data.organization_id,
+                        data.metric,
+                        from_date=from_date,
+                        to_date=to_date,
+                        limit=data.limit,
+                        bucket=data.bucket,
+                    )
             except Exception as exc:
                 if audit_repository is not None:
                     try:
@@ -809,3 +860,10 @@ def build_operations_tool_definitions(
             requires_confirmation=False,
         ),
     )
+
+
+def _operations_rate_limit_key(organization_id: str) -> str:
+    """生成不暴露机构原文的 Redis 固定窗口 Key。"""
+
+    digest = hashlib.sha256(organization_id.encode("utf-8")).hexdigest()
+    return f"fitness:agent:operations-rate:{digest}"

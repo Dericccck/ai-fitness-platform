@@ -185,6 +185,9 @@ class Settings(BaseSettings):
     gateway_base_url: str = "http://127.0.0.1:8081"
     gateway_internal_service_token: str = ""
     gateway_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
+    operations_query_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
+    operations_rate_limit_requests: int = Field(default=60, ge=1, le=10_000)
+    operations_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
     gateway_max_retries: int = Field(default=2, ge=0, le=5)
     gateway_retry_backoff_seconds: float = Field(default=0.1, ge=0, le=5)
 

@@ -340,6 +340,11 @@ Operations 查询前策略评测样例位于 `evals/operations_policy_smoke.json
 支持的时间桶、是否支持上一等长周期环比和是否支持上一自然年同期同比；报表的 `metric_definition` 会返回这些非敏感元数据，帮助模型和管理员正确
 解释结果。新增经营指标时必须先补齐目录定义、Gateway 固定 SQL、权限/审计和评测，不能只增加一个自然语言关键词。
 
+Operations 查询还受服务端资源策略保护：单次时间范围最多 92 天、结果最多 100 行；当前周期加环比/同比最多触发两次
+Gateway 查询，每次调用受 `AGENT_OPERATIONS_QUERY_TIMEOUT_SECONDS` 超时约束。生产 API 按机构使用 Redis 固定窗口限制请求量，
+由 `AGENT_OPERATIONS_RATE_LIMIT_REQUESTS` 和 `AGENT_OPERATIONS_RATE_LIMIT_WINDOW_SECONDS` 配置；Redis 限流不可用时查询 fail-closed，
+避免把缓存故障转化为 MySQL 查询洪峰。上述限制只控制资源消耗，不替代 Java Gateway 的签名权限校验。
+
 短期会话摘要的确定性安全评测样例位于 `fitness-agent-service/evals/session_summary_samples.json`，阈值位于
 `fitness-agent-service/evals/session_summary_thresholds.json`。执行 `make agent-session-summary-eval` 会检查摘要 JSON、
 非空、长度、必需上下文、凭证脱敏、禁止越权表达和通过率；禁止表达用于拦截动态事实、权限、医疗诊断和训练计划状态
