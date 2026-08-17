@@ -58,16 +58,16 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
         if (bucket != OperationsTimeBucket.NONE) {
             if (!supportsTimeBucket(metric)) {
                 throw new IllegalArgumentException(
-                        "DAY/WEEK time buckets currently support appointment, completed class, new customer, course and coach metrics");
+                        "DAY/WEEK time buckets currently support appointment, completed class, new customer, revenue, course and coach metrics");
             }
-            // 预约和完课按课程开始时间归属；新客按有效合同创建时间归属。
-            // 两种时间字段都来自固定指标分支，不能由用户或模型传入。
-            String timeColumn = metric == OperationsMetric.NEW_CUSTOMER_COUNT
+            // 预约、完课、课程和教练指标按课程开始时间归属；新客和营收按合同创建时间归属。
+            // 数据表和时间字段都来自固定指标分支，不能由用户或模型传入。
+            boolean contractMetric = metric == OperationsMetric.NEW_CUSTOMER_COUNT
+                    || metric == OperationsMetric.REVENUE_AMOUNT;
+            String timeColumn = contractMetric
                     ? "create_time"
                     : "course_start_time";
-            String sourceTable = metric == OperationsMetric.NEW_CUSTOMER_COUNT
-                    ? "contract"
-                    : "appointment";
+            String sourceTable = contractMetric ? "contract" : "appointment";
             String bucketExpression = bucket == OperationsTimeBucket.DAY
                     ? "DATE_FORMAT(DATE(" + timeColumn + "), '%Y-%m-%d')"
                     : "DATE_FORMAT(DATE_SUB(DATE(" + timeColumn + "), "
@@ -83,7 +83,12 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
                     : "";
             String aggregateExpression = metric == OperationsMetric.NEW_CUSTOMER_COUNT
                     ? "COUNT(DISTINCT user_id)"
+                    : metric == OperationsMetric.REVENUE_AMOUNT
+                    ? "COALESCE(SUM(COALESCE(total_amount, 0) - COALESCE(refund_amount, 0)), 0)"
                     : "COUNT(1)";
+            String amountFilter = metric == OperationsMetric.REVENUE_AMOUNT
+                    ? " AND total_amount IS NOT NULL"
+                    : "";
             // bucketExpression 和 metricFilter 都来自 Java 枚举分支，不能由用户或模型注入；
             // 实际机构和日期仍通过命名参数绑定，继续保留固定 SQL 的授权边界。
             String sql = "SELECT " + bucketExpression + " AS dimension, "
@@ -91,7 +96,7 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
                     + sourceTable + " "
                     + "WHERE organization_id = :organizationId AND deleted = 0 "
                     + "AND " + timeColumn + " >= :fromTime AND " + timeColumn + " < :toTime"
-                    + metricFilter + " GROUP BY " + bucketExpression
+                    + metricFilter + amountFilter + " GROUP BY " + bucketExpression
                     + " ORDER BY " + bucketExpression + " ASC LIMIT :limit";
             return jdbcTemplate.query(sql, parameters, this::mapRow);
         }
@@ -127,6 +132,14 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
                         "SELECT 'TOTAL' AS dimension, '新客量' AS label, COUNT(DISTINCT user_id) AS value "
                                 + "FROM contract WHERE organization_id = :organizationId "
                                 + "AND deleted = 0 AND new_customer = 1 AND user_id IS NOT NULL "
+                                + "AND create_time >= :fromTime AND create_time < :toTime",
+                        parameters, this::mapRow);
+            case REVENUE_AMOUNT:
+                return jdbcTemplate.query(
+                        "SELECT 'TOTAL' AS dimension, '营收金额' AS label, "
+                                + "COALESCE(SUM(COALESCE(total_amount, 0) - COALESCE(refund_amount, 0)), 0) AS value "
+                                + "FROM contract WHERE organization_id = :organizationId "
+                                + "AND deleted = 0 AND total_amount IS NOT NULL "
                                 + "AND create_time >= :fromTime AND create_time < :toTime",
                         parameters, this::mapRow);
             case COURSE_APPOINTMENT_COUNT:
@@ -173,6 +186,7 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
         return metric == OperationsMetric.APPOINTMENT_COUNT
                 || metric == OperationsMetric.COMPLETED_CLASS_COUNT
                 || metric == OperationsMetric.NEW_CUSTOMER_COUNT
+                || metric == OperationsMetric.REVENUE_AMOUNT
                 || metric == OperationsMetric.COURSE_APPOINTMENT_COUNT
                 || metric == OperationsMetric.COACH_APPOINTMENT_COUNT;
     }

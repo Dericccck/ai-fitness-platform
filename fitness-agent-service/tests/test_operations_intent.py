@@ -42,6 +42,14 @@ def test_parses_new_customer_metric() -> None:
     assert hint.bucket == "DAY"
 
 
+def test_parses_revenue_metric() -> None:
+    hint = parse_operations_intent("查看本月营收按周趋势", today=date(2026, 8, 15))
+
+    assert hint is not None
+    assert hint.metric == "REVENUE_AMOUNT"
+    assert hint.bucket == "WEEK"
+
+
 def test_parses_daily_appointment_trend() -> None:
     hint = parse_operations_intent("查看近30天预约量趋势", today=date(2026, 8, 15))
 

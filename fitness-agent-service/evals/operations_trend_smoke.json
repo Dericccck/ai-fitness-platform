@@ -131,6 +131,24 @@
     "expected_warning_fragments": ["已将 1 个无记录时间桶按 0 计入"]
   },
   {
+    "case_id": "revenue-weekly-trend",
+    "metric": "REVENUE_AMOUNT",
+    "bucket": "WEEK",
+    "from": "2026-08-03",
+    "to": "2026-08-16",
+    "rows": [
+      {"dimension": "2026-08-03", "label": "2026-08-03", "value": 12000},
+      {"dimension": "2026-08-10", "label": "2026-08-10", "value": 18000}
+    ],
+    "expected_trend_available": true,
+    "expected_direction": "UP",
+    "expected_series": [
+      {"bucket": "2026-08-03", "value": 12000},
+      {"bucket": "2026-08-10", "value": 18000}
+    ],
+    "expected_warning_fragments": []
+  },
+  {
     "case_id": "coach-weekly-trend",
     "metric": "COACH_APPOINTMENT_COUNT",
     "bucket": "WEEK",

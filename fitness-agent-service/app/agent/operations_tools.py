@@ -37,6 +37,7 @@ _METRICS = Literal[
     "APPOINTMENT_STATUS_BREAKDOWN",
     "COMPLETED_CLASS_COUNT",
     "NEW_CUSTOMER_COUNT",
+    "REVENUE_AMOUNT",
     "COURSE_APPOINTMENT_COUNT",
     "COACH_APPOINTMENT_COUNT",
     "REMAINING_CLASS_HOURS",
@@ -116,6 +117,15 @@ OPERATIONS_METRIC_CATALOG: tuple[OperationsMetricDefinition, ...] = (
         "新客量",
         "指定机构和合同创建时间范围内，被标记为新客的有效合同所涉及的去重学员数；不返回学员明细。",
         "新客总量或按合同创建日期分组的新客数量。",
+        frozenset({"NONE", "DAY", "WEEK"}),
+        True,
+        True,
+    ),
+    OperationsMetricDefinition(
+        "REVENUE_AMOUNT",
+        "营收金额",
+        "指定机构和合同创建时间范围内，有效合同总金额扣除合同退款金额后的净营收；不返回合同明细，金额单位沿用业务合同字段。",
+        "营收总额或按合同创建日期分组的净营收金额。",
         frozenset({"NONE", "DAY", "WEEK"}),
         True,
         True,
@@ -248,7 +258,7 @@ def operations_metric_catalog_prompt() -> str:
     return (
         "当前可查询的固定经营指标包括："
         + entries
-        + "。预约总量、完课量、新客量、课程预约量和教练预约量支持按日/周趋势、上一等长周期环比及上一自然年同期同比；"
+        + "。预约总量、完课量、新客量、营收金额、课程预约量和教练预约量支持按日/周趋势、上一等长周期环比及上一自然年同期同比；"
         + "预约状态分布和课程剩余课时当前只支持汇总查询，不自动执行环比或同比。"
     )
 
@@ -459,6 +469,7 @@ def parse_operations_intent(
         ("APPOINTMENT_STATUS_BREAKDOWN", ("预约状态", "预约成功率", "取消率", "完成率")),
         ("COMPLETED_CLASS_COUNT", ("完课量", "完课数", "完成课程量", "已完成课程")),
         ("NEW_CUSTOMER_COUNT", ("新客量", "新客数", "新增客户", "新增用户")),
+        ("REVENUE_AMOUNT", ("营收", "营收金额", "收入", "营业收入")),
         ("REMAINING_CLASS_HOURS", ("剩余课时", "课时余额", "剩余课")),
         ("COURSE_APPOINTMENT_COUNT", ("课程预约量", "课程预约", "课程利用", "课程使用")),
         ("COACH_APPOINTMENT_COUNT", ("教练预约量", "教练预约", "教练表现", "教练工作量")),

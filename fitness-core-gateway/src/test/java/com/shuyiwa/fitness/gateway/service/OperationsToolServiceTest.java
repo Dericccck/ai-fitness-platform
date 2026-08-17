@@ -120,6 +120,27 @@ public class OperationsToolServiceTest {
     }
 
     @Test
+    public void organizationAdminCanRequestRevenueTrend() {
+        when(repository.query(
+                "org-1", OperationsMetric.REVENUE_AMOUNT, OperationsTimeBucket.WEEK,
+                Instant.parse("2026-08-02T16:00:00Z"), Instant.parse("2026-08-16T16:00:00Z"), 20
+        )).thenReturn(Arrays.asList(
+                new OperationsMetricRow("2026-08-03", "2026-08-03", 12000),
+                new OperationsMetricRow("2026-08-10", "2026-08-10", 18000)
+        ));
+
+        OperationsViews.MetricView result = service.metric(
+                context(AgentContext.ROLE_ORGANIZATION_ADMIN), "org-1", "REVENUE_AMOUNT",
+                LocalDate.of(2026, 8, 3), LocalDate.of(2026, 8, 16), 20, "WEEK"
+        );
+
+        assertEquals("REVENUE_AMOUNT", result.getMetric());
+        assertEquals("WEEK", result.getBucket());
+        assertEquals(2, result.getRows().size());
+        assertEquals(18000L, result.getRows().get(1).getValue());
+    }
+
+    @Test
     public void organizationAdminCanRequestDailyCourseTrend() {
         when(repository.query(
                 "org-1", OperationsMetric.COURSE_APPOINTMENT_COUNT, OperationsTimeBucket.DAY,

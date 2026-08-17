@@ -45,6 +45,7 @@ public class JdbcOperationsReadRepositoryIntegrationTest {
                     OperationsMetric.APPOINTMENT_COUNT,
                     OperationsMetric.COMPLETED_CLASS_COUNT,
                     OperationsMetric.NEW_CUSTOMER_COUNT,
+                    OperationsMetric.REVENUE_AMOUNT,
                     OperationsMetric.COURSE_APPOINTMENT_COUNT,
                     OperationsMetric.COACH_APPOINTMENT_COUNT
             }) {

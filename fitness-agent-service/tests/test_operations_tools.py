@@ -69,6 +69,7 @@ def test_operations_input_allows_year_over_year_for_count_metrics() -> None:
         "APPOINTMENT_COUNT",
         "COMPLETED_CLASS_COUNT",
         "NEW_CUSTOMER_COUNT",
+        "REVENUE_AMOUNT",
         "COURSE_APPOINTMENT_COUNT",
         "COACH_APPOINTMENT_COUNT",
     ):

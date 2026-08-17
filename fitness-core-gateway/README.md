@@ -93,6 +93,7 @@ APPOINTMENT_COUNT
 APPOINTMENT_STATUS_BREAKDOWN
 COMPLETED_CLASS_COUNT
 NEW_CUSTOMER_COUNT
+REVENUE_AMOUNT
 COURSE_APPOINTMENT_COUNT
 COACH_APPOINTMENT_COUNT
 REMAINING_CLASS_HOURS
@@ -100,9 +101,10 @@ REMAINING_CLASS_HOURS
 
 `COMPLETED_CLASS_COUNT` 统计 `deleted = 0` 且 `appointment.status = 6`（已完成/核销成功）的课程次数，按课程开始时间归属统计。
 `NEW_CUSTOMER_COUNT` 统计有效合同中 `new_customer = 1` 的去重学员数，按合同创建时间归属统计；账号注册但未形成客户合同的用户不计入。
+`REVENUE_AMOUNT` 统计有效合同的 `total_amount - refund_amount` 净营收，按合同创建时间归属统计；空金额按 0 处理，金额单位沿用合同字段。
 经营指标只允许 `SYSTEM_ADMIN` 和 `ORGANIZATION_ADMIN` 访问，查询会绑定签名上下文中的机构范围，
 时间范围最多 92 天，单次最多返回 100 行。当前阶段不接受 SQL、表名或任意字段名；后续 Text-to-SQL
 也必须先映射到这个指标目录，并继续由 Java Gateway 执行固定 SQL。
 
-`bucket=DAY` 或 `bucket=WEEK` 当前开放给预约总量、完课量、新客量、课程预约量和教练预约量；新客量按合同创建时间分组，课程指标只统计有课程 ID 的预约，
+`bucket=DAY` 或 `bucket=WEEK` 当前开放给预约总量、完课量、新客量、营收金额、课程预约量和教练预约量；新客量和营收金额按合同创建时间分组，课程指标只统计有课程 ID 的预约，
 教练指标只统计有教练 ID 的预约。状态分布和剩余课时仍只能查询整个时间范围汇总。

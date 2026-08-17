@@ -58,7 +58,7 @@ claim。Agent 服务会 fail-closed，因此这一外部依赖未落地时专业
 学生只能读取本人数据；教练读取其他学员时必须存在有效的机构教练关系；机构管理员只能读取签名上下文授权的机构范围。所有列表默认最多 20 条，单次最多 100 条；预约时间范围最多 92 天。
 
 经营指标只允许 `SYSTEM_ADMIN` 和 `ORGANIZATION_ADMIN`，不向教练和学员开放。第一阶段的 `metric` 必须是固定目录中的指标 ID：
-`APPOINTMENT_COUNT`、`APPOINTMENT_STATUS_BREAKDOWN`、`COMPLETED_CLASS_COUNT`、`NEW_CUSTOMER_COUNT`、
+`APPOINTMENT_COUNT`、`APPOINTMENT_STATUS_BREAKDOWN`、`COMPLETED_CLASS_COUNT`、`NEW_CUSTOMER_COUNT`、`REVENUE_AMOUNT`、
 `COURSE_APPOINTMENT_COUNT`、`COACH_APPOINTMENT_COUNT`、`REMAINING_CLASS_HOURS`。Gateway 执行固定 SQL 并强制绑定机构和时间范围，
 不接受 SQL、表名或任意字段名；这条边界是后续受控 Text-to-SQL 的前置条件。
 
@@ -68,9 +68,12 @@ claim。Agent 服务会 fail-closed，因此这一外部依赖未落地时专业
 `NEW_CUSTOMER_COUNT` 的口径是：在指定机构和合同创建时间范围内，`contract.deleted = 0`、`contract.new_customer = 1`
 且存在 `user_id` 的有效合同所涉及的去重学员数。它统计成为门店新客的学员数量，不把账号注册但未形成客户合同的用户计入，也不会因同一学员的重复新客标记而重复计数。
 
+`REVENUE_AMOUNT` 的口径是：在指定机构和合同创建时间范围内，有效合同的 `total_amount` 总额扣除 `refund_amount` 总额后的净营收金额。
+它沿用旧健身项目的合同创建时间归属，空金额按 0 处理；该指标不表示按退款发生时间归属的现金流，也不返回合同明细，金额单位沿用业务合同字段。
+
 `bucket` 只允许 `NONE`、`DAY`、`WEEK`。省略时默认为 `NONE`，返回整个时间范围的聚合；当前
-`DAY`/`WEEK` 仅允许指标 `APPOINTMENT_COUNT`、`COMPLETED_CLASS_COUNT`、`NEW_CUSTOMER_COUNT`、`COURSE_APPOINTMENT_COUNT` 和 `COACH_APPOINTMENT_COUNT`，返回按业务时区（`Asia/Shanghai`）
-分组的预约量或新客量；预约类指标按课程开始时间分组，新客量按合同创建时间分组，
+`DAY`/`WEEK` 仅允许指标 `APPOINTMENT_COUNT`、`COMPLETED_CLASS_COUNT`、`NEW_CUSTOMER_COUNT`、`REVENUE_AMOUNT`、`COURSE_APPOINTMENT_COUNT` 和 `COACH_APPOINTMENT_COUNT`，返回按业务时区（`Asia/Shanghai`）
+分组的预约量、新客量或营收金额；预约类指标按课程开始时间分组，新客量和营收金额按合同创建时间分组，
 其中 `dimension` 和 `label` 为时间桶起始日期；`COURSE_APPOINTMENT_COUNT` 只统计有课程 ID 的预约，
 `COACH_APPOINTMENT_COUNT` 只统计有教练 ID 的预约。时间桶仍由 Gateway 执行固定 SQL，不接受任意分组字段。
 返回视图会额外携带实际生效的 `bucket`，便于 Agent 判断能否计算趋势。
@@ -79,7 +82,7 @@ Agent 解释层会根据 `from`、`to` 和 `bucket` 补齐 Gateway 没有返回�
 环比由 Agent 在同一固定指标下发起当前周期和上一等长周期两次只读查询后计算；`PREVIOUS_PERIOD`
 只表示上一等长周期，不等同于同比。同比使用 `SAME_PERIOD_LAST_YEAR`，按相同月日映射到上一自然年；
 2 月 29 日在非闰年映射为 2 月 28 日，实际日期范围会写入审计。当前环比和同比开放
-`APPOINTMENT_COUNT`、`COMPLETED_CLASS_COUNT`、`NEW_CUSTOMER_COUNT`、`COURSE_APPOINTMENT_COUNT` 和 `COACH_APPOINTMENT_COUNT`，对比周期为 0 时只返回差值，不生成无意义的百分比。
+`APPOINTMENT_COUNT`、`COMPLETED_CLASS_COUNT`、`NEW_CUSTOMER_COUNT`、`REVENUE_AMOUNT`、`COURSE_APPOINTMENT_COUNT` 和 `COACH_APPOINTMENT_COUNT`，对比周期为 0 时只返回差值，不生成无意义的百分比。
 
 Operations 查询在 Agent 服务侧还受资源策略约束：单次时间范围最多 92 天、最多返回 100 行；当前周期、环比或同比最多产生两次
 Gateway 调用，每次调用都有独立超时。生产环境按机构使用 Redis 固定窗口限流，限流计数器只保存不可逆机构摘要和次数，不保存
