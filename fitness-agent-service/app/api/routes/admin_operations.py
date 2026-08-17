@@ -133,6 +133,7 @@ async def list_operations_query_audits(
         "APPOINTMENT_COUNT",
         "APPOINTMENT_STATUS_BREAKDOWN",
         "COMPLETED_CLASS_COUNT",
+        "NEW_CUSTOMER_COUNT",
         "COURSE_APPOINTMENT_COUNT",
         "COACH_APPOINTMENT_COUNT",
         "REMAINING_CLASS_HOURS",

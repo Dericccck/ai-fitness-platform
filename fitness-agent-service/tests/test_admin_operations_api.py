@@ -123,12 +123,17 @@ async def test_admin_can_load_metric_catalog_without_querying_business_data() ->
     assert response.headers["cache-control"] == "private, max-age=300, must-revalidate"
     etag = response.headers["etag"]
     items = response.json()["items"]
-    assert len(items) == 6
+    assert len(items) == 7
     completed = next(item for item in items if item["id"] == "COMPLETED_CLASS_COUNT")
     assert completed["label"] == "完课量"
     assert completed["supported_buckets"] == ["DAY", "NONE", "WEEK"]
     assert completed["supports_previous_period"] is True
     assert completed["supports_year_over_year"] is True
+    new_customer = next(item for item in items if item["id"] == "NEW_CUSTOMER_COUNT")
+    assert new_customer["label"] == "新客量"
+    assert new_customer["supported_buckets"] == ["DAY", "NONE", "WEEK"]
+    assert new_customer["supports_previous_period"] is True
+    assert new_customer["supports_year_over_year"] is True
     course = next(item for item in items if item["id"] == "COURSE_APPOINTMENT_COUNT")
     assert course["label"] == "课程预约量"
     assert course["supported_buckets"] == ["DAY", "NONE", "WEEK"]

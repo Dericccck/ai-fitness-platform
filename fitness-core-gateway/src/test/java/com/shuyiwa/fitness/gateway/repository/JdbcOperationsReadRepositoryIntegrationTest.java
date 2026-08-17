@@ -43,6 +43,8 @@ public class JdbcOperationsReadRepositoryIntegrationTest {
         }) {
             for (OperationsMetric metric : new OperationsMetric[]{
                     OperationsMetric.APPOINTMENT_COUNT,
+                    OperationsMetric.COMPLETED_CLASS_COUNT,
+                    OperationsMetric.NEW_CUSTOMER_COUNT,
                     OperationsMetric.COURSE_APPOINTMENT_COUNT,
                     OperationsMetric.COACH_APPOINTMENT_COUNT
             }) {

@@ -72,7 +72,7 @@ public class OperationsToolService {
         OperationsTimeBucket bucket = OperationsTimeBucket.parse(bucketCode);
         if (bucket != OperationsTimeBucket.NONE && !supportsTimeBucket(metric)) {
             throw new IllegalArgumentException(
-                    "DAY/WEEK time buckets currently support appointment, completed class, course and coach metrics");
+                    "DAY/WEEK time buckets currently support appointment, completed class, new customer, course and coach metrics");
         }
         int limit = normalizeLimit(requestedLimit);
         Instant fromInstant = start.atStartOfDay(BUSINESS_ZONE).toInstant();
@@ -102,6 +102,7 @@ public class OperationsToolService {
     private boolean supportsTimeBucket(OperationsMetric metric) {
         return metric == OperationsMetric.APPOINTMENT_COUNT
                 || metric == OperationsMetric.COMPLETED_CLASS_COUNT
+                || metric == OperationsMetric.NEW_CUSTOMER_COUNT
                 || metric == OperationsMetric.COURSE_APPOINTMENT_COUNT
                 || metric == OperationsMetric.COACH_APPOINTMENT_COUNT;
     }

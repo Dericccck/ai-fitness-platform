@@ -112,6 +112,25 @@
     "expected_warning_fragments": []
   },
   {
+    "case_id": "new-customer-daily-trend",
+    "metric": "NEW_CUSTOMER_COUNT",
+    "bucket": "DAY",
+    "from": "2026-08-01",
+    "to": "2026-08-03",
+    "rows": [
+      {"dimension": "2026-08-01", "label": "2026-08-01", "value": 3},
+      {"dimension": "2026-08-03", "label": "2026-08-03", "value": 6}
+    ],
+    "expected_trend_available": true,
+    "expected_direction": "UP",
+    "expected_series": [
+      {"bucket": "2026-08-01", "value": 3},
+      {"bucket": "2026-08-02", "value": 0},
+      {"bucket": "2026-08-03", "value": 6}
+    ],
+    "expected_warning_fragments": ["已将 1 个无记录时间桶按 0 计入"]
+  },
+  {
     "case_id": "coach-weekly-trend",
     "metric": "COACH_APPOINTMENT_COUNT",
     "bucket": "WEEK",

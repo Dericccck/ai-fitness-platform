@@ -58,25 +58,39 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
         if (bucket != OperationsTimeBucket.NONE) {
             if (!supportsTimeBucket(metric)) {
                 throw new IllegalArgumentException(
-                        "DAY/WEEK time buckets currently support appointment, completed class, course and coach metrics");
+                        "DAY/WEEK time buckets currently support appointment, completed class, new customer, course and coach metrics");
             }
+            // 预约和完课按课程开始时间归属；新客按有效合同创建时间归属。
+            // 两种时间字段都来自固定指标分支，不能由用户或模型传入。
+            String timeColumn = metric == OperationsMetric.NEW_CUSTOMER_COUNT
+                    ? "create_time"
+                    : "course_start_time";
+            String sourceTable = metric == OperationsMetric.NEW_CUSTOMER_COUNT
+                    ? "contract"
+                    : "appointment";
             String bucketExpression = bucket == OperationsTimeBucket.DAY
-                    ? "DATE_FORMAT(DATE(course_start_time), '%Y-%m-%d')"
-                    : "DATE_FORMAT(DATE_SUB(DATE(course_start_time), "
-                    + "INTERVAL WEEKDAY(course_start_time) DAY), '%Y-%m-%d')";
+                    ? "DATE_FORMAT(DATE(" + timeColumn + "), '%Y-%m-%d')"
+                    : "DATE_FORMAT(DATE_SUB(DATE(" + timeColumn + "), "
+                    + "INTERVAL WEEKDAY(" + timeColumn + ") DAY), '%Y-%m-%d')";
             String metricFilter = metric == OperationsMetric.COURSE_APPOINTMENT_COUNT
                     ? " AND course_id IS NOT NULL"
                     : metric == OperationsMetric.COACH_APPOINTMENT_COUNT
                     ? " AND coach_id IS NOT NULL"
                     : metric == OperationsMetric.COMPLETED_CLASS_COUNT
                     ? " AND status = " + COMPLETED_APPOINTMENT_STATUS
+                    : metric == OperationsMetric.NEW_CUSTOMER_COUNT
+                    ? " AND new_customer = 1 AND user_id IS NOT NULL"
                     : "";
+            String aggregateExpression = metric == OperationsMetric.NEW_CUSTOMER_COUNT
+                    ? "COUNT(DISTINCT user_id)"
+                    : "COUNT(1)";
             // bucketExpression 和 metricFilter 都来自 Java 枚举分支，不能由用户或模型注入；
             // 实际机构和日期仍通过命名参数绑定，继续保留固定 SQL 的授权边界。
             String sql = "SELECT " + bucketExpression + " AS dimension, "
-                    + bucketExpression + " AS label, COUNT(1) AS value FROM appointment "
+                    + bucketExpression + " AS label, " + aggregateExpression + " AS value FROM "
+                    + sourceTable + " "
                     + "WHERE organization_id = :organizationId AND deleted = 0 "
-                    + "AND course_start_time >= :fromTime AND course_start_time < :toTime"
+                    + "AND " + timeColumn + " >= :fromTime AND " + timeColumn + " < :toTime"
                     + metricFilter + " GROUP BY " + bucketExpression
                     + " ORDER BY " + bucketExpression + " ASC LIMIT :limit";
             return jdbcTemplate.query(sql, parameters, this::mapRow);
@@ -107,6 +121,13 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
                                 + "AND deleted = 0 AND status = " + COMPLETED_APPOINTMENT_STATUS
                                 + " AND course_start_time >= :fromTime "
                                 + "AND course_start_time < :toTime",
+                        parameters, this::mapRow);
+            case NEW_CUSTOMER_COUNT:
+                return jdbcTemplate.query(
+                        "SELECT 'TOTAL' AS dimension, '新客量' AS label, COUNT(DISTINCT user_id) AS value "
+                                + "FROM contract WHERE organization_id = :organizationId "
+                                + "AND deleted = 0 AND new_customer = 1 AND user_id IS NOT NULL "
+                                + "AND create_time >= :fromTime AND create_time < :toTime",
                         parameters, this::mapRow);
             case COURSE_APPOINTMENT_COUNT:
                 return jdbcTemplate.query(
@@ -151,6 +172,7 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
     private boolean supportsTimeBucket(OperationsMetric metric) {
         return metric == OperationsMetric.APPOINTMENT_COUNT
                 || metric == OperationsMetric.COMPLETED_CLASS_COUNT
+                || metric == OperationsMetric.NEW_CUSTOMER_COUNT
                 || metric == OperationsMetric.COURSE_APPOINTMENT_COUNT
                 || metric == OperationsMetric.COACH_APPOINTMENT_COUNT;
     }
