@@ -26,6 +26,7 @@ class HttpMetrics:
     session_summary_events_total: Counter
     session_summary_tokens_total: Counter
     session_summary_chars: Histogram
+    operations_query_events_total: Counter
 
     @classmethod
     def create(
@@ -126,6 +127,13 @@ class HttpMetrics:
                 registry=target_registry,
                 buckets=(100, 500, 1000, 2000, 3000, 5000, 10000, 20000),
             ),
+            operations_query_events_total=Counter(
+                "operations_query_events_total",
+                "Operations query outcomes and resource protection events.",
+                labelnames=("event",),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
         )
 
     def record_memory_candidate_event(self, event: str, count: int = 1) -> None:
@@ -149,6 +157,12 @@ class HttpMetrics:
 
         if count > 0:
             self.session_summary_events_total.labels(event=event).inc(count)
+
+    def record_operations_query_event(self, event: str, count: int = 1) -> None:
+        """记录经营查询结果和资源保护事件，禁止把机构或请求 ID 放入标签。"""
+
+        if count > 0:
+            self.operations_query_events_total.labels(event=event).inc(count)
 
 
 def _route_template(scope: Scope) -> str:

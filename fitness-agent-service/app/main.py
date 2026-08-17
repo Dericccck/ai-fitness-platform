@@ -211,6 +211,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         operations_rate_limit_requests=settings.operations_rate_limit_requests,
         operations_rate_limit_window_seconds=settings.operations_rate_limit_window_seconds,
         operations_query_timeout_seconds=settings.operations_query_timeout_seconds,
+        operations_metrics=http_metrics,
     )
     # 确认参数进入 PostgreSQL 前必须经过应用层加密；密钥缺失时拒绝启动，避免形成
     # “看似持久化、实际明文落库”的不安全降级路径。

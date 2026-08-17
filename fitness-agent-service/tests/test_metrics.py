@@ -57,3 +57,15 @@ def test_notification_delivery_metrics_use_only_low_cardinality_labels() -> None
     assert 'channel="IN_APP",status="SUCCEEDED"' in exposition
     assert 'channel="IN_APP",status="FINAL_FAILED"' in exposition
     assert "notification_id" not in exposition
+
+
+def test_operations_metrics_use_fixed_event_label_without_identifiers() -> None:
+    _, metrics = build_test_app()
+    metrics.record_operations_query_event("RATE_LIMITED")
+    metrics.record_operations_query_event("GATEWAY_TIMEOUT")
+
+    exposition = generate_latest(metrics.registry).decode()
+    assert 'event="RATE_LIMITED"' in exposition
+    assert 'event="GATEWAY_TIMEOUT"' in exposition
+    assert "organization_id" not in exposition
+    assert "request_id" not in exposition

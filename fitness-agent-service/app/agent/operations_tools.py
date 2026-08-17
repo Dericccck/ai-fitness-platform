@@ -19,6 +19,7 @@ from zoneinfo import ZoneInfo
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from app.core.metrics import HttpMetrics
 from app.infrastructure.cache import Cache
 from app.infrastructure.gateway_client import GatewayClient, GatewayOperationsMetric
 
@@ -664,6 +665,7 @@ def build_operations_tool_definitions(
     rate_limit_requests: int = 60,
     rate_limit_window_seconds: int = 60,
     query_timeout_seconds: float | None = None,
+    metrics: HttpMetrics | None = None,
 ) -> tuple[ToolDefinition, ...]:
     """注册固定经营查询工具，并可选接入 PostgreSQL 持久化审计。
 
@@ -708,6 +710,8 @@ def build_operations_tool_definitions(
                     window_seconds=rate_limit_window_seconds,
                 )
             except Exception as exc:
+                if metrics is not None:
+                    metrics.record_operations_query_event("RATE_LIMITER_UNAVAILABLE")
                 _logger.error(
                     "operations_rate_limiter_unavailable",
                     organization_id=data.organization_id,
@@ -716,6 +720,8 @@ def build_operations_tool_definitions(
                 )
                 raise ValueError("operations resource limiter unavailable") from exc
             if not allowed:
+                if metrics is not None:
+                    metrics.record_operations_query_event("RATE_LIMITED")
                 _logger.warning(
                     "operations_rate_limit_exceeded",
                     organization_id=data.organization_id,
@@ -732,6 +738,8 @@ def build_operations_tool_definitions(
             nonlocal gateway_call_count
             gateway_call_count += 1
             if gateway_call_count > OPERATIONS_MAX_GATEWAY_CALLS:
+                if metrics is not None:
+                    metrics.record_operations_query_event("GATEWAY_CALL_BUDGET_EXCEEDED")
                 raise ValueError("operations gateway call budget exceeded")
             try:
                 async with asyncio.timeout(effective_timeout_seconds):
@@ -744,7 +752,9 @@ def build_operations_tool_definitions(
                         limit=data.limit,
                         bucket=data.bucket,
                     )
-            except Exception as exc:
+            except TimeoutError as exc:
+                if metrics is not None:
+                    metrics.record_operations_query_event("GATEWAY_TIMEOUT")
                 if audit_repository is not None:
                     try:
                         await audit_repository.record(
@@ -762,6 +772,47 @@ def build_operations_tool_definitions(
                             trace_id=context.gateway_context.trace_id,
                         )
                     except Exception:  # noqa: BLE001 - 保留 Gateway 原始失败，审计失败只记日志
+                        if metrics is not None:
+                            metrics.record_operations_query_event("AUDIT_FAILED")
+                        _logger.error(
+                            "operations_query_failure_audit_persistence_failed",
+                            metric=data.metric,
+                            comparison_role=role,
+                            organization_id=data.organization_id,
+                            request_id=context.gateway_context.request_id,
+                            trace_id=context.gateway_context.trace_id,
+                        )
+                _logger.warning(
+                    "operations_query_timeout",
+                    metric=data.metric,
+                    comparison_role=role,
+                    organization_id=data.organization_id,
+                    request_id=context.gateway_context.request_id,
+                    trace_id=context.gateway_context.trace_id,
+                )
+                raise
+            except Exception as exc:
+                if metrics is not None:
+                    metrics.record_operations_query_event("GATEWAY_ERROR")
+                if audit_repository is not None:
+                    try:
+                        await audit_repository.record(
+                            identity=context.identity,
+                            organization_id=data.organization_id,
+                            metric=data.metric,
+                            bucket=data.bucket,
+                            comparison_role=role,
+                            from_date=from_date,
+                            to_date=to_date,
+                            row_count=None,
+                            status="FAILED",
+                            error_code=type(exc).__name__[:100],
+                            request_id=context.gateway_context.request_id,
+                            trace_id=context.gateway_context.trace_id,
+                        )
+                    except Exception:  # noqa: BLE001 - 保留 Gateway 原始失败，审计失败只记日志
+                        if metrics is not None:
+                            metrics.record_operations_query_event("AUDIT_FAILED")
                         # 原始 Gateway 错误仍然是业务调用的真实失败原因；审计失败只记录
                         # 受控事件，不把数据库异常正文暴露给模型或用户。
                         _logger.error(
@@ -799,6 +850,8 @@ def build_operations_tool_definitions(
                         trace_id=context.gateway_context.trace_id,
                     )
                 except Exception as exc:
+                    if metrics is not None:
+                        metrics.record_operations_query_event("AUDIT_FAILED")
                     # 经营结果已经从 Gateway 返回，但没有形成完整审计事实。生产环境不
                     # 允许继续返回，以免出现“用户看到了数据、平台却无法追溯”的窗口。
                     _logger.error(
@@ -830,6 +883,8 @@ def build_operations_tool_definitions(
 
         result = await query_period(from_date=data.from_date, to_date=data.to_date, role="CURRENT")
         if data.comparison == "NONE":
+            if metrics is not None:
+                metrics.record_operations_query_event("SUCCEEDED")
             return build_operations_tool_result(result)
         if data.comparison == "PREVIOUS_PERIOD":
             previous_from, previous_to = _previous_period_bounds(result)
@@ -840,6 +895,8 @@ def build_operations_tool_definitions(
         previous = await query_period(
             from_date=previous_from, to_date=previous_to, role=comparison_role
         )
+        if metrics is not None:
+            metrics.record_operations_query_event("SUCCEEDED")
         return build_operations_comparison_tool_result(
             result,
             previous,

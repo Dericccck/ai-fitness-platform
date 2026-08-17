@@ -343,7 +343,9 @@ Operations 查询前策略评测样例位于 `evals/operations_policy_smoke.json
 Operations 查询还受服务端资源策略保护：单次时间范围最多 92 天、结果最多 100 行；当前周期加环比/同比最多触发两次
 Gateway 查询，每次调用受 `AGENT_OPERATIONS_QUERY_TIMEOUT_SECONDS` 超时约束。生产 API 按机构使用 Redis 固定窗口限制请求量，
 由 `AGENT_OPERATIONS_RATE_LIMIT_REQUESTS` 和 `AGENT_OPERATIONS_RATE_LIMIT_WINDOW_SECONDS` 配置；Redis 限流不可用时查询 fail-closed，
-避免把缓存故障转化为 MySQL 查询洪峰。上述限制只控制资源消耗，不替代 Java Gateway 的签名权限校验。
+避免把缓存故障转化为 MySQL 查询洪峰。Prometheus 会通过低基数 `operations_query_events_total{event=...}` 记录成功、限流、
+超时、调用预算超限、Gateway 失败和审计失败等固定事件，不记录机构 ID、请求 ID、SQL 或业务参数。上述限制和指标只用于控制和观测资源消耗，
+不替代 Java Gateway 的签名权限校验。
 
 短期会话摘要的确定性安全评测样例位于 `fitness-agent-service/evals/session_summary_samples.json`，阈值位于
 `fitness-agent-service/evals/session_summary_thresholds.json`。执行 `make agent-session-summary-eval` 会检查摘要 JSON、

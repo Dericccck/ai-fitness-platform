@@ -78,7 +78,8 @@ Agent 解释层会根据 `from`、`to` 和 `bucket` 补齐 Gateway 没有返回�
 Operations 查询在 Agent 服务侧还受资源策略约束：单次时间范围最多 92 天、最多返回 100 行；当前周期、环比或同比最多产生两次
 Gateway 调用，每次调用都有独立超时。生产环境按机构使用 Redis 固定窗口限流，限流计数器只保存不可逆机构摘要和次数，不保存
 经营参数或结果；Redis 不可用时 Agent fail-closed。该策略用于保护 Agent、Gateway 和 MySQL 的资源，不改变 Gateway 作为最终权限
-与数据范围裁决者的职责。
+与数据范围裁决者的职责。Agent 同时暴露低基数 `operations_query_events_total{event=...}` 指标，用于观察成功、限流、超时、
+Gateway 失败和审计失败等固定事件；指标不包含机构 ID、请求 ID、SQL 或业务结果。
 
 Agent 侧会把每次当前周期、上一等长周期或上一自然年同期查询追加写入 PostgreSQL 表 `agent_operations_query_audits`，用于管理员查询追溯。
 审计只保存签名主体、角色快照、机构、固定指标、时间桶、日期范围、聚合行数、状态和 request/trace ID，不保存 SQL、Prompt、

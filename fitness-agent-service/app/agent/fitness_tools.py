@@ -14,6 +14,7 @@ from typing import Any, cast
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.confirmation.normalization import ConfirmationPolicy
+from app.core.metrics import HttpMetrics
 from app.infrastructure.cache import Cache
 from app.infrastructure.gateway_client import GatewayClient
 from app.memory.service import MemoryService
@@ -675,6 +676,7 @@ def build_fitness_tool_registry(
     operations_rate_limit_requests: int = 60,
     operations_rate_limit_window_seconds: int = 60,
     operations_query_timeout_seconds: float | None = None,
+    operations_metrics: HttpMetrics | None = None,
 ) -> ToolRegistry:
     """创建进程级健身工具注册表。
 
@@ -1084,6 +1086,7 @@ def build_fitness_tool_registry(
         rate_limit_requests=operations_rate_limit_requests,
         rate_limit_window_seconds=operations_rate_limit_window_seconds,
         query_timeout_seconds=operations_query_timeout_seconds,
+        metrics=operations_metrics,
     )
     for definition in definitions:
         registry.register(definition)

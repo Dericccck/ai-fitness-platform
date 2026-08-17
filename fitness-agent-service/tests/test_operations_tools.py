@@ -2,6 +2,7 @@ import asyncio
 from datetime import date
 
 import pytest
+from prometheus_client import CollectorRegistry, generate_latest
 
 from app.agent.operations_tools import (
     OperationsMetricToolInput,
@@ -13,6 +14,7 @@ from app.agent.operations_tools import (
     get_operations_metric_definition,
 )
 from app.agent.tool_registry import ToolContext, ToolExecutionError, ToolRegistry
+from app.core.metrics import HttpMetrics
 from app.infrastructure.gateway_client import (
     GatewayOperationsMetric,
     GatewayOperationsMetricRow,
@@ -464,12 +466,19 @@ async def test_operations_tool_queries_same_period_last_year() -> None:
 async def test_operations_tool_rejects_rate_limited_organization_before_gateway() -> None:
     gateway = FakeOperationsGateway()
     cache = FakeRateLimitCache(allowed=False)
+    metrics = HttpMetrics.create(
+        service_name="fitness-agent-service",
+        service_version="test",
+        environment="test",
+        registry=CollectorRegistry(),
+    )
     registry = ToolRegistry()
     for definition in build_operations_tool_definitions(
         gateway,
         rate_limit_cache=cache,  # type: ignore[arg-type]
         rate_limit_requests=2,
         rate_limit_window_seconds=30,
+        metrics=metrics,
     ):
         registry.register(definition)
 
@@ -488,15 +497,23 @@ async def test_operations_tool_rejects_rate_limited_organization_before_gateway(
 
     assert gateway.calls == []
     assert cache.calls[0][1:] == (2, 30)
+    assert 'event="RATE_LIMITED"' in generate_latest(metrics.registry).decode()
 
 
 @pytest.mark.asyncio
 async def test_operations_tool_times_out_before_returning_gateway_result() -> None:
     gateway = SlowOperationsGateway()
+    metrics = HttpMetrics.create(
+        service_name="fitness-agent-service",
+        service_version="test",
+        environment="test",
+        registry=CollectorRegistry(),
+    )
     registry = ToolRegistry()
     for definition in build_operations_tool_definitions(
         gateway,
         query_timeout_seconds=0.001,
+        metrics=metrics,
     ):
         registry.register(definition)
 
@@ -514,6 +531,7 @@ async def test_operations_tool_times_out_before_returning_gateway_result() -> No
         )
 
     assert gateway.calls == []
+    assert 'event="GATEWAY_TIMEOUT"' in generate_latest(metrics.registry).decode()
 
 
 @pytest.mark.asyncio
