@@ -91,11 +91,13 @@ Operations 指标第一阶段只允许以下目录项：
 ```text
 APPOINTMENT_COUNT
 APPOINTMENT_STATUS_BREAKDOWN
+COMPLETED_CLASS_COUNT
 COURSE_APPOINTMENT_COUNT
 COACH_APPOINTMENT_COUNT
 REMAINING_CLASS_HOURS
 ```
 
+`COMPLETED_CLASS_COUNT` 统计 `deleted = 0` 且 `appointment.status = 6`（已完成/核销成功）的课程次数，按课程开始时间归属统计。
 经营指标只允许 `SYSTEM_ADMIN` 和 `ORGANIZATION_ADMIN` 访问，查询会绑定签名上下文中的机构范围，
 时间范围最多 92 天，单次最多返回 100 行。当前阶段不接受 SQL、表名或任意字段名；后续 Text-to-SQL
 也必须先映射到这个指标目录，并继续由 Java Gateway 执行固定 SQL。

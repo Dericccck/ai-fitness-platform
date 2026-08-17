@@ -132,6 +132,7 @@ async def list_operations_query_audits(
     metric: Literal[
         "APPOINTMENT_COUNT",
         "APPOINTMENT_STATUS_BREAKDOWN",
+        "COMPLETED_CLASS_COUNT",
         "COURSE_APPOINTMENT_COUNT",
         "COACH_APPOINTMENT_COUNT",
         "REMAINING_CLASS_HOURS",

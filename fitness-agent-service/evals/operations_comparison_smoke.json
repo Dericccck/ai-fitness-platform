@@ -137,6 +137,22 @@
     "expected_note_fragments": ["对比周期为 0"]
   },
   {
+    "case_id": "completed-class-increase",
+    "metric": "COMPLETED_CLASS_COUNT",
+    "current_from": "2026-08-01",
+    "current_to": "2026-08-15",
+    "previous_from": "2026-07-17",
+    "previous_to": "2026-07-31",
+    "current_values": [18],
+    "previous_values": [15],
+    "expected_current_total": 18,
+    "expected_previous_total": 15,
+    "expected_delta": 3,
+    "expected_direction": "UP",
+    "expected_change_percent": 20.0,
+    "expected_note_fragments": []
+  },
+  {
     "case_id": "year-over-year-leap-day-clamp",
     "comparison_type": "SAME_PERIOD_LAST_YEAR",
     "current_from": "2024-02-29",

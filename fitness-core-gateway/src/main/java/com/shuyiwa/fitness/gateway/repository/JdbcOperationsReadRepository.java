@@ -21,6 +21,9 @@ import java.util.List;
 @Repository
 public class JdbcOperationsReadRepository implements OperationsReadRepository {
 
+    /** 旧 appointment.status=6 表示核销成功，即业务上的“已完成/已完课”。 */
+    private static final int COMPLETED_APPOINTMENT_STATUS = 6;
+
     private final NamedParameterJdbcTemplate jdbcTemplate;
 
     public JdbcOperationsReadRepository(NamedParameterJdbcTemplate jdbcTemplate) {
@@ -55,7 +58,7 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
         if (bucket != OperationsTimeBucket.NONE) {
             if (!supportsTimeBucket(metric)) {
                 throw new IllegalArgumentException(
-                        "DAY/WEEK time buckets currently support appointment, course and coach metrics");
+                        "DAY/WEEK time buckets currently support appointment, completed class, course and coach metrics");
             }
             String bucketExpression = bucket == OperationsTimeBucket.DAY
                     ? "DATE_FORMAT(DATE(course_start_time), '%Y-%m-%d')"
@@ -65,6 +68,8 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
                     ? " AND course_id IS NOT NULL"
                     : metric == OperationsMetric.COACH_APPOINTMENT_COUNT
                     ? " AND coach_id IS NOT NULL"
+                    : metric == OperationsMetric.COMPLETED_CLASS_COUNT
+                    ? " AND status = " + COMPLETED_APPOINTMENT_STATUS
                     : "";
             // bucketExpression 和 metricFilter 都来自 Java 枚举分支，不能由用户或模型注入；
             // 实际机构和日期仍通过命名参数绑定，继续保留固定 SQL 的授权边界。
@@ -91,9 +96,17 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
                                 + "WHEN 3 THEN '改课中' WHEN 4 THEN '已完成' WHEN 5 THEN '已取消' "
                                 + "ELSE '其他状态' END AS label, COUNT(1) AS value "
                                 + "FROM appointment WHERE organization_id = :organizationId "
-                                + "AND deleted = 0 AND course_start_time >= :fromTime "
-                                + "AND course_start_time < :toTime GROUP BY status "
-                                + "ORDER BY value DESC, dimension ASC LIMIT :limit",
+                        + "AND deleted = 0 AND course_start_time >= :fromTime "
+                        + "AND course_start_time < :toTime GROUP BY status "
+                        + "ORDER BY value DESC, dimension ASC LIMIT :limit",
+                        parameters, this::mapRow);
+            case COMPLETED_CLASS_COUNT:
+                return jdbcTemplate.query(
+                        "SELECT 'TOTAL' AS dimension, '完课量' AS label, COUNT(1) AS value "
+                                + "FROM appointment WHERE organization_id = :organizationId "
+                                + "AND deleted = 0 AND status = " + COMPLETED_APPOINTMENT_STATUS
+                                + " AND course_start_time >= :fromTime "
+                                + "AND course_start_time < :toTime",
                         parameters, this::mapRow);
             case COURSE_APPOINTMENT_COUNT:
                 return jdbcTemplate.query(
@@ -137,6 +150,7 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
 
     private boolean supportsTimeBucket(OperationsMetric metric) {
         return metric == OperationsMetric.APPOINTMENT_COUNT
+                || metric == OperationsMetric.COMPLETED_CLASS_COUNT
                 || metric == OperationsMetric.COURSE_APPOINTMENT_COUNT
                 || metric == OperationsMetric.COACH_APPOINTMENT_COUNT;
     }

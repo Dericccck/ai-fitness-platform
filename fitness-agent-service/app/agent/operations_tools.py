@@ -35,6 +35,7 @@ _ADMIN_ROLES = frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN"})
 _METRICS = Literal[
     "APPOINTMENT_COUNT",
     "APPOINTMENT_STATUS_BREAKDOWN",
+    "COMPLETED_CLASS_COUNT",
     "COURSE_APPOINTMENT_COUNT",
     "COACH_APPOINTMENT_COUNT",
     "REMAINING_CLASS_HOURS",
@@ -99,6 +100,15 @@ OPERATIONS_METRIC_CATALOG: tuple[OperationsMetricDefinition, ...] = (
         frozenset({"NONE"}),
         False,
         False,
+    ),
+    OperationsMetricDefinition(
+        "COMPLETED_CLASS_COUNT",
+        "完课量",
+        "指定机构和时间范围内，预约状态为已完成的课程次数；不返回学员明细。",
+        "完课总量或按日期分组的完课次数。",
+        frozenset({"NONE", "DAY", "WEEK"}),
+        True,
+        True,
     ),
     OperationsMetricDefinition(
         "COURSE_APPOINTMENT_COUNT",
@@ -228,7 +238,7 @@ def operations_metric_catalog_prompt() -> str:
     return (
         "当前可查询的固定经营指标包括："
         + entries
-        + "。预约总量、课程预约量和教练预约量支持按日/周趋势、上一等长周期环比及上一自然年同期同比；"
+        + "。预约总量、完课量、课程预约量和教练预约量支持按日/周趋势、上一等长周期环比及上一自然年同期同比；"
         + "预约状态分布和课程剩余课时当前只支持汇总查询，不自动执行环比或同比。"
     )
 
@@ -437,6 +447,7 @@ def parse_operations_intent(
     text = user_message.lower()
     metric_terms: list[tuple[_METRICS, tuple[str, ...]]] = [
         ("APPOINTMENT_STATUS_BREAKDOWN", ("预约状态", "预约成功率", "取消率", "完成率")),
+        ("COMPLETED_CLASS_COUNT", ("完课量", "完课数", "完成课程量", "已完成课程")),
         ("REMAINING_CLASS_HOURS", ("剩余课时", "课时余额", "剩余课")),
         ("COURSE_APPOINTMENT_COUNT", ("课程预约量", "课程预约", "课程利用", "课程使用")),
         ("COACH_APPOINTMENT_COUNT", ("教练预约量", "教练预约", "教练表现", "教练工作量")),

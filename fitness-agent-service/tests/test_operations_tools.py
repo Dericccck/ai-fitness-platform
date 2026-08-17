@@ -67,6 +67,7 @@ def test_operations_input_allows_comparison_for_course_and_coach_metrics() -> No
 def test_operations_input_allows_year_over_year_for_count_metrics() -> None:
     for metric in (
         "APPOINTMENT_COUNT",
+        "COMPLETED_CLASS_COUNT",
         "COURSE_APPOINTMENT_COUNT",
         "COACH_APPOINTMENT_COUNT",
     ):

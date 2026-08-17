@@ -58,12 +58,15 @@ claim。Agent 服务会 fail-closed，因此这一外部依赖未落地时专业
 学生只能读取本人数据；教练读取其他学员时必须存在有效的机构教练关系；机构管理员只能读取签名上下文授权的机构范围。所有列表默认最多 20 条，单次最多 100 条；预约时间范围最多 92 天。
 
 经营指标只允许 `SYSTEM_ADMIN` 和 `ORGANIZATION_ADMIN`，不向教练和学员开放。第一阶段的 `metric` 必须是固定目录中的指标 ID：
-`APPOINTMENT_COUNT`、`APPOINTMENT_STATUS_BREAKDOWN`、`COURSE_APPOINTMENT_COUNT`、
+`APPOINTMENT_COUNT`、`APPOINTMENT_STATUS_BREAKDOWN`、`COMPLETED_CLASS_COUNT`、`COURSE_APPOINTMENT_COUNT`、
 `COACH_APPOINTMENT_COUNT`、`REMAINING_CLASS_HOURS`。Gateway 执行固定 SQL 并强制绑定机构和时间范围，
 不接受 SQL、表名或任意字段名；这条边界是后续受控 Text-to-SQL 的前置条件。
 
+`COMPLETED_CLASS_COUNT` 的口径是：在指定机构和课程开始时间范围内，`appointment.deleted = 0` 且旧业务
+`appointment.status = 6`（已完成/核销成功）的预约记录数量。它统计课程次数，不统计去重学员数，也不把预约成功、待核销或核销失败计入完课量。
+
 `bucket` 只允许 `NONE`、`DAY`、`WEEK`。省略时默认为 `NONE`，返回整个时间范围的聚合；当前
-`DAY`/`WEEK` 仅允许指标 `APPOINTMENT_COUNT`、`COURSE_APPOINTMENT_COUNT` 和 `COACH_APPOINTMENT_COUNT`，返回按业务时区（`Asia/Shanghai`）
+`DAY`/`WEEK` 仅允许指标 `APPOINTMENT_COUNT`、`COMPLETED_CLASS_COUNT`、`COURSE_APPOINTMENT_COUNT` 和 `COACH_APPOINTMENT_COUNT`，返回按业务时区（`Asia/Shanghai`）
 分组的预约量，
 其中 `dimension` 和 `label` 为时间桶起始日期；`COURSE_APPOINTMENT_COUNT` 只统计有课程 ID 的预约，
 `COACH_APPOINTMENT_COUNT` 只统计有教练 ID 的预约。时间桶仍由 Gateway 执行固定 SQL，不接受任意分组字段。
@@ -73,7 +76,7 @@ Agent 解释层会根据 `from`、`to` 和 `bucket` 补齐 Gateway 没有返回�
 环比由 Agent 在同一固定指标下发起当前周期和上一等长周期两次只读查询后计算；`PREVIOUS_PERIOD`
 只表示上一等长周期，不等同于同比。同比使用 `SAME_PERIOD_LAST_YEAR`，按相同月日映射到上一自然年；
 2 月 29 日在非闰年映射为 2 月 28 日，实际日期范围会写入审计。当前环比和同比开放
-`APPOINTMENT_COUNT`、`COURSE_APPOINTMENT_COUNT` 和 `COACH_APPOINTMENT_COUNT`，对比周期为 0 时只返回差值，不生成无意义的百分比。
+`APPOINTMENT_COUNT`、`COMPLETED_CLASS_COUNT`、`COURSE_APPOINTMENT_COUNT` 和 `COACH_APPOINTMENT_COUNT`，对比周期为 0 时只返回差值，不生成无意义的百分比。
 
 Operations 查询在 Agent 服务侧还受资源策略约束：单次时间范围最多 92 天、最多返回 100 行；当前周期、环比或同比最多产生两次
 Gateway 调用，每次调用都有独立超时。生产环境按机构使用 Redis 固定窗口限流，限流计数器只保存不可逆机构摘要和次数，不保存

@@ -78,6 +78,27 @@ public class OperationsToolServiceTest {
     }
 
     @Test
+    public void organizationAdminCanRequestCompletedClassTrend() {
+        when(repository.query(
+                "org-1", OperationsMetric.COMPLETED_CLASS_COUNT, OperationsTimeBucket.WEEK,
+                Instant.parse("2026-08-02T16:00:00Z"), Instant.parse("2026-08-16T16:00:00Z"), 20
+        )).thenReturn(Arrays.asList(
+                new OperationsMetricRow("2026-08-03", "2026-08-03", 7),
+                new OperationsMetricRow("2026-08-10", "2026-08-10", 9)
+        ));
+
+        OperationsViews.MetricView result = service.metric(
+                context(AgentContext.ROLE_ORGANIZATION_ADMIN), "org-1", "COMPLETED_CLASS_COUNT",
+                LocalDate.of(2026, 8, 3), LocalDate.of(2026, 8, 16), 20, "WEEK"
+        );
+
+        assertEquals("COMPLETED_CLASS_COUNT", result.getMetric());
+        assertEquals("WEEK", result.getBucket());
+        assertEquals(2, result.getRows().size());
+        assertEquals(9L, result.getRows().get(1).getValue());
+    }
+
+    @Test
     public void organizationAdminCanRequestDailyCourseTrend() {
         when(repository.query(
                 "org-1", OperationsMetric.COURSE_APPOINTMENT_COUNT, OperationsTimeBucket.DAY,
