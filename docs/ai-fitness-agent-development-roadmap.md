@@ -1262,6 +1262,8 @@ Memory 脱敏评测。
    已完成 Operations Agent 的 Supervisor 端到端联调：经营自然语言请求会先命中 `OPERATIONS` 路由提示，模型只能选择固定指标工具，
    再经过 Tool Registry 的角色与参数校验、查询前策略校验后调用 Java Gateway；真实聚合结果写入不含 SQL、Prompt 和明细的审计元数据，
    最终由模型生成结果摘要。集成测试已覆盖管理员成功查询、指标/日期/时间桶传递、审计字段完整性，以及学员在到达 Gateway 前被拒绝的越权场景。
+   已增加显式提供签名组织管理员 AgentContext 才能执行的真实 HTTP 冒烟联调脚本，验证 Agent API、DeepSeek、PostgreSQL/Redis 会话运行时、
+   Java Gateway 和业务数据库的真实连接；脚本不伪造身份、不直连业务库、不输出 Token 或完整响应，失败时只输出 request_id 供结构化日志定位。
    Operations 第一阶段的固定指标和核心权限闭环已完成，后续继续建设更多指标的受控时间桶、
    组织范围和资源限制基础上的自然语言指标解析、
    SQL 生成前校验和趋势结果解释，

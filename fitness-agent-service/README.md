@@ -174,6 +174,21 @@ Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry 已包�
 内部联调过渡通道，接口拒绝额外的用户/组织/角色字段；浏览器和模型不应接触该 Token。当前先提供
 非流式稳定协议；SSE 和更完整的断线/重启故障演练将在 v2 凭证边界完成后接入。
 
+Operations 真实服务冒烟联调使用仓库根目录的 `make agent-operations-live-check`。执行前必须
+启动 Agent API 和 Java Gateway，并把认证服务签发的组织管理员 `AgentContext` 临时放入
+`AGENT_LIVE_AGENT_CONTEXT` 环境变量：
+
+```bash
+export AGENT_LIVE_AGENT_CONTEXT='<认证服务签发的短时 Token>'
+make agent-operations-live-check
+```
+
+脚本默认请求“2026-08-01 至 2026-08-15 的营收金额按周趋势”，验证真实请求进入
+`OPERATIONS` 路由、至少完成一次固定指标工具调用并返回结果；它不会伪造身份、直接连接 MySQL，
+也不会输出 AgentContext 或完整响应正文。可通过 `AGENT_LIVE_API_URL`、`AGENT_LIVE_MESSAGE`
+和 `AGENT_LIVE_TIMEOUT_SECONDS` 调整地址、问题和超时时间。该检查必须使用组织管理员上下文，
+学员或教练 Token 应通过权限负例测试验证被拒绝，而不是用来冒充经营查询成功。
+
 确认单接口为 `GET /api/v1/agent/confirmations/{confirmation_id}` 和
 `POST /api/v1/agent/confirmations/{confirmation_id}/decisions`。决定请求只提交
 `APPROVE`/`REJECT` 与独立 `decision_request_id`；身份、组织和角色仍从签名 AgentContext 获取。
