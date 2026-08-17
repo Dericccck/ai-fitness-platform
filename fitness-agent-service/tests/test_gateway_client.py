@@ -1,3 +1,5 @@
+from datetime import date
+
 import httpx
 import pytest
 
@@ -6,6 +8,8 @@ from app.infrastructure.gateway_client import (
     GatewayAuthenticationError,
     GatewayClient,
     GatewayForbiddenError,
+    GatewayOperationsMetric,
+    GatewayProtocolError,
     GatewayRequestContext,
     GatewayUnavailableError,
     GatewayUser,
@@ -121,3 +125,75 @@ async def test_client_maps_exhausted_transient_failure() -> None:
         client = GatewayClient(build_settings(gateway_max_retries=1), http_client)
         with pytest.raises(GatewayUnavailableError):
             await client.get_current_user(context())
+
+
+async def test_client_queries_operations_metric_with_versioned_http_contract() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "GET"
+        assert request.url.path == "/internal/agent-tools/v1/operations/metrics"
+        assert request.headers["X-Internal-Service-Token"] == "service-token"
+        assert request.headers["X-Agent-Context"] == "signed-context"
+        assert request.headers["X-Request-ID"] == "request-123"
+        assert request.headers["X-Trace-ID"] == "trace-456"
+        assert request.url.params["organizationId"] == "org-1"
+        assert request.url.params["metric"] == "REVENUE_AMOUNT"
+        assert request.url.params["from"] == "2026-08-01"
+        assert request.url.params["to"] == "2026-08-15"
+        assert request.url.params["limit"] == "20"
+        assert request.url.params["bucket"] == "WEEK"
+        return httpx.Response(
+            200,
+            json={
+                "metric": "REVENUE_AMOUNT",
+                "bucket": "WEEK",
+                "organizationId": "org-1",
+                "from": "2026-08-01",
+                "to": "2026-08-15",
+                "rows": [
+                    {"dimension": "2026-08-03", "label": "2026-08-03", "value": 12000},
+                    {"dimension": "2026-08-10", "label": "2026-08-10", "value": 18000},
+                ],
+                "generatedAt": "2026-08-15T10:00:00Z",
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://gateway.test"
+    ) as http_client:
+        client = GatewayClient(build_settings(), http_client)
+        result = await client.query_operations_metric(
+            context(),
+            "org-1",
+            "REVENUE_AMOUNT",
+            from_date=date(2026, 8, 1),
+            to_date=date(2026, 8, 15),
+            limit=20,
+            bucket="WEEK",
+        )
+
+    assert isinstance(result, GatewayOperationsMetric)
+    assert result.organization_id == "org-1"
+    assert [row.value for row in result.rows] == [12000, 18000]
+
+
+async def test_client_rejects_malformed_operations_metric_response() -> None:
+    async def handler(_: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "metric": "REVENUE_AMOUNT",
+                "bucket": "WEEK",
+                "organizationId": "org-1",
+                "from": "2026-08-01",
+                "to": "2026-08-15",
+                "rows": [{"dimension": "2026-08-03", "label": "2026-08-03", "value": 12000}],
+                # generatedAt 缺失，说明 Java Gateway 版本化 Tool View 契约不完整。
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://gateway.test"
+    ) as http_client:
+        client = GatewayClient(build_settings(), http_client)
+        with pytest.raises(GatewayProtocolError):
+            await client.query_operations_metric(context(), "org-1", "REVENUE_AMOUNT")

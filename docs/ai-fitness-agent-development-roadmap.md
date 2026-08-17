@@ -1264,6 +1264,8 @@ Memory 脱敏评测。
    最终由模型生成结果摘要。集成测试已覆盖管理员成功查询、指标/日期/时间桶传递、审计字段完整性，以及学员在到达 Gateway 前被拒绝的越权场景。
    已增加显式提供签名组织管理员 AgentContext 才能执行的真实 HTTP 冒烟联调脚本，验证 Agent API、DeepSeek、PostgreSQL/Redis 会话运行时、
    Java Gateway 和业务数据库的真实连接；脚本不伪造身份、不直连业务库、不输出 Token 或完整响应，失败时只输出 request_id 供结构化日志定位。
+   已增加 Python→Java Gateway 的 Operations HTTP 契约回归，校验双层认证 Header、固定指标查询参数和版本化 Tool View 响应；缺少必需字段时
+   在进入结果解释前 fail-closed，避免模型基于不完整业务事实生成报表。
    Operations 第一阶段的固定指标和核心权限闭环已完成，后续继续建设更多指标的受控时间桶、
    组织范围和资源限制基础上的自然语言指标解析、
    SQL 生成前校验和趋势结果解释，

@@ -149,6 +149,9 @@ Python 版本固定为 3.11，`uv.lock` 是依赖事实源；CI 和本地均使�
 每次业务请求还必须由认证服务提供签名的 `GatewayRequestContext`；Client 对 408、429、5xx
 和连接超时做有限指数退避，对 401、403、404 和参数错误不重试。完整 HTTP 契约见
 `docs/contracts/fitness-core-gateway-v1.md`。
+Operations 指标还通过 HTTP 契约回归测试固定路径、组织/指标/日期/时间桶参数、双层认证 Header
+和 `GatewayOperationsMetric` 响应字段；缺少 `generatedAt` 等版本化字段时会 fail-closed，
+不会把不完整结果交给模型。
 
 DeepSeek 配置使用 `DEEPSEEK_API_KEY`、`DEEPSEEK_MODEL` 和 `DEEPSEEK_BASE_URL`；默认模型为
 `deepseek-v4-flash`，默认关闭 thinking，以保持工具调用参数和结构化响应稳定。旧的
