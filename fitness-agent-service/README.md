@@ -186,6 +186,10 @@ export AGENT_LIVE_AGENT_CONTEXT='<认证服务签发的短时 Token>'
 make agent-operations-live-check
 ```
 
+该命令会先执行 `agent-operations-live-preflight`：检查 Agent/Gateway 存活探针、Agent
+PostgreSQL/Redis/模型/Gateway readiness，以及管理员上下文是否存在；前置检查失败时不会
+调用 DeepSeek 或业务指标接口。
+
 脚本默认请求“2026-08-01 至 2026-08-15 的营收金额按周趋势”，验证真实请求进入
 `OPERATIONS` 路由、至少完成一次固定指标工具调用并返回结果；它不会伪造身份、直接连接 MySQL，
 也不会输出 AgentContext 或完整响应正文。可通过 `AGENT_LIVE_API_URL`、`AGENT_LIVE_MESSAGE`
