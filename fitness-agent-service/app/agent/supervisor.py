@@ -372,6 +372,18 @@ class Supervisor:
                 error_type=type(exc).__name__,
             )
             raise SupervisorRuntimeError("supervisor execution failed") from exc
+        except SupervisorRuntimeError as exc:
+            # 一些运行时护栏（例如模型工具调用超预算、确认运行上下文不完整或
+            # 业务查询准备失败）本身不会落入上面的底层异常集合。若不在这里记录，
+            # API 仍会返回 503，但服务端没有 request_id 对应的根因，现场只能反复
+            # 猜测。这里只记录稳定类型和链路标识，不记录 Prompt、工具参数或 Token。
+            _logger.exception(
+                "supervisor_execution_failed",
+                request_id=request.gateway_context.request_id,
+                trace_id=request.gateway_context.trace_id,
+                error_type=type(exc).__name__,
+            )
+            raise
 
         interrupts = final_state.get("__interrupt__", [])
         if interrupts:
@@ -460,7 +472,23 @@ class Supervisor:
             ModelResponseError,
             ToolRegistryError,
         ) as exc:
+            _logger.exception(
+                "confirmation_execution_failed",
+                request_id=gateway_context.request_id,
+                trace_id=gateway_context.trace_id,
+                error_type=type(exc).__name__,
+            )
             raise SupervisorRuntimeError("confirmation execution failed") from exc
+        except SupervisorRuntimeError as exc:
+            # 恢复路径同样可能触发运行时护栏；否则确认接口会返回 503，却缺少可关联
+            # 的服务端错误记录。确认 ID 不写入日志，避免把业务凭证标识扩散到普通日志。
+            _logger.exception(
+                "confirmation_execution_failed",
+                request_id=gateway_context.request_id,
+                trace_id=gateway_context.trace_id,
+                error_type=type(exc).__name__,
+            )
+            raise
         response = self._response_from_state(final_state)
         await self._persist_session_summary(
             final_state,

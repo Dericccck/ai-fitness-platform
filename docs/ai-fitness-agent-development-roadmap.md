@@ -1323,10 +1323,12 @@ Memory 脱敏评测。
   Gateway 结果和数据库事实作为验收证据。
 - 2026-08-22 已使用本地 `fitness-mysql` 的真实机构/学员/合同/课程/教练关系执行 Booking dry-run；Agent、
   PostgreSQL、Redis、模型配置和 Gateway 存活/就绪检查均通过，但业务请求返回 HTTP 503，未创建预约、未扣课时。
-  已在 Supervisor 统一 503 边界增加脱敏 `error_type` 结构化日志；待下一次联调根据 request_id 定位模型、工具解析、
-  Gateway 或权限根因后，才能把 Booking 真实联调标记为完成。
+  已在 Supervisor 统一 503 边界增加脱敏 `error_type` 结构化日志，并覆盖通用运行时护栏和确认恢复路径；待下一次联调
+  根据 request_id 定位模型、工具解析、Gateway 或权限根因后，才能把 Booking 真实联调标记为完成。
 - Gateway 质量门禁同时发现预约可用性单元测试依赖已经过去的固定日期；已为 `FitnessToolService` 注入生产系统时钟和
   测试固定时钟，保持生产行为不变，避免日期推进后测试误报失败。
+- 已为 Booking/Fitness 真实联调脚本补齐离线协议测试：默认流程会生成确认单、读取 `PENDING`、自动提交 `REJECT`
+  并确认清理结果；显式 `--execute` 才会提交 `APPROVE`，随后轮询 `execution_status=SUCCEEDED`，不会把仅批准当成业务写入成功。
 
 完成上述验收后，按以下顺序继续：
 
