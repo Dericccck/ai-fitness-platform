@@ -4,7 +4,7 @@ AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-operations-live-preflight agent-operations-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run training-check training-run booking-check booking-it booking-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run training-check training-run booking-check booking-it booking-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
@@ -26,6 +26,9 @@ help:
 	@echo "  agent-operations-policy-eval Run deterministic Operations query policy gates"
 	@echo "  agent-operations-live-preflight Check Agent/Gateway readiness before real smoke test"
 	@echo "  agent-operations-live-check Run the opt-in real DeepSeek/Java Gateway Operations smoke check"
+	@echo "  agent-business-live-preflight Check Agent/Gateway readiness before Booking/Fitness live checks"
+	@echo "  agent-booking-live-check Check Booking confirmation flow; --execute enables real appointment write"
+	@echo "  agent-fitness-live-check Check Fitness draft confirmation flow; --execute enables real draft write"
 	@echo "  agent-dev-context Sign a 5-minute local-only organization admin AgentContext"
 	@echo "  agent-session-summary-eval Run deterministic session summary security gates"
 	@echo "  agent-run    Start the Agent API locally"
@@ -139,6 +142,16 @@ agent-operations-live-preflight:
 
 agent-operations-live-check: agent-operations-live-preflight
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/operations_live_check.py
+
+agent-business-live-preflight:
+	@test -n "$$AGENT_LIVE_AGENT_CONTEXT" || (echo "请先设置 AGENT_LIVE_AGENT_CONTEXT（认证服务签发的组织管理员 Token）"; exit 1)
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/operations_live_preflight.py
+
+agent-booking-live-check: agent-business-live-preflight
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/booking_live_check.py $(ARGS)
+
+agent-fitness-live-check: agent-business-live-preflight
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/fitness_live_check.py $(ARGS)
 
 agent-reindex-worker:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.reindex_worker_main

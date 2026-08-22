@@ -1242,7 +1242,7 @@ Memory 脱敏评测。
 5. **Booking Agent（已完成）**：实现预约、改约、取消预约，复用阶段 2 的 interrupt/确认凭证协议，并完成幂等、
    事务、审计、Outbox、真实 MySQL 集成测试和管理员/教练/学员权限边界。当前验证复用本地 `fitness-mysql`，生产仍需
    独立测试库、迁移 Job 和部署级故障演练。
-6. **Operations Agent 与受控 Text-to-SQL（进行中）**：已完成固定指标目录、管理员权限边界、常见中文问题的指标/日期提示、
+6. **Operations Agent 与受控 Text-to-SQL（第一阶段已完成，后续扩展）**：已完成固定指标目录、管理员权限边界、常见中文问题的指标/日期提示、
    歧义澄清、不含明细的查询元数据审计、基于真实聚合结果的报表摘要和异常提示，以及预约总量的 DAY/WEEK 时间桶查询；
    当前周期、环比上一周期和同比上一自然年同期已分别持久化到 PostgreSQL `agent_operations_query_audits`，只保存主体/角色快照、机构、固定指标、
    时间范围、聚合行数、状态和请求链路，不保存 SQL、Prompt、明细或模型输出；生产工具在审计写入失败时 fail-closed；
@@ -1306,3 +1306,31 @@ Memory 脱敏评测。
 
 后续开发不得跳过 Tool Gateway 和权限层，直接从对话 Prompt 开始拼装业务 Agent；RAG
 内容也不能替代预约、合同、课时和训练日完成状态等 Java 业务事实。
+
+### 17.1 2026-08-22 状态校正与当前执行步骤
+
+本节用于覆盖前文已经过时的“进行中”描述，作为当前开发顺序的唯一依据：
+
+- Operations Agent 第一阶段已经完成真实联调，验证了 DeepSeek、Agent Runtime、PostgreSQL/Redis、
+  Tool Registry、Java Gateway、MySQL 和审计链路；后续指标扩展不作为当前开发前置条件。
+- 训练计划生成代码已经实际组合已发布 RAG 与已确认 Memory，并返回结构化 `DRAFT_PREVIEW`；目前缺少的
+  不是生成代码，而是使用真实 AgentContext 对 Booking、Fitness 和 Memory 进行可重复的 HTTP 全链路验收。
+- 已新增 `scripts/business_live_check_support.py`、`scripts/booking_live_check.py` 和
+  `scripts/fitness_live_check.py`。脚本默认只检查路由、写操作确认单和状态边界，不执行真实写入；只有显式
+  `--execute` 或 `AGENT_LIVE_EXECUTE_WRITES=1` 才批准并执行，避免联调误创建预约或训练计划。
+- 当前唯一进行中的步骤是“核心业务真实联调验收”：先验证 Booking 的预约/改约/取消确认闭环，再验证
+  Fitness 的 RAG/Memory→训练计划草案→确认→训练服务写入闭环；每一步都要保留 request_id、确认单状态、
+  Gateway 结果和数据库事实作为验收证据。
+
+完成上述验收后，按以下顺序继续：
+
+1. 认证服务接入和 AgentContext/确认凭证的非对称签名、密钥轮换及故障演练。
+2. Proactive Agent 第一版，只使用现有 Outbox/事件和 `IN_APP` 站内通知，实现预约、训练和审核待办提醒；
+   暂不接入短信、Push，也不为 Memory 增加模拟短信。
+3. 三角色最小前端：学员执行训练和确认 Memory，教练审核发布计划，管理员查看 Operations、知识库和审计。
+4. 精简 Customer Service Agent：健身问答、业务查询、工单和人工转接；退款、医疗和争议问题必须人工处理。
+5. 评测、压测、故障恢复、备份恢复、监控告警、灰度发布和回滚。
+6. 最后处理复杂 PDF、OCR、表格、图片动作标注和知识库重建；语音能力作为可选扩展，不阻塞核心项目交付。
+
+本阶段继续遵守以下范围约束：忽略赛事、作品和活动运营遗留模块；不建设身体测量、疼痛/疲劳量表、阶段性
+自动调参等暂不需要的复杂训练业务；不把任意 Text-to-SQL、短信、Push 或语音作为当前阶段的完成条件。
