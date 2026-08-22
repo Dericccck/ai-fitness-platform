@@ -104,6 +104,22 @@ openssl rand -hex 32
 `/health/live` 只检查进程，`/health/ready` 检查 PostgreSQL、Redis 和三个模型能力是否均已配置并可用。
 没有配置真实模型凭证时服务不会伪装成 ready。
 
+本地 Operations 真实联调身份
+
+当前仓库尚未接入独立认证服务，因此本地联调可以使用受保护的开发签发器生成一个
+5 分钟有效的组织管理员 `AgentContext`。该脚本只在显式开启本地开关时运行，固定角色为
+`ORGANIZATION_ADMIN`，不会作为生产接口部署，也不会打印签名密钥：
+
+```bash
+export DEV_AGENT_ORG_ID='<本地 MySQL 中真实存在的机构 ID>'
+export AGENT_LIVE_AGENT_CONTEXT="$(make agent-dev-context)"
+make agent-operations-live-preflight
+```
+
+`agent-dev-context` 会从 `fitness-agent-service/.env` 读取
+`GATEWAY_CONTEXT_SIGNING_SECRET`，因此 Agent 和 Gateway 必须使用同一份密钥。Token 只应
+保存在当前终端的环境变量中，过期后重新签发；正式环境必须由认证服务签发，不能使用这个脚本。
+
 常用质量检查：
 
 ```bash

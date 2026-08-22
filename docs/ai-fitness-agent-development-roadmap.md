@@ -249,6 +249,11 @@ AgentContext 必须由 Java 后端根据已认证用户生成并签名，至少�
 
 模型输出、前端参数和自然语言中的用户 ID、组织 ID、教练 ID都不可信。工具执行时必须从已验证的 AgentContext 获取主体和租户范围。
 
+当前仓库尚未接入独立认证服务，因此本地真实联调增加了受保护的开发签发器：必须显式开启
+`FITNESS_DEV_CONTEXT_ISSUER=1`，固定签发 `ORGANIZATION_ADMIN`，有效期最多 5 分钟，使用真实
+机构 ID，并从本地环境读取与 Gateway 共享的 Context 签名密钥。该签发器只输出一次性测试 Token，
+不提供生产 HTTP 接口，也不能替代正式认证服务；生产环境必须由认证服务根据登录会话和权限事实源签发。
+
 ### 7.2 Tool Gateway
 
 Java 后端统一提供 `/internal/agent-tools/**` 内部接口，并采用服务间认证。工具分为：
