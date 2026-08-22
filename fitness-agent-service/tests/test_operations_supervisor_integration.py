@@ -35,6 +35,9 @@ class FakeOperationsModels:
         if self.turn_index == 0:
             assert any("当前路由=OPERATIONS" in str(message.get("content")) for message in messages)
             assert any("REVENUE_AMOUNT" in str(tool) for tool in tools)
+            assert [tool["function"]["name"] for tool in tools] == [
+                "fitness_operations_metric_query_v1"
+            ]
             self.turn_index += 1
             return ModelTurn(
                 content="",

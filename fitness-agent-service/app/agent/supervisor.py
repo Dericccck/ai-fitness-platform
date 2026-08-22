@@ -21,7 +21,11 @@ from app.confirmation.models import ConfirmationStateError
 from app.confirmation.service import ConfirmationService
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.cache import SessionLockManager, SessionLockUnavailable
-from app.infrastructure.gateway_client import GatewayRequestContext, GatewayUnavailableError
+from app.infrastructure.gateway_client import (
+    GatewayClientError,
+    GatewayRequestContext,
+    GatewayUnavailableError,
+)
 from app.infrastructure.model_gateway import (
     ModelConfigurationError,
     ModelGateway,
@@ -58,6 +62,13 @@ SupervisorRoute = Literal[
 ]
 SupervisorRunStatus = Literal["COMPLETED", "CONFIRMATION_REQUIRED"]
 _logger = structlog.get_logger("agent.supervisor")
+
+# 路由级工具白名单是模型可见能力边界，不替代 ToolRegistry 和 Java Gateway 的最终
+# 权限校验。尤其是 Operations 只允许固定经营指标工具，避免模型先调用用户资料、
+# 课程或预约工具，把无关的资源不存在错误带入经营分析链路。
+_ROUTE_TOOL_ALLOWLIST: dict[SupervisorRoute, frozenset[str]] = {
+    "OPERATIONS": frozenset({"fitness.operations.metric.query.v1"}),
+}
 
 
 class SupervisorRuntimeError(RuntimeError):
@@ -340,7 +351,12 @@ class Supervisor:
                     final_state = await run_with_persisted_history()
         except SessionLockUnavailable as exc:
             raise SupervisorSessionBusy("conversation is already being processed") from exc
-        except (ModelConfigurationError, ModelResponseError, ToolRegistryError) as exc:
+        except (
+            GatewayClientError,
+            ModelConfigurationError,
+            ModelResponseError,
+            ToolRegistryError,
+        ) as exc:
             raise SupervisorRuntimeError("supervisor execution failed") from exc
 
         interrupts = final_state.get("__interrupt__", [])
@@ -425,6 +441,7 @@ class Supervisor:
             raise SupervisorSessionBusy("conversation is already being processed") from exc
         except (
             ConfirmationStateError,
+            GatewayClientError,
             ModelConfigurationError,
             ModelResponseError,
             ToolRegistryError,
@@ -520,7 +537,9 @@ class Supervisor:
         if state.get("pending_confirmation_id"):
             return {"model_tool_calls": []}
         tool_schemas = (
-            _model_tools(self.tools) if state.get("tool_steps", 0) < self.max_tool_steps else []
+            _model_tools(self.tools, state["route"])
+            if state.get("tool_steps", 0) < self.max_tool_steps
+            else []
         )
         turn = await self.models.chat_with_tools(
             state["messages"],
@@ -767,7 +786,8 @@ def _system_prompt(route: SupervisorRoute, locale: str) -> str:
     )
 
 
-def _model_tools(registry: ToolRegistry) -> list[dict[str, Any]]:
+def _model_tools(registry: ToolRegistry, route: SupervisorRoute) -> list[dict[str, Any]]:
+    allowed_tool_ids = _ROUTE_TOOL_ALLOWLIST.get(route)
     return [
         {
             "type": "function",
@@ -780,6 +800,7 @@ def _model_tools(registry: ToolRegistry) -> list[dict[str, Any]]:
             },
         }
         for spec in registry.public_specs()
+        if allowed_tool_ids is None or spec["name"] in allowed_tool_ids
     ]
 
 
