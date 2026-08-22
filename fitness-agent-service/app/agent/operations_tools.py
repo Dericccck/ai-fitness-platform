@@ -69,6 +69,10 @@ class OperationsQueryPolicyDecision:
     message: str
 
 
+class OperationsQueryPreparationError(ValueError):
+    """经营问题无法在已签名组织范围内形成唯一、确定的工具参数。"""
+
+
 @dataclass(frozen=True)
 class OperationsMetricDefinition:
     """固定经营指标的业务口径和可用能力。"""
@@ -543,7 +547,8 @@ def operations_prompt_hint(user_message: str) -> str:
         + hint.to_date.isoformat()
         + bucket_note
         + comparison_note
-        + "。该提示不代表已授权，不能改写为 SQL；工具参数仍须严格使用指标白名单。"
+        + "。该提示不代表已授权，不能改写为 SQL。模型只需调用空参数经营工具；"
+        + "机构、指标、日期、时间桶和对比口径由服务端根据签名身份及用户原问题生成。"
         + "工具返回的 report 是程序根据真实聚合结果计算的摘要；回答时优先引用 report，"
         + "只能陈述返回数据，不得把集中度提示说成因果结论。当前没有日/周时间桶时，"
         + "不得声称趋势增长或下降。"
@@ -629,6 +634,46 @@ class OperationsMetricToolInput(BaseModel):
             comparison_role=(self.comparison if self.comparison != "NONE" else None),
         )
         return self
+
+
+def build_authorized_operations_tool_input(
+    user_message: str,
+    *,
+    allowed_organization_ids: frozenset[str],
+) -> dict[str, object]:
+    """根据用户原问题和签名身份生成唯一的经营工具参数。
+
+    Operations 的指标、日期、时间桶和组织范围都属于受控查询条件，不应由模型
+    自由填写。模型只负责表达“需要调用固定经营指标工具”；真正执行前由这里重新
+    解析用户原问题，并从已验证 AgentContext 中取得唯一机构。这样既避免模型猜测
+    内部机构 ID，也防止模型通过工具参数扩大日期、切换指标或跨组织查询。
+
+    当前对话协议不接收可替代权限判断的 organization_id，因此多机构上下文无法
+    唯一选定机构时必须停止并要求上游先切换机构，不能擅自选择第一个机构。
+    """
+
+    if len(allowed_organization_ids) != 1:
+        raise OperationsQueryPreparationError(
+            "operations query requires exactly one signed organization scope"
+        )
+    hint = parse_operations_intent(user_message)
+    if hint is None:
+        raise OperationsQueryPreparationError(
+            "operations query requires an unambiguous metric and time range"
+        )
+    organization_id = next(iter(allowed_organization_ids))
+    query = OperationsMetricToolInput.model_validate(
+        {
+            "organization_id": organization_id,
+            "metric": hint.metric,
+            "from": hint.from_date,
+            "to": hint.to_date,
+            "limit": 20,
+            "bucket": hint.bucket,
+            "comparison": hint.comparison,
+        }
+    )
+    return cast(dict[str, object], query.model_dump(mode="json", by_alias=True))
 
 
 def validate_operations_query_policy(
@@ -940,7 +985,8 @@ def build_operations_tool_definitions(
         ToolDefinition(
             tool_id="fitness.operations.metric.query.v1",
             description=(
-                "查询机构经营指标，如预约量、预约状态、课程预约量、教练预约量和剩余课时；"
+                "查询机构固定经营指标，包括预约总量、预约状态、完课量、新客量、营收金额、"
+                "课程预约量、教练预约量和剩余课时；"
                 "只允许管理员，查询结果来自 Java Gateway 固定只读指标目录。"
             ),
             input_model=OperationsMetricToolInput,

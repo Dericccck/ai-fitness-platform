@@ -34,10 +34,15 @@ class FakeOperationsModels:
         self.tools_seen.append(tools)
         if self.turn_index == 0:
             assert any("当前路由=OPERATIONS" in str(message.get("content")) for message in messages)
-            assert any("REVENUE_AMOUNT" in str(tool) for tool in tools)
+            assert any("REVENUE_AMOUNT" in str(message.get("content")) for message in messages)
             assert [tool["function"]["name"] for tool in tools] == [
                 "fitness_operations_metric_query_v1"
             ]
+            assert tools[0]["function"]["parameters"] == {
+                "type": "object",
+                "properties": {},
+                "additionalProperties": False,
+            }
             self.turn_index += 1
             return ModelTurn(
                 content="",
@@ -45,13 +50,13 @@ class FakeOperationsModels:
                     ModelToolCall(
                         call_id="operations-call-1",
                         name="fitness.operations.metric.query.v1",
+                        # 即使供应商违反空 Schema 返回了越权或漂移参数，Supervisor
+                        # 也必须丢弃它们，重新从签名身份和用户原问题生成查询参数。
                         arguments={
-                            "organization_id": "org-1",
-                            "metric": "REVENUE_AMOUNT",
-                            "from": "2026-08-01",
-                            "to": "2026-08-15",
-                            "bucket": "WEEK",
-                            "comparison": "NONE",
+                            "organization_id": "attacker-org",
+                            "metric": "APPOINTMENT_COUNT",
+                            "from": "2020-01-01",
+                            "to": "2020-01-02",
                         },
                     ),
                 ),

@@ -1,7 +1,11 @@
 from datetime import date
 
+import pytest
+
 from app.agent.operations_tools import (
     OperationsMetricToolInput,
+    OperationsQueryPreparationError,
+    build_authorized_operations_tool_input,
     operations_metric_catalog_prompt,
     operations_prompt_hint,
     parse_operations_intent,
@@ -16,6 +20,31 @@ def test_parses_monthly_course_metric() -> None:
     assert hint.metric == "COURSE_APPOINTMENT_COUNT"
     assert hint.from_date == date(2026, 8, 1)
     assert hint.to_date == date(2026, 8, 15)
+
+
+def test_builds_authorized_tool_input_from_question_and_single_signed_org() -> None:
+    query = build_authorized_operations_tool_input(
+        "统计 2026-08-01 至 2026-08-15 的营收金额按周趋势",
+        allowed_organization_ids=frozenset({"org-1"}),
+    )
+
+    assert query == {
+        "organization_id": "org-1",
+        "metric": "REVENUE_AMOUNT",
+        "from": "2026-08-01",
+        "to": "2026-08-15",
+        "limit": 20,
+        "bucket": "WEEK",
+        "comparison": "NONE",
+    }
+
+
+def test_authorized_tool_input_rejects_ambiguous_multi_org_scope() -> None:
+    with pytest.raises(OperationsQueryPreparationError):
+        build_authorized_operations_tool_input(
+            "统计 2026-08-01 至 2026-08-15 的营收金额按周趋势",
+            allowed_organization_ids=frozenset({"org-1", "org-2"}),
+        )
 
 
 def test_parses_recent_status_metric() -> None:

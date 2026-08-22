@@ -49,7 +49,11 @@ from app.session_summary import (
     build_compacted_messages,
 )
 
-from .operations_tools import operations_prompt_hint
+from .operations_tools import (
+    OperationsQueryPreparationError,
+    build_authorized_operations_tool_input,
+    operations_prompt_hint,
+)
 from .tool_registry import ToolContext, ToolRegistry, ToolRegistryError
 
 # SupervisorRoute 是意图路由，不是业务执行状态：FITNESS_COACHING 健身指导；BOOKING 预约；
@@ -708,7 +712,35 @@ class Supervisor:
         tool_messages: list[dict[str, Any]] = []
         calls = state.get("model_tool_calls", [])
         for call in calls:
-            result = await self.tools.invoke(call.name, call.arguments, context)
+            definition = self.tools.get(call.name)
+            raw_input = call.arguments
+            if (
+                state["route"] == "OPERATIONS"
+                and definition.tool_id == "fitness.operations.metric.query.v1"
+            ):
+                if runtime.context.identity is None:
+                    raise SupervisorRuntimeError("signed identity is required for operations query")
+                if not runtime.context.user_message:
+                    raise SupervisorRuntimeError(
+                        "original user message is required for operations query"
+                    )
+                try:
+                    # 经营查询的组织、指标和日期来自已验证身份及用户原问题。模型只
+                    # 选择工具，不能通过参数猜测机构 ID、扩大时间范围或切换指标。
+                    raw_input = build_authorized_operations_tool_input(
+                        runtime.context.user_message,
+                        allowed_organization_ids=(runtime.context.identity.organization_ids),
+                    )
+                except OperationsQueryPreparationError as exc:
+                    raise SupervisorRuntimeError(
+                        "operations query could not be prepared safely"
+                    ) from exc
+                _logger.info(
+                    "operations_tool_input_prepared",
+                    request_id=runtime.context.gateway_context.request_id,
+                    trace_id=runtime.context.gateway_context.trace_id,
+                )
+            result = await self.tools.invoke(definition.tool_id, raw_input, context)
             tool_messages.append(
                 {
                     "role": "tool",
@@ -796,7 +828,18 @@ def _model_tools(registry: ToolRegistry, route: SupervisorRoute) -> list[dict[st
                 # 别名，满足 DeepSeek/OpenAI-compatible 函数名约束。
                 "name": spec["model_name"],
                 "description": spec["description"],
-                "parameters": spec["input_schema"],
+                # Operations 参数全部由服务端根据用户原问题和签名身份生成。模型只
+                # 决定是否调用固定指标工具，不接触内部机构 ID、日期或指标参数。
+                "parameters": (
+                    {
+                        "type": "object",
+                        "properties": {},
+                        "additionalProperties": False,
+                    }
+                    if route == "OPERATIONS"
+                    and spec["name"] == "fitness.operations.metric.query.v1"
+                    else spec["input_schema"]
+                ),
             },
         }
         for spec in registry.public_specs()
