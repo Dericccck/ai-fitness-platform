@@ -1325,11 +1325,15 @@ Memory 脱敏评测。
   PostgreSQL、Redis、模型配置和 Gateway 存活/就绪检查均通过，但业务请求返回 HTTP 503，未创建预约、未扣课时。
   已在 Supervisor 统一 503 边界增加脱敏 `error_type` 结构化日志，并覆盖通用运行时护栏和确认恢复路径；待下一次联调
   根据 request_id 定位模型、工具解析、Gateway 或权限根因后，才能把 Booking 真实联调标记为完成。
-- 进一步排查确认：Gateway 的预约写操作通过 `fitness-booking-service` 的 `8083` 端口转发，之前本地只启动了
-  MySQL、PostgreSQL、Redis、RabbitMQ 等基础设施，未启动 Booking 写服务，因此 Gateway 到预约下游不可用是此前
-  HTTP 503 的首要环境原因。已使用本地 MySQL 账号和 Agent/Gateway 约定的内部 Token 启动 `fitness-booking-service`，
-  服务成功连接 MySQL；Agent、Gateway、Booking 三个进程的联调前置检查现已全部通过。仍需在用户明确允许外发测试请求后，
-  执行一次 Booking dry-run，验证确认单生成和自动拒绝清理闭环。
+- 进一步排查确认：Gateway 的预约写操作通过 `fitness-booking-service` 的 `8083` 端口转发，之前本地确实漏启了该写服务；
+  这属于部署缺口，但不是 dry-run 在确认单生成前返回 503 的最终根因。启动 Booking 服务后使用可捕获日志的临时 Agent
+  重放请求，确认 DeepSeek 已成功选择 `fitness.user.get_current.v1`，随后 Gateway `/internal/agent-tools/v1/me` 返回 404：
+  本地签发器默认 `sub=local-operations-admin` 只适合不读取用户资料的 Operations 联调，该主体在 MySQL `login_user` 中不存在。
+- 2026-08-23 已修复本地身份联调边界：开发签发器允许显式传入真实 `DEV_AGENT_SUBJECT` 和受控
+  `DEV_AGENT_ROLE`，角色仅限 `ORGANIZATION_ADMIN`、`COACH`、`STUDENT`，禁止签发 `SYSTEM_ADMIN`；
+  `agent-business-live-preflight` 新增 Gateway `/me` 身份探针，在调用 DeepSeek 前验证签名主体能够映射到真实业务用户，
+  且不输出用户资料、内部 Token 或 AgentContext。已使用本地有效合同学员完成 Agent、Gateway、Booking 和业务身份六项前置验证。
+  完整 Booking dry-run 仍需对“向 DeepSeek 发送该测试学员、合同、课程和教练标识”取得明确授权后执行。
 - Gateway 质量门禁同时发现预约可用性单元测试依赖已经过去的固定日期；已为 `FitnessToolService` 注入生产系统时钟和
   测试固定时钟，保持生产行为不变，避免日期推进后测试误报失败。
 - 已为 Booking/Fitness 真实联调脚本补齐离线协议测试：默认流程会生成确认单、读取 `PENDING`、自动提交 `REJECT`

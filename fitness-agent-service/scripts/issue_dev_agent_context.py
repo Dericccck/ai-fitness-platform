@@ -3,11 +3,11 @@
 
 这个脚本不是认证服务，也不能部署成生产接口。它只用于在本地已经启动
 Agent 和 Java Gateway 后，给 Operations 真实冒烟联调提供一个可验证的
-组织管理员上下文。
+受控角色上下文。
 
 安全边界：
 1. 必须显式设置 ``FITNESS_DEV_CONTEXT_ISSUER=1`` 才允许运行；
-2. 角色固定为 ``ORGANIZATION_ADMIN``，不接受命令行传入任意高权限角色；
+2. 角色只允许从组织管理员、教练、学员白名单中选择，不能签发系统管理员；
 3. 有效期最多 5 分钟；
 4. 共享签名密钥只从环境变量或本地 ``.env`` 读取，永远不打印；
 5. 标准输出只包含 Token，方便直接赋值给 ``AGENT_LIVE_AGENT_CONTEXT``。
@@ -29,6 +29,8 @@ from pathlib import Path
 
 MAX_CONTEXT_TTL_SECONDS = 300
 DEFAULT_SUBJECT = "local-operations-admin"
+DEFAULT_ROLE = "ORGANIZATION_ADMIN"
+ALLOWED_DEV_ROLES = frozenset({"ORGANIZATION_ADMIN", "COACH", "STUDENT"})
 DEV_FLAG = "FITNESS_DEV_CONTEXT_ISSUER"
 SECRET_ENV = "GATEWAY_CONTEXT_SIGNING_SECRET"
 
@@ -81,6 +83,7 @@ def issue_token(
     secret: str,
     subject: str,
     organization_id: str,
+    role: str = DEFAULT_ROLE,
     ttl_seconds: int = MAX_CONTEXT_TTL_SECONDS,
     now: int | None = None,
 ) -> str:
@@ -92,6 +95,10 @@ def issue_token(
         raise DevContextIssuerError("本地测试 subject 不能为空")
     if not organization_id.strip():
         raise DevContextIssuerError("本地测试 organization_id 不能为空")
+    normalized_role = role.strip().upper()
+    if normalized_role not in ALLOWED_DEV_ROLES:
+        allowed = ", ".join(sorted(ALLOWED_DEV_ROLES))
+        raise DevContextIssuerError(f"本地测试 role 只允许：{allowed}")
     if not 1 <= ttl_seconds <= MAX_CONTEXT_TTL_SECONDS:
         raise DevContextIssuerError(f"Token 有效期必须在 1 到 {MAX_CONTEXT_TTL_SECONDS} 秒之间")
 
@@ -99,7 +106,7 @@ def issue_token(
     claims = {
         "sub": subject.strip(),
         "orgs": [organization_id.strip()],
-        "roles": ["ORGANIZATION_ADMIN"],
+        "roles": [normalized_role],
         "capabilities": [],
         "qualifications": [],
         "iat": issued_at,
@@ -112,9 +119,15 @@ def issue_token(
 
 
 def _parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="签发本地开发用组织管理员 AgentContext")
+    parser = argparse.ArgumentParser(description="签发本地开发用受控角色 AgentContext")
     parser.add_argument("--subject", default=DEFAULT_SUBJECT, help="本地测试主体 ID")
     parser.add_argument("--org-id", help="机构 ID；也可以通过 DEV_AGENT_ORG_ID 提供")
+    parser.add_argument(
+        "--role",
+        default=DEFAULT_ROLE,
+        choices=sorted(ALLOWED_DEV_ROLES),
+        help="本地测试角色；只允许组织管理员、教练或学员",
+    )
     parser.add_argument(
         "--ttl-seconds",
         type=int,
@@ -143,6 +156,7 @@ def main() -> int:
             secret=secret,
             subject=args.subject,
             organization_id=organization_id,
+            role=args.role,
             ttl_seconds=args.ttl_seconds,
         )
     except DevContextIssuerError as exc:

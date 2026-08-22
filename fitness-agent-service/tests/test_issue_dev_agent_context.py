@@ -27,7 +27,7 @@ def test_issue_token_is_accepted_by_agent_context_verifier(
     assert identity.expires_at == 1_800_000_300
 
 
-def test_issue_token_contains_only_fixed_local_admin_role() -> None:
+def test_issue_token_defaults_to_local_organization_admin_role() -> None:
     token = issue_token(
         secret="local-context-secret",
         subject="local-admin",
@@ -40,6 +40,33 @@ def test_issue_token_contains_only_fixed_local_admin_role() -> None:
     assert claims["roles"] == ["ORGANIZATION_ADMIN"]
     assert claims["capabilities"] == []
     assert claims["qualifications"] == []
+
+
+def test_issue_token_supports_allowlisted_student_role() -> None:
+    """Booking 联调可签发真实学员上下文，但不能借此生成系统管理员权限。"""
+
+    token = issue_token(
+        secret="local-context-secret",
+        subject="student-001",
+        organization_id="org-demo",
+        role="STUDENT",
+        now=1_800_000_000,
+    )
+    payload = token.split(".", 1)[0]
+    claims = json.loads(base64.urlsafe_b64decode(payload + "=="))
+
+    assert claims["sub"] == "student-001"
+    assert claims["roles"] == ["STUDENT"]
+
+
+def test_issue_token_rejects_role_outside_local_allowlist() -> None:
+    with pytest.raises(DevContextIssuerError, match="role 只允许"):
+        issue_token(
+            secret="local-context-secret",
+            subject="system-admin",
+            organization_id="org-demo",
+            role="SYSTEM_ADMIN",
+        )
 
 
 def test_issue_token_rejects_ttl_above_gateway_limit() -> None:

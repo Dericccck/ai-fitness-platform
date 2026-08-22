@@ -104,17 +104,34 @@ openssl rand -hex 32
 `/health/live` 只检查进程，`/health/ready` 检查 PostgreSQL、Redis 和三个模型能力是否均已配置并可用。
 没有配置真实模型凭证时服务不会伪装成 ready。
 
-本地 Operations 真实联调身份
+本地真实联调身份
 
 当前仓库尚未接入独立认证服务，因此本地联调可以使用受保护的开发签发器生成一个
-5 分钟有效的组织管理员 `AgentContext`。该脚本只在显式开启本地开关时运行，固定角色为
-`ORGANIZATION_ADMIN`，不会作为生产接口部署，也不会打印签名密钥：
+5 分钟有效的 `AgentContext`。该脚本只在显式开启本地开关时运行，角色限制在
+`ORGANIZATION_ADMIN`、`COACH`、`STUDENT` 白名单内，禁止签发 `SYSTEM_ADMIN`，不会作为
+生产接口部署，也不会打印签名密钥。
+
+Operations 使用机构管理员上下文：
 
 ```bash
 export DEV_AGENT_ORG_ID='<本地 MySQL 中真实存在的机构 ID>'
 export AGENT_LIVE_AGENT_CONTEXT="$(make agent-dev-context)"
 make agent-operations-live-preflight
 ```
+
+Booking/Fitness 必须使用 MySQL 中真实存在的业务用户；例如 Booking 学员 dry-run：
+
+```bash
+export DEV_AGENT_ORG_ID='<学员所属机构 ID>'
+export DEV_AGENT_SUBJECT='<login_user.id，且该学员在机构内有有效合同>'
+export DEV_AGENT_ROLE='STUDENT'
+export AGENT_LIVE_AGENT_CONTEXT="$(make agent-dev-context)"
+make agent-business-live-preflight
+make agent-booking-live-check
+```
+
+业务前置检查除了服务存活和就绪状态，还会通过 Gateway `/me` 验证签名 `subject` 确实存在于
+业务用户表；校验失败时不会调用 DeepSeek。不能用随意编造的用户 ID 通过这道门禁。
 
 `agent-dev-context` 会从 `fitness-agent-service/.env` 读取
 `GATEWAY_CONTEXT_SIGNING_SECRET`，因此 Agent 和 Gateway 必须使用同一份密钥。Token 只应

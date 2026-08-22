@@ -6,6 +6,7 @@ import pytest
 
 import scripts.operations_live_preflight as preflight
 from scripts.operations_live_preflight import (
+    _verify_current_user,
     run_preflight,
     validate_agent_readiness,
     validate_live_response,
@@ -71,10 +72,66 @@ async def test_business_preflight_checks_booking_service_when_url_is_provided(
     )
 
     assert [result.name for result in results] == [
-        "admin-context",
+        "agent-context",
         "agent-live",
         "agent-ready",
         "gateway-live",
         "booking-live",
     ]
     assert probe.await_count == 4
+
+
+@pytest.mark.asyncio
+async def test_verify_current_user_accepts_existing_gateway_user(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """业务联调必须在模型调用前确认 Token subject 可以映射到 MySQL 用户。"""
+
+    monkeypatch.setenv("AGENT_GATEWAY_INTERNAL_SERVICE_TOKEN", "internal-token")
+    request = AsyncMock(
+        return_value=type(
+            "Response",
+            (),
+            {
+                "status_code": 200,
+                "json": lambda self: {"id": "student-001", "name": "本地学员"},
+            },
+        )()
+    )
+    client = type("Client", (), {"get": request})()
+
+    result = await _verify_current_user(
+        client,
+        gateway_url="http://gateway.test",
+        signed_context="signed-context",
+    )
+
+    assert result.passed is True
+    assert result.name == "business-user"
+    headers = request.await_args.kwargs["headers"]
+    assert headers["X-Internal-Service-Token"] == "internal-token"
+    assert headers["X-Agent-Context"] == "signed-context"
+
+
+@pytest.mark.asyncio
+async def test_verify_current_user_rejects_missing_business_subject(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENT_GATEWAY_INTERNAL_SERVICE_TOKEN", "internal-token")
+    request = AsyncMock(
+        return_value=type(
+            "Response",
+            (),
+            {"status_code": 404, "json": lambda self: {"code": "NOT_FOUND"}},
+        )()
+    )
+    client = type("Client", (), {"get": request})()
+
+    result = await _verify_current_user(
+        client,
+        gateway_url="http://gateway.test",
+        signed_context="signed-context",
+    )
+
+    assert result.passed is False
+    assert "不存在" in result.detail

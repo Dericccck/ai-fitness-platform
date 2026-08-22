@@ -134,7 +134,9 @@ agent-run:
 
 agent-dev-context:
 	@test -n "$$DEV_AGENT_ORG_ID" || (echo "请先设置 DEV_AGENT_ORG_ID（本地 MySQL 中真实存在的机构 ID）"; exit 1)
-	@cd $(AGENT_DIR) && FITNESS_DEV_CONTEXT_ISSUER=1 UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/issue_dev_agent_context.py
+	@cd $(AGENT_DIR) && FITNESS_DEV_CONTEXT_ISSUER=1 UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/issue_dev_agent_context.py \
+		--subject "$${DEV_AGENT_SUBJECT:-local-operations-admin}" \
+		--role "$${DEV_AGENT_ROLE:-ORGANIZATION_ADMIN}"
 
 agent-operations-live-preflight:
 	@test -n "$$AGENT_LIVE_AGENT_CONTEXT" || (echo "请先设置 AGENT_LIVE_AGENT_CONTEXT（认证服务签发的组织管理员 Token）"; exit 1)
@@ -144,9 +146,10 @@ agent-operations-live-check: agent-operations-live-preflight
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/operations_live_check.py
 
 agent-business-live-preflight:
-	@test -n "$$AGENT_LIVE_AGENT_CONTEXT" || (echo "请先设置 AGENT_LIVE_AGENT_CONTEXT（认证服务签发的组织管理员 Token）"; exit 1)
+	@test -n "$$AGENT_LIVE_AGENT_CONTEXT" || (echo "请先设置 AGENT_LIVE_AGENT_CONTEXT（认证服务签发的业务用户 Token）"; exit 1)
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/operations_live_preflight.py \
-		--booking-url "$${AGENT_BOOKING_SERVICE_URL:-http://127.0.0.1:8083}"
+		--booking-url "$${AGENT_BOOKING_SERVICE_URL:-http://127.0.0.1:8083}" \
+		--verify-current-user
 
 agent-booking-live-check: agent-business-live-preflight
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/booking_live_check.py $(ARGS)

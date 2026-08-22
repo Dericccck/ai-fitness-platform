@@ -16,6 +16,8 @@ from typing import Any
 
 import httpx
 
+from app.core.config import Settings
+
 
 class OperationsPreflightError(RuntimeError):
     """联调前置条件不满足。"""
@@ -48,6 +50,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--booking-url",
         default=None,
         help="可选预约写服务地址；传入后额外检查 fitness-booking-service 存活探针",
+    )
+    parser.add_argument(
+        "--verify-current-user",
+        action="store_true",
+        help=(
+            "使用当前签名上下文调用 Gateway /me，确认 subject 在业务库中真实存在；"
+            "该检查不调用 DeepSeek"
+        ),
     )
     parser.add_argument(
         "--timeout-seconds",
@@ -111,17 +121,64 @@ async def _get_json(client: httpx.AsyncClient, name: str, url: str) -> ProbeResu
     )
 
 
+async def _verify_current_user(
+    client: httpx.AsyncClient,
+    *,
+    gateway_url: str,
+    signed_context: str,
+) -> ProbeResult:
+    """验证签名主体能映射到真实业务用户，但不输出用户资料或任何 Token。
+
+    AgentContext 通过验签只说明 Token 本身可信，不能证明 ``sub`` 在 MySQL 中存在。
+    Booking/Fitness 会先读取当前用户，所以必须在调用模型前完成这层业务身份门禁。
+    """
+
+    settings = Settings()
+    internal_token = settings.gateway_internal_service_token.strip()
+    if not internal_token:
+        return ProbeResult("business-user", False, "Agent 缺少 Gateway 内部服务 Token")
+    if not signed_context:
+        return ProbeResult("business-user", False, "缺少签名上下文，无法校验业务用户")
+    try:
+        response = await client.get(
+            gateway_url.rstrip("/") + "/internal/agent-tools/v1/me",
+            headers={
+                "X-Internal-Service-Token": internal_token,
+                "X-Agent-Context": signed_context,
+                "X-Request-ID": "business-live-preflight",
+            },
+        )
+    except httpx.HTTPError:
+        return ProbeResult("business-user", False, "无法连接 Gateway 身份接口")
+    if response.status_code == 404:
+        return ProbeResult("business-user", False, "签名 subject 在业务用户表中不存在")
+    if response.status_code in {401, 403}:
+        return ProbeResult(
+            "business-user", False, f"Gateway 拒绝身份上下文（HTTP {response.status_code}）"
+        )
+    if response.status_code >= 400:
+        return ProbeResult(
+            "business-user", False, f"Gateway 身份接口返回 HTTP {response.status_code}"
+        )
+    try:
+        payload = response.json()
+    except ValueError:
+        return ProbeResult("business-user", False, "Gateway 身份接口未返回 JSON")
+    if not isinstance(payload, dict) or not isinstance(payload.get("id"), str) or not payload["id"]:
+        return ProbeResult("business-user", False, "Gateway 身份响应缺少用户 ID")
+    return ProbeResult("business-user", True, "签名 subject 已映射到真实业务用户")
+
+
 async def run_preflight(args: argparse.Namespace) -> tuple[ProbeResult, ...]:
     """执行所有前置检查并返回结果；不发起任何模型或业务查询。"""
 
     if args.timeout_seconds <= 0:
         raise OperationsPreflightError("--timeout-seconds 必须大于 0")
+    signed_context = os.getenv("AGENT_LIVE_AGENT_CONTEXT", "").strip()
     context_result = ProbeResult(
-        "admin-context",
-        bool(os.getenv("AGENT_LIVE_AGENT_CONTEXT", "").strip()),
-        "已提供签名上下文"
-        if os.getenv("AGENT_LIVE_AGENT_CONTEXT", "").strip()
-        else "未提供签名上下文",
+        "agent-context",
+        bool(signed_context),
+        "已提供签名上下文" if signed_context else "未提供签名上下文",
     )
     async with httpx.AsyncClient(timeout=args.timeout_seconds) as client:
         results: list[ProbeResult] = [
@@ -136,6 +193,14 @@ async def run_preflight(args: argparse.Namespace) -> tuple[ProbeResult, ...]:
                     client,
                     "booking-live",
                     args.booking_url.rstrip("/") + "/health/live",
+                )
+            )
+        if getattr(args, "verify_current_user", False):
+            results.append(
+                await _verify_current_user(
+                    client,
+                    gateway_url=args.gateway_url,
+                    signed_context=signed_context,
                 )
             )
     return tuple(results)
