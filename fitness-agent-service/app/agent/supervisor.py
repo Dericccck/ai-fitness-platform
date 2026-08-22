@@ -537,8 +537,11 @@ class Supervisor:
             if self.confirmation_service is None:
                 raise SupervisorRuntimeError("confirmation service is not configured")
             call = tool_calls[0]
+            # 模型返回的是 model_name，确认单必须保存内部稳定 tool_id，避免供应商
+            # 别名进入凭证、审计和后续恢复流程。
+            definition = self.tools.get(call.name)
             confirmation = await self.confirmation_service.prepare(
-                tool_id=call.name,
+                tool_id=definition.tool_id,
                 raw_input=call.arguments,
                 gateway_context=runtime.context.gateway_context,
                 identity=runtime.context.identity,
@@ -769,7 +772,9 @@ def _model_tools(registry: ToolRegistry) -> list[dict[str, Any]]:
         {
             "type": "function",
             "function": {
-                "name": spec["name"],
+                # 内部保留带命名空间和版本号的 tool_id；模型侧使用不含点号的
+                # 别名，满足 DeepSeek/OpenAI-compatible 函数名约束。
+                "name": spec["model_name"],
                 "description": spec["description"],
                 "parameters": spec["input_schema"],
             },

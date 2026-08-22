@@ -182,6 +182,13 @@ def test_fitness_registry_exposes_only_versioned_specs() -> None:
     ]
     assert sum(spec["read_only"] is False for spec in specs) == 10
     assert sum(spec["requires_confirmation"] is True for spec in specs) == 10
+    assert all("." not in spec["model_name"] for spec in specs)
+    assert all(spec["model_name"].replace("_", "").isalnum() for spec in specs)
+    registry = build_fitness_tool_registry(cast(GatewayClient, FakeGateway()))
+    assert (
+        registry.get("fitness_operations_metric_query_v1").tool_id
+        == "fitness.operations.metric.query.v1"
+    )
 
 
 async def test_registry_validates_input_calls_fixed_gateway_adapter_and_serializes_result() -> None:

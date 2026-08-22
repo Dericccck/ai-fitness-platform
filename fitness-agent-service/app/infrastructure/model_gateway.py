@@ -3,7 +3,7 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, OpenAIError
 
 from app.core.config import Settings
 
@@ -89,12 +89,15 @@ class ModelGateway:
         if not self.settings.llm_configured:
             raise ModelConfigurationError("LLM provider is not configured")
 
-        response = await self._llm.chat.completions.create(
-            model=self.settings.llm_model,
-            messages=messages,  # type: ignore[arg-type]
-            temperature=temperature,
-            extra_body=_deepseek_extra_body(self.settings.llm_thinking_enabled),
-        )
+        try:
+            response = await self._llm.chat.completions.create(
+                model=self.settings.llm_model,
+                messages=messages,  # type: ignore[arg-type]
+                temperature=temperature,
+                extra_body=_deepseek_extra_body(self.settings.llm_thinking_enabled),
+            )
+        except OpenAIError as exc:
+            raise ModelResponseError("LLM provider request failed") from exc
         return response.choices[0].message.content or ""
 
     async def chat_json(
@@ -132,7 +135,10 @@ class ModelGateway:
             "response_format": {"type": "json_object"},
             "extra_body": _deepseek_extra_body(self.settings.llm_thinking_enabled),
         }
-        response = await self._llm.chat.completions.create(**request)
+        try:
+            response = await self._llm.chat.completions.create(**request)
+        except OpenAIError as exc:
+            raise ModelResponseError("LLM provider request failed") from exc
         if not response.choices:
             raise ModelResponseError("LLM returned no choices")
         content = response.choices[0].message.content or ""
@@ -173,7 +179,10 @@ class ModelGateway:
         if tools:
             request["tools"] = tools
             request["tool_choice"] = "auto"
-        response = await self._llm.chat.completions.create(**request)
+        try:
+            response = await self._llm.chat.completions.create(**request)
+        except OpenAIError as exc:
+            raise ModelResponseError("LLM provider request failed") from exc
         if not response.choices:
             raise ModelResponseError("LLM returned no choices")
 

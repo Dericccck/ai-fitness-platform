@@ -2,6 +2,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock
 
 import pytest
+from openai import OpenAIError
 
 from app.core.config import Settings
 from app.infrastructure.model_gateway import (
@@ -97,3 +98,14 @@ async def test_model_gateway_does_not_call_provider_when_unconfigured() -> None:
         )
 
     create.assert_not_awaited()
+
+
+async def test_model_gateway_converts_provider_errors_to_stable_response_error() -> None:
+    gateway = ModelGateway(configured_settings())
+    gateway._llm.chat.completions.create = AsyncMock(side_effect=OpenAIError("provider failed"))
+
+    with pytest.raises(ModelResponseError, match="LLM provider request failed"):
+        await gateway.chat_with_tools(
+            [{"role": "user", "content": "查询经营指标"}],
+            tools=[{"type": "function", "function": {"name": "fitness_operations_v1"}}],
+        )

@@ -154,11 +154,24 @@ class ToolDefinition:
 
         return self.tool_id.rsplit(".", maxsplit=1)[-1]
 
+    @property
+    def model_name(self) -> str:
+        """返回供应商 Tool Calling 可接受的模型侧名称。
+
+        内部工具 ID 保留命名空间和版本号，例如
+        ``fitness.operations.metric.query.v1``，便于审计、确认单和代码检索。
+        但 OpenAI-compatible 接口要求函数名只包含字母、数字、下划线和连字符，
+        因此只在供应商边界把点号转换成下划线；业务内部仍始终使用原始 ID。
+        """
+
+        return self.tool_id.replace(".", "_")
+
     def public_spec(self) -> dict[str, Any]:
         """返回可提供给 Supervisor/模型的工具描述，不包含 Python handler。"""
 
         return {
             "name": self.tool_id,
+            "model_name": self.model_name,
             "description": self.description,
             "input_schema": self.input_model.model_json_schema(),
             "version": self.version,
@@ -199,6 +212,8 @@ class ToolRegistry:
             )
         if definition.tool_id in self._definitions:
             raise DuplicateToolError(f"tool already registered: {definition.tool_id}")
+        if any(item.model_name == definition.model_name for item in self._definitions.values()):
+            raise DuplicateToolError(f"model tool name already registered: {definition.model_name}")
         self._definitions[definition.tool_id] = definition
 
     def get(self, tool_id: str) -> ToolDefinition:
@@ -207,6 +222,9 @@ class ToolRegistry:
         try:
             return self._definitions[tool_id]
         except KeyError as exc:
+            for definition in self._definitions.values():
+                if definition.model_name == tool_id:
+                    return definition
             raise UnknownToolError(f"unknown tool: {tool_id}") from exc
 
     def public_specs(self) -> list[dict[str, Any]]:
@@ -269,7 +287,9 @@ class ToolRegistry:
         started_at = perf_counter()
         request_id = context.gateway_context.request_id
         trace_id = context.gateway_context.trace_id
-        self._audit_sink.record(ToolAuditEvent(tool_id, "started", request_id, trace_id))
+        # 模型可能传回经过供应商边界转换的 model_name；审计必须落原始内部
+        # tool_id，保证运营排障、指标统计和确认单引用的是同一个稳定标识。
+        self._audit_sink.record(ToolAuditEvent(definition.tool_id, "started", request_id, trace_id))
 
         # allowed_roles 是 Agent 层的第一道工具暴露边界，必须在实际调用入口复核，
         # 不能只把它作为模型描述字段。Java Gateway 仍会根据签名上下文、组织范围和
