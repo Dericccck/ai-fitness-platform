@@ -1325,6 +1325,8 @@ Memory 脱敏评测。
   PostgreSQL、Redis、模型配置和 Gateway 存活/就绪检查均通过，但业务请求返回 HTTP 503，未创建预约、未扣课时。
   已在 Supervisor 统一 503 边界增加脱敏 `error_type` 结构化日志；待下一次联调根据 request_id 定位模型、工具解析、
   Gateway 或权限根因后，才能把 Booking 真实联调标记为完成。
+- Gateway 质量门禁同时发现预约可用性单元测试依赖已经过去的固定日期；已为 `FitnessToolService` 注入生产系统时钟和
+  测试固定时钟，保持生产行为不变，避免日期推进后测试误报失败。
 
 完成上述验收后，按以下顺序继续：
 

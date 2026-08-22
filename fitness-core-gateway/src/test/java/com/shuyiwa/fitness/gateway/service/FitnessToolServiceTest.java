@@ -8,6 +8,8 @@ import org.junit.Test;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.Clock;
+import java.time.ZoneOffset;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Optional;
@@ -19,7 +21,10 @@ import static org.mockito.Mockito.when;
 public class FitnessToolServiceTest {
 
     private final FitnessReadRepository repository = mock(FitnessReadRepository.class);
-    private final FitnessToolService service = new FitnessToolService(repository);
+    private final FitnessToolService service = new FitnessToolService(
+            repository,
+            Clock.fixed(Instant.parse("2026-08-12T00:00:00Z"), ZoneOffset.UTC)
+    );
 
     @Test
     public void studentCannotReadAnotherUserContract() {

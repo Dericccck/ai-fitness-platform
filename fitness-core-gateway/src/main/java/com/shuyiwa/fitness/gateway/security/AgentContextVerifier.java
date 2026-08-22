@@ -3,6 +3,7 @@ package com.shuyiwa.fitness.gateway.security;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shuyiwa.fitness.gateway.config.GatewayProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.Mac;
@@ -32,6 +33,7 @@ public class AgentContextVerifier {
     private final GatewayProperties properties;
     private final Clock clock;
 
+    @Autowired
     public AgentContextVerifier(ObjectMapper objectMapper, GatewayProperties properties) {
         this(objectMapper, properties, Clock.systemUTC());
     }

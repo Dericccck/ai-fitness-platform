@@ -10,6 +10,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.Clock;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
 import java.util.List;
@@ -29,9 +30,23 @@ public class FitnessToolService {
     private static final int MAX_LIMIT = 100;
 
     private final FitnessReadRepository repository;
+    private final Clock clock;
 
+    /**
+     * 生产装配使用系统 UTC 时钟；将默认构造入口保留为 Spring Bean 入口，避免业务代码
+     * 在各处直接调用 {@link Instant#now()}，同时允许单元测试注入固定时钟验证边界日期。
+     */
+    @org.springframework.beans.factory.annotation.Autowired
     public FitnessToolService(FitnessReadRepository repository) {
+        this(repository, Clock.systemUTC());
+    }
+
+    /**
+     * 可注入时钟的构造入口，测试可以固定当前时间，避免“测试预约日期”随日历自然流逝。
+     */
+    FitnessToolService(FitnessReadRepository repository, Clock clock) {
         this.repository = repository;
+        this.clock = clock;
     }
 
     public ToolViews.UserView currentUser(AgentContext context) {
@@ -109,7 +124,7 @@ public class FitnessToolService {
         }
 
         List<String> reasons = new ArrayList<>();
-        if (start.isBefore(Instant.now())) {
+        if (start.isBefore(Instant.now(clock))) {
             reasons.add("START_TIME_IN_PAST");
         }
         List<ToolViews.AppointmentView> conflicts = repository.findCoachAppointments(
