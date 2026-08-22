@@ -11,8 +11,10 @@ import com.shuyiwa.fitness.booking.security.BookingConfirmation;
 import org.junit.Test;
 
 import java.sql.Date;
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Optional;
@@ -26,7 +28,9 @@ import static org.mockito.Mockito.when;
 
 public class BookingServiceTest {
     private final BookingRepository repository = mock(BookingRepository.class);
-    private final BookingService service = new BookingService(repository);
+    // 固定在测试数据之前，避免真实系统日期推进后 2026-08-20/21 的夹具失效。
+    private final BookingService service = new BookingService(repository,
+            Clock.fixed(Instant.parse("2026-08-19T00:00:00Z"), ZoneOffset.UTC));
 
     @Test
     public void studentCanCreateOwnBookingAfterFinalRuleCheck() {

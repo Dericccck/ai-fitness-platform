@@ -10,10 +10,12 @@ import com.shuyiwa.fitness.booking.domain.AppointmentStatusCodes;
 import com.shuyiwa.fitness.booking.repository.BookingRepository;
 import com.shuyiwa.fitness.booking.security.BookingActor;
 import com.shuyiwa.fitness.booking.security.BookingConfirmation;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
@@ -31,8 +33,23 @@ public class BookingService {
     private static final int COURSE_ENABLED = 1;
 
     private final BookingRepository repository;
+    private final Clock clock;
 
-    public BookingService(BookingRepository repository) { this.repository = repository; }
+    /**
+     * 生产环境使用 UTC 系统时钟；业务请求中的 Instant 再按既有规则转换为机构时区。
+     * 将 Clock 注入而不是在方法中直接调用 Instant.now()，可以让跨日期测试固定“当前时刻”，
+     * 避免测试数据随日历推进后突然变成过去时间。
+     */
+    @Autowired
+    public BookingService(BookingRepository repository) {
+        this(repository, Clock.systemUTC());
+    }
+
+    /** 供单元测试注入固定时钟；不改变生产装配方式。 */
+    BookingService(BookingRepository repository, Clock clock) {
+        this.repository = repository;
+        this.clock = clock;
+    }
 
     @Transactional
     public BookingAppointmentView create(BookingActor actor, BookingCreateRequest request) {
@@ -197,7 +214,7 @@ public class BookingService {
             if (!AppointmentStatusCodes.canCancel(observed.getStatus())) {
                 throw new BookingApiException(HttpStatus.CONFLICT, "当前预约状态不允许取消");
             }
-            if (observed.getStartTime() == null || !observed.getStartTime().isAfter(Instant.now())) {
+            if (observed.getStartTime() == null || !observed.getStartTime().isAfter(Instant.now(clock))) {
                 throw new BookingApiException(HttpStatus.CONFLICT, "课程已经开始，无法取消预约");
             }
             if (!request.getExpectedStartTime().equals(observed.getStartTime())) {
@@ -251,7 +268,7 @@ public class BookingService {
         if (request.getEndTime().isAfter(request.getStartTime().plusSeconds(8 * 3600L))) {
             throw new BookingApiException(HttpStatus.BAD_REQUEST, "单次预约时长不能超过 8 小时");
         }
-        if (request.getStartTime().isBefore(Instant.now())) {
+        if (request.getStartTime().isBefore(Instant.now(clock))) {
             throw new BookingApiException(HttpStatus.BAD_REQUEST, "预约开始时间不能早于当前时间");
         }
     }
@@ -268,7 +285,7 @@ public class BookingService {
         if (request.getEndTime().isAfter(request.getStartTime().plusSeconds(8 * 3600L))) {
             throw new BookingApiException(HttpStatus.BAD_REQUEST, "单次预约时长不能超过 8 小时");
         }
-        if (request.getStartTime().isBefore(Instant.now())) {
+        if (request.getStartTime().isBefore(Instant.now(clock))) {
             throw new BookingApiException(HttpStatus.BAD_REQUEST, "预约开始时间不能早于当前时间");
         }
     }

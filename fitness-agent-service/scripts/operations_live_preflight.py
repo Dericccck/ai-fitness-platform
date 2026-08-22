@@ -45,6 +45,11 @@ def build_parser() -> argparse.ArgumentParser:
         help="Java Gateway 地址，默认读取 AGENT_GATEWAY_BASE_URL",
     )
     parser.add_argument(
+        "--booking-url",
+        default=None,
+        help="可选预约写服务地址；传入后额外检查 fitness-booking-service 存活探针",
+    )
+    parser.add_argument(
         "--timeout-seconds",
         type=float,
         default=float(os.getenv("AGENT_LIVE_PREFLIGHT_TIMEOUT_SECONDS", "5")),
@@ -119,13 +124,21 @@ async def run_preflight(args: argparse.Namespace) -> tuple[ProbeResult, ...]:
         else "未提供签名上下文",
     )
     async with httpx.AsyncClient(timeout=args.timeout_seconds) as client:
-        results = (
+        results: list[ProbeResult] = [
             context_result,
             await _get_json(client, "agent-live", args.agent_url.rstrip("/") + "/health/live"),
             await _get_json(client, "agent-ready", args.agent_url.rstrip("/") + "/health/ready"),
             await _get_json(client, "gateway-live", args.gateway_url.rstrip("/") + "/health/live"),
-        )
-    return results
+        ]
+        if args.booking_url:
+            results.append(
+                await _get_json(
+                    client,
+                    "booking-live",
+                    args.booking_url.rstrip("/") + "/health/live",
+                )
+            )
+    return tuple(results)
 
 
 def main() -> int:

@@ -1334,6 +1334,10 @@ Memory 脱敏评测。
   测试固定时钟，保持生产行为不变，避免日期推进后测试误报失败。
 - 已为 Booking/Fitness 真实联调脚本补齐离线协议测试：默认流程会生成确认单、读取 `PENDING`、自动提交 `REJECT`
   并确认清理结果；显式 `--execute` 才会提交 `APPROVE`，随后轮询 `execution_status=SUCCEEDED`，不会把仅批准当成业务写入成功。
+- 已补充 Booking 下游存活探针和业务联调前置检查：`agent-business-live-preflight` 现在会在调用模型前检查
+  `fitness-booking-service:8083/health/live`，避免预约下游未启动时才通过 Agent 暴露 503。
+- Booking 服务时间校验已注入 `Clock`：生产继续使用系统 UTC 时钟，单元测试使用固定时钟，避免静态预约夹具随日历推进失效；
+  同时显式标注 Spring Boot 2.1 的生产构造函数，修复测试构造函数引入后的启动装配问题。
 
 完成上述验收后，按以下顺序继续：
 

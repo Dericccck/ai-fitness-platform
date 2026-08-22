@@ -145,7 +145,8 @@ agent-operations-live-check: agent-operations-live-preflight
 
 agent-business-live-preflight:
 	@test -n "$$AGENT_LIVE_AGENT_CONTEXT" || (echo "请先设置 AGENT_LIVE_AGENT_CONTEXT（认证服务签发的组织管理员 Token）"; exit 1)
-	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/operations_live_preflight.py
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/operations_live_preflight.py \
+		--booking-url "$${AGENT_BOOKING_SERVICE_URL:-http://127.0.0.1:8083}"
 
 agent-booking-live-check: agent-business-live-preflight
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/booking_live_check.py $(ARGS)
