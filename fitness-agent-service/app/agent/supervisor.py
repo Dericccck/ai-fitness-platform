@@ -361,6 +361,16 @@ class Supervisor:
             ModelResponseError,
             ToolRegistryError,
         ) as exc:
+            # 对外仍保持统一的 503，避免把模型供应商、Gateway 或工具参数细节泄漏给
+            # 客户端；但必须在服务端记录可关联的脱敏故障元数据，否则调用方拿到 503
+            # 后无法根据 request_id 定位真正原因。这里刻意只记录异常类型和链路 ID，
+            # 不记录 Prompt、模型原文、签名上下文、确认参数或业务明细。
+            _logger.exception(
+                "supervisor_execution_failed",
+                request_id=request.gateway_context.request_id,
+                trace_id=request.gateway_context.trace_id,
+                error_type=type(exc).__name__,
+            )
             raise SupervisorRuntimeError("supervisor execution failed") from exc
 
         interrupts = final_state.get("__interrupt__", [])
