@@ -1325,6 +1325,11 @@ Memory 脱敏评测。
   PostgreSQL、Redis、模型配置和 Gateway 存活/就绪检查均通过，但业务请求返回 HTTP 503，未创建预约、未扣课时。
   已在 Supervisor 统一 503 边界增加脱敏 `error_type` 结构化日志，并覆盖通用运行时护栏和确认恢复路径；待下一次联调
   根据 request_id 定位模型、工具解析、Gateway 或权限根因后，才能把 Booking 真实联调标记为完成。
+- 进一步排查确认：Gateway 的预约写操作通过 `fitness-booking-service` 的 `8083` 端口转发，之前本地只启动了
+  MySQL、PostgreSQL、Redis、RabbitMQ 等基础设施，未启动 Booking 写服务，因此 Gateway 到预约下游不可用是此前
+  HTTP 503 的首要环境原因。已使用本地 MySQL 账号和 Agent/Gateway 约定的内部 Token 启动 `fitness-booking-service`，
+  服务成功连接 MySQL；Agent、Gateway、Booking 三个进程的联调前置检查现已全部通过。仍需在用户明确允许外发测试请求后，
+  执行一次 Booking dry-run，验证确认单生成和自动拒绝清理闭环。
 - Gateway 质量门禁同时发现预约可用性单元测试依赖已经过去的固定日期；已为 `FitnessToolService` 注入生产系统时钟和
   测试固定时钟，保持生产行为不变，避免日期推进后测试误报失败。
 - 已为 Booking/Fitness 真实联调脚本补齐离线协议测试：默认流程会生成确认单、读取 `PENDING`、自动提交 `REJECT`
