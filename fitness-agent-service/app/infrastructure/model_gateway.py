@@ -104,6 +104,7 @@ class ModelGateway:
         self,
         messages: list[dict[str, str]],
         *,
+        max_output_tokens: int | None = None,
         temperature: float = 0.2,
     ) -> str:
         """调用对话模型并要求返回一个 JSON 对象。
@@ -115,12 +116,19 @@ class ModelGateway:
         概率。模型未配置、返回空结果或供应商不符合契约时统一抛错，禁止伪造草案。
         """
 
-        return (await self.chat_json_with_usage(messages, temperature=temperature)).content
+        return (
+            await self.chat_json_with_usage(
+                messages,
+                max_output_tokens=max_output_tokens,
+                temperature=temperature,
+            )
+        ).content
 
     async def chat_json_with_usage(
         self,
         messages: list[dict[str, str]],
         *,
+        max_output_tokens: int | None = None,
         temperature: float = 0.2,
     ) -> JsonModelTurn:
         """结构化生成并保留 Token 用量，供摘要等后台能力做成本监控。"""
@@ -131,7 +139,7 @@ class ModelGateway:
             "model": self.settings.llm_model,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": self.settings.llm_max_output_tokens,
+            "max_tokens": max_output_tokens or self.settings.llm_max_output_tokens,
             "response_format": {"type": "json_object"},
             "extra_body": _deepseek_extra_body(self.settings.llm_thinking_enabled),
         }
@@ -157,6 +165,7 @@ class ModelGateway:
         *,
         tools: list[dict[str, Any]],
         force_tool_name: str | None = None,
+        max_output_tokens: int | None = None,
         temperature: float = 0.2,
     ) -> ModelTurn:
         """调用支持 Tool Calling 的模型，并规范化为 Runtime 自有协议。
@@ -172,7 +181,7 @@ class ModelGateway:
             "model": self.settings.llm_model,
             "messages": messages,
             "temperature": temperature,
-            "max_tokens": self.settings.llm_max_output_tokens,
+            "max_tokens": max_output_tokens or self.settings.llm_max_output_tokens,
             "extra_body": _deepseek_extra_body(self.settings.llm_thinking_enabled),
         }
         # 工具预算耗尽后仍需要让模型基于最后一次真实工具结果生成最终答复，

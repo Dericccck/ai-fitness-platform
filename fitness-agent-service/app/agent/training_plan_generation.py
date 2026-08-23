@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
+import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.infrastructure.agent_context import AgentIdentity
@@ -19,6 +20,8 @@ from app.rag.models import RetrievalScope
 from app.rag.service import RagSearchError, RagSearchResult, RagService
 
 from .fitness_tools import CreateTrainingDraftToolInput
+
+_logger = structlog.get_logger("agent.training_plan_generation")
 
 
 class TrainingPlanGenerationError(RuntimeError):
@@ -81,6 +84,7 @@ class TrainingPlanGenerationService:
         *,
         memory_service: MemoryService | None = None,
         max_repair_attempts: int = 1,
+        max_output_tokens: int | None = None,
     ) -> None:
         if max_repair_attempts < 0 or max_repair_attempts > 2:
             raise ValueError("max_repair_attempts must be between 0 and 2")
@@ -88,6 +92,7 @@ class TrainingPlanGenerationService:
         self.rag_service = rag_service
         self.memory_service = memory_service
         self.max_repair_attempts = max_repair_attempts
+        self.max_output_tokens = max_output_tokens
 
     async def generate(
         self,
@@ -164,11 +169,23 @@ class TrainingPlanGenerationService:
                     }
                 )
             try:
-                raw = await self.models.chat_json(messages)
+                raw = await self.models.chat_json(
+                    messages,
+                    max_output_tokens=self.max_output_tokens,
+                )
                 content = GeneratedTrainingPlanContent.model_validate(json.loads(raw))
                 return content
             except (json.JSONDecodeError, ValidationError, ModelResponseError) as exc:
                 last_error = _safe_error_text(exc)
+                # 只记录模型输出未通过哪类程序校验，不记录 Prompt、模型原文或完整
+                # 用户上下文。该事件用于定位真实供应商输出与本地 Schema 的契约漂移，
+                # 也让最终对外的稳定 503 能通过 request_id 找到可修复的具体原因。
+                _logger.warning(
+                    "training_plan_generation_attempt_failed",
+                    attempt=attempt + 1,
+                    error_type=type(exc).__name__,
+                    error_detail=last_error,
+                )
                 if attempt >= self.max_repair_attempts:
                     break
         raise TrainingPlanGenerationError("模型生成的训练计划未通过结构化校验")

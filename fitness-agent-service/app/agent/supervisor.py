@@ -594,6 +594,15 @@ class Supervisor:
         model_kwargs: dict[str, Any] = {"tools": tool_schemas}
         if force_tool_name and tool_schemas:
             model_kwargs["force_tool_name"] = force_tool_name
+        # 生成结构化训练计划后，下一回合需要把完整的多日动作明细作为创建草案
+        # 工具参数传回模型。这里复用训练计划专用预算，避免第二次 Tool Calling
+        # 仍使用普通对话的 1200 tokens 导致参数 JSON 截断；FakeModels 等测试桩
+        # 没有 settings 时不传该可选参数，保持基础 Runtime 测试兼容。
+        training_plan_budget = getattr(
+            getattr(self.models, "settings", None), "training_plan_max_output_tokens", None
+        )
+        if state["route"] == "FITNESS_COACHING" and training_plan_budget:
+            model_kwargs["max_output_tokens"] = training_plan_budget
         turn = await self.models.chat_with_tools(state["messages"], **model_kwargs)
         tool_calls = list(turn.tool_calls)
         if any(not self.tools.get(call.name).read_only for call in tool_calls):

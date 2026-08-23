@@ -78,6 +78,20 @@ async def test_model_gateway_can_force_a_specific_tool_for_explicit_write_intent
     }
 
 
+async def test_model_gateway_supports_task_specific_tool_call_output_budget() -> None:
+    gateway = ModelGateway(configured_settings())
+    create = AsyncMock(return_value=response_for(arguments='{"course_id":"course-1"}'))
+    gateway._llm.chat.completions.create = create
+
+    await gateway.chat_with_tools(
+        [{"role": "user", "content": "创建训练计划草案"}],
+        tools=[{"type": "function", "function": {"name": "fitness_training_plan_create_v1"}}],
+        max_output_tokens=3000,
+    )
+
+    assert create.await_args.kwargs["max_tokens"] == 3000
+
+
 async def test_model_gateway_requests_json_object_for_structured_generation() -> None:
     gateway = ModelGateway(configured_settings())
     response = SimpleNamespace(
@@ -90,6 +104,22 @@ async def test_model_gateway_requests_json_object_for_structured_generation() ->
 
     assert result == '{"title":"力量计划"}'
     assert create.await_args.kwargs["response_format"] == {"type": "json_object"}
+
+
+async def test_model_gateway_supports_task_specific_json_output_budget() -> None:
+    gateway = ModelGateway(configured_settings())
+    response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content='{"ok":true}'))]
+    )
+    create = AsyncMock(return_value=response)
+    gateway._llm.chat.completions.create = create
+
+    await gateway.chat_json(
+        [{"role": "user", "content": "生成训练计划"}],
+        max_output_tokens=3000,
+    )
+
+    assert create.await_args.kwargs["max_tokens"] == 3000
 
 
 async def test_model_gateway_rejects_non_object_tool_arguments() -> None:

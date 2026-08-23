@@ -201,6 +201,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.models,
         app.state.rag_service,
         memory_service=app.state.memory_service,
+        max_output_tokens=settings.training_plan_max_output_tokens,
     )
     app.state.tool_registry = build_fitness_tool_registry(
         app.state.gateway,

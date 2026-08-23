@@ -16,6 +16,7 @@ def test_provider_configuration_is_explicit() -> None:
     assert settings.reranker_configured is True
     assert settings.llm_timeout_seconds == 30
     assert settings.agent_max_tool_steps == 4
+    assert settings.training_plan_max_output_tokens == 3000
     assert settings.llm_base_url == "https://api.deepseek.com"
     assert settings.llm_model == "fitness-chat-model"
     assert settings.otel_configured is False

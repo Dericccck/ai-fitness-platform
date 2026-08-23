@@ -85,6 +85,10 @@ class Settings(BaseSettings):
     )
     llm_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
     llm_max_output_tokens: int = Field(default=1200, ge=128, le=8192)
+    # 结构化训练计划包含多天和动作明细，单独使用更大的输出预算，避免 JSON
+    # 在动作 notes 或最后一个训练日中途被模型截断；普通对话和经营查询仍使用
+    # llm_max_output_tokens，防止所有请求无差别增加 Token 成本。
+    training_plan_max_output_tokens: int = Field(default=3000, ge=512, le=8192)
     agent_max_tool_steps: int = Field(default=4, ge=1, le=8)
     llm_thinking_enabled: bool = False
 

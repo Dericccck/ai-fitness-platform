@@ -69,7 +69,9 @@ class FakeModels:
         self.responses = responses
         self.calls: list[list[dict[str, str]]] = []
 
-    async def chat_json(self, messages: list[dict[str, str]]) -> str:
+    async def chat_json(
+        self, messages: list[dict[str, str]], *, max_output_tokens: int | None = None
+    ) -> str:
         self.calls.append(messages)
         return self.responses.pop(0)
 
