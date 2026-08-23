@@ -11,6 +11,8 @@ from app.agent.supervisor import (
     SupervisorRequest,
     SupervisorRuntimeError,
     UnsupportedLegacyRequest,
+    _forced_write_tool_name,
+    _system_prompt,
     classify_route,
 )
 from app.agent.tool_registry import ToolContext, ToolDefinition, ToolRegistry
@@ -31,15 +33,18 @@ class FakeModels:
         self.turns = turns
         self.tools_seen: list[list[dict[str, Any]]] = []
         self.messages_seen: list[list[dict[str, Any]]] = []
+        self.force_tool_names: list[str | None] = []
 
     async def chat_with_tools(
         self,
         messages: list[dict[str, Any]],
         *,
         tools: list[dict[str, Any]],
+        force_tool_name: str | None = None,
     ) -> ModelTurn:
         self.tools_seen.append(tools)
         self.messages_seen.append(messages)
+        self.force_tool_names.append(force_tool_name)
         return self.turns.pop(0)
 
 
@@ -142,6 +147,15 @@ async def test_supervisor_runs_model_tool_model_cycle_and_returns_real_result() 
     assert len(models.tools_seen) == 2
     assert models.tools_seen[0]
     assert models.tools_seen[1] == []
+    assert models.force_tool_names == [None, None]
+
+
+async def test_supervisor_forces_booking_create_tool_for_explicit_create_request() -> None:
+    assert (
+        _forced_write_tool_name("BOOKING", "请创建预约：明天九点的瑜伽课")
+        == "fitness_booking_create_v1"
+    )
+    assert _forced_write_tool_name("BOOKING", "查询明天可约时间") is None
 
 
 async def test_supervisor_uses_session_summary_after_checkpoint_compaction() -> None:
@@ -316,3 +330,10 @@ def test_supervisor_route_guard_covers_fitness_business_boundaries() -> None:
     assert classify_route("查看本月教练预约量") == "OPERATIONS"
     assert classify_route("我想制定减脂训练计划") == "FITNESS_COACHING"
     assert classify_route("查询比赛报名") == "UNSUPPORTED_LEGACY"
+
+
+def test_booking_prompt_requires_write_tool_and_confirmation_flow() -> None:
+    prompt = _system_prompt("BOOKING", "zh-CN")
+
+    assert "必须调用对应的 Booking 工具" in prompt
+    assert "自动生成确认单并暂停" in prompt

@@ -8,8 +8,9 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from typing import Any, cast
+from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -30,6 +31,20 @@ from .tool_registry import (
 
 _ID_FIELD = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 _READ_ROLES = frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH", "STUDENT"})
+_BUSINESS_TIMEZONE = ZoneInfo("Asia/Shanghai")
+
+
+def _normalize_gateway_datetime(value: datetime) -> datetime:
+    """把模型生成的时间统一为带时区的 UTC Instant。
+
+    中文预约请求经常让模型生成无时区的本地时间，例如 ``2026-08-24T09:00:00``。
+    Java Gateway 的契约使用 ``Instant``，无法解析这种值；这里把无时区时间按健身
+    业务默认时区 Asia/Shanghai 解释，再统一输出 UTC。带时区输入也会归一化，确保
+    确认摘要、加密 Payload 和 Gateway 请求使用同一时刻。
+    """
+
+    aware = value.replace(tzinfo=_BUSINESS_TIMEZONE) if value.tzinfo is None else value
+    return aware.astimezone(UTC)
 
 
 class OrganizationToolInput(BaseModel):
@@ -82,6 +97,10 @@ class AppointmentListToolInput(ContractListToolInput):
 
     @model_validator(mode="after")
     def validate_time_window(self) -> AppointmentListToolInput:
+        if self.from_time:
+            self.from_time = _normalize_gateway_datetime(self.from_time)
+        if self.to_time:
+            self.to_time = _normalize_gateway_datetime(self.to_time)
         if self.from_time and self.to_time and self.from_time >= self.to_time:
             raise ValueError("from_time must be earlier than to_time")
         return self
@@ -114,6 +133,8 @@ class BookingAvailabilityToolInput(OrganizationToolInput):
 
     @model_validator(mode="after")
     def validate_time_window(self) -> BookingAvailabilityToolInput:
+        self.start_time = _normalize_gateway_datetime(self.start_time)
+        self.end_time = _normalize_gateway_datetime(self.end_time)
         if self.start_time >= self.end_time:
             raise ValueError("start_time must be earlier than end_time")
         return self
@@ -163,6 +184,8 @@ class BookingCreateToolInput(OrganizationToolInput):
 
     @model_validator(mode="after")
     def validate_time_window(self) -> BookingCreateToolInput:
+        self.start_time = _normalize_gateway_datetime(self.start_time)
+        self.end_time = _normalize_gateway_datetime(self.end_time)
         if self.start_time >= self.end_time:
             raise ValueError("start_time must be earlier than end_time")
         if self.end_time - self.start_time > timedelta(hours=8):
@@ -203,6 +226,9 @@ class BookingRescheduleToolInput(OrganizationToolInput):
 
     @model_validator(mode="after")
     def validate_time_window(self) -> BookingRescheduleToolInput:
+        self.expected_start_time = _normalize_gateway_datetime(self.expected_start_time)
+        self.start_time = _normalize_gateway_datetime(self.start_time)
+        self.end_time = _normalize_gateway_datetime(self.end_time)
         if self.start_time >= self.end_time:
             raise ValueError("start_time must be earlier than end_time")
         if self.end_time - self.start_time > timedelta(hours=8):
@@ -229,6 +255,11 @@ class BookingCancelToolInput(OrganizationToolInput):
     )
     # 取消确认卡绑定用户查询到的原开始时间；如果确认后预约发生变化，Java 侧拒绝执行。
     expected_start_time: datetime = Field(alias="expectedStartTime")
+
+    @model_validator(mode="after")
+    def normalize_expected_start_time(self) -> BookingCancelToolInput:
+        self.expected_start_time = _normalize_gateway_datetime(self.expected_start_time)
+        return self
 
 
 class TrainingItemInput(BaseModel):
@@ -925,7 +956,10 @@ def build_fitness_tool_registry(
         ),
         ToolDefinition(
             tool_id="fitness.booking.create.v1",
-            description="创建健身课程预约；执行前必须展示预约时间、教练、课程、合同和扣减课时确认卡。",
+            description=(
+                "用户明确要求创建预约时必须调用本工具；执行前必须展示预约时间、教练、课程、"
+                "合同和扣减课时确认卡，工具本身不会绕过确认直接写入。"
+            ),
             input_model=BookingCreateToolInput,
             handler=create_booking,
             allowed_roles=_READ_ROLES,

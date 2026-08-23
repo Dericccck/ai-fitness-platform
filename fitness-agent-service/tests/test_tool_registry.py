@@ -191,6 +191,71 @@ def test_fitness_registry_exposes_only_versioned_specs() -> None:
     )
 
 
+async def test_registry_binds_organization_and_student_to_signed_context() -> None:
+    gateway = FakeGateway()
+    registry = build_fitness_tool_registry(cast(GatewayClient, gateway))
+    context = ToolContext(
+        gateway_context=GatewayRequestContext(signed_context="signed-context"),
+        identity=AgentIdentity(
+            subject="student-real",
+            organization_ids=frozenset({"org-real"}),
+            roles=frozenset({"STUDENT"}),
+            issued_at=1,
+            expires_at=2,
+        ),
+    )
+
+    await registry.invoke(
+        "fitness.contract.list.v1",
+        {"organization_id": "org-guessed", "user_id": "student-guessed"},
+        context,
+    )
+    await registry.invoke(
+        "fitness.course.list.v1",
+        {"organization_id": "org-guessed", "limit": 5},
+        context,
+    )
+
+    # FakeGateway 返回的合同主体来自绑定后的 user_id；课程调用记录验证机构也被绑定。
+    assert gateway.course_calls == [("org-real", 5)]
+
+
+def test_registry_context_binding_preserves_coach_cross_student_capability() -> None:
+    registry = ToolRegistry()
+
+    class Input(BaseModel):
+        organization_id: str
+        user_id: str | None = None
+
+    async def handler(_: BaseModel, __: ToolContext) -> None:
+        return None
+
+    registry.register(
+        ToolDefinition(
+            tool_id="fitness.test.context_binding.v1",
+            description="test",
+            input_model=Input,
+            handler=handler,
+            allowed_roles=frozenset({"COACH"}),
+            read_only=True,
+            requires_confirmation=False,
+        )
+    )
+    bound = registry.bind_context_input(
+        "fitness.test.context_binding.v1",
+        {"organization_id": "wrong-org", "user_id": "assigned-student"},
+        AgentIdentity(
+            subject="coach-real",
+            organization_ids=frozenset({"org-real"}),
+            roles=frozenset({"COACH"}),
+            issued_at=1,
+            expires_at=2,
+        ),
+    )
+
+    assert bound == {"organization_id": "org-real", "user_id": "assigned-student"}
+
+
 async def test_registry_validates_input_calls_fixed_gateway_adapter_and_serializes_result() -> None:
     gateway = FakeGateway()
     registry = build_fitness_tool_registry(cast(GatewayClient, gateway))

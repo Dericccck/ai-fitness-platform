@@ -68,6 +68,10 @@ class ToolRoleForbiddenError(ToolRegistryError):
     """当前签名 AgentContext 的角色不能调用该工具。"""
 
 
+class ToolContextBindingError(ToolRegistryError):
+    """模型参数无法安全绑定到已验证 AgentContext。"""
+
+
 class ToolConfirmationNormalizationError(ToolRegistryError):
     """写工具参数无法形成确定性确认动作。"""
 
@@ -235,6 +239,52 @@ class ToolRegistry:
             for definition in sorted(self._definitions.values(), key=lambda item: item.tool_id)
         ]
 
+    def bind_context_input(
+        self,
+        tool_id: str,
+        raw_input: Mapping[str, Any],
+        identity: AgentIdentity | None,
+    ) -> dict[str, Any]:
+        """把模型参数中的租户和当前主体字段绑定到已验签身份。
+
+        模型可以提出“明天上午、瑜伽课、王教练”等业务意图，但不能决定自己属于
+        哪个机构或替哪个学员读取/写入数据。此前仅依赖 Gateway 最终拒绝虽然安全，
+        却会把模型随机构 ID 一起猜错的输入变成 403/503。这里在 Agent 工具边界
+        先做确定性绑定，并让确认单创建、只读查询和确认恢复共用同一份结果。
+        """
+
+        definition = self.get(tool_id)
+        bound = dict(raw_input)
+        if identity is None:
+            return bound
+
+        organization_field = self._model_field_key(definition, "organization_id")
+        if organization_field is not None:
+            if len(identity.organization_ids) != 1:
+                raise ToolContextBindingError(
+                    "当前 AgentContext 包含多个机构，不能在模型参数中猜测机构"
+                )
+            bound[organization_field] = next(iter(identity.organization_ids))
+
+        # 只有纯学员上下文才强制绑定当前主体。管理员或教练可能在授权范围内
+        # 为其他学员处理业务，仍由 Gateway 校验组织成员关系和教练绑定关系。
+        elevated_roles = {"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH"}
+        if "STUDENT" in identity.roles and not identity.roles.intersection(elevated_roles):
+            for field_name in ("student_id", "user_id"):
+                field_key = self._model_field_key(definition, field_name)
+                if field_key is not None:
+                    bound[field_key] = identity.subject
+        return bound
+
+    @staticmethod
+    def _model_field_key(definition: ToolDefinition, field_name: str) -> str | None:
+        """返回模型实际接收的字段名，兼容 snake_case 与 Java camelCase 别名。"""
+
+        field = definition.input_model.model_fields.get(field_name)
+        if field is None:
+            return None
+        return field.alias or field_name
+
     def normalize_confirmation(
         self,
         tool_id: str,
@@ -313,12 +363,20 @@ class ToolRegistry:
             )
 
         try:
-            validated_input = definition.input_model.model_validate(dict(raw_input))
+            bound_input = self.bind_context_input(tool_id, raw_input, context.identity)
+            validated_input = definition.input_model.model_validate(bound_input)
         except ValidationError as exc:
             self._record_failure(
                 definition.tool_id, request_id, trace_id, "INVALID_INPUT", started_at
             )
             raise ToolInputValidationError(f"invalid input for tool: {definition.tool_id}") from exc
+        except ToolContextBindingError as exc:
+            self._record_failure(
+                definition.tool_id, request_id, trace_id, "CONTEXT_BINDING_FAILED", started_at
+            )
+            raise ToolInputValidationError(
+                f"tool input cannot be bound to verified context: {definition.tool_id}"
+            ) from exc
 
         try:
             result = await definition.handler(validated_input, context)

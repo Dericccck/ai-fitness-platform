@@ -106,6 +106,26 @@ def test_booking_payload_uses_java_gateway_camel_case_contract() -> None:
     assert '"organization_id"' not in canonical
 
 
+def test_booking_confirmation_uses_bound_organization_id() -> None:
+    registry = build_fitness_tool_registry(cast(GatewayClient, FakeGateway()))
+    action = registry.normalize_confirmation(
+        "fitness.booking.create.v1",
+        {
+            "organization_id": "org-1",
+            "student_id": "student-1",
+            "contract_id": "contract-1",
+            "coach_id": "coach-1",
+            "course_id": "course-1",
+            "start_time": "2026-08-20T10:00:00Z",
+            "end_time": "2026-08-20T11:00:00Z",
+        },
+        context=context(),
+        organization_id="org-1",
+    )
+
+    assert action.display_summary["organization_id"] == "org-1"
+
+
 def test_reschedule_payload_uses_java_gateway_camel_case_contract() -> None:
     registry = build_fitness_tool_registry(cast(GatewayClient, FakeGateway()))
     action = registry.normalize_confirmation(

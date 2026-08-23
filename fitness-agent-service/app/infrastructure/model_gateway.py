@@ -156,6 +156,7 @@ class ModelGateway:
         messages: list[dict[str, Any]],
         *,
         tools: list[dict[str, Any]],
+        force_tool_name: str | None = None,
         temperature: float = 0.2,
     ) -> ModelTurn:
         """调用支持 Tool Calling 的模型，并规范化为 Runtime 自有协议。
@@ -178,7 +179,18 @@ class ModelGateway:
         # 此时显式不传 tools，避免模型继续发起新的业务调用。
         if tools:
             request["tools"] = tools
-            request["tool_choice"] = "auto"
+            # 对明确的业务写意图，Supervisor 可以要求模型必须从当前路由白名单中
+            # 选择指定工具。这样模型不能先查询一次资料后自行结束，写操作仍然会在
+            # Supervisor 的确认节点暂停；该参数只控制“选哪个工具”，不绕过权限、
+            # 参数绑定或确认机制。
+            request["tool_choice"] = (
+                {
+                    "type": "function",
+                    "function": {"name": force_tool_name},
+                }
+                if force_tool_name
+                else "auto"
+            )
         try:
             response = await self._llm.chat.completions.create(**request)
         except OpenAIError as exc:

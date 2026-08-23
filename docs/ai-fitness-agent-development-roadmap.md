@@ -1321,10 +1321,9 @@ Memory 脱敏评测。
 - 当前唯一进行中的步骤是“核心业务真实联调验收”：先验证 Booking 的预约/改约/取消确认闭环，再验证
   Fitness 的 RAG/Memory→训练计划草案→确认→训练服务写入闭环；每一步都要保留 request_id、确认单状态、
   Gateway 结果和数据库事实作为验收证据。
-- 2026-08-22 已使用本地 `fitness-mysql` 的真实机构/学员/合同/课程/教练关系执行 Booking dry-run；Agent、
+- 2026-08-22 首次使用本地 `fitness-mysql` 的真实机构/学员/合同/课程/教练关系执行 Booking dry-run；Agent、
   PostgreSQL、Redis、模型配置和 Gateway 存活/就绪检查均通过，但业务请求返回 HTTP 503，未创建预约、未扣课时。
-  已在 Supervisor 统一 503 边界增加脱敏 `error_type` 结构化日志，并覆盖通用运行时护栏和确认恢复路径；待下一次联调
-  根据 request_id 定位模型、工具解析、Gateway 或权限根因后，才能把 Booking 真实联调标记为完成。
+  已在 Supervisor 统一 503 边界增加脱敏 `error_type` 结构化日志，并覆盖通用运行时护栏和确认恢复路径。
 - 进一步排查确认：Gateway 的预约写操作通过 `fitness-booking-service` 的 `8083` 端口转发，之前本地确实漏启了该写服务；
   这属于部署缺口，但不是 dry-run 在确认单生成前返回 503 的最终根因。启动 Booking 服务后使用可捕获日志的临时 Agent
   重放请求，确认 DeepSeek 已成功选择 `fitness.user.get_current.v1`，随后 Gateway `/internal/agent-tools/v1/me` 返回 404：
@@ -1333,7 +1332,14 @@ Memory 脱敏评测。
   `DEV_AGENT_ROLE`，角色仅限 `ORGANIZATION_ADMIN`、`COACH`、`STUDENT`，禁止签发 `SYSTEM_ADMIN`；
   `agent-business-live-preflight` 新增 Gateway `/me` 身份探针，在调用 DeepSeek 前验证签名主体能够映射到真实业务用户，
   且不输出用户资料、内部 Token 或 AgentContext。已使用本地有效合同学员完成 Agent、Gateway、Booking 和业务身份六项前置验证。
-  完整 Booking dry-run 仍需对“向 DeepSeek 发送该测试学员、合同、课程和教练标识”取得明确授权后执行。
+- 2026-08-23 已完成获得明确授权后的 Booking dry-run：向 DeepSeek 发送本地测试学员、合同、课程和教练标识，
+  验证了自然语言请求进入 BOOKING 路由、强制选择创建预约工具、签名机构/学员主体绑定、Asia/Shanghai 本地时间转
+  Java `Instant` 所需的 UTC RFC3339、确认单生成、`PENDING` 查询和正式 `REJECT` 清理。结果为 Agent/Gateway/Booking
+  全链路 HTTP 200，确认单进入 `REJECTED`，没有执行预约写入、扣减课时或留下 `PENDING` 数据。
+- 本次联调暴露并修复了两个企业集成问题：DeepSeek 可能先调用只读工具后结束，现对高置信度创建/改约/取消请求使用
+  Supervisor 级强制工具选择，但仍必须经过 Tool Registry、确认单和 `interrupt()`；Booking 确认服务原先把未要求
+  Gateway 快照的预约动作错误标记为“从 Gateway 解析组织”，现统一使用已绑定的签名组织 ID。相关参数绑定、时间转换、
+  模型工具选择和确认规范化均有单元测试覆盖。
 - Gateway 质量门禁同时发现预约可用性单元测试依赖已经过去的固定日期；已为 `FitnessToolService` 注入生产系统时钟和
   测试固定时钟，保持生产行为不变，避免日期推进后测试误报失败。
 - 已为 Booking/Fitness 真实联调脚本补齐离线协议测试：默认流程会生成确认单、读取 `PENDING`、自动提交 `REJECT`
@@ -1343,7 +1349,11 @@ Memory 脱敏评测。
 - Booking 服务时间校验已注入 `Clock`：生产继续使用系统 UTC 时钟，单元测试使用固定时钟，避免静态预约夹具随日历推进失效；
   同时显式标注 Spring Boot 2.1 的生产构造函数，修复测试构造函数引入后的启动装配问题。
 
-完成上述验收后，按以下顺序继续：
+Booking 真实 dry-run 已完成，当前唯一进行中的步骤切换为“Fitness 真实联调验收”：使用同一套真实 AgentContext
+和本地健身数据，先验证 RAG/Memory 查询与结构化训练计划草案预览，再验证草案写入前的确认单和教练审核边界；本阶段
+仍不执行真实训练计划写入，除非另行获得明确授权。
+
+完成 Fitness 验收后，按以下顺序继续：
 
 1. 认证服务接入和 AgentContext/确认凭证的非对称签名、密钥轮换及故障演练。
 2. Proactive Agent 第一版，只使用现有 Outbox/事件和 `IN_APP` 站内通知，实现预约、训练和审核待办提醒；

@@ -1,8 +1,9 @@
 import asyncio
 import uuid
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from typing import Any, Literal, TypeVar
+from zoneinfo import ZoneInfo
 
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
@@ -10,6 +11,14 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError
 from app.core.config import Settings
 
 T = TypeVar("T", bound=BaseModel)
+_BUSINESS_TIMEZONE = ZoneInfo("Asia/Shanghai")
+
+
+def _instant_parameter(value: datetime) -> str:
+    """把 Python datetime 编码为 Java Instant 可解析的 RFC3339 字符串。"""
+
+    aware = value.replace(tzinfo=_BUSINESS_TIMEZONE) if value.tzinfo is None else value
+    return aware.astimezone(UTC).isoformat().replace("+00:00", "Z")
 
 
 class GatewayClientError(RuntimeError):
@@ -317,8 +326,8 @@ class GatewayClient:
             {
                 "organizationId": organization_id,
                 "userId": user_id,
-                "from": from_time.isoformat() if from_time else None,
-                "to": to_time.isoformat() if to_time else None,
+                "from": _instant_parameter(from_time) if from_time else None,
+                "to": _instant_parameter(to_time) if to_time else None,
                 "limit": limit,
             },
             GatewayAppointment,
@@ -344,8 +353,8 @@ class GatewayClient:
                 "studentId": student_id,
                 "coachId": coach_id,
                 "courseId": course_id,
-                "start": start_time.isoformat(),
-                "end": end_time.isoformat(),
+                "start": _instant_parameter(start_time),
+                "end": _instant_parameter(end_time),
                 "excludeAppointmentId": exclude_appointment_id,
             },
             GatewayBookingAvailability,

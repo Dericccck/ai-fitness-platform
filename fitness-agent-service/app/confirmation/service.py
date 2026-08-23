@@ -241,10 +241,18 @@ def _ensure_identity_snapshot(record: ConfirmationRecord, identity: AgentIdentit
 def _organization_from_input(tool_id: str, raw_input: Mapping[str, Any]) -> str:
     if tool_id in {
         "fitness.training.plan.create_draft.v1",
+        "fitness.booking.create.v1",
+        "fitness.booking.reschedule.v1",
+        "fitness.booking.cancel.v1",
         "fitness.memory.save.v1",
         "fitness.memory.revoke.v1",
     }:
-        value = raw_input.get("organization_id")
+        # 训练计划和 Booking 写入的组织范围直接来自已绑定的工具参数；资源型
+        # 训练计划审核/发布等动作则仍必须从 Gateway 读取可信资源快照。Booking
+        # 创建/改约/取消虽然都需要确认，但当前版本的策略没有 resource_required，
+        # 不能把占位值 ``__resolved_from_gateway__`` 传给规范化器，否则会被动作中
+        # 的真实 organization_id 判定为跨机构参数。
+        value = raw_input.get("organization_id") or raw_input.get("organizationId")
         if isinstance(value, str) and value.strip():
             return value
     # 资源型动作的机构范围必须来自 Gateway 计划快照，不能由模型参数补充。

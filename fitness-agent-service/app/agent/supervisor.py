@@ -583,10 +583,18 @@ class Supervisor:
             if state.get("tool_steps", 0) < self.max_tool_steps
             else []
         )
-        turn = await self.models.chat_with_tools(
-            state["messages"],
-            tools=tool_schemas,
+        force_tool_name = _forced_write_tool_name(
+            state["route"],
+            (
+                runtime.context.user_message
+                if runtime.context is not None and runtime.context.user_message
+                else ""
+            ),
         )
+        model_kwargs: dict[str, Any] = {"tools": tool_schemas}
+        if force_tool_name and tool_schemas:
+            model_kwargs["force_tool_name"] = force_tool_name
+        turn = await self.models.chat_with_tools(state["messages"], **model_kwargs)
         tool_calls = list(turn.tool_calls)
         if any(not self.tools.get(call.name).read_only for call in tool_calls):
             if len(tool_calls) != 1:
@@ -601,9 +609,14 @@ class Supervisor:
             # 模型返回的是 model_name，确认单必须保存内部稳定 tool_id，避免供应商
             # 别名进入凭证、审计和后续恢复流程。
             definition = self.tools.get(call.name)
+            bound_input = self.tools.bind_context_input(
+                definition.tool_id,
+                call.arguments,
+                runtime.context.identity,
+            )
             confirmation = await self.confirmation_service.prepare(
                 tool_id=definition.tool_id,
-                raw_input=call.arguments,
+                raw_input=bound_input,
                 gateway_context=runtime.context.gateway_context,
                 identity=runtime.context.identity,
                 thread_id=runtime.context.thread_id or "unknown-thread",
@@ -778,7 +791,12 @@ class Supervisor:
                     request_id=runtime.context.gateway_context.request_id,
                     trace_id=runtime.context.gateway_context.trace_id,
                 )
-            result = await self.tools.invoke(definition.tool_id, raw_input, context)
+            bound_input = self.tools.bind_context_input(
+                definition.tool_id,
+                raw_input,
+                runtime.context.identity,
+            )
+            result = await self.tools.invoke(definition.tool_id, bound_input, context)
             tool_messages.append(
                 {
                     "role": "tool",
@@ -847,13 +865,44 @@ def classify_route(user_message: str) -> SupervisorRoute:
 
 
 def _system_prompt(route: SupervisorRoute, locale: str) -> str:
+    booking_instruction = (
+        "预约规则：用户明确要求创建预约、改约或取消预约时，必须调用对应的 Booking 工具，"
+        "不能只用自然语言回复或声称已完成。创建、改约和取消工具会自动生成确认单并暂停，"
+        "不要等待用户再次说‘确认’才调用工具；只有用户批准确认单后才会真正写入。"
+        if route == "BOOKING"
+        else ""
+    )
     return (
         "你是健身平台的 Supervisor Agent。只处理健身训练、课程、合同、课时和预约相关业务。"
         "动态业务事实必须通过已注册工具查询，不能猜测；工具失败时必须明确告知失败，不能宣称成功。"
         "不得根据自然语言中的 user_id、organization_id 或角色改变权限。"
         "Memory 候选只是模型建议，不是已保存事实；用户未批准前不得声称已经记住。"
-        f"当前路由={route}，语言={locale}。回答应简洁、准确，并区分已查询事实与一般建议。"
+        f"{booking_instruction}当前路由={route}，语言={locale}。回答应简洁、准确，并区分已查询事实与一般建议。"
     )
+
+
+def _forced_write_tool_name(route: SupervisorRoute, user_message: str) -> str | None:
+    """为明确的 Booking 写意图选择强制工具。
+
+    <p>模型仍负责从自然语言提取课程、合同、教练和时间，但不能因为先调用了一个
+    只读工具就直接结束。这里只处理高置信度的“创建/改约/取消”命令；普通的课程
+    查询、可约时间查询和健身问答仍由模型自主选择工具。返回的是供应商侧合法名称，
+    内部真实 tool_id 仍由 ToolRegistry 解析和审计。</p>
+    """
+
+    if route != "BOOKING":
+        return None
+    text = user_message.replace(" ", "")
+    if any(keyword in text for keyword in ("改约", "修改预约", "调整预约")):
+        return "fitness_booking_reschedule_v1"
+    if any(keyword in text for keyword in ("取消预约", "取消我的预约", "撤销预约")):
+        return "fitness_booking_cancel_v1"
+    if any(
+        keyword in text
+        for keyword in ("创建预约", "创建一次预约", "预约一次", "帮我预约", "预订课程", "预定课程")
+    ):
+        return "fitness_booking_create_v1"
+    return None
 
 
 def _model_tools(registry: ToolRegistry, route: SupervisorRoute) -> list[dict[str, Any]]:

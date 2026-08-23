@@ -61,6 +61,23 @@ async def test_model_gateway_normalizes_openai_tool_call() -> None:
     create.assert_awaited_once()
 
 
+async def test_model_gateway_can_force_a_specific_tool_for_explicit_write_intent() -> None:
+    gateway = ModelGateway(configured_settings())
+    create = AsyncMock(return_value=response_for(arguments='{"course_id":"course-1"}'))
+    gateway._llm.chat.completions.create = create
+
+    await gateway.chat_with_tools(
+        [{"role": "user", "content": "创建预约"}],
+        tools=[{"type": "function", "function": {"name": "fitness_booking_create_v1"}}],
+        force_tool_name="fitness_booking_create_v1",
+    )
+
+    assert create.await_args.kwargs["tool_choice"] == {
+        "type": "function",
+        "function": {"name": "fitness_booking_create_v1"},
+    }
+
+
 async def test_model_gateway_requests_json_object_for_structured_generation() -> None:
     gateway = ModelGateway(configured_settings())
     response = SimpleNamespace(

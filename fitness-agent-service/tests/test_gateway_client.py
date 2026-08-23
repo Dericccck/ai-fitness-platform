@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, datetime
 
 import httpx
 import pytest
@@ -197,3 +197,39 @@ async def test_client_rejects_malformed_operations_metric_response() -> None:
         client = GatewayClient(build_settings(), http_client)
         with pytest.raises(GatewayProtocolError):
             await client.query_operations_metric(context(), "org-1", "REVENUE_AMOUNT")
+
+
+async def test_client_encodes_naive_booking_time_as_shanghai_based_utc_instant() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.params["start"] == "2026-08-24T01:00:00Z"
+        assert request.url.params["end"] == "2026-08-24T02:00:00Z"
+        return httpx.Response(
+            200,
+            json={
+                "organizationId": "org-1",
+                "studentId": "student-1",
+                "coachId": "coach-1",
+                "courseId": "course-1",
+                "startTime": "2026-08-24T01:00:00Z",
+                "endTime": "2026-08-24T02:00:00Z",
+                "available": True,
+                "reasonCodes": [],
+                "conflicts": [],
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://gateway.test"
+    ) as http_client:
+        client = GatewayClient(build_settings(), http_client)
+        result = await client.check_booking_availability(
+            context(),
+            "org-1",
+            student_id="student-1",
+            coach_id="coach-1",
+            course_id="course-1",
+            start_time=datetime.fromisoformat("2026-08-24T09:00:00"),
+            end_time=datetime.fromisoformat("2026-08-24T10:00:00"),
+        )
+
+    assert result.available is True
