@@ -360,6 +360,101 @@ async def test_registry_blocks_student_from_coach_only_generation_tool() -> None
         )
 
 
+def test_training_plan_role_matrix_keeps_student_in_execution_only_lane() -> None:
+    registry = build_fitness_tool_registry(cast(GatewayClient, FakeGateway()))
+
+    author_roles = {"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH"}
+    author_tools = (
+        "fitness.training.plan.generate_draft.v1",
+        "fitness.training.plan.create_draft.v1",
+        "fitness.training.plan.submit_review.v1",
+        "fitness.training.plan.review.v1",
+        "fitness.training.plan.publish.v1",
+    )
+    for tool_id in author_tools:
+        assert registry.get(tool_id).allowed_roles == frozenset(author_roles)
+        assert "STUDENT" not in registry.get(tool_id).allowed_roles
+
+    assert registry.get("fitness.training.plan.get.v1").allowed_roles == frozenset(
+        {"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH", "STUDENT"}
+    )
+    assert registry.get("fitness.training.day.executions.list.v1").allowed_roles == frozenset(
+        {"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH", "STUDENT"}
+    )
+    assert registry.get("fitness.training.day.record_execution.v1").allowed_roles == frozenset(
+        {"STUDENT"}
+    )
+
+
+async def test_registry_blocks_student_from_all_plan_authoring_tools() -> None:
+    registry = build_fitness_tool_registry(cast(GatewayClient, FakeGateway()))
+    context = ToolContext(
+        gateway_context=GatewayRequestContext(signed_context="signed-context"),
+        identity=AgentIdentity(
+            subject="student-1",
+            organization_ids=frozenset({"org-1"}),
+            roles=frozenset({"STUDENT"}),
+            issued_at=1,
+            expires_at=2,
+        ),
+    )
+
+    inputs = {
+        "fitness.training.plan.create_draft.v1": {
+            "organization_id": "org-1",
+            "student_id": "student-1",
+            "coach_id": "coach-1",
+            "title": "基础力量",
+            "goal_type": "力量",
+            "days": [
+                {
+                    "day_number": 1,
+                    "title": "下肢",
+                    "items": [
+                        {
+                            "exercise_name": "深蹲",
+                            "sort_order": 1,
+                            "sets": 3,
+                            "reps": "8-10",
+                        }
+                    ],
+                }
+            ],
+        },
+        "fitness.training.plan.submit_review.v1": {"plan_id": "plan-1"},
+        "fitness.training.plan.review.v1": {
+            "plan_id": "plan-1",
+            "decision": "APPROVE",
+        },
+        "fitness.training.plan.publish.v1": {"plan_id": "plan-1"},
+    }
+
+    for tool_id, raw_input in inputs.items():
+        with pytest.raises(ToolRoleForbiddenError):
+            await registry.invoke(tool_id, raw_input, context)
+
+
+async def test_student_execution_tool_is_role_allowed_but_still_requires_confirmation() -> None:
+    registry = build_fitness_tool_registry(cast(GatewayClient, FakeGateway()))
+    context = ToolContext(
+        gateway_context=GatewayRequestContext(signed_context="signed-context"),
+        identity=AgentIdentity(
+            subject="student-1",
+            organization_ids=frozenset({"org-1"}),
+            roles=frozenset({"STUDENT"}),
+            issued_at=1,
+            expires_at=2,
+        ),
+    )
+
+    with pytest.raises(ToolConfirmationRequiredError):
+        await registry.invoke(
+            "fitness.training.day.record_execution.v1",
+            {"plan_id": "plan-1", "day_id": "day-1", "status": "COMPLETED"},
+            context,
+        )
+
+
 async def test_registry_rejects_unknown_tool_without_invoking_gateway() -> None:
     sink = RecordingAuditSink()
     gateway = FakeGateway()

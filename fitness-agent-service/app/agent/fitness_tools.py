@@ -31,6 +31,7 @@ from .tool_registry import (
 
 _ID_FIELD = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
 _READ_ROLES = frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH", "STUDENT"})
+_PLAN_AUTHOR_ROLES = frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH"})
 _BUSINESS_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
@@ -940,7 +941,7 @@ def build_fitness_tool_registry(
             ),
             input_model=TrainingPlanGenerationInput,
             handler=generate_training_plan_draft,
-            allowed_roles=frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH"}),
+            allowed_roles=_PLAN_AUTHOR_ROLES,
             read_only=True,
             requires_confirmation=False,
         ),
@@ -949,7 +950,10 @@ def build_fitness_tool_registry(
             description="创建结构化训练计划草案；草案不能直接发布，必须经过教练审核。",
             input_model=CreateTrainingDraftToolInput,
             handler=create_training_draft,
-            allowed_roles=_READ_ROLES,
+            # 学员可以查看已发布计划和提交执行记录，但不能通过自然语言触发计划
+            # 创建。即使这个写操作还需要 interrupt/确认凭证，也不能把学员暴露到
+            # “先创建再等待审核”的教练工作流中；Java Gateway 仍会做最终资源校验。
+            allowed_roles=_PLAN_AUTHOR_ROLES,
             read_only=False,
             requires_confirmation=True,
             confirmation_policy=_create_policy(),
@@ -1024,7 +1028,7 @@ def build_fitness_tool_registry(
             description="提交训练计划审核；只有负责教练或机构管理员可以完成该状态转换。",
             input_model=TrainingPlanToolInput,
             handler=submit_training_review,
-            allowed_roles=frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH"}),
+            allowed_roles=_PLAN_AUTHOR_ROLES,
             read_only=False,
             requires_confirmation=True,
             confirmation_policy=_submit_policy(),
@@ -1034,7 +1038,7 @@ def build_fitness_tool_registry(
             description="审核或驳回训练计划；驳回必须填写原因。",
             input_model=ReviewTrainingPlanToolInput,
             handler=review_training_plan,
-            allowed_roles=frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH"}),
+            allowed_roles=_PLAN_AUTHOR_ROLES,
             read_only=False,
             requires_confirmation=True,
             confirmation_policy=_review_policy(),
@@ -1044,7 +1048,7 @@ def build_fitness_tool_registry(
             description="发布已审核通过的训练计划，发布后学员才可以执行。",
             input_model=TrainingPlanToolInput,
             handler=publish_training_plan,
-            allowed_roles=frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH"}),
+            allowed_roles=_PLAN_AUTHOR_ROLES,
             read_only=False,
             requires_confirmation=True,
             confirmation_policy=_publish_policy(),
