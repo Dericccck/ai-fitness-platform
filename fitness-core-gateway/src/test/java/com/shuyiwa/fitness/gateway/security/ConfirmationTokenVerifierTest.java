@@ -7,6 +7,10 @@ import org.junit.Test;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.PrivateKey;
+import java.security.Signature;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.HashMap;
@@ -62,6 +66,32 @@ public class ConfirmationTokenVerifierTest {
         );
     }
 
+    @Test
+    public void acceptsRs256ConfirmationTokenWithPublicKey() throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+        generator.initialize(2048);
+        KeyPair keyPair = generator.generateKeyPair();
+        GatewayProperties properties = properties();
+        properties.setConfirmationSigningAlgorithm("RS256");
+        properties.setConfirmationSigningKeyId("confirm-rsa-v1");
+        Map<String, String> publicKeys = new HashMap<>();
+        publicKeys.put("confirm-rsa-v1", pem(keyPair.getPublic().getEncoded()));
+        properties.setConfirmationVerificationPublicKeyRing(publicKeys);
+
+        ConfirmationTokenClaims claims = new ConfirmationTokenVerifier(
+                new ObjectMapper(), properties
+        ).verify(
+                rsaToken(keyPair.getPrivate()),
+                context(),
+                "fitness.training.plan.create_draft.v1",
+                "CREATE_TRAINING_DRAFT",
+                "org-1:student-1",
+                "request-1"
+        );
+
+        assertEquals("jti-1", claims.getJti());
+    }
+
     private static GatewayProperties properties() {
         GatewayProperties properties = new GatewayProperties();
         properties.setConfirmationSigningSecret(SECRET);
@@ -96,5 +126,34 @@ public class ConfirmationTokenVerifierTest {
         mac.init(new SecretKeySpec(SECRET.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
         Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();
         return encoder.encodeToString(payloadBytes) + "." + encoder.encodeToString(mac.doFinal(payloadBytes));
+    }
+
+    private static String rsaToken(PrivateKey privateKey) throws Exception {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("alg", "RS256");
+        payload.put("kid", "confirm-rsa-v1");
+        payload.put("sub", "coach-1");
+        payload.put("action", "CREATE_TRAINING_DRAFT");
+        payload.put("resource", "org-1:student-1");
+        payload.put("request_id", "request-1");
+        payload.put("exp", Instant.now().plusSeconds(120).getEpochSecond());
+        payload.put("confirmation_id", "confirmation-1");
+        payload.put("tool_id", "fitness.training.plan.create_draft.v1");
+        payload.put("organization_id", "org-1");
+        payload.put("payload_hash", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        payload.put("jti", "jti-1");
+        byte[] payloadBytes = new ObjectMapper().writeValueAsBytes(payload);
+        Signature signer = Signature.getInstance("SHA256withRSA");
+        signer.initSign(privateKey);
+        signer.update(payloadBytes);
+        Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();
+        return encoder.encodeToString(payloadBytes) + "." + encoder.encodeToString(signer.sign());
+    }
+
+    private static String pem(byte[] encodedPublicKey) {
+        Base64.Encoder encoder = Base64.getMimeEncoder(64, new byte[]{'\n'});
+        return "-----BEGIN PUBLIC KEY-----\n"
+                + encoder.encodeToString(encodedPublicKey)
+                + "\n-----END PUBLIC KEY-----";
     }
 }

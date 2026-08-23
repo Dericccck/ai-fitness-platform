@@ -30,7 +30,8 @@ public class JwksPublicKeyProvider implements AgentContextPublicKeyProvider {
     private static final String RSA_SIGNATURE_ALGORITHM = "RS256";
     private static final int MAX_KEYS = 50;
     private final ObjectMapper objectMapper;
-    private final GatewayProperties properties;
+    private final String jwksUrl;
+    private final long cacheSeconds;
     private final RestTemplate restTemplate;
     private final Clock clock;
     private volatile CacheSnapshot cache;
@@ -38,30 +39,65 @@ public class JwksPublicKeyProvider implements AgentContextPublicKeyProvider {
     public JwksPublicKeyProvider(ObjectMapper objectMapper, GatewayProperties properties) {
         this(
                 objectMapper,
-                properties,
+                properties.getContextVerificationJwksUrl(),
+                properties.getContextVerificationJwksCacheSeconds(),
+                properties.getContextVerificationJwksTimeoutMilliseconds()
+        );
+    }
+
+    /** 供确认凭证等其他签名域复用同一 JWKS 实现，但使用独立的配置和缓存实例。 */
+    public JwksPublicKeyProvider(
+            ObjectMapper objectMapper,
+            String jwksUrl,
+            long cacheSeconds,
+            long timeoutMilliseconds
+    ) {
+        this(
+                objectMapper,
+                jwksUrl,
+                cacheSeconds,
                 new RestTemplateBuilder()
-                        .setConnectTimeout(Duration.ofMillis(properties.getContextVerificationJwksTimeoutMilliseconds()))
-                        .setReadTimeout(Duration.ofMillis(properties.getContextVerificationJwksTimeoutMilliseconds()))
+                        .setConnectTimeout(Duration.ofMillis(timeoutMilliseconds))
+                        .setReadTimeout(Duration.ofMillis(timeoutMilliseconds))
                         .build(),
                 Clock.systemUTC()
         );
     }
 
+    private JwksPublicKeyProvider(
+            ObjectMapper objectMapper,
+            String jwksUrl,
+            long cacheSeconds,
+            RestTemplate restTemplate,
+            Clock clock
+    ) {
+        this.objectMapper = objectMapper;
+        this.jwksUrl = jwksUrl;
+        this.cacheSeconds = cacheSeconds;
+        this.restTemplate = restTemplate;
+        this.clock = clock;
+    }
+
+    /*
+     * 保留一个兼容测试构造函数，避免测试需要启动真实 HTTP 服务。
+     */
     JwksPublicKeyProvider(
             ObjectMapper objectMapper,
             GatewayProperties properties,
             RestTemplate restTemplate,
             Clock clock
     ) {
-        this.objectMapper = objectMapper;
-        this.properties = properties;
-        this.restTemplate = restTemplate;
-        this.clock = clock;
+        this(
+                objectMapper,
+                properties.getContextVerificationJwksUrl(),
+                properties.getContextVerificationJwksCacheSeconds(),
+                restTemplate,
+                clock
+        );
     }
 
     @Override
     public PublicKey getPublicKey(String keyId) {
-        String jwksUrl = properties.getContextVerificationJwksUrl();
         if (jwksUrl == null || jwksUrl.trim().isEmpty()) {
             return null;
         }
@@ -85,7 +121,7 @@ public class JwksPublicKeyProvider implements AgentContextPublicKeyProvider {
             Map<String, PublicKey> keys = parse(document);
             return new CacheSnapshot(
                     Collections.unmodifiableMap(keys),
-                    now.plusSeconds(properties.getContextVerificationJwksCacheSeconds())
+                    now.plusSeconds(cacheSeconds)
             );
         } catch (GatewaySecurityException exception) {
             throw exception;

@@ -251,6 +251,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.confirmation_token_issuer = ConfirmationTokenIssuer(
         settings.confirmation_signing_secret,
         ttl_seconds=settings.confirmation_token_ttl_seconds,
+        signing_algorithm=settings.confirmation_signing_algorithm,
+        signing_key_id=settings.confirmation_signing_key_id,
+        signing_private_key_pem=settings.confirmation_signing_private_key_pem,
     )
     app.state.confirmation_service = ConfirmationService(
         ConfirmationRepository(app.state.database),

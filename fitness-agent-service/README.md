@@ -62,9 +62,10 @@
 - OpenTelemetry：可选 OTLP/HTTP Trace 导出，默认关闭且不发送 Prompt 或用户档案。
 - 写操作确认：训练计划写工具会先生成确定性确认摘要和加密参数，写入 PostgreSQL 确认单后通过
   LangGraph `interrupt()` 暂停；批准接口会在服务端持久化决定后使用同一 `thread_id` 调用
-  `Command(resume=...)`，从加密参数恢复并通过短时确认凭证调用 Java Gateway。当前凭证仍是与
-  Java Gateway v1 兼容的 HMAC 过渡版本；一次性 JTI 已在 Agent 确认单中领取、由 Gateway
-  校验并在训练服务事务中消费。AgentContext 已支持配置公钥环的 RS256 验签，RS256 私钥不进入
+  `Command(resume=...)`，从加密参数恢复并通过短时确认凭证调用 Java Gateway。确认凭证兼容
+  Java Gateway v1 的 HMAC 模式，也支持 Agent 使用 RSA 私钥签发的 RS256 Token；一次性 JTI 已在 Agent 确认单中领取、由 Gateway
+  校验并在训练服务事务中消费。确认凭证已支持 Agent 使用配置的 RSA 私钥签发 RS256 Token，
+  Gateway 只使用公钥验证。AgentContext 已支持配置公钥环的 RS256 验签，RS256 私钥不进入
   Agent 服务；默认不配置外部 JWKS，未配置时公钥更新仍由部署配置完成。
   配置 `GATEWAY_CONTEXT_VERIFICATION_JWKS_URL` 后，Agent 会按 `kid` 获取标准 JWKS 公钥并
   在短期缓存内复用；缓存过期且认证服务不可用时，RS256 请求会 fail-closed。

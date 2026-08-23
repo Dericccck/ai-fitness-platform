@@ -52,7 +52,10 @@ AgentContext 当前支持 `HS256` 和配置公钥环的 `RS256`；`GATEWAY_CONTE
 配置 `GATEWAY_CONTEXT_VERIFICATION_JWKS_URL` 后，Gateway 会按 `kid` 从标准 JWKS 文档读取
 RSA 公钥并在短期缓存内复用；缓存过期且认证服务不可用时，RS256 请求会 fail-closed。
 `GATEWAY_CONFIRMATION_SIGNING_SECRET` 必须与 Agent 的 `AGENT_CONFIRMATION_SIGNING_SECRET`
-逐字节一致；当前是兼容 Gateway v1 的 HMAC 过渡密钥，后续 v2 会切换为可轮换的非对称验签。
+逐字节一致；确认凭证当前支持 HMAC v1 和 RS256。使用 RS256 时配置
+`GATEWAY_CONFIRMATION_SIGNING_ALGORITHM=RS256`、按 `kid` 配置
+`confirmation-verification-public-key-ring` 或 `GATEWAY_CONFIRMATION_VERIFICATION_JWKS_URL`，
+Gateway 只持有公钥，Agent/确认服务持有私钥。
 
 真实数据库集成测试默认关闭。连接到专门的测试库并提供有效机构 ID 后显式执行；本地开发也可以
 临时复用 Docker `fitness-mysql`（宿主机 `3307`、数据库 `fitness`），但生产和 CI 仍必须使用

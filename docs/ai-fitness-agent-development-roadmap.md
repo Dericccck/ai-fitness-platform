@@ -445,11 +445,11 @@ PostgreSQL 迁移至少建立以下逻辑结构，具体字段名在实现时固
    AgentContext 重新认证，使用同一 thread 会话锁通过 `Command(resume=...)` 恢复，并从加密确认单
    恢复原始工具参数后调用 Gateway。API 返回授权/执行双状态，前端可以稳定渲染完成、待确认、拒绝、
    过期、执行中和执行失败；服务端不会把 thread、参数或 Token 交给前端。
-6. **凭证 v2 与消费闭环（字段和 JTI 消费已完成，算法升级待完成）**：确认凭证已新增并校验
-   `confirmation_id/tool_id/organization_id/payload_hash/jti`，Gateway 将已验签声明透传到训练服务，
-   训练计划写入与 JTI 消费在同一事务内完成。后续生产采用 ES256 等非对称 JWS：Agent 授权模块只
-   持有私钥，Gateway 只持有按 `kid` 轮换的公钥，避免验证方同时具备任意签发能力；当前 HMAC v1
-   属于过渡实现，算法升级完成后按配置关闭 v1，不能永久兼容弱范围凭证。
+6. **凭证 v2 与消费闭环（字段、JTI 消费和 RS256 验签已完成）**：确认凭证已新增并校验
+  `confirmation_id/tool_id/organization_id/payload_hash/jti`，Gateway 将已验签声明透传到训练服务，
+   训练计划写入与 JTI 消费在同一事务内完成。当前支持 Agent 使用 RS256 私钥签发、Gateway
+   按 `kid` 使用静态公钥或 JWKS 公钥验证；HMAC v1 仍作为本地兼容过渡实现，生产切换后应按
+   配置关闭 v1，不能永久兼容弱范围凭证。确认凭证撤销和生产故障演练仍未完成。
 7. **训练计划四工具联调**：覆盖创建草案、提交审核、批准/驳回和发布的摘要、角色、资源状态及幂等；
    教练业务审核页面和 Agent 即时确认分别保留，不合并成一个状态。
 8. **可观测性与清理**：增加待确认数、确认延迟、拒绝率、过期率、恢复失败和重复消费指标；日志只记
@@ -1187,7 +1187,8 @@ Memory、主动提醒、客服、多端交互和上线演练完成后执行。�
   幂等创建、决定幂等、行锁并发控制、一次性 JTI 领取边界和可重试失败重新签发 JTI；已完成确认动作
   规范化、AES-GCM 参数加密、LangGraph `interrupt()` 暂停、Checkpoint 脱敏、确认 API、服务端恢复
   和真实 Gateway 执行；已完成 Gateway 完整字段校验和训练服务 JTI 一次性消费。AgentContext 已增加
-  版本化 `alg`/`kid` 和 RS256 公钥环验签，尚未完成外部 JWKS、确认凭证非对称签名、撤销和生产故障演练。
+  版本化 `alg`/`kid`、RS256 公钥环验签、确认凭证 RS256 签发/验签和确认凭证 JWKS 公钥缓存已完成，
+  尚未完成真实认证服务配置、Token/确认凭证撤销和生产故障演练。
 - 训练计划结构化生成第一切片：增加只读 `fitness.training.plan.generate_draft.v1` 工具，按已验证
   AgentContext 检索已发布知识，调用统一 DeepSeek 模型网关的 JSON Object 输出，使用 Pydantic 和
   业务规则校验训练日/动作顺序、数量和目标一致性，并返回来源引用。生成结果仅为 `DRAFT_PREVIEW`，
@@ -1219,8 +1220,8 @@ Memory、主动提醒、客服、多端交互和上线演练完成后执行。�
 认证契约升级第一切片：AgentContext 载荷支持显式 `alg`/`kid`，Java Gateway 和 Python Agent
 同时拒绝未知算法、未知密钥 ID 和主密钥回退；Gateway/Agent 支持轮换期间读取旧 HMAC 密钥或
 RS256 公钥，并已实现标准 JWKS 公钥解析、按 `kid` 缓存和缓存过期后的 fail-closed 刷新策略；
-历史缺少这两个字段的短时 HMAC v1 Token 仍兼容验证。当前尚未配置真实认证服务 JWKS 地址，
-也不代表已经完成确认凭证非对称签名、撤销和生产故障演练。
+确认凭证也已支持 RS256 私钥签发和 Gateway 公钥/JWKS 验签。历史缺少这两个字段的短时 HMAC v1
+Token 仍兼容验证。当前尚未配置真实认证服务 JWKS 地址，也不代表已经完成撤销和生产故障演练。
 
 路线调整后的下一步按顺序执行：
 
@@ -1401,7 +1402,7 @@ Booking 和 Fitness 的真实 dry-run、Agent 层角色矩阵、训练服务最�
 完成 Fitness 验收后，按以下顺序继续：
 
 1. 对接真实认证服务的 JWKS 地址，验证公钥轮换、缓存失效、认证服务不可用和恢复场景；随后补齐
-   AgentContext/确认凭证的非对称签名、撤销语义及生产故障演练。当前只是通用 JWKS 客户端，不能
+   AgentContext/确认凭证的撤销语义及生产故障演练。当前只是通用 JWKS 客户端，不能
    把本地配置的公钥或测试 JWKS 当成生产认证服务。
 2. Proactive Agent 第一版，只使用现有 Outbox/事件和 `IN_APP` 站内通知，实现预约、训练和审核待办提醒；
    暂不接入短信、Push，也不为 Memory 增加模拟短信。

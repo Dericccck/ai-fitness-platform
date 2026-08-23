@@ -31,6 +31,15 @@ public class GatewayProperties {
     private long contextVerificationJwksTimeoutMilliseconds = 2000L;
     private long maxContextTtlSeconds = 300L;
     private String confirmationSigningSecret = "";
+    /** 确认凭证允许的签名算法；本地默认保持 HMAC v1。 */
+    private String confirmationSigningAlgorithm = "HS256";
+    private String confirmationSigningKeyId = "legacy";
+    private Map<String, String> confirmationSigningKeyRing = new HashMap<>();
+    /** RS256 确认凭证只读取公钥，私钥由 Agent 服务或认证服务持有。 */
+    private Map<String, String> confirmationVerificationPublicKeyRing = new HashMap<>();
+    private String confirmationVerificationJwksUrl = "";
+    private long confirmationVerificationJwksCacheSeconds = 300L;
+    private long confirmationVerificationJwksTimeoutMilliseconds = 2000L;
 
     public String getInternalServiceToken() {
         return internalServiceToken;
@@ -122,5 +131,69 @@ public class GatewayProperties {
 
     public void setConfirmationSigningSecret(String confirmationSigningSecret) {
         this.confirmationSigningSecret = confirmationSigningSecret;
+    }
+
+    public String getConfirmationSigningAlgorithm() {
+        return confirmationSigningAlgorithm;
+    }
+
+    public void setConfirmationSigningAlgorithm(String confirmationSigningAlgorithm) {
+        this.confirmationSigningAlgorithm = confirmationSigningAlgorithm;
+    }
+
+    public String getConfirmationSigningKeyId() {
+        return confirmationSigningKeyId;
+    }
+
+    public void setConfirmationSigningKeyId(String confirmationSigningKeyId) {
+        this.confirmationSigningKeyId = confirmationSigningKeyId;
+    }
+
+    public Map<String, String> getConfirmationSigningKeyRing() {
+        return confirmationSigningKeyRing;
+    }
+
+    public void setConfirmationSigningKeyRing(Map<String, String> confirmationSigningKeyRing) {
+        this.confirmationSigningKeyRing = confirmationSigningKeyRing == null
+                ? new HashMap<>()
+                : new HashMap<>(confirmationSigningKeyRing);
+    }
+
+    public Map<String, String> getConfirmationVerificationPublicKeyRing() {
+        return confirmationVerificationPublicKeyRing;
+    }
+
+    public void setConfirmationVerificationPublicKeyRing(
+            Map<String, String> confirmationVerificationPublicKeyRing
+    ) {
+        this.confirmationVerificationPublicKeyRing = confirmationVerificationPublicKeyRing == null
+                ? new HashMap<>()
+                : new HashMap<>(confirmationVerificationPublicKeyRing);
+    }
+
+    public String getConfirmationVerificationJwksUrl() {
+        return confirmationVerificationJwksUrl;
+    }
+
+    public void setConfirmationVerificationJwksUrl(String confirmationVerificationJwksUrl) {
+        this.confirmationVerificationJwksUrl = confirmationVerificationJwksUrl;
+    }
+
+    public long getConfirmationVerificationJwksCacheSeconds() {
+        return confirmationVerificationJwksCacheSeconds;
+    }
+
+    public void setConfirmationVerificationJwksCacheSeconds(long confirmationVerificationJwksCacheSeconds) {
+        this.confirmationVerificationJwksCacheSeconds = confirmationVerificationJwksCacheSeconds;
+    }
+
+    public long getConfirmationVerificationJwksTimeoutMilliseconds() {
+        return confirmationVerificationJwksTimeoutMilliseconds;
+    }
+
+    public void setConfirmationVerificationJwksTimeoutMilliseconds(
+            long confirmationVerificationJwksTimeoutMilliseconds
+    ) {
+        this.confirmationVerificationJwksTimeoutMilliseconds = confirmationVerificationJwksTimeoutMilliseconds;
     }
 }

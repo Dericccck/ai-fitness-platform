@@ -7,6 +7,10 @@ import org.springframework.stereotype.Component;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
+import java.security.PublicKey;
+import java.security.Signature;
+import java.security.spec.X509EncodedKeySpec;
 import java.time.Instant;
 import java.util.Base64;
 import java.util.Map;
@@ -21,18 +25,39 @@ import java.util.Map;
 @Component
 public class ConfirmationTokenVerifier {
 
+    private static final String HMAC_TOKEN_ALGORITHM = "HS256";
+    private static final String RSA_TOKEN_ALGORITHM = "RS256";
+    private static final String LEGACY_KEY_ID = "legacy";
     private final ObjectMapper objectMapper;
     private final GatewayProperties properties;
+    private final AgentContextPublicKeyProvider publicKeyProvider;
 
     public ConfirmationTokenVerifier(ObjectMapper objectMapper, GatewayProperties properties) {
+        this(
+                objectMapper,
+                properties,
+                new JwksPublicKeyProvider(
+                        objectMapper,
+                        properties.getConfirmationVerificationJwksUrl(),
+                        properties.getConfirmationVerificationJwksCacheSeconds(),
+                        properties.getConfirmationVerificationJwksTimeoutMilliseconds()
+                )
+        );
+    }
+
+    ConfirmationTokenVerifier(
+            ObjectMapper objectMapper,
+            GatewayProperties properties,
+            AgentContextPublicKeyProvider publicKeyProvider
+    ) {
         this.objectMapper = objectMapper;
         this.properties = properties;
+        this.publicKeyProvider = publicKeyProvider;
     }
 
     public ConfirmationTokenClaims verify(String token, AgentContext context, String toolId,
                                           String action, String resource, String requestId) {
-        if (token == null || token.trim().isEmpty()
-                || properties.getConfirmationSigningSecret().trim().isEmpty()) {
+        if (token == null || token.trim().isEmpty()) {
             throw new GatewaySecurityException("confirmation token is required");
         }
         try {
@@ -42,12 +67,11 @@ public class ConfirmationTokenVerifier {
             }
             byte[] payloadBytes = Base64.getUrlDecoder().decode(parts[0]);
             byte[] signature = Base64.getUrlDecoder().decode(parts[1]);
-            byte[] expected = hmac(payloadBytes, properties.getConfirmationSigningSecret());
-            if (!java.security.MessageDigest.isEqual(expected, signature)) {
-                throw new GatewaySecurityException("invalid confirmation token");
-            }
             @SuppressWarnings("unchecked")
             Map<String, Object> payload = objectMapper.readValue(payloadBytes, Map.class);
+            String algorithm = optionalString(payload, "alg", HMAC_TOKEN_ALGORITHM);
+            String keyId = optionalString(payload, "kid", LEGACY_KEY_ID);
+            verifySignature(payloadBytes, signature, algorithm, keyId);
             String subjectUserId = string(payload, "sub");
             String tokenAction = string(payload, "action");
             String tokenResource = string(payload, "resource");
@@ -85,6 +109,72 @@ public class ConfirmationTokenVerifier {
         Mac mac = Mac.getInstance("HmacSHA256");
         mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
         return mac.doFinal(payload);
+    }
+
+    private void verifySignature(byte[] payload, byte[] signature, String algorithm, String keyId)
+            throws Exception {
+        String configuredAlgorithm = properties.getConfirmationSigningAlgorithm();
+        if (!(HMAC_TOKEN_ALGORITHM.equals(algorithm) || RSA_TOKEN_ALGORITHM.equals(algorithm))
+                || !algorithm.equals(configuredAlgorithm)
+                || keyId.trim().isEmpty()) {
+            throw new GatewaySecurityException("unsupported confirmation token signing contract");
+        }
+        if (HMAC_TOKEN_ALGORITHM.equals(algorithm)) {
+            String secret = resolveSigningSecret(keyId);
+            if (secret == null || secret.trim().isEmpty()) {
+                throw new GatewaySecurityException("confirmation signing key is not configured");
+            }
+            byte[] expected = hmac(payload, secret);
+            if (!java.security.MessageDigest.isEqual(expected, signature)) {
+                throw new GatewaySecurityException("invalid confirmation token");
+            }
+            return;
+        }
+
+        PublicKey publicKey = resolveStaticPublicKey(keyId);
+        if (publicKey == null) {
+            publicKey = publicKeyProvider.getPublicKey(keyId);
+        }
+        if (publicKey == null) {
+            throw new GatewaySecurityException("confirmation verification key is not configured");
+        }
+        Signature verifier = Signature.getInstance("SHA256withRSA");
+        verifier.initVerify(publicKey);
+        verifier.update(payload);
+        if (!verifier.verify(signature)) {
+            throw new GatewaySecurityException("invalid confirmation token");
+        }
+    }
+
+    private String resolveSigningSecret(String keyId) {
+        if (keyId.equals(properties.getConfirmationSigningKeyId())) {
+            return properties.getConfirmationSigningSecret();
+        }
+        Map<String, String> keyRing = properties.getConfirmationSigningKeyRing();
+        return keyRing == null ? null : keyRing.get(keyId);
+    }
+
+    private PublicKey resolveStaticPublicKey(String keyId) {
+        String publicKeyPem = properties.getConfirmationVerificationPublicKeyRing().get(keyId);
+        if (publicKeyPem == null || publicKeyPem.trim().isEmpty()) {
+            return null;
+        }
+        try {
+            byte[] der = Base64.getMimeDecoder().decode(
+                    publicKeyPem
+                            .replace("-----BEGIN PUBLIC KEY-----", "")
+                            .replace("-----END PUBLIC KEY-----", "")
+            );
+            return KeyFactory.getInstance("RSA")
+                    .generatePublic(new X509EncodedKeySpec(der));
+        } catch (Exception exception) {
+            throw new GatewaySecurityException("invalid confirmation verification key");
+        }
+    }
+
+    private static String optionalString(Map<String, Object> payload, String key, String defaultValue) {
+        Object value = payload.get(key);
+        return value == null ? defaultValue : string(payload, key);
     }
 
     private static String string(Map<String, Object> payload, String key) {

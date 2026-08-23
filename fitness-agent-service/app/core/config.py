@@ -56,6 +56,25 @@ class Settings(BaseSettings):
     # 管理的同一密钥，不能通过浏览器或模型传入。
     confirmation_signing_secret: str = ""
     confirmation_token_ttl_seconds: int = Field(default=120, ge=30, le=600)
+    confirmation_signing_algorithm: str = Field(
+        default="HS256",
+        validation_alias=AliasChoices(
+            "CONFIRMATION_SIGNING_ALGORITHM", "AGENT_CONFIRMATION_SIGNING_ALGORITHM"
+        ),
+    )
+    confirmation_signing_key_id: str = Field(
+        default="legacy",
+        validation_alias=AliasChoices(
+            "CONFIRMATION_SIGNING_KEY_ID", "AGENT_CONFIRMATION_SIGNING_KEY_ID"
+        ),
+    )
+    confirmation_signing_private_key_pem: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "CONFIRMATION_SIGNING_PRIVATE_KEY_PEM",
+            "AGENT_CONFIRMATION_SIGNING_PRIVATE_KEY_PEM",
+        ),
+    )
 
     gateway_context_signing_secret: str = Field(
         default="",

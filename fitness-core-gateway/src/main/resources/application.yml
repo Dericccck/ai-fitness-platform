@@ -31,6 +31,13 @@ gateway:
     context-verification-jwks-timeout-milliseconds: ${GATEWAY_CONTEXT_VERIFICATION_JWKS_TIMEOUT_MS:2000}
     max-context-ttl-seconds: ${GATEWAY_MAX_CONTEXT_TTL_SECONDS:300}
     confirmation-signing-secret: ${GATEWAY_CONFIRMATION_SIGNING_SECRET:}
+    confirmation-signing-algorithm: ${GATEWAY_CONFIRMATION_SIGNING_ALGORITHM:HS256}
+    confirmation-signing-key-id: ${GATEWAY_CONFIRMATION_SIGNING_KEY_ID:legacy}
+    confirmation-signing-key-ring: {}
+    confirmation-verification-public-key-ring: {}
+    confirmation-verification-jwks-url: ${GATEWAY_CONFIRMATION_VERIFICATION_JWKS_URL:}
+    confirmation-verification-jwks-cache-seconds: ${GATEWAY_CONFIRMATION_VERIFICATION_JWKS_CACHE_SECONDS:300}
+    confirmation-verification-jwks-timeout-milliseconds: ${GATEWAY_CONFIRMATION_VERIFICATION_JWKS_TIMEOUT_MS:2000}
   training-service:
     base-url: ${GATEWAY_TRAINING_SERVICE_BASE_URL:http://127.0.0.1:8082}
     internal-service-token: ${GATEWAY_TRAINING_SERVICE_TOKEN:}
