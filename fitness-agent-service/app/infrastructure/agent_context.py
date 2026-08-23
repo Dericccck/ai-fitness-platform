@@ -19,6 +19,8 @@ from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
 
+from app.infrastructure.jwks import JwksPublicKeyProvider
+
 
 class AgentContextVerificationError(RuntimeError):
     """签名上下文缺失、篡改、过期或 claims 不完整。"""
@@ -55,6 +57,7 @@ class AgentContextVerifier:
         signing_key_id: str = "legacy",
         signing_key_ring: dict[str, str] | None = None,
         verification_public_key_ring: dict[str, str] | None = None,
+        jwks_provider: JwksPublicKeyProvider | None = None,
     ) -> None:
         self.secret = secret.encode("utf-8")
         self.max_ttl_seconds = max_ttl_seconds
@@ -64,6 +67,7 @@ class AgentContextVerifier:
             key: value.encode("utf-8") for key, value in (signing_key_ring or {}).items()
         }
         self.verification_public_key_ring = dict(verification_public_key_ring or {})
+        self.jwks_provider = jwks_provider
 
     def verify(self, token: str) -> AgentIdentity:
         if not token or len(token) > 8192:
@@ -100,9 +104,14 @@ class AgentContextVerifier:
                     raise AgentContextVerificationError("invalid agent context signature")
             else:
                 public_key_pem = self.verification_public_key_ring.get(key_id, "")
-                if not public_key_pem:
+                if public_key_pem:
+                    public_key = serialization.load_pem_public_key(public_key_pem.encode("utf-8"))
+                elif self.jwks_provider is not None:
+                    public_key = self.jwks_provider.get_public_key(key_id)
+                else:
+                    public_key = None
+                if public_key is None:
                     raise ValueError("unknown verification key id")
-                public_key = serialization.load_pem_public_key(public_key_pem.encode("utf-8"))
                 try:
                     public_key.verify(
                         signature,

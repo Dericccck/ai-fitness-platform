@@ -65,7 +65,9 @@
   `Command(resume=...)`，从加密参数恢复并通过短时确认凭证调用 Java Gateway。当前凭证仍是与
   Java Gateway v1 兼容的 HMAC 过渡版本；一次性 JTI 已在 Agent 确认单中领取、由 Gateway
   校验并在训练服务事务中消费。AgentContext 已支持配置公钥环的 RS256 验签，RS256 私钥不进入
-  Agent 服务；当前尚未接入外部 JWKS，公钥更新仍由部署配置完成。
+  Agent 服务；默认不配置外部 JWKS，未配置时公钥更新仍由部署配置完成。
+  配置 `GATEWAY_CONTEXT_VERIFICATION_JWKS_URL` 后，Agent 会按 `kid` 获取标准 JWKS 公钥并
+  在短期缓存内复用；缓存过期且认证服务不可用时，RS256 请求会 fail-closed。
 
 ## 本地启动
 

@@ -25,6 +25,10 @@ public class GatewayProperties {
     private Map<String, String> contextSigningKeyRing = new HashMap<>();
     /** RS256 验签使用的 PEM 公钥环；私钥永远不进入 Gateway。 */
     private Map<String, String> contextVerificationPublicKeyRing = new HashMap<>();
+    /** 可选认证服务 JWKS 地址；配置后用于补充或替代静态公钥环。 */
+    private String contextVerificationJwksUrl = "";
+    private long contextVerificationJwksCacheSeconds = 300L;
+    private long contextVerificationJwksTimeoutMilliseconds = 2000L;
     private long maxContextTtlSeconds = 300L;
     private String confirmationSigningSecret = "";
 
@@ -78,6 +82,30 @@ public class GatewayProperties {
         this.contextVerificationPublicKeyRing = contextVerificationPublicKeyRing == null
                 ? new HashMap<>()
                 : new HashMap<>(contextVerificationPublicKeyRing);
+    }
+
+    public String getContextVerificationJwksUrl() {
+        return contextVerificationJwksUrl;
+    }
+
+    public void setContextVerificationJwksUrl(String contextVerificationJwksUrl) {
+        this.contextVerificationJwksUrl = contextVerificationJwksUrl;
+    }
+
+    public long getContextVerificationJwksCacheSeconds() {
+        return contextVerificationJwksCacheSeconds;
+    }
+
+    public void setContextVerificationJwksCacheSeconds(long contextVerificationJwksCacheSeconds) {
+        this.contextVerificationJwksCacheSeconds = contextVerificationJwksCacheSeconds;
+    }
+
+    public long getContextVerificationJwksTimeoutMilliseconds() {
+        return contextVerificationJwksTimeoutMilliseconds;
+    }
+
+    public void setContextVerificationJwksTimeoutMilliseconds(long contextVerificationJwksTimeoutMilliseconds) {
+        this.contextVerificationJwksTimeoutMilliseconds = contextVerificationJwksTimeoutMilliseconds;
     }
 
     public long getMaxContextTtlSeconds() {

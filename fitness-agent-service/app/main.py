@@ -33,6 +33,7 @@ from app.infrastructure.agent_context import AgentContextVerifier
 from app.infrastructure.cache import Cache, SessionLockManager
 from app.infrastructure.database import CheckpointStore, Database
 from app.infrastructure.gateway_client import GatewayClient
+from app.infrastructure.jwks import JwksPublicKeyProvider
 from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient
 from app.memory.candidate import MemoryCandidateExtractionService
@@ -96,6 +97,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         signing_key_id=settings.gateway_context_signing_key_id,
         signing_key_ring=settings.gateway_context_signing_key_ring,
         verification_public_key_ring=settings.gateway_context_verification_public_key_ring,
+        jwks_provider=JwksPublicKeyProvider(
+            settings.gateway_context_verification_jwks_url,
+            cache_ttl_seconds=settings.gateway_context_verification_jwks_cache_seconds,
+            timeout_seconds=settings.gateway_context_verification_jwks_timeout_seconds,
+        ),
     )
     app.state.models = ModelGateway(settings)
     app.state.reranker = RerankerClient(settings)

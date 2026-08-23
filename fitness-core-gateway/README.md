@@ -48,7 +48,9 @@ AgentContext 当前支持 `HS256` 和配置公钥环的 `RS256`；`GATEWAY_CONTE
 回退到主密钥。使用 `RS256` 时只配置
 `gateway.security.context-verification-public-key-ring` 公钥环，例如按
 `GATEWAY_SECURITY_CONTEXT_VERIFICATION_PUBLIC_KEY_RING_<KID>` 注入；私钥只保留在认证服务。
-当前尚未接入外部 JWKS，公钥更新仍由部署配置完成。
+默认不配置外部 JWKS，未配置时公钥更新仍由部署配置完成。
+配置 `GATEWAY_CONTEXT_VERIFICATION_JWKS_URL` 后，Gateway 会按 `kid` 从标准 JWKS 文档读取
+RSA 公钥并在短期缓存内复用；缓存过期且认证服务不可用时，RS256 请求会 fail-closed。
 `GATEWAY_CONFIRMATION_SIGNING_SECRET` 必须与 Agent 的 `AGENT_CONFIRMATION_SIGNING_SECRET`
 逐字节一致；当前是兼容 Gateway v1 的 HMAC 过渡密钥，后续 v2 会切换为可轮换的非对称验签。
 

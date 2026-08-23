@@ -26,6 +26,9 @@ gateway:
     context-signing-key-ring: {}
     # RS256 只配置公钥，私钥必须留在认证服务；轮换时按 kid 增加公钥。
     context-verification-public-key-ring: {}
+    context-verification-jwks-url: ${GATEWAY_CONTEXT_VERIFICATION_JWKS_URL:}
+    context-verification-jwks-cache-seconds: ${GATEWAY_CONTEXT_VERIFICATION_JWKS_CACHE_SECONDS:300}
+    context-verification-jwks-timeout-milliseconds: ${GATEWAY_CONTEXT_VERIFICATION_JWKS_TIMEOUT_MS:2000}
     max-context-ttl-seconds: ${GATEWAY_MAX_CONTEXT_TTL_SECONDS:300}
     confirmation-signing-secret: ${GATEWAY_CONFIRMATION_SIGNING_SECRET:}
   training-service:

@@ -89,6 +89,31 @@ class Settings(BaseSettings):
             "AGENT_GATEWAY_CONTEXT_VERIFICATION_PUBLIC_KEY_RING",
         ),
     )
+    gateway_context_verification_jwks_url: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "GATEWAY_CONTEXT_VERIFICATION_JWKS_URL",
+            "AGENT_GATEWAY_CONTEXT_VERIFICATION_JWKS_URL",
+        ),
+    )
+    gateway_context_verification_jwks_cache_seconds: int = Field(
+        default=300,
+        ge=30,
+        le=3600,
+        validation_alias=AliasChoices(
+            "GATEWAY_CONTEXT_VERIFICATION_JWKS_CACHE_SECONDS",
+            "AGENT_GATEWAY_CONTEXT_VERIFICATION_JWKS_CACHE_SECONDS",
+        ),
+    )
+    gateway_context_verification_jwks_timeout_seconds: float = Field(
+        default=2.0,
+        gt=0,
+        le=10,
+        validation_alias=AliasChoices(
+            "GATEWAY_CONTEXT_VERIFICATION_JWKS_TIMEOUT_SECONDS",
+            "AGENT_GATEWAY_CONTEXT_VERIFICATION_JWKS_TIMEOUT_SECONDS",
+        ),
+    )
 
     # 优先读取学习项目使用的 DEEPSEEK_* 变量；AGENT_LLM_* 仅作为历史兼容配置，
     # 避免已有本地环境升级时突然失效。生产部署建议统一使用 DEEPSEEK_*。

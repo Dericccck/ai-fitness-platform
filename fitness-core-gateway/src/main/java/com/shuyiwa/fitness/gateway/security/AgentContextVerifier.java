@@ -41,16 +41,27 @@ public class AgentContextVerifier {
     private final ObjectMapper objectMapper;
     private final GatewayProperties properties;
     private final Clock clock;
+    private final AgentContextPublicKeyProvider publicKeyProvider;
 
     @Autowired
     public AgentContextVerifier(ObjectMapper objectMapper, GatewayProperties properties) {
-        this(objectMapper, properties, Clock.systemUTC());
+        this(objectMapper, properties, Clock.systemUTC(), new JwksPublicKeyProvider(objectMapper, properties));
     }
 
     AgentContextVerifier(ObjectMapper objectMapper, GatewayProperties properties, Clock clock) {
+        this(objectMapper, properties, clock, new JwksPublicKeyProvider(objectMapper, properties));
+    }
+
+    AgentContextVerifier(
+            ObjectMapper objectMapper,
+            GatewayProperties properties,
+            Clock clock,
+            AgentContextPublicKeyProvider publicKeyProvider
+    ) {
         this.objectMapper = objectMapper;
         this.properties = properties;
         this.clock = clock;
+        this.publicKeyProvider = publicKeyProvider;
     }
 
     public AgentContext verify(String token) {
@@ -150,9 +161,28 @@ public class AgentContextVerifier {
     }
 
     private boolean verifyRsa(byte[] payload, byte[] signature, String keyId) {
+        PublicKey publicKey = resolveStaticPublicKey(keyId);
+        if (publicKey == null) {
+            publicKey = publicKeyProvider.getPublicKey(keyId);
+        }
+        if (publicKey == null) {
+            throw new GatewaySecurityException("agent context verification key is not configured");
+        }
+        try {
+            Signature verifier = Signature.getInstance("SHA256withRSA");
+            verifier.initVerify(publicKey);
+            verifier.update(payload);
+            return verifier.verify(signature);
+        } catch (Exception exception) {
+            // 公钥格式错误、算法不匹配和验签失败统一 fail-closed，避免泄露密钥配置细节。
+            throw new GatewaySecurityException("invalid agent context verification key");
+        }
+    }
+
+    private PublicKey resolveStaticPublicKey(String keyId) {
         String publicKeyPem = properties.getContextVerificationPublicKeyRing().get(keyId);
         if (publicKeyPem == null || publicKeyPem.trim().isEmpty()) {
-            throw new GatewaySecurityException("agent context verification key is not configured");
+            return null;
         }
         try {
             byte[] der = Base64.getMimeDecoder().decode(
@@ -160,14 +190,9 @@ public class AgentContextVerifier {
                             .replace("-----BEGIN PUBLIC KEY-----", "")
                             .replace("-----END PUBLIC KEY-----", "")
             );
-            PublicKey publicKey = KeyFactory.getInstance("RSA")
+            return KeyFactory.getInstance("RSA")
                     .generatePublic(new X509EncodedKeySpec(der));
-            Signature verifier = Signature.getInstance("SHA256withRSA");
-            verifier.initVerify(publicKey);
-            verifier.update(payload);
-            return verifier.verify(signature);
         } catch (Exception exception) {
-            // 公钥格式错误、算法不匹配和验签失败统一 fail-closed，避免泄露密钥配置细节。
             throw new GatewaySecurityException("invalid agent context verification key");
         }
     }
