@@ -42,6 +42,9 @@ TRAINING_INTERNAL_SERVICE_TOKEN
 
 ## 内部 API
 
+存活检查：`GET /health`，成功返回 `{"status":"UP"}`。该接口不需要业务主体 Header；内部
+训练接口才需要以下安全 Header。
+
 `/internal/training/v1/**` 需要同时携带：
 
 - `X-Internal-Service-Token`

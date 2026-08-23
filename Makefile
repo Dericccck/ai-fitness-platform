@@ -4,7 +4,7 @@ AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run training-check training-run booking-check booking-it booking-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run training-check training-run training-role-live-check booking-check booking-it booking-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
@@ -46,6 +46,7 @@ help:
 	@echo "  gateway-run  Start the fitness core Gateway locally"
 	@echo "  training-check Build and test the structured training service"
 	@echo "  training-run  Start the structured training service locally"
+	@echo "  training-role-live-check  Check training health and student draft denial without writes"
 	@echo "  booking-check Build and test the appointment write service"
 	@echo "  booking-it    Run the opt-in real MySQL Booking create/reschedule/cancel integration test"
 	@echo "  booking-run  Start the appointment write service locally"
@@ -209,6 +210,13 @@ training-check:
 
 training-run:
 	./mvnw --batch-mode -f fitness-training-service/pom.xml -s .mvn/settings.xml -Dmaven.repo.local=.mvn/repository spring-boot:run
+
+training-role-live-check:
+	@test -n "$$TRAINING_INTERNAL_SERVICE_TOKEN" || (echo "请先设置 TRAINING_INTERNAL_SERVICE_TOKEN"; exit 1)
+	@test -n "$$TRAINING_LIVE_ORGANIZATION_ID" || (echo "请先设置 TRAINING_LIVE_ORGANIZATION_ID"; exit 1)
+	@test -n "$$TRAINING_LIVE_STUDENT_ID" || (echo "请先设置 TRAINING_LIVE_STUDENT_ID"; exit 1)
+	@test -n "$$TRAINING_LIVE_COACH_ID" || (echo "请先设置 TRAINING_LIVE_COACH_ID"; exit 1)
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/training_role_live_check.py
 
 booking-check:
 	./mvnw --batch-mode -f fitness-booking-service/pom.xml -s .mvn/settings.xml -Dmaven.repo.local=.mvn/repository clean test
