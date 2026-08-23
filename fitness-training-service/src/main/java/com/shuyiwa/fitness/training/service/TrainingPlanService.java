@@ -248,16 +248,17 @@ public class TrainingPlanService {
             }
             return;
         }
-        if (actor.hasRole(TrainingActor.STUDENT) && !actor.getUserId().equals(studentId)) {
-            throw forbidden("学员只能为本人生成训练计划草案");
-        }
         if (actor.hasRole(TrainingActor.COACH)
                 && !repository.isCoachForStudent(organizationId, actor.getUserId(), studentId)) {
             throw forbidden("教练不是该学员的负责教练");
         }
-        if (!actor.hasRole(TrainingActor.STUDENT) && !actor.hasRole(TrainingActor.COACH)) {
-            throw forbidden("当前主体没有训练计划权限");
+        if (actor.hasRole(TrainingActor.COACH)) {
+            return;
         }
+        // 学员只能执行已经发布的计划，不能通过直接调用训练服务创建草案。
+        // Agent 层会提前拦截一次，但训练服务作为最终业务事实源必须再次拒绝，避免
+        // 绕过 Python Agent 或未来新增其他调用方后出现“下游放行”的权限漏洞。
+        throw forbidden("只有机构管理员或负责教练可以创建训练计划草案");
     }
 
     private void validatePlanContent(String title, String goalType, List<TrainingDay> days) {

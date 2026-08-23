@@ -49,13 +49,35 @@ public class TrainingPlanServiceTest {
                 "CREATE_TRAINING_DRAFT", "org-1", "org-1:student-1",
                 "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         );
-        TrainingActor actor = new TrainingActor("student-1",
-                Collections.singleton(TrainingActor.STUDENT), Collections.singleton("org-1"), "req-1",
+        TrainingActor actor = new TrainingActor("coach-1",
+                Collections.singleton(TrainingActor.COACH), Collections.singleton("org-1"), "req-1",
                 confirmation);
         assertEquals(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.DRAFT,
                 service.createAgentDraft(actor, request).getStatus());
         verify(repository).insertDraft(any(TrainingPlan.class), org.mockito.ArgumentMatchers.eq("req-1"),
                 any(TrainingConfirmation.class));
+    }
+
+    @Test
+    public void studentCannotCreateDraftEvenForSelf() {
+        TrainingPlanRepository repository = mock(TrainingPlanRepository.class);
+        TrainingPlanService service = new TrainingPlanService(repository);
+
+        try {
+            service.createAgentDraft(new TrainingActor("student-1",
+                    Collections.singleton(TrainingActor.STUDENT), Collections.singleton("org-1"), "req-1",
+                    new TrainingConfirmation(
+                            "confirmation-1", "jti-1", "fitness.training.plan.create_draft.v1",
+                            "CREATE_TRAINING_DRAFT", "org-1", "org-1:student-1",
+                            "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+                    )), validDraftRequest());
+        } catch (com.shuyiwa.fitness.training.api.TrainingApiException exception) {
+            assertEquals(org.springframework.http.HttpStatus.FORBIDDEN, exception.getStatus());
+            verify(repository, never()).insertDraft(any(TrainingPlan.class),
+                    org.mockito.ArgumentMatchers.eq("req-1"), any(TrainingConfirmation.class));
+            return;
+        }
+        throw new AssertionError("学员即使为本人也不能创建训练计划草案");
     }
 
     @Test
@@ -66,8 +88,8 @@ public class TrainingPlanServiceTest {
         when(repository.isCoachForStudent("org-1", "coach-1", "student-1")).thenReturn(true);
 
         try {
-            service.createAgentDraft(new TrainingActor("student-1",
-                    Collections.singleton(TrainingActor.STUDENT), Collections.singleton("org-1"), "req-1"),
+            service.createAgentDraft(new TrainingActor("coach-1",
+                    Collections.singleton(TrainingActor.COACH), Collections.singleton("org-1"), "req-1"),
                     validDraftRequest());
         } catch (com.shuyiwa.fitness.training.api.TrainingApiException exception) {
             assertEquals(org.springframework.http.HttpStatus.UNAUTHORIZED, exception.getStatus());
