@@ -9,7 +9,11 @@ import org.springframework.stereotype.Component;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyFactory;
 import java.security.MessageDigest;
+import java.security.PublicKey;
+import java.security.Signature;
+import java.security.spec.X509EncodedKeySpec;
 import java.time.Clock;
 import java.time.Instant;
 import java.util.Base64;
@@ -21,15 +25,17 @@ import java.util.Set;
 /**
  * 验证签名 AgentContext。
  *
- * <p>Token 格式为 {@code base64url(payload).base64url(HMAC-SHA256(payload))}。这里只接受
- * 明确的 subject、组织范围、角色、签发时间、过期时间和 nonce；不接受客户端自定义的
- * 任意 claims 作为授权依据。上下文有效期默认只有 5 分钟，降低泄露后的可利用窗口。</p>
+ * <p>Token 格式为 {@code base64url(payload).base64url(signature)}。v1 使用 HMAC-SHA256，
+ * v2 支持 RS256；这里只接受明确的 subject、组织范围、角色、签发时间、过期时间和 nonce，
+ * 不接受客户端自定义的任意 claims 作为授权依据。上下文有效期默认只有 5 分钟，降低
+ * 泄露后的可利用窗口。生产环境的 RS256 私钥只应保留在认证服务，Gateway 只持有公钥。</p>
  */
 @Component
 public class AgentContextVerifier {
 
     private static final String HMAC_ALGORITHM = "HmacSHA256";
     private static final String TOKEN_ALGORITHM = "HS256";
+    private static final String RSA_TOKEN_ALGORITHM = "RS256";
     private static final String LEGACY_KEY_ID = "legacy";
     private static final int MAX_TOKEN_LENGTH = 8192;
     private final ObjectMapper objectMapper;
@@ -84,8 +90,7 @@ public class AgentContextVerifier {
         String keyId = optionalText(root, "kid", LEGACY_KEY_ID);
         validateSigningContract(algorithm, keyId);
 
-        byte[] expectedSignature = sign(payload, keyId);
-        if (!MessageDigest.isEqual(expectedSignature, signature)) {
+        if (!verifySignature(payload, signature, algorithm, keyId)) {
             throw new GatewaySecurityException("invalid agent context signature");
         }
 
@@ -119,7 +124,18 @@ public class AgentContextVerifier {
         }
     }
 
-    private byte[] sign(byte[] payload, String keyId) {
+    private boolean verifySignature(byte[] payload, byte[] signature, String algorithm, String keyId) {
+        if (TOKEN_ALGORITHM.equals(algorithm)) {
+            byte[] expectedSignature = signHmac(payload, keyId);
+            return MessageDigest.isEqual(expectedSignature, signature);
+        }
+        if (RSA_TOKEN_ALGORITHM.equals(algorithm)) {
+            return verifyRsa(payload, signature, keyId);
+        }
+        throw new GatewaySecurityException("unsupported agent context signing contract");
+    }
+
+    private byte[] signHmac(byte[] payload, String keyId) {
         String secret = resolveSigningSecret(keyId);
         if (secret == null || secret.isEmpty()) {
             throw new GatewaySecurityException("agent context verifier is not configured");
@@ -133,10 +149,35 @@ public class AgentContextVerifier {
         }
     }
 
+    private boolean verifyRsa(byte[] payload, byte[] signature, String keyId) {
+        String publicKeyPem = properties.getContextVerificationPublicKeyRing().get(keyId);
+        if (publicKeyPem == null || publicKeyPem.trim().isEmpty()) {
+            throw new GatewaySecurityException("agent context verification key is not configured");
+        }
+        try {
+            byte[] der = Base64.getMimeDecoder().decode(
+                    publicKeyPem
+                            .replace("-----BEGIN PUBLIC KEY-----", "")
+                            .replace("-----END PUBLIC KEY-----", "")
+            );
+            PublicKey publicKey = KeyFactory.getInstance("RSA")
+                    .generatePublic(new X509EncodedKeySpec(der));
+            Signature verifier = Signature.getInstance("SHA256withRSA");
+            verifier.initVerify(publicKey);
+            verifier.update(payload);
+            return verifier.verify(signature);
+        } catch (Exception exception) {
+            // 公钥格式错误、算法不匹配和验签失败统一 fail-closed，避免泄露密钥配置细节。
+            throw new GatewaySecurityException("invalid agent context verification key");
+        }
+    }
+
     private void validateSigningContract(String algorithm, String keyId) {
         String configuredAlgorithm = properties.getContextSigningAlgorithm();
-        if (!TOKEN_ALGORITHM.equals(algorithm)
-                || !TOKEN_ALGORITHM.equals(configuredAlgorithm)
+        if (!(TOKEN_ALGORITHM.equals(algorithm) || RSA_TOKEN_ALGORITHM.equals(algorithm))
+                || !(TOKEN_ALGORITHM.equals(configuredAlgorithm)
+                || RSA_TOKEN_ALGORITHM.equals(configuredAlgorithm))
+                || !algorithm.equals(configuredAlgorithm)
                 || keyId.trim().isEmpty()) {
             throw new GatewaySecurityException("unsupported agent context signing contract");
         }

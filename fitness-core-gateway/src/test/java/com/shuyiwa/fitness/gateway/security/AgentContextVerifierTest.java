@@ -7,6 +7,10 @@ import org.junit.Test;
 import javax.crypto.Mac;
 import javax.crypto.spec.SecretKeySpec;
 import java.nio.charset.StandardCharsets;
+import java.security.KeyPair;
+import java.security.KeyPairGenerator;
+import java.security.PrivateKey;
+import java.security.Signature;
 import java.time.Clock;
 import java.time.Instant;
 import java.time.ZoneOffset;
@@ -106,6 +110,30 @@ public class AgentContextVerifierTest {
         }
     }
 
+    @Test
+    public void acceptsRs256ContextWithConfiguredPublicKey() throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+        generator.initialize(2048);
+        KeyPair keyPair = generator.generateKeyPair();
+
+        GatewayProperties properties = properties();
+        properties.setContextSigningAlgorithm("RS256");
+        properties.setContextSigningKeyId("rsa-v1");
+        Map<String, String> publicKeys = new HashMap<>();
+        publicKeys.put("rsa-v1", pem(keyPair.getPublic().getEncoded()));
+        properties.setContextVerificationPublicKeyRing(publicKeys);
+
+        AgentContextVerifier verifier = new AgentContextVerifier(
+                new ObjectMapper(), properties, Clock.fixed(NOW, ZoneOffset.UTC)
+        );
+
+        AgentContext context = verifier.verify(rsaToken(
+                NOW.minusSeconds(10), NOW.plusSeconds(120), "rsa-v1", keyPair.getPrivate()
+        ));
+
+        assertEquals("user-1", context.getSubjectUserId());
+    }
+
     private static GatewayProperties properties() {
         GatewayProperties properties = new GatewayProperties();
         properties.setContextSigningSecret("test-context-secret");
@@ -144,5 +172,37 @@ public class AgentContextVerifierTest {
         mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
         Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();
         return encoder.encodeToString(payloadBytes) + "." + encoder.encodeToString(mac.doFinal(payloadBytes));
+    }
+
+    private static String rsaToken(
+            Instant issuedAt,
+            Instant expiresAt,
+            String keyId,
+            PrivateKey privateKey
+    ) throws Exception {
+        Map<String, Object> payload = new HashMap<>();
+        payload.put("alg", "RS256");
+        payload.put("kid", keyId);
+        payload.put("sub", "user-1");
+        payload.put("orgs", new String[]{"org-1"});
+        payload.put("roles", new String[]{"STUDENT"});
+        payload.put("capabilities", new String[]{"KNOWLEDGE_REVIEW_FITNESS"});
+        payload.put("qualifications", new String[]{"COACH_CERTIFIED"});
+        payload.put("iat", issuedAt.getEpochSecond());
+        payload.put("exp", expiresAt.getEpochSecond());
+        payload.put("nonce", "nonce-rsa-1");
+        byte[] payloadBytes = new ObjectMapper().writeValueAsBytes(payload);
+        Signature signer = Signature.getInstance("SHA256withRSA");
+        signer.initSign(privateKey);
+        signer.update(payloadBytes);
+        Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();
+        return encoder.encodeToString(payloadBytes) + "." + encoder.encodeToString(signer.sign());
+    }
+
+    private static String pem(byte[] encodedPublicKey) {
+        Base64.Encoder encoder = Base64.getMimeEncoder(64, new byte[]{'\n'});
+        return "-----BEGIN PUBLIC KEY-----\n"
+                + encoder.encodeToString(encodedPublicKey)
+                + "\n-----END PUBLIC KEY-----";
     }
 }

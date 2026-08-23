@@ -24,6 +24,8 @@ gateway:
     # 轮换期间通过标准 Spring 配置注入旧 kid -> secret 的 Map；当前主密钥仍使用上面的 secret。
     # 例如环境变量可使用 GATEWAY_SECURITY_CONTEXT_SIGNING_KEY_RING_V1。
     context-signing-key-ring: {}
+    # RS256 只配置公钥，私钥必须留在认证服务；轮换时按 kid 增加公钥。
+    context-verification-public-key-ring: {}
     max-context-ttl-seconds: ${GATEWAY_MAX_CONTEXT_TTL_SECONDS:300}
     confirmation-signing-secret: ${GATEWAY_CONFIRMATION_SIGNING_SECRET:}
   training-service:

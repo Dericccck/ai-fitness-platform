@@ -15,6 +15,10 @@ import time
 from dataclasses import dataclass
 from typing import Any, cast
 
+from cryptography.exceptions import InvalidSignature
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding
+
 
 class AgentContextVerificationError(RuntimeError):
     """签名上下文缺失、篡改、过期或 claims 不完整。"""
@@ -34,11 +38,12 @@ class AgentIdentity:
 
 
 class AgentContextVerifier:
-    """与 Java Gateway 保持一致的版本化 base64url + HMAC-SHA256 验证器。
+    """与 Java Gateway 保持一致的版本化上下文验证器。
 
     ``kid`` 让轮换期间的旧 Token 可以使用只读旧密钥验证；当前服务不具备签发能力，
     也不会因为收到未知 kid 而回退到主密钥。缺失 ``alg``/``kid`` 的历史 Token 仍按
-    v1 默认值兼容验证，便于本地已有短时上下文平滑升级。
+    v1 默认值兼容验证，便于本地已有短时上下文平滑升级。RS256 场景只加载公钥，
+    私钥不进入 Agent 服务。
     """
 
     def __init__(
@@ -49,6 +54,7 @@ class AgentContextVerifier:
         signing_algorithm: str = "HS256",
         signing_key_id: str = "legacy",
         signing_key_ring: dict[str, str] | None = None,
+        verification_public_key_ring: dict[str, str] | None = None,
     ) -> None:
         self.secret = secret.encode("utf-8")
         self.max_ttl_seconds = max_ttl_seconds
@@ -57,9 +63,10 @@ class AgentContextVerifier:
         self.signing_key_ring = {
             key: value.encode("utf-8") for key, value in (signing_key_ring or {}).items()
         }
+        self.verification_public_key_ring = dict(verification_public_key_ring or {})
 
     def verify(self, token: str) -> AgentIdentity:
-        if not self.secret or not token or len(token) > 8192:
+        if not token or len(token) > 8192:
             raise AgentContextVerificationError("invalid agent context")
         parts = token.split(".")
         if len(parts) != 2:
@@ -76,18 +83,37 @@ class AgentContextVerifier:
                 raise TypeError("claims must be an object")
             algorithm = _optional_text(claims, "alg", "HS256")
             key_id = _optional_text(claims, "kid", "legacy")
-            if (
-                algorithm != "HS256"
-                or self.signing_algorithm != "HS256"
-                or not self.signing_key_id
-            ):
+            if algorithm not in {"HS256", "RS256"} or algorithm != self.signing_algorithm:
                 raise ValueError("unsupported signing contract")
-            secret = self.secret if key_id == self.signing_key_id else self.signing_key_ring.get(key_id, b"")
-            if not secret:
-                raise ValueError("unknown key id")
-            expected = hmac.new(secret, payload, hashlib.sha256).digest()
-            if not hmac.compare_digest(expected, signature):
-                raise AgentContextVerificationError("invalid agent context signature")
+            if algorithm == "HS256":
+                if not self.signing_key_id:
+                    raise ValueError("missing active key id")
+                secret = (
+                    self.secret
+                    if key_id == self.signing_key_id
+                    else self.signing_key_ring.get(key_id, b"")
+                )
+                if not secret:
+                    raise ValueError("unknown key id")
+                expected = hmac.new(secret, payload, hashlib.sha256).digest()
+                if not hmac.compare_digest(expected, signature):
+                    raise AgentContextVerificationError("invalid agent context signature")
+            else:
+                public_key_pem = self.verification_public_key_ring.get(key_id, "")
+                if not public_key_pem:
+                    raise ValueError("unknown verification key id")
+                public_key = serialization.load_pem_public_key(public_key_pem.encode("utf-8"))
+                try:
+                    public_key.verify(
+                        signature,
+                        payload,
+                        padding.PKCS1v15(),
+                        hashes.SHA256(),
+                    )
+                except InvalidSignature as exc:
+                    raise AgentContextVerificationError(
+                        "invalid agent context signature"
+                    ) from exc
             subject = _required_text(claims, "sub")
             organizations = _required_string_set(claims, "orgs")
             roles = _required_string_set(claims, "roles")

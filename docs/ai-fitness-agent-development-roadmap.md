@@ -1186,8 +1186,8 @@ Memory、主动提醒、客服、多端交互和上线演练完成后执行。�
 - Agent 写操作确认基础：完成 0013 确认单与不可变事件迁移、确认授权/执行双状态领域模型、数据库
   幂等创建、决定幂等、行锁并发控制、一次性 JTI 领取边界和可重试失败重新签发 JTI；已完成确认动作
   规范化、AES-GCM 参数加密、LangGraph `interrupt()` 暂停、Checkpoint 脱敏、确认 API、服务端恢复
-  和真实 Gateway 执行；已完成 Gateway 完整字段校验和训练服务 JTI 一次性消费，尚未完成非对称签名、
-  密钥轮换和生产故障演练。
+  和真实 Gateway 执行；已完成 Gateway 完整字段校验和训练服务 JTI 一次性消费。AgentContext 已增加
+  版本化 `alg`/`kid` 和 RS256 公钥环验签，尚未完成外部 JWKS、确认凭证非对称签名、撤销和生产故障演练。
 - 训练计划结构化生成第一切片：增加只读 `fitness.training.plan.generate_draft.v1` 工具，按已验证
   AgentContext 检索已发布知识，调用统一 DeepSeek 模型网关的 JSON Object 输出，使用 Pydantic 和
   业务规则校验训练日/动作顺序、数量和目标一致性，并返回来源引用。生成结果仅为 `DRAFT_PREVIEW`，
@@ -1217,9 +1217,9 @@ Memory、主动提醒、客服、多端交互和上线演练完成后执行。�
    后续继续建设更复杂指标的时间桶、自然语言 Text-to-SQL 的正式指标映射和趋势解释。
 
 认证契约升级第一切片：AgentContext 载荷支持显式 `alg`/`kid`，Java Gateway 和 Python Agent
-同时拒绝未知算法、未知密钥 ID 和主密钥回退；Gateway/Agent 支持轮换期间读取旧密钥，历史缺少
-这两个字段的短时 HMAC v1 Token 仍兼容验证。本切片只完成版本化 HMAC 验证边界，不代表已经接入
-独立认证服务，也不代表已经完成非对称签名、JWKS、撤销和故障演练。
+同时拒绝未知算法、未知密钥 ID 和主密钥回退；Gateway/Agent 支持轮换期间读取旧 HMAC 密钥或
+RS256 公钥，历史缺少这两个字段的短时 HMAC v1 Token 仍兼容验证。本切片尚未接入外部 JWKS，
+也不代表已经完成确认凭证非对称签名、撤销和故障演练。
 
 路线调整后的下一步按顺序执行：
 
@@ -1399,8 +1399,8 @@ Booking 和 Fitness 的真实 dry-run、Agent 层角色矩阵、训练服务最�
 
 完成 Fitness 验收后，按以下顺序继续：
 
-1. 认证服务接入和 AgentContext/确认凭证的非对称签名、JWKS/密钥轮换、撤销语义及故障演练；
-   当前仅完成版本化 HMAC 验证契约，不能把它当成生产认证服务。
+1. 接入认证服务的 JWKS、公钥缓存与失效策略，补齐 AgentContext/确认凭证的非对称签名、撤销语义
+   及故障演练；当前已完成 RS256 公钥环验签，但不能把静态公钥配置当成生产认证服务。
 2. Proactive Agent 第一版，只使用现有 Outbox/事件和 `IN_APP` 站内通知，实现预约、训练和审核待办提醒；
    暂不接入短信、Push，也不为 Memory 增加模拟短信。
 3. 三角色最小前端：学员执行训练和确认 Memory，教练审核发布计划，管理员查看 Operations、知识库和审计。

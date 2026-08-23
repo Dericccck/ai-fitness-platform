@@ -64,7 +64,8 @@
   LangGraph `interrupt()` 暂停；批准接口会在服务端持久化决定后使用同一 `thread_id` 调用
   `Command(resume=...)`，从加密参数恢复并通过短时确认凭证调用 Java Gateway。当前凭证仍是与
   Java Gateway v1 兼容的 HMAC 过渡版本；一次性 JTI 已在 Agent 确认单中领取、由 Gateway
-  校验并在训练服务事务中消费。后续仍需把签名算法升级为可轮换的非对称验签。
+  校验并在训练服务事务中消费。AgentContext 已支持配置公钥环的 RS256 验签，RS256 私钥不进入
+  Agent 服务；当前尚未接入外部 JWKS，公钥更新仍由部署配置完成。
 
 ## 本地启动
 

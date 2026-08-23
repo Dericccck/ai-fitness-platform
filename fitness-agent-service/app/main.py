@@ -95,6 +95,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         signing_algorithm=settings.gateway_context_signing_algorithm,
         signing_key_id=settings.gateway_context_signing_key_id,
         signing_key_ring=settings.gateway_context_signing_key_ring,
+        verification_public_key_ring=settings.gateway_context_verification_public_key_ring,
     )
     app.state.models = ModelGateway(settings)
     app.state.reranker = RerankerClient(settings)

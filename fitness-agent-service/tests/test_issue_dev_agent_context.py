@@ -2,6 +2,8 @@ import base64
 import json
 
 import pytest
+from cryptography.hazmat.primitives import hashes, serialization
+from cryptography.hazmat.primitives.asymmetric import padding, rsa
 
 from app.infrastructure.agent_context import AgentContextVerificationError, AgentContextVerifier
 from scripts.issue_dev_agent_context import DevContextIssuerError, issue_token, main
@@ -113,6 +115,45 @@ def test_agent_verifier_rejects_unknown_key_id_without_fallback() -> None:
 
     with pytest.raises(AgentContextVerificationError, match="invalid agent context"):
         AgentContextVerifier("active-context-secret", signing_key_id="v2").verify(token)
+
+
+def test_agent_verifier_accepts_rs256_with_public_key_ring(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.infrastructure.agent_context.time.time", lambda: 1_800_000_000)
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    token = issue_token(
+        secret="issuer-only-secret",
+        subject="local-admin",
+        organization_id="org-demo",
+        key_id="rsa-v1",
+        now=1_800_000_000,
+    )
+    payload_part = token.split(".", 1)[0]
+    payload = base64.urlsafe_b64decode(payload_part + "==")
+    claims = json.loads(payload)
+    claims["alg"] = "RS256"
+    payload = json.dumps(claims, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
+    payload_part = base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
+    signature = private_key.sign(payload, padding.PKCS1v15(), hashes.SHA256())
+    rsa_token = (
+        payload_part
+        + "."
+        + base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
+    )
+    public_key_pem = private_key.public_key().public_bytes(
+        serialization.Encoding.PEM,
+        serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+
+    identity = AgentContextVerifier(
+        "",
+        signing_algorithm="RS256",
+        signing_key_id="rsa-v1",
+        verification_public_key_ring={"rsa-v1": public_key_pem},
+    ).verify(rsa_token)
+
+    assert identity.subject == "local-admin"
 
 
 def test_cli_requires_explicit_local_dev_switch(monkeypatch: pytest.MonkeyPatch) -> None:

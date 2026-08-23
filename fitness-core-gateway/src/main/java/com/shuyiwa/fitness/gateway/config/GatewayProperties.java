@@ -23,6 +23,8 @@ public class GatewayProperties {
     private String contextSigningKeyId = "legacy";
     /** 轮换期间保留的旧密钥，key 为 Token 中的 kid，value 由 Secret Manager 注入。 */
     private Map<String, String> contextSigningKeyRing = new HashMap<>();
+    /** RS256 验签使用的 PEM 公钥环；私钥永远不进入 Gateway。 */
+    private Map<String, String> contextVerificationPublicKeyRing = new HashMap<>();
     private long maxContextTtlSeconds = 300L;
     private String confirmationSigningSecret = "";
 
@@ -66,6 +68,16 @@ public class GatewayProperties {
         this.contextSigningKeyRing = contextSigningKeyRing == null
                 ? new HashMap<>()
                 : new HashMap<>(contextSigningKeyRing);
+    }
+
+    public Map<String, String> getContextVerificationPublicKeyRing() {
+        return contextVerificationPublicKeyRing;
+    }
+
+    public void setContextVerificationPublicKeyRing(Map<String, String> contextVerificationPublicKeyRing) {
+        this.contextVerificationPublicKeyRing = contextVerificationPublicKeyRing == null
+                ? new HashMap<>()
+                : new HashMap<>(contextVerificationPublicKeyRing);
     }
 
     public long getMaxContextTtlSeconds() {
