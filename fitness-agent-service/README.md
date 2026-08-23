@@ -258,6 +258,13 @@ Gateway 训练写入验收使用 `make gateway-training-write-live-check`，默�
 不替代 Agent 的 `interrupt()` 流程；Agent 端完整确认流程仍由 `agent-fitness-live-check --execute`
 单独验收。
 
+Gateway 训练完整角色工作流验收使用 `make gateway-training-workflow-live-check`，默认始终拒绝执行。
+该脚本在显式设置 `GATEWAY_LIVE_EXECUTE_WORKFLOW_WRITES=1` 后，验证
+`DRAFT -> PENDING_REVIEW -> APPROVED -> PUBLISHED`，并在发布前验证学员不可见、发布后验证管理员、
+负责教练和学员均可读取。脚本必须同时配置 MySQL 清理账号，结束时只按本轮生成的精确计划 ID、请求 ID
+和确认消费记录清理；如果清理失败，脚本返回失败并打印计划 ID，禁止继续下一轮验收。该脚本不验证
+LangGraph `interrupt()`，只验证 Gateway 到训练服务的角色和确认声明闭环。
+
 Fitness Agent 的 dry-run 使用 `make agent-fitness-live-check`。当请求明确包含“创建/制定/生成/安排
 训练计划”时，Agent 会先调用 RAG 生成并校验结构化预览，再由运行时将同一份 Payload 直接交给确认单，
 不再依赖模型第二次工具调用。确认单进入 `interrupt()` 后，dry-run 会查询 `PENDING` 并自动提交
