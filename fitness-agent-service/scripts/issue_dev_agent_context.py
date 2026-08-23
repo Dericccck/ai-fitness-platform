@@ -33,6 +33,10 @@ DEFAULT_ROLE = "ORGANIZATION_ADMIN"
 ALLOWED_DEV_ROLES = frozenset({"ORGANIZATION_ADMIN", "COACH", "STUDENT"})
 DEV_FLAG = "FITNESS_DEV_CONTEXT_ISSUER"
 SECRET_ENV = "GATEWAY_CONTEXT_SIGNING_SECRET"
+ALGORITHM_ENV = "GATEWAY_CONTEXT_SIGNING_ALGORITHM"
+KEY_ID_ENV = "GATEWAY_CONTEXT_SIGNING_KEY_ID"
+SUPPORTED_ALGORITHM = "HS256"
+DEFAULT_KEY_ID = "legacy"
 
 
 class DevContextIssuerError(RuntimeError):
@@ -85,12 +89,18 @@ def issue_token(
     organization_id: str,
     role: str = DEFAULT_ROLE,
     ttl_seconds: int = MAX_CONTEXT_TTL_SECONDS,
+    signing_algorithm: str = SUPPORTED_ALGORITHM,
+    key_id: str = DEFAULT_KEY_ID,
     now: int | None = None,
 ) -> str:
     """按照 Java Gateway v1 契约生成 `payload.signature` Token。"""
 
     if not secret:
         raise DevContextIssuerError(f"缺少 {SECRET_ENV}")
+    if signing_algorithm != SUPPORTED_ALGORITHM:
+        raise DevContextIssuerError(f"本地签发器只支持 {SUPPORTED_ALGORITHM}")
+    if not key_id.strip():
+        raise DevContextIssuerError("本地测试 key_id 不能为空")
     if not subject.strip():
         raise DevContextIssuerError("本地测试 subject 不能为空")
     if not organization_id.strip():
@@ -104,6 +114,8 @@ def issue_token(
 
     issued_at = int(time.time()) if now is None else now
     claims = {
+        "alg": signing_algorithm,
+        "kid": key_id.strip(),
         "sub": subject.strip(),
         "orgs": [organization_id.strip()],
         "roles": [normalized_role],
@@ -150,6 +162,8 @@ def main() -> int:
     args = _parse_args()
     dotenv_values = load_local_env(Path(__file__).resolve().parents[1] / ".env")
     secret = _get_setting(SECRET_ENV, dotenv_values)
+    signing_algorithm = _get_setting(ALGORITHM_ENV, dotenv_values) or SUPPORTED_ALGORITHM
+    key_id = _get_setting(KEY_ID_ENV, dotenv_values) or DEFAULT_KEY_ID
     organization_id = (args.org_id or os.getenv("DEV_AGENT_ORG_ID", "")).strip()
     try:
         token = issue_token(
@@ -158,6 +172,8 @@ def main() -> int:
             organization_id=organization_id,
             role=args.role,
             ttl_seconds=args.ttl_seconds,
+            signing_algorithm=signing_algorithm,
+            key_id=key_id,
         )
     except DevContextIssuerError as exc:
         print(f"无法签发本地 AgentContext：{exc}", file=sys.stderr)

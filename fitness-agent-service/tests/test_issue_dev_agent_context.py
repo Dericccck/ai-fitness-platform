@@ -3,7 +3,7 @@ import json
 
 import pytest
 
-from app.infrastructure.agent_context import AgentContextVerifier
+from app.infrastructure.agent_context import AgentContextVerificationError, AgentContextVerifier
 from scripts.issue_dev_agent_context import DevContextIssuerError, issue_token, main
 
 
@@ -38,6 +38,8 @@ def test_issue_token_defaults_to_local_organization_admin_role() -> None:
     claims = json.loads(base64.urlsafe_b64decode(payload + "=="))
 
     assert claims["roles"] == ["ORGANIZATION_ADMIN"]
+    assert claims["alg"] == "HS256"
+    assert claims["kid"] == "legacy"
     assert claims["capabilities"] == []
     assert claims["qualifications"] == []
 
@@ -77,6 +79,40 @@ def test_issue_token_rejects_ttl_above_gateway_limit() -> None:
             organization_id="org-demo",
             ttl_seconds=301,
         )
+
+
+def test_agent_verifier_accepts_retired_key_during_rotation(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("app.infrastructure.agent_context.time.time", lambda: 1_800_000_000)
+    token = issue_token(
+        secret="retired-context-secret",
+        subject="local-admin",
+        organization_id="org-demo",
+        key_id="v1",
+        now=1_800_000_000,
+    )
+
+    identity = AgentContextVerifier(
+        "active-context-secret",
+        signing_key_id="v2",
+        signing_key_ring={"v1": "retired-context-secret"},
+    ).verify(token)
+
+    assert identity.subject == "local-admin"
+
+
+def test_agent_verifier_rejects_unknown_key_id_without_fallback() -> None:
+    token = issue_token(
+        secret="active-context-secret",
+        subject="local-admin",
+        organization_id="org-demo",
+        key_id="deleted-key",
+        now=1_800_000_000,
+    )
+
+    with pytest.raises(AgentContextVerificationError, match="invalid agent context"):
+        AgentContextVerifier("active-context-secret", signing_key_id="v2").verify(token)
 
 
 def test_cli_requires_explicit_local_dev_switch(monkeypatch: pytest.MonkeyPatch) -> None:

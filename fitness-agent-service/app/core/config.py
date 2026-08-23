@@ -64,6 +64,24 @@ class Settings(BaseSettings):
         ),
     )
     gateway_context_max_ttl_seconds: int = Field(default=300, ge=60, le=900)
+    gateway_context_signing_algorithm: str = Field(
+        default="HS256",
+        validation_alias=AliasChoices(
+            "GATEWAY_CONTEXT_SIGNING_ALGORITHM", "AGENT_GATEWAY_CONTEXT_SIGNING_ALGORITHM"
+        ),
+    )
+    gateway_context_signing_key_id: str = Field(
+        default="legacy",
+        validation_alias=AliasChoices(
+            "GATEWAY_CONTEXT_SIGNING_KEY_ID", "AGENT_GATEWAY_CONTEXT_SIGNING_KEY_ID"
+        ),
+    )
+    gateway_context_signing_key_ring: dict[str, str] = Field(
+        default_factory=dict,
+        validation_alias=AliasChoices(
+            "GATEWAY_CONTEXT_SIGNING_KEY_RING", "AGENT_GATEWAY_CONTEXT_SIGNING_KEY_RING"
+        ),
+    )
 
     # 优先读取学习项目使用的 DEEPSEEK_* 变量；AGENT_LLM_* 仅作为历史兼容配置，
     # 避免已有本地环境升级时突然失效。生产部署建议统一使用 DEEPSEEK_*。

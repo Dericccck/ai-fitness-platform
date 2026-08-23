@@ -15,6 +15,7 @@ import java.util.HashMap;
 import java.util.Map;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.fail;
 
 public class AgentContextVerifierTest {
 
@@ -61,6 +62,50 @@ public class AgentContextVerifierTest {
         throw new AssertionError("tampered context must be rejected");
     }
 
+    @Test
+    public void acceptsVersionedContextWithRotatedVerificationKey() throws Exception {
+        GatewayProperties properties = properties();
+        properties.setContextSigningKeyId("v2");
+        Map<String, String> keyRing = new HashMap<>();
+        keyRing.put("v1", "retired-context-secret");
+        properties.setContextSigningKeyRing(keyRing);
+
+        AgentContextVerifier verifier = new AgentContextVerifier(
+                new ObjectMapper(), properties, Clock.fixed(NOW, ZoneOffset.UTC)
+        );
+
+        AgentContext context = verifier.verify(token(
+                NOW.minusSeconds(10), NOW.plusSeconds(120), "HS256", "v1", "retired-context-secret"
+        ));
+
+        assertEquals("user-1", context.getSubjectUserId());
+    }
+
+    @Test(expected = GatewaySecurityException.class)
+    public void rejectsUnknownAlgorithmBeforeBusinessClaimsAreTrusted() throws Exception {
+        AgentContextVerifier verifier = new AgentContextVerifier(
+                new ObjectMapper(), properties(), Clock.fixed(NOW, ZoneOffset.UTC)
+        );
+
+        verifier.verify(token(NOW.minusSeconds(10), NOW.plusSeconds(120), "RS256", "legacy", "test-context-secret"));
+    }
+
+    @Test
+    public void rejectsUnknownKeyIdDuringRotation() throws Exception {
+        AgentContextVerifier verifier = new AgentContextVerifier(
+                new ObjectMapper(), properties(), Clock.fixed(NOW, ZoneOffset.UTC)
+        );
+
+        try {
+            verifier.verify(token(
+                    NOW.minusSeconds(10), NOW.plusSeconds(120), "HS256", "deleted-key", "test-context-secret"
+            ));
+            fail("unknown key id must be rejected");
+        } catch (GatewaySecurityException expected) {
+            // 未配置的 kid 不能回退到当前主密钥。
+        }
+    }
+
     private static GatewayProperties properties() {
         GatewayProperties properties = new GatewayProperties();
         properties.setContextSigningSecret("test-context-secret");
@@ -69,7 +114,23 @@ public class AgentContextVerifierTest {
     }
 
     private static String token(Instant issuedAt, Instant expiresAt) throws Exception {
+        return token(issuedAt, expiresAt, null, null, "test-context-secret");
+    }
+
+    private static String token(
+            Instant issuedAt,
+            Instant expiresAt,
+            String algorithm,
+            String keyId,
+            String secret
+    ) throws Exception {
         Map<String, Object> payload = new HashMap<>();
+        if (algorithm != null) {
+            payload.put("alg", algorithm);
+        }
+        if (keyId != null) {
+            payload.put("kid", keyId);
+        }
         payload.put("sub", "user-1");
         payload.put("orgs", new String[]{"org-1"});
         payload.put("roles", new String[]{"STUDENT"});
@@ -80,7 +141,7 @@ public class AgentContextVerifierTest {
         payload.put("nonce", "nonce-1");
         byte[] payloadBytes = new ObjectMapper().writeValueAsBytes(payload);
         Mac mac = Mac.getInstance("HmacSHA256");
-        mac.init(new SecretKeySpec("test-context-secret".getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
+        mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), "HmacSHA256"));
         Base64.Encoder encoder = Base64.getUrlEncoder().withoutPadding();
         return encoder.encodeToString(payloadBytes) + "." + encoder.encodeToString(mac.doFinal(payloadBytes));
     }

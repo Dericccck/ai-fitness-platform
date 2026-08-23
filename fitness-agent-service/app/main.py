@@ -92,6 +92,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.context_verifier = AgentContextVerifier(
         settings.gateway_context_signing_secret,
         max_ttl_seconds=settings.gateway_context_max_ttl_seconds,
+        signing_algorithm=settings.gateway_context_signing_algorithm,
+        signing_key_id=settings.gateway_context_signing_key_id,
+        signing_key_ring=settings.gateway_context_signing_key_ring,
     )
     app.state.models = ModelGateway(settings)
     app.state.reranker = RerankerClient(settings)

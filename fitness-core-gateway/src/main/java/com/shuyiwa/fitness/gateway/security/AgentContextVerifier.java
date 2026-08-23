@@ -15,6 +15,7 @@ import java.time.Instant;
 import java.util.Base64;
 import java.util.HashSet;
 import java.util.Iterator;
+import java.util.Map;
 import java.util.Set;
 
 /**
@@ -28,6 +29,8 @@ import java.util.Set;
 public class AgentContextVerifier {
 
     private static final String HMAC_ALGORITHM = "HmacSHA256";
+    private static final String TOKEN_ALGORITHM = "HS256";
+    private static final String LEGACY_KEY_ID = "legacy";
     private static final int MAX_TOKEN_LENGTH = 8192;
     private final ObjectMapper objectMapper;
     private final GatewayProperties properties;
@@ -63,13 +66,30 @@ public class AgentContextVerifier {
             throw new GatewaySecurityException("invalid agent context encoding");
         }
 
-        byte[] expectedSignature = sign(payload);
+        JsonNode root;
+        try {
+            root = objectMapper.readTree(payload);
+            if (root == null || !root.isObject()) {
+                throw new GatewaySecurityException("invalid agent context claims");
+            }
+        } catch (GatewaySecurityException exception) {
+            throw exception;
+        } catch (Exception exception) {
+            throw new GatewaySecurityException("invalid agent context claims");
+        }
+
+        // alg/kid 属于签名载荷的一部分，必须在验签前用于选择验证策略；选择失败时直接拒绝，
+        // 不允许调用方通过伪造算法名称或未知 kid 触发降级到任意默认密钥。
+        String algorithm = optionalText(root, "alg", TOKEN_ALGORITHM);
+        String keyId = optionalText(root, "kid", LEGACY_KEY_ID);
+        validateSigningContract(algorithm, keyId);
+
+        byte[] expectedSignature = sign(payload, keyId);
         if (!MessageDigest.isEqual(expectedSignature, signature)) {
             throw new GatewaySecurityException("invalid agent context signature");
         }
 
         try {
-            JsonNode root = objectMapper.readTree(payload);
             String subject = requiredText(root, "sub");
             String nonce = requiredText(root, "nonce");
             Set<String> organizationIds = requiredStringSet(root, "orgs");
@@ -99,8 +119,8 @@ public class AgentContextVerifier {
         }
     }
 
-    private byte[] sign(byte[] payload) {
-        String secret = properties.getContextSigningSecret();
+    private byte[] sign(byte[] payload, String keyId) {
+        String secret = resolveSigningSecret(keyId);
         if (secret == null || secret.isEmpty()) {
             throw new GatewaySecurityException("agent context verifier is not configured");
         }
@@ -111,6 +131,41 @@ public class AgentContextVerifier {
         } catch (Exception exception) {
             throw new IllegalStateException("cannot initialize agent context verifier", exception);
         }
+    }
+
+    private void validateSigningContract(String algorithm, String keyId) {
+        String configuredAlgorithm = properties.getContextSigningAlgorithm();
+        if (!TOKEN_ALGORITHM.equals(algorithm)
+                || !TOKEN_ALGORITHM.equals(configuredAlgorithm)
+                || keyId.trim().isEmpty()) {
+            throw new GatewaySecurityException("unsupported agent context signing contract");
+        }
+        String activeKeyId = properties.getContextSigningKeyId();
+        if (activeKeyId == null || activeKeyId.trim().isEmpty()) {
+            throw new GatewaySecurityException("agent context key id is not configured");
+        }
+    }
+
+    private String resolveSigningSecret(String keyId) {
+        if (keyId.equals(properties.getContextSigningKeyId())) {
+            return properties.getContextSigningSecret();
+        }
+        Map<String, String> keyRing = properties.getContextSigningKeyRing();
+        if (keyRing != null) {
+            return keyRing.get(keyId);
+        }
+        return null;
+    }
+
+    private static String optionalText(JsonNode root, String field, String defaultValue) {
+        JsonNode value = root.get(field);
+        if (value == null) {
+            return defaultValue;
+        }
+        if (!value.isTextual() || value.asText().trim().isEmpty()) {
+            throw new GatewaySecurityException("invalid agent context field: " + field);
+        }
+        return value.asText();
     }
 
     private static String requiredText(JsonNode root, String field) {

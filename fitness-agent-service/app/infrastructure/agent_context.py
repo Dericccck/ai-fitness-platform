@@ -34,11 +34,29 @@ class AgentIdentity:
 
 
 class AgentContextVerifier:
-    """与 Java Gateway 保持一致的 base64url + HMAC-SHA256 验证器。"""
+    """与 Java Gateway 保持一致的版本化 base64url + HMAC-SHA256 验证器。
 
-    def __init__(self, secret: str, *, max_ttl_seconds: int = 300) -> None:
+    ``kid`` 让轮换期间的旧 Token 可以使用只读旧密钥验证；当前服务不具备签发能力，
+    也不会因为收到未知 kid 而回退到主密钥。缺失 ``alg``/``kid`` 的历史 Token 仍按
+    v1 默认值兼容验证，便于本地已有短时上下文平滑升级。
+    """
+
+    def __init__(
+        self,
+        secret: str,
+        *,
+        max_ttl_seconds: int = 300,
+        signing_algorithm: str = "HS256",
+        signing_key_id: str = "legacy",
+        signing_key_ring: dict[str, str] | None = None,
+    ) -> None:
         self.secret = secret.encode("utf-8")
         self.max_ttl_seconds = max_ttl_seconds
+        self.signing_algorithm = signing_algorithm
+        self.signing_key_id = signing_key_id
+        self.signing_key_ring = {
+            key: value.encode("utf-8") for key, value in (signing_key_ring or {}).items()
+        }
 
     def verify(self, token: str) -> AgentIdentity:
         if not self.secret or not token or len(token) > 8192:
@@ -52,11 +70,24 @@ class AgentContextVerifier:
         except ValueError as exc:
             raise AgentContextVerificationError("invalid agent context encoding") from exc
 
-        expected = hmac.new(self.secret, payload, hashlib.sha256).digest()
-        if not hmac.compare_digest(expected, signature):
-            raise AgentContextVerificationError("invalid agent context signature")
         try:
             claims = json.loads(payload)
+            if not isinstance(claims, dict):
+                raise TypeError("claims must be an object")
+            algorithm = _optional_text(claims, "alg", "HS256")
+            key_id = _optional_text(claims, "kid", "legacy")
+            if (
+                algorithm != "HS256"
+                or self.signing_algorithm != "HS256"
+                or not self.signing_key_id
+            ):
+                raise ValueError("unsupported signing contract")
+            secret = self.secret if key_id == self.signing_key_id else self.signing_key_ring.get(key_id, b"")
+            if not secret:
+                raise ValueError("unknown key id")
+            expected = hmac.new(secret, payload, hashlib.sha256).digest()
+            if not hmac.compare_digest(expected, signature):
+                raise AgentContextVerificationError("invalid agent context signature")
             subject = _required_text(claims, "sub")
             organizations = _required_string_set(claims, "orgs")
             roles = _required_string_set(claims, "roles")
@@ -65,7 +96,7 @@ class AgentContextVerifier:
             issued_at = _required_int(claims, "iat")
             expires_at = _required_int(claims, "exp")
             _required_text(claims, "nonce")
-        except (TypeError, ValueError, KeyError) as exc:
+        except (TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
             raise AgentContextVerificationError("invalid agent context claims") from exc
 
         now = int(time.time())
@@ -108,6 +139,15 @@ def _decode_base64url(value: str) -> bytes:
 def _required_text(claims: Any, key: str) -> str:
     value = claims[key]
     if not isinstance(value, str) or not value:
+        raise ValueError(key)
+    return value
+
+
+def _optional_text(claims: dict[str, Any], key: str, default: str) -> str:
+    """读取版本化签名元数据；字段缺失兼容 v1，字段存在则必须是非空字符串。"""
+
+    value = claims.get(key, default)
+    if not isinstance(value, str) or not value.strip():
         raise ValueError(key)
     return value
 

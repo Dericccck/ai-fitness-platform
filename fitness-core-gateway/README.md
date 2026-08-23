@@ -40,6 +40,12 @@ cd /Users/a1-6/Desktop/fitness-backend
 ```
 
 生产环境的密钥必须由 Secret Manager 注入，不能写入 `application.yml` 或提交到 Git。
+AgentContext 当前还要求 `GATEWAY_CONTEXT_SIGNING_ALGORITHM=HS256` 和
+`GATEWAY_CONTEXT_SIGNING_KEY_ID`。密钥轮换时，新 Token 使用新的 `kid` 和主密钥，旧
+`kid` 的短时 Token 只从 `gateway.security.context-signing-key-ring` 读取旧密钥；使用环境变量
+时可按 `GATEWAY_SECURITY_CONTEXT_SIGNING_KEY_RING_<KID>` 注入，例如 `..._V1`；未知 `kid` 不会
+回退到主密钥。当前这一步只完成版本化 HMAC 验证契约，正式认证服务的非对称签名/JWKS
+接入仍是后续步骤。
 `GATEWAY_CONFIRMATION_SIGNING_SECRET` 必须与 Agent 的 `AGENT_CONFIRMATION_SIGNING_SECRET`
 逐字节一致；当前是兼容 Gateway v1 的 HMAC 过渡密钥，后续 v2 会切换为可轮换的非对称验签。
 

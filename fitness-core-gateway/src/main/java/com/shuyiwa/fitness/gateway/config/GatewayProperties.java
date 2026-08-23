@@ -2,6 +2,9 @@ package com.shuyiwa.fitness.gateway.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
+import java.util.HashMap;
+import java.util.Map;
+
 /**
  * Gateway 的安全配置。
  *
@@ -14,6 +17,12 @@ public class GatewayProperties {
 
     private String internalServiceToken = "";
     private String contextSigningSecret = "";
+    /** 当前签名契约使用的算法名称；v1 只允许 HS256，避免算法降级或混淆。 */
+    private String contextSigningAlgorithm = "HS256";
+    /** 当前主密钥的标识；轮换时新 Token 使用这个 ID。 */
+    private String contextSigningKeyId = "legacy";
+    /** 轮换期间保留的旧密钥，key 为 Token 中的 kid，value 由 Secret Manager 注入。 */
+    private Map<String, String> contextSigningKeyRing = new HashMap<>();
     private long maxContextTtlSeconds = 300L;
     private String confirmationSigningSecret = "";
 
@@ -31,6 +40,32 @@ public class GatewayProperties {
 
     public void setContextSigningSecret(String contextSigningSecret) {
         this.contextSigningSecret = contextSigningSecret;
+    }
+
+    public String getContextSigningAlgorithm() {
+        return contextSigningAlgorithm;
+    }
+
+    public void setContextSigningAlgorithm(String contextSigningAlgorithm) {
+        this.contextSigningAlgorithm = contextSigningAlgorithm;
+    }
+
+    public String getContextSigningKeyId() {
+        return contextSigningKeyId;
+    }
+
+    public void setContextSigningKeyId(String contextSigningKeyId) {
+        this.contextSigningKeyId = contextSigningKeyId;
+    }
+
+    public Map<String, String> getContextSigningKeyRing() {
+        return contextSigningKeyRing;
+    }
+
+    public void setContextSigningKeyRing(Map<String, String> contextSigningKeyRing) {
+        this.contextSigningKeyRing = contextSigningKeyRing == null
+                ? new HashMap<>()
+                : new HashMap<>(contextSigningKeyRing);
     }
 
     public long getMaxContextTtlSeconds() {
