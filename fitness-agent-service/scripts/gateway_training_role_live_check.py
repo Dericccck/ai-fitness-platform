@@ -113,6 +113,27 @@ def validate_unauthorized(name: str, status_code: int, payload: Any) -> ProbeRes
     return ProbeResult(name, False, f"预期 HTTP 401，实际 HTTP {status_code}")
 
 
+def validate_confirmation_required(name: str, status_code: int, payload: Any) -> ProbeResult:
+    """写入口缺少确认凭证时必须在进入业务服务前拒绝。
+
+    Spring MVC 可能在 Controller 参数绑定阶段返回 400，Gateway 安全过滤器也可能返回
+    401；两者都表示请求没有进入训练服务写事务。这里故意不把该探针写成“请求成功后
+    再查询数据库”，避免验收脚本为了验证安全边界而制造业务数据。
+    """
+
+    if status_code in {400, 401}:
+        return ProbeResult(name, True, "Gateway 在缺少确认凭证时拒绝写入口")
+    return ProbeResult(name, False, f"预期 HTTP 400/401，实际 HTTP {status_code}")
+
+
+def validate_execution_list(name: str, status_code: int, payload: Any) -> ProbeResult:
+    """执行记录接口必须返回数组，不能把未授权错误误判成空列表。"""
+
+    if status_code == 200 and isinstance(payload, list):
+        return ProbeResult(name, True, "Gateway 返回训练执行记录列表")
+    return ProbeResult(name, False, f"预期 HTTP 200/数组，实际 HTTP {status_code}")
+
+
 async def _request_json(
     client: httpx.AsyncClient, method: str, url: str, **kwargs: Any
 ) -> tuple[int, Any]:
@@ -195,6 +216,27 @@ async def run_check(args: argparse.Namespace) -> tuple[ProbeResult, ...]:
             )
         )
 
+        # 这是一个故意失败的 POST：缺少确认凭证时必须在 Gateway 入口终止，不能触发
+        # submit-review，也不会消费 JTI 或修改训练计划状态，因此属于无写入安全探针。
+        missing_confirmation_status, missing_confirmation_payload = await _request_json(
+            client,
+            "POST",
+            base_url
+            + f"/internal/agent-tools/v1/training/plans/{args.draft_plan_id}/submit-review",
+            headers={
+                "X-Internal-Service-Token": args.internal_token,
+                "X-Agent-Context": contexts["coach"],
+                "X-Request-ID": "gateway-training-live-missing-confirmation",
+            },
+        )
+        results.append(
+            validate_confirmation_required(
+                "gateway-write-missing-confirmation-denied",
+                missing_confirmation_status,
+                missing_confirmation_payload,
+            )
+        )
+
         cases = (
             ("gateway-admin-read-draft", "admin", args.draft_plan_id, "DRAFT", True),
             ("gateway-coach-read-draft", "coach", args.draft_plan_id, "DRAFT", True),
@@ -224,6 +266,28 @@ async def run_check(args: argparse.Namespace) -> tuple[ProbeResult, ...]:
                 results.append(
                     validate_visible(name, status_code, payload, plan_id, expected_status)
                 )
+            else:
+                results.append(validate_hidden(name, status_code, payload))
+
+        execution_cases = (
+            ("gateway-admin-list-published-executions", "admin", args.published_plan_id, True),
+            ("gateway-coach-list-published-executions", "coach", args.published_plan_id, True),
+            ("gateway-student-list-published-executions", "student", args.published_plan_id, True),
+            ("gateway-student-hide-draft-executions", "student", args.draft_plan_id, False),
+        )
+        for name, context_name, plan_id, should_be_visible in execution_cases:
+            status_code, payload = await _request_json(
+                client,
+                "GET",
+                base_url + f"/internal/agent-tools/v1/training/plans/{plan_id}/executions",
+                headers={
+                    "X-Internal-Service-Token": args.internal_token,
+                    "X-Agent-Context": contexts[context_name],
+                    "X-Request-ID": f"gateway-training-live-{name}",
+                },
+            )
+            if should_be_visible:
+                results.append(validate_execution_list(name, status_code, payload))
             else:
                 results.append(validate_hidden(name, status_code, payload))
     return tuple(results)
