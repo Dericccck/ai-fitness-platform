@@ -81,6 +81,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--mysql-database", default=os.getenv("GATEWAY_DB_NAME", "fitness"))
     parser.add_argument("--mysql-username", default=os.getenv("GATEWAY_DB_USERNAME", ""))
     parser.add_argument("--mysql-password", default=os.getenv("GATEWAY_DB_PASSWORD", ""))
+    parser.add_argument(
+        "--mysql-container",
+        default=os.getenv("GATEWAY_DB_CLEANUP_CONTAINER", ""),
+        help="可选：通过 Docker 容器中的 mysql 客户端执行精确清理",
+    )
     return parser
 
 
@@ -256,9 +261,22 @@ DELETE FROM training_plan_day WHERE plan_id = '{plan_id}';
 DELETE FROM training_plan WHERE id = '{plan_id}';
 """
     env = {**os.environ, "MYSQL_PWD": args.mysql_password}
-    result = subprocess.run(
-        [
+    if args.mysql_container.strip():
+        # 当前开发机没有宿主机 mysql CLI，因此允许显式指定已有的 fitness-mysql 容器。
+        # 容器名来自本地配置，不接受计划 ID 或 SQL 片段，SQL 仍通过标准输入传入。
+        command = [
+            "docker",
+            "exec",
+            "-i",
+            "-e",
+            f"MYSQL_PWD={args.mysql_password}",
+            args.mysql_container,
             "mysql",
+        ]
+    else:
+        command = ["mysql"]
+    command.extend(
+        [
             "--protocol=tcp",
             "--default-character-set=utf8mb4",
             "-h",
@@ -270,7 +288,10 @@ DELETE FROM training_plan WHERE id = '{plan_id}';
             args.mysql_database,
             "--batch",
             "--skip-column-names",
-        ],
+        ]
+    )
+    result = subprocess.run(
+        command,
         input=sql,
         text=True,
         capture_output=True,
