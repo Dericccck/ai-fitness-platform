@@ -1358,6 +1358,10 @@ Memory 脱敏评测。
   接收一条 `DRAFT` 和一条 `PUBLISHED` 的明确本地夹具，真实验证管理员/负责教练可读两种状态、对应学员只能读取
   `PUBLISHED`。本次夹具通过真实 API 创建并走完 `DRAFT -> PENDING_REVIEW -> APPROVED -> PUBLISHED`，验收结束后
   仅按本轮生成的明确计划 ID 清理，不把夹具或测试身份写入生产配置。
+- 已新增无写入的 `gateway-training-role-live-check`：使用本地开发签发器生成短时管理员、教练和学员
+  `AgentContext`，通过 Java Gateway 训练 Tool 读取接口复验上述角色边界，并验证缺少 Agent→Gateway 内部 Token
+  时在 Gateway 入口返回 `401`。该检查不创建训练计划、不携带确认凭证、不消费 JTI；下一步再验证通过 Gateway
+  的确认写入链路和 Agent→Gateway→Training Service 的完整训练计划闭环。
 - Gateway 质量门禁同时发现预约可用性单元测试依赖已经过去的固定日期；已为 `FitnessToolService` 注入生产系统时钟和
   测试固定时钟，保持生产行为不变，避免日期推进后测试误报失败。
 - 已为 Booking/Fitness 真实联调脚本补齐离线协议测试：默认流程会生成确认单、读取 `PENDING`、自动提交 `REJECT`

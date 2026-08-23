@@ -245,6 +245,11 @@ make training-role-visibility-live-check
 确认凭证，也不会写入训练数据库。夹具必须使用固定前缀并在验收完成后按明确 ID 清理，不能使用
 通配条件删除训练计划；生产环境不应保留这类数据。
 
+Java Gateway 到训练服务的真实验收使用 `make gateway-training-role-live-check`。它要求显式设置
+`FITNESS_DEV_CONTEXT_ISSUER=1`，由本地开发签发器生成短时的管理员、教练和学员上下文，然后只访问
+Gateway 的训练读取接口。除了复验上述六种可见性，还会验证缺少 `GATEWAY_INTERNAL_SERVICE_TOKEN`
+时 Gateway 在入口返回 `401`。脚本不会打印上下文或 Token，也不会创建计划、消费确认凭证或写入数据库。
+
 确认单接口为 `GET /api/v1/agent/confirmations/{confirmation_id}` 和
 `POST /api/v1/agent/confirmations/{confirmation_id}/decisions`。决定请求只提交
 `APPROVE`/`REJECT` 与独立 `decision_request_id`；身份、组织和角色仍从签名 AgentContext 获取。
