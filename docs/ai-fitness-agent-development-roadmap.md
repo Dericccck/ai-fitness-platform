@@ -1362,6 +1362,11 @@ Memory 脱敏评测。
   `AgentContext`，通过 Java Gateway 训练 Tool 读取接口复验上述角色边界，并验证缺少 Agent→Gateway 内部 Token
   时在 Gateway 入口返回 `401`。该检查不创建训练计划、不携带确认凭证、不消费 JTI；下一步再验证通过 Gateway
   的确认写入链路和 Agent→Gateway→Training Service 的完整训练计划闭环。
+- 已新增显式开关保护的 `gateway-training-write-live-check`：仅在 `GATEWAY_LIVE_EXECUTE_WRITES=1` 时，
+  使用固定测试夹具通过 Gateway 创建 `DRAFT`，验证相同请求 ID 幂等返回同一计划，以及相同 JTI 换请求 ID
+  重放被训练服务返回 `409 CONFLICT`。该脚本使用本地密钥模拟已批准确认凭证，目的是验证 Gateway→Training
+  Service 的确认声明透传和 JTI 事务消费，不替代 Agent 的 LangGraph `interrupt()` 流程；写入结果必须按明确
+  计划 ID 清理，不能保留到业务库。
 - Gateway 质量门禁同时发现预约可用性单元测试依赖已经过去的固定日期；已为 `FitnessToolService` 注入生产系统时钟和
   测试固定时钟，保持生产行为不变，避免日期推进后测试误报失败。
 - 已为 Booking/Fitness 真实联调脚本补齐离线协议测试：默认流程会生成确认单、读取 `PENDING`、自动提交 `REJECT`

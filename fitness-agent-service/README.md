@@ -250,6 +250,14 @@ Java Gateway 到训练服务的真实验收使用 `make gateway-training-role-li
 Gateway 的训练读取接口。除了复验上述六种可见性，还会验证缺少 `GATEWAY_INTERNAL_SERVICE_TOKEN`
 时 Gateway 在入口返回 `401`。脚本不会打印上下文或 Token，也不会创建计划、消费确认凭证或写入数据库。
 
+Gateway 训练写入验收使用 `make gateway-training-write-live-check`，默认始终拒绝执行。只有明确
+确认本地夹具写入并设置 `GATEWAY_LIVE_EXECUTE_WRITES=1` 后，脚本才会通过 Gateway 创建一条
+`[GATEWAY_WRITE_FIXTURE]` 草案，并验证：相同请求 ID 重试返回同一计划；相同 JTI 换请求 ID 重放返回
+`409 CONFLICT`；训练服务确认消费记录与计划写入处于同一事务。脚本会输出本轮计划 ID，验收后必须
+按这个明确 ID 清理，不允许用机构、学员或状态条件批量删除。该脚本使用本地密钥模拟已批准确认凭证，
+不替代 Agent 的 `interrupt()` 流程；Agent 端完整确认流程仍由 `agent-fitness-live-check --execute`
+单独验收。
+
 确认单接口为 `GET /api/v1/agent/confirmations/{confirmation_id}` 和
 `POST /api/v1/agent/confirmations/{confirmation_id}/decisions`。决定请求只提交
 `APPROVE`/`REJECT` 与独立 `decision_request_id`；身份、组织和角色仍从签名 AgentContext 获取。

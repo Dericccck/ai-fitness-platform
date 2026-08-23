@@ -166,6 +166,9 @@ GET  /internal/agent-tools/v1/training/plans/{planId}/executions
 POST /internal/agent-tools/v1/training/plans/{planId}/days/{dayId}/execution
 ```
 
+Gateway 训练写工具沿用 Tool 调用的统一 `200 OK` 响应约定；下游 Training Service 的创建草案接口
+内部返回 `201 Created`，由 Gateway 转换为 `200 OK` 并返回结构化训练计划视图。
+
 写工具的 `X-Confirmation-Token` 当前由 Agent 服务端使用共享 HMAC 密钥签发，Gateway 会绑定并校验
 签名主体、工具 ID、动作、机构、资源、请求 ID、参数哈希、JTI 和过期时间。Gateway 不把原始 Token
 继续传给训练服务，而是只转发已验签的声明 Header：`X-Confirmation-Id`、`X-Confirmation-JTI`、
