@@ -3,6 +3,7 @@ from datetime import UTC, datetime
 
 import pytest
 
+from app.agent.fitness_tools import CreateTrainingDraftToolInput, _create_training_draft_payload
 from app.agent.training_plan_generation import (
     TrainingPlanGenerationError,
     TrainingPlanGenerationInput,
@@ -99,6 +100,49 @@ def valid_json() -> str:
         '"rest_seconds":90,"target_weight_kg":null,"target_rpe":6,"notes":null}]}'
         "]}"
     )
+
+
+def test_training_draft_payload_uses_java_gateway_field_names() -> None:
+    """确认摘要和真实 Gateway 请求必须共享 camelCase 跨服务契约。"""
+
+    typed = CreateTrainingDraftToolInput.model_validate(
+        {
+            "organization_id": "org-1",
+            "student_id": "student-1",
+            "coach_id": "coach-1",
+            "title": "力量入门",
+            "goal_type": "力量",
+            "days": [
+                {
+                    "day_number": 1,
+                    "title": "下肢",
+                    "scheduled_date": None,
+                    "items": [
+                        {
+                            "exercise_name": "徒手深蹲",
+                            "sort_order": 1,
+                            "sets": 3,
+                            "reps": "10-12",
+                            "rest_seconds": 60,
+                            "target_weight_kg": None,
+                            "target_rpe": None,
+                            "notes": "保持稳定",
+                        }
+                    ],
+                }
+            ],
+        }
+    )
+
+    payload = _create_training_draft_payload(typed)
+
+    assert payload["organizationId"] == "org-1"
+    assert payload["studentId"] == "student-1"
+    assert payload["coachId"] == "coach-1"
+    assert payload["goalType"] == "力量"
+    assert payload["days"][0]["dayNumber"] == 1  # type: ignore[index]
+    assert payload["days"][0]["items"][0]["exerciseName"] == "徒手深蹲"  # type: ignore[index]
+    assert "organization_id" not in payload
 
 
 @pytest.mark.asyncio

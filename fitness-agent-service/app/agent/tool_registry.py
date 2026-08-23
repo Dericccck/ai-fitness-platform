@@ -264,6 +264,7 @@ class ToolRegistry:
                 raise ToolContextBindingError(
                     "当前 AgentContext 包含多个机构，不能在模型参数中猜测机构"
                 )
+            self._remove_model_alias(definition, bound, organization_field)
             bound[organization_field] = next(iter(identity.organization_ids))
 
         # 只有纯学员上下文才强制绑定当前主体。管理员或教练可能在授权范围内
@@ -273,17 +274,35 @@ class ToolRegistry:
             for field_name in ("student_id", "user_id"):
                 field_key = self._model_field_key(definition, field_name)
                 if field_key is not None:
+                    self._remove_model_alias(definition, bound, field_key)
                     bound[field_key] = identity.subject
         return bound
 
     @staticmethod
+    def _remove_model_alias(
+        definition: ToolDefinition, bound: dict[str, Any], field_name: str
+    ) -> None:
+        """把 alias 输入归一化为 Agent 内部字段，避免 strict Schema 看到重复键。"""
+
+        field = definition.input_model.model_fields.get(field_name)
+        if field is not None and field.alias and field.alias != field_name:
+            bound.pop(field.alias, None)
+
+    @staticmethod
     def _model_field_key(definition: ToolDefinition, field_name: str) -> str | None:
-        """返回模型实际接收的字段名，兼容 snake_case 与 Java camelCase 别名。"""
+        """返回 Agent Schema 的 Python 字段名，兼容跨服务 camelCase 别名。
+
+        Pydantic 的 ``populate_by_name`` 允许模型输入使用 snake_case，并在最终
+        ``model_dump(by_alias=True)`` 时转换成 Java 需要的 camelCase。如果这里把
+        绑定值写到 alias 字段，会同时保留模型原始的 snake_case 字段，严格的
+        ``extra='forbid'`` 就会把同一个合法请求误判为多余参数。因此租户绑定必须
+        写回 Python 字段名；跨服务命名转换只能发生在 Gateway Payload 生成处。
+        """
 
         field = definition.input_model.model_fields.get(field_name)
         if field is None:
             return None
-        return field.alias or field_name
+        return field_name
 
     def normalize_confirmation(
         self,

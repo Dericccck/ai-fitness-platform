@@ -271,8 +271,12 @@ def _token_resource(record: ConfirmationRecord, payload: Mapping[str, Any]) -> s
 
     if record.resource_id:
         return record.resource_id
-    organization_id = payload.get("organization_id")
-    student_id = payload.get("student_id")
+    # 确认单中的 canonical payload 来自 Pydantic ``model_dump(by_alias=True)``，
+    # 因此训练草案恢复时通常是 Java 约定的 camelCase；兼容 snake_case 是为了
+    # 读取旧版本已创建、但尚未执行的本地确认单。资源范围必须在签发凭证前
+    # 归一化，否则会把一个合法的 org/student 误判成缺少资源范围。
+    organization_id = payload.get("organization_id") or payload.get("organizationId")
+    student_id = payload.get("student_id") or payload.get("studentId")
     if isinstance(organization_id, str) and isinstance(student_id, str):
         return f"{organization_id}:{student_id}"
     # Memory 不经过 Java Gateway，但仍使用相同的窄范围凭证生命周期；其资源范围绑定

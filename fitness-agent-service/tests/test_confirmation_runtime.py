@@ -1,4 +1,5 @@
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from typing import Any, cast
 
 from langgraph.checkpoint.memory import InMemorySaver
@@ -7,12 +8,23 @@ from app.agent.fitness_tools import build_fitness_tool_registry
 from app.agent.supervisor import Supervisor, SupervisorRequest
 from app.confirmation.cipher import AesGcmPayloadCipher, ConfirmationPayloadCipherError
 from app.confirmation.models import ConfirmationRecord
-from app.confirmation.service import ConfirmationExecutionPreparation
+from app.confirmation.service import ConfirmationExecutionPreparation, _token_resource
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.gateway_client import GatewayClient, GatewayRequestContext
 from app.infrastructure.model_gateway import ModelGateway, ModelToolCall, ModelTurn
 
 from .test_tool_registry import FakeGateway
+
+
+def test_token_resource_accepts_java_camel_case_payload() -> None:
+    """恢复确认单时必须按 Java canonical payload 提取 org/student 资源范围。"""
+
+    record = SimpleNamespace(resource_id=None, resource_type="training_plan", subject_user_id="user-1")
+
+    assert _token_resource(
+        record,
+        {"organizationId": "org-1", "studentId": "student-1"},
+    ) == "org-1:student-1"
 
 
 class OneWriteModel:

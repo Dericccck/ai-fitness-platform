@@ -264,35 +264,56 @@ class BookingCancelToolInput(OrganizationToolInput):
 
 
 class TrainingItemInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # Agent 内部统一使用 snake_case，但 Java Gateway 的跨服务 JSON 契约使用
+    # camelCase。这里必须在 Schema 层声明别名，不能只在确认摘要里“看起来”转换；
+    # 否则确认凭证按 organizationId/studentId 计算的资源范围，与真正发送给
+    # Gateway 的 JSON 字段就会发生漂移，Gateway 会拒绝执行高风险写操作。
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    exercise_name: str = Field(min_length=1, max_length=128)
-    sort_order: int = Field(ge=1, le=100)
+    exercise_name: str = Field(
+        alias="exerciseName", min_length=1, max_length=128
+    )
+    sort_order: int = Field(alias="sortOrder", ge=1, le=100)
     sets: int = Field(ge=1, le=100)
     reps: str = Field(min_length=1, max_length=64)
-    rest_seconds: int | None = Field(default=None, ge=0, le=3600)
-    target_weight_kg: float | None = Field(default=None, ge=0, le=1000)
-    target_rpe: float | None = Field(default=None, ge=0, le=10)
+    rest_seconds: int | None = Field(alias="restSeconds", default=None, ge=0, le=3600)
+    target_weight_kg: float | None = Field(
+        alias="targetWeightKg", default=None, ge=0, le=1000
+    )
+    target_rpe: float | None = Field(alias="targetRpe", default=None, ge=0, le=10)
     notes: str | None = Field(default=None, max_length=1000)
 
 
 class TrainingDayInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    day_number: int = Field(ge=1, le=31)
+    day_number: int = Field(alias="dayNumber", ge=1, le=31)
     title: str = Field(min_length=1, max_length=128)
-    scheduled_date: str | None = None
+    scheduled_date: str | None = Field(alias="scheduledDate", default=None)
     items: list[TrainingItemInput] = Field(min_length=1, max_length=100)
 
 
 class CreateTrainingDraftToolInput(BaseModel):
-    model_config = ConfigDict(extra="forbid")
+    # 这是 Agent 工具输入的最后一道跨服务契约边界：模型仍可以生成 snake_case，
+    # 但 model_dump(by_alias=True) 必须输出 Java TrainingToolInputs.DraftInput
+    # 能够反序列化的字段名。确认摘要、payload 哈希和真实 HTTP 请求都复用这个
+    # Schema，保证“用户确认的内容”与“Gateway 实际收到的内容”完全一致。
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    organization_id: str = _ID_FIELD
-    student_id: str = _ID_FIELD
-    coach_id: str = _ID_FIELD
+    organization_id: str = Field(
+        alias="organizationId", min_length=1, max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$"
+    )
+    student_id: str = Field(
+        alias="studentId", min_length=1, max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$"
+    )
+    coach_id: str = Field(
+        alias="coachId", min_length=1, max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$"
+    )
     title: str = Field(min_length=1, max_length=128)
-    goal_type: str = Field(min_length=1, max_length=32)
+    goal_type: str = Field(alias="goalType", min_length=1, max_length=32)
     days: list[TrainingDayInput] = Field(min_length=1, max_length=31)
 
 
