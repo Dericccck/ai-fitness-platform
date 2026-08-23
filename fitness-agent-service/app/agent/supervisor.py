@@ -618,17 +618,10 @@ class Supervisor:
             # 模型返回的是 model_name，确认单必须保存内部稳定 tool_id，避免供应商
             # 别名进入凭证、审计和后续恢复流程。
             definition = self.tools.get(call.name)
-            bound_input = self.tools.bind_context_input(
+            confirmation = await self._prepare_write_confirmation(
                 definition.tool_id,
                 call.arguments,
-                runtime.context.identity,
-            )
-            confirmation = await self.confirmation_service.prepare(
-                tool_id=definition.tool_id,
-                raw_input=bound_input,
-                gateway_context=runtime.context.gateway_context,
-                identity=runtime.context.identity,
-                thread_id=runtime.context.thread_id or "unknown-thread",
+                runtime,
             )
             # Checkpoint 只保存空参数占位和确认 ID；精确参数已在确认单中加密保存。
             assistant_message: dict[str, Any] = {
@@ -806,17 +799,64 @@ class Supervisor:
                 runtime.context.identity,
             )
             result = await self.tools.invoke(definition.tool_id, bound_input, context)
+            model_result = _safe_model_tool_result(definition.tool_id, result)
             tool_messages.append(
                 {
                     "role": "tool",
                     "tool_call_id": call.call_id,
-                    "content": json.dumps(result, ensure_ascii=False),
+                    "content": json.dumps(model_result, ensure_ascii=False),
                 }
             )
+            if (
+                definition.tool_id == "fitness.training.plan.generate_draft.v1"
+                and _is_explicit_training_plan_creation_request(runtime.context.user_message)
+            ):
+                # 生成服务已经完成 RAG、结构化 Schema 和语义校验。用户明确要求“创建”时，
+                # 这里直接把同一份已校验 Payload 交给确认服务，不再把下一步是否调用写工具
+                # 交给模型决定。Payload 只在当前节点内存和加密确认单中存在，不进入 State。
+                generated_payload = _generated_draft_payload(result)
+                confirmation = await self._prepare_write_confirmation(
+                    "fitness.training.plan.create_draft.v1",
+                    generated_payload,
+                    runtime,
+                )
+                return {
+                    "messages": [*state["messages"], *tool_messages],
+                    "tool_steps": state.get("tool_steps", 0) + 1,
+                    "model_tool_calls": [],
+                    "pending_confirmation_id": confirmation.id,
+                    "final_answer": "",
+                }
         return {
             "messages": [*state["messages"], *tool_messages],
             "tool_steps": state.get("tool_steps", 0) + 1,
         }
+
+    async def _prepare_write_confirmation(
+        self,
+        tool_id: str,
+        raw_input: dict[str, Any],
+        runtime: Runtime[SupervisorRuntimeContext],
+    ) -> Any:
+        """统一创建写操作确认单，确保模型直写和生成后直写使用同一安全边界。"""
+
+        if runtime.context is None or runtime.context.identity is None:
+            raise SupervisorRuntimeError("signed identity is required for write confirmation")
+        if self.confirmation_service is None:
+            raise SupervisorRuntimeError("confirmation service is not configured")
+        definition = self.tools.get(tool_id)
+        bound_input = self.tools.bind_context_input(
+            definition.tool_id,
+            raw_input,
+            runtime.context.identity,
+        )
+        return await self.confirmation_service.prepare(
+            tool_id=definition.tool_id,
+            raw_input=bound_input,
+            gateway_context=runtime.context.gateway_context,
+            identity=runtime.context.identity,
+            thread_id=runtime.context.thread_id or "unknown-thread",
+        )
 
     @staticmethod
     def _after_model(state: SupervisorState) -> str:
@@ -912,6 +952,35 @@ def _forced_write_tool_name(route: SupervisorRoute, user_message: str) -> str | 
     ):
         return "fitness_booking_create_v1"
     return None
+
+
+def _is_explicit_training_plan_creation_request(user_message: str | None) -> bool:
+    """判断用户是否明确要求创建训练计划，而不是只请求建议或预览。"""
+
+    if not user_message:
+        return False
+    text = "".join(user_message.split())
+    creation_verbs = ("创建", "制定", "生成", "安排", "设计", "制作")
+    return "训练计划" in text and any(verb in text for verb in creation_verbs)
+
+
+def _generated_draft_payload(result: Any) -> dict[str, Any]:
+    """读取已通过生成服务校验的创建 Payload，拒绝不完整的内部工具结果。"""
+
+    if not isinstance(result, dict) or result.get("status") != "DRAFT_PREVIEW":
+        raise SupervisorRuntimeError("training draft generation did not return a preview")
+    payload = result.get("payload")
+    if not isinstance(payload, dict) or not payload:
+        raise SupervisorRuntimeError("training draft preview payload is missing")
+    return {str(key): value for key, value in payload.items()}
+
+
+def _safe_model_tool_result(tool_id: str, result: Any) -> Any:
+    """移除训练草案精确 Payload，防止模型工具消息把写参数落入 Checkpoint。"""
+
+    if tool_id != "fitness.training.plan.generate_draft.v1" or not isinstance(result, dict):
+        return result
+    return {key: value for key, value in result.items() if key != "payload"}
 
 
 def _model_tools(registry: ToolRegistry, route: SupervisorRoute) -> list[dict[str, Any]]:

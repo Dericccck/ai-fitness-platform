@@ -58,7 +58,7 @@ class OneWriteModel:
 
 
 class GenerateThenWriteModel:
-    """先请求生成预览，再把同一份草案交给写工具，验证两步之间仍有确认拦截。"""
+    """请求生成预览；运行时应把明确的创建意图直接交给确认边界。"""
 
     def __init__(self, payload: dict[str, Any]) -> None:
         self.payload = payload
@@ -325,7 +325,7 @@ async def test_generated_preview_flows_into_confirmation_before_draft_creation()
         confirmation_service=cast(Any, confirmation_service),
     )
     request = SupervisorRequest(
-        user_message="根据知识生成并创建力量训练草案",
+        user_message="根据知识生成并创建力量训练计划草案",
         gateway_context=GatewayRequestContext(
             signed_context="signed-context",
             request_id="request-1",
@@ -345,7 +345,9 @@ async def test_generated_preview_flows_into_confirmation_before_draft_creation()
     response = await supervisor.invoke(request)
 
     assert response.status == "CONFIRMATION_REQUIRED"
-    assert models.calls == 2
+    # 生成结果已经通过结构化校验，后续创建确认由运行时确定性编排，不能再依赖
+    # 第二次模型调用是否记得继续调用 create_draft。
+    assert models.calls == 1
     assert generator.identities == ["coach-1"]
     assert confirmation_service.prepared[0]["raw_input"] == payload
     assert gateway.current_user_calls == 0
