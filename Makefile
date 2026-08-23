@@ -218,6 +218,15 @@ training-role-live-check:
 	@test -n "$$TRAINING_LIVE_COACH_ID" || (echo "请先设置 TRAINING_LIVE_COACH_ID"; exit 1)
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/training_role_live_check.py
 
+training-role-visibility-live-check:
+	@test -n "$$TRAINING_INTERNAL_SERVICE_TOKEN" || (echo "请先设置 TRAINING_INTERNAL_SERVICE_TOKEN"; exit 1)
+	@test -n "$$TRAINING_LIVE_ORGANIZATION_ID" || (echo "请先设置 TRAINING_LIVE_ORGANIZATION_ID"; exit 1)
+	@test -n "$$TRAINING_LIVE_STUDENT_ID" || (echo "请先设置 TRAINING_LIVE_STUDENT_ID"; exit 1)
+	@test -n "$$TRAINING_LIVE_COACH_ID" || (echo "请先设置 TRAINING_LIVE_COACH_ID"; exit 1)
+	@test -n "$$TRAINING_LIVE_DRAFT_PLAN_ID" || (echo "请先设置 TRAINING_LIVE_DRAFT_PLAN_ID"; exit 1)
+	@test -n "$$TRAINING_LIVE_PUBLISHED_PLAN_ID" || (echo "请先设置 TRAINING_LIVE_PUBLISHED_PLAN_ID"; exit 1)
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/training_role_live_check.py
+
 booking-check:
 	./mvnw --batch-mode -f fitness-booking-service/pom.xml -s .mvn/settings.xml -Dmaven.repo.local=.mvn/repository clean test
 

@@ -229,6 +229,22 @@ PostgreSQL/Redis/模型/Gateway readiness，以及管理员上下文是否存在
 和 `AGENT_LIVE_TIMEOUT_SECONDS` 调整地址、问题和超时时间。该检查必须使用组织管理员上下文，
 学员或教练 Token 应通过权限负例测试验证被拒绝，而不是用来冒充经营查询成功。
 
+训练服务角色真实验收
+
+基础验收命令 `make training-role-live-check` 只检查训练服务存活和“学员创建草案被拒绝”，
+不会创建训练计划。准备两条带 `[ROLE_FIXTURE]` 标记的本地夹具（一条 `DRAFT`、一条
+`PUBLISHED`）后，可以通过可选环境变量追加完整读取边界验收：
+
+```bash
+export TRAINING_LIVE_DRAFT_PLAN_ID='<本地草案夹具 ID>'
+export TRAINING_LIVE_PUBLISHED_PLAN_ID='<本地已发布夹具 ID>'
+make training-role-visibility-live-check
+```
+
+该验收要求管理员和负责教练都能读取两种状态，计划对应学员只能读取 `PUBLISHED`，读取请求不携带
+确认凭证，也不会写入训练数据库。夹具必须使用固定前缀并在验收完成后按明确 ID 清理，不能使用
+通配条件删除训练计划；生产环境不应保留这类数据。
+
 确认单接口为 `GET /api/v1/agent/confirmations/{confirmation_id}` 和
 `POST /api/v1/agent/confirmations/{confirmation_id}/decisions`。决定请求只提交
 `APPROVE`/`REJECT` 与独立 `decision_request_id`；身份、组织和角色仍从签名 AgentContext 获取。

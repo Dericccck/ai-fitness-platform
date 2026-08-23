@@ -1354,8 +1354,10 @@ Memory 脱敏评测。
   现在训练服务也只允许机构管理员或负责教练创建草案；学员只能读取本人 `PUBLISHED` 计划并提交本人训练日执行记录。
   新增 Java 服务层越权回归测试，避免未来绕过 Python Agent 的调用方重新打开学员创建入口。
 - 已新增无写入的 `training-role-live-check`：启动本地训练服务后检查 `/health` 返回 `UP`，并用学员上下文
-  真实请求创建草案接口，要求服务返回 `403 FORBIDDEN`；本次本地验收通过，训练计划表保持 0 条记录。由于当前库没有
-  训练计划夹具，管理员/教练读取和学员仅能读取 `PUBLISHED` 的可见性暂不伪造通过，后续准备受控夹具后再验收。
+  真实请求创建草案接口，要求服务返回 `403 FORBIDDEN`；同时提供 `training-role-visibility-live-check`，
+  接收一条 `DRAFT` 和一条 `PUBLISHED` 的明确本地夹具，真实验证管理员/负责教练可读两种状态、对应学员只能读取
+  `PUBLISHED`。本次夹具通过真实 API 创建并走完 `DRAFT -> PENDING_REVIEW -> APPROVED -> PUBLISHED`，验收结束后
+  仅按本轮生成的明确计划 ID 清理，不把夹具或测试身份写入生产配置。
 - Gateway 质量门禁同时发现预约可用性单元测试依赖已经过去的固定日期；已为 `FitnessToolService` 注入生产系统时钟和
   测试固定时钟，保持生产行为不变，避免日期推进后测试误报失败。
 - 已为 Booking/Fitness 真实联调脚本补齐离线协议测试：默认流程会生成确认单、读取 `PENDING`、自动提交 `REJECT`
