@@ -1,8 +1,10 @@
 package com.shuyiwa.fitness.training.service;
 
 import com.shuyiwa.fitness.training.api.TrainingPlanRequest;
+import com.shuyiwa.fitness.training.api.TrainingPlanView;
 import com.shuyiwa.fitness.training.api.TrainingDayExecutionRequest;
 import com.shuyiwa.fitness.training.api.TrainingDayExecutionView;
+import com.shuyiwa.fitness.training.api.TrainingReviewRequest;
 import com.shuyiwa.fitness.training.domain.TrainingDay;
 import com.shuyiwa.fitness.training.domain.TrainingDayExecution;
 import com.shuyiwa.fitness.training.domain.TrainingDayExecutionStatus;
@@ -11,6 +13,7 @@ import com.shuyiwa.fitness.training.domain.TrainingPlan;
 import com.shuyiwa.fitness.training.repository.TrainingPlanRepository;
 import com.shuyiwa.fitness.training.security.TrainingActor;
 import com.shuyiwa.fitness.training.security.TrainingConfirmation;
+import org.springframework.http.HttpStatus;
 import org.junit.Test;
 
 import java.util.Collections;
@@ -22,6 +25,7 @@ import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.when;
 import static org.mockito.Mockito.verify;
+import static org.mockito.ArgumentMatchers.eq;
 
 /** 训练计划权限和结构化输入测试，防止 Agent 直接生成正式发布计划。 */
 public class TrainingPlanServiceTest {
@@ -147,6 +151,197 @@ public class TrainingPlanServiceTest {
                 any(String.class), any(TrainingDayExecutionStatus.class), any(java.time.LocalDate.class),
                 org.mockito.ArgumentMatchers.any(), any(String.class), any(String.class),
                 any(TrainingConfirmation.class));
+    }
+
+    @Test
+    public void idempotentTransitionStillRequiresConfirmation() {
+        TrainingPlanRepository repository = mock(TrainingPlanRepository.class);
+        TrainingPlanService service = new TrainingPlanService(repository);
+        TrainingPlan plan = plan("plan-1", "student-1", "coach-1",
+                com.shuyiwa.fitness.training.domain.TrainingPlanStatus.PENDING_REVIEW);
+        when(repository.findById("plan-1")).thenReturn(java.util.Optional.of(plan));
+        when(repository.wasRequestApplied("plan-1", "req-replay")).thenReturn(true);
+
+        expectStatus(HttpStatus.UNAUTHORIZED, () -> service.review(
+                new TrainingActor("coach-1", Collections.singleton(TrainingActor.COACH),
+                        Collections.singleton("org-1"), "req-replay"),
+                "plan-1", reviewRequest("APPROVE", null)));
+
+        // 幂等命中只能跳过二次写入，不能跳过确认凭证验证，更不能再次写审计。
+        verify(repository, never()).transition(any(TrainingPlan.class), any(), any(String.class),
+                any(String.class), any(String.class), any(), any(TrainingConfirmation.class));
+    }
+
+    @Test
+    public void responsibleCoachCanSubmitPlanForReview() {
+        TrainingPlanRepository repository = mock(TrainingPlanRepository.class);
+        TrainingPlanService service = new TrainingPlanService(repository);
+        TrainingPlan plan = plan("plan-1", "student-1", "coach-1",
+                com.shuyiwa.fitness.training.domain.TrainingPlanStatus.DRAFT);
+        when(repository.findById("plan-1")).thenReturn(java.util.Optional.of(plan));
+        when(repository.wasRequestApplied("plan-1", "req-submit")).thenReturn(false);
+        when(repository.transition(any(TrainingPlan.class), eq(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.PENDING_REVIEW),
+                eq("SUBMIT_REVIEW"), eq("coach-1"), eq("req-submit"), eq(null), any(TrainingConfirmation.class)))
+                .thenAnswer(invocation -> {
+                    plan.setStatus(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.PENDING_REVIEW);
+                    return true;
+                });
+
+        TrainingPlanView result = service.submitForReview(new TrainingActor("coach-1",
+                Collections.singleton(TrainingActor.COACH), Collections.singleton("org-1"), "req-submit",
+                confirmation("fitness.training.plan.submit_review.v1", "SUBMIT_TRAINING_REVIEW", "plan-1")),
+                "plan-1");
+
+        assertEquals(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.PENDING_REVIEW, result.getStatus());
+        verify(repository).transition(any(TrainingPlan.class), eq(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.PENDING_REVIEW),
+                eq("SUBMIT_REVIEW"), eq("coach-1"), eq("req-submit"), eq(null), any(TrainingConfirmation.class));
+    }
+
+    @Test
+    public void studentCannotReviewPlan() {
+        TrainingPlanRepository repository = mock(TrainingPlanRepository.class);
+        TrainingPlanService service = new TrainingPlanService(repository);
+        TrainingPlan plan = plan("plan-1", "student-1", "coach-1",
+                com.shuyiwa.fitness.training.domain.TrainingPlanStatus.PENDING_REVIEW);
+        when(repository.findById("plan-1")).thenReturn(java.util.Optional.of(plan));
+
+        expectStatus(HttpStatus.FORBIDDEN, () -> service.review(new TrainingActor("student-1",
+                Collections.singleton(TrainingActor.STUDENT), Collections.singleton("org-1"), "req-review",
+                confirmation("fitness.training.plan.review.v1", "REVIEW_TRAINING_PLAN", "plan-1")),
+                "plan-1", reviewRequest("APPROVE", null)));
+        verify(repository, never()).transition(any(TrainingPlan.class), any(), any(String.class),
+                any(String.class), any(String.class), any(), any(TrainingConfirmation.class));
+    }
+
+    @Test
+    public void organizationAdminCanApprovePlanAcrossAssignedCoach() {
+        TrainingPlanRepository repository = mock(TrainingPlanRepository.class);
+        TrainingPlanService service = new TrainingPlanService(repository);
+        TrainingPlan plan = plan("plan-1", "student-1", "coach-1",
+                com.shuyiwa.fitness.training.domain.TrainingPlanStatus.PENDING_REVIEW);
+        when(repository.findById("plan-1")).thenReturn(java.util.Optional.of(plan));
+        when(repository.wasRequestApplied("plan-1", "req-admin-review")).thenReturn(false);
+        when(repository.transition(any(TrainingPlan.class), eq(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.APPROVED),
+                eq("REVIEW"), eq("admin-1"), eq("req-admin-review"), eq(null), any(TrainingConfirmation.class)))
+                .thenAnswer(invocation -> {
+                    plan.setStatus(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.APPROVED);
+                    return true;
+                });
+
+        TrainingPlanView result = service.review(new TrainingActor("admin-1",
+                Collections.singleton(TrainingActor.ORGANIZATION_ADMIN), Collections.singleton("org-1"),
+                "req-admin-review", confirmation("fitness.training.plan.review.v1",
+                        "REVIEW_TRAINING_PLAN", "plan-1")), "plan-1", reviewRequest("APPROVE", null));
+
+        assertEquals(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.APPROVED, result.getStatus());
+        verify(repository).transition(any(TrainingPlan.class), eq(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.APPROVED),
+                eq("REVIEW"), eq("admin-1"), eq("req-admin-review"), eq(null), any(TrainingConfirmation.class));
+    }
+
+    @Test
+    public void unrelatedCoachCannotReviewPlan() {
+        TrainingPlanRepository repository = mock(TrainingPlanRepository.class);
+        TrainingPlanService service = new TrainingPlanService(repository);
+        TrainingPlan plan = plan("plan-1", "student-1", "coach-1",
+                com.shuyiwa.fitness.training.domain.TrainingPlanStatus.PENDING_REVIEW);
+        when(repository.findById("plan-1")).thenReturn(java.util.Optional.of(plan));
+
+        expectStatus(HttpStatus.FORBIDDEN, () -> service.review(new TrainingActor("coach-2",
+                Collections.singleton(TrainingActor.COACH), Collections.singleton("org-1"), "req-review",
+                confirmation("fitness.training.plan.review.v1", "REVIEW_TRAINING_PLAN", "plan-1")),
+                "plan-1", reviewRequest("APPROVE", null)));
+        verify(repository, never()).transition(any(TrainingPlan.class), any(), any(String.class),
+                any(String.class), any(String.class), any(), any(TrainingConfirmation.class));
+    }
+
+    @Test
+    public void rejectedReviewMustContainReason() {
+        TrainingPlanRepository repository = mock(TrainingPlanRepository.class);
+        TrainingPlanService service = new TrainingPlanService(repository);
+        TrainingPlan plan = plan("plan-1", "student-1", "coach-1",
+                com.shuyiwa.fitness.training.domain.TrainingPlanStatus.PENDING_REVIEW);
+        when(repository.findById("plan-1")).thenReturn(java.util.Optional.of(plan));
+
+        expectStatus(HttpStatus.BAD_REQUEST, () -> service.review(new TrainingActor("coach-1",
+                Collections.singleton(TrainingActor.COACH), Collections.singleton("org-1"), "req-reject",
+                confirmation("fitness.training.plan.review.v1", "REVIEW_TRAINING_PLAN", "plan-1")),
+                "plan-1", reviewRequest("REJECT", "  ")));
+        verify(repository, never()).transition(any(TrainingPlan.class), any(), any(String.class),
+                any(String.class), any(String.class), any(), any(TrainingConfirmation.class));
+    }
+
+    @Test
+    public void responsibleCoachCanPublishApprovedPlan() {
+        TrainingPlanRepository repository = mock(TrainingPlanRepository.class);
+        TrainingPlanService service = new TrainingPlanService(repository);
+        TrainingPlan plan = plan("plan-1", "student-1", "coach-1",
+                com.shuyiwa.fitness.training.domain.TrainingPlanStatus.APPROVED);
+        when(repository.findById("plan-1")).thenReturn(java.util.Optional.of(plan));
+        when(repository.wasRequestApplied("plan-1", "req-publish")).thenReturn(false);
+        when(repository.transition(any(TrainingPlan.class), eq(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.PUBLISHED),
+                eq("PUBLISH"), eq("coach-1"), eq("req-publish"), eq(null), any(TrainingConfirmation.class)))
+                .thenAnswer(invocation -> {
+                    plan.setStatus(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.PUBLISHED);
+                    return true;
+                });
+
+        TrainingPlanView result = service.publish(new TrainingActor("coach-1",
+                Collections.singleton(TrainingActor.COACH), Collections.singleton("org-1"), "req-publish",
+                confirmation("fitness.training.plan.publish.v1", "PUBLISH_TRAINING_PLAN", "plan-1")),
+                "plan-1");
+
+        assertEquals(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.PUBLISHED, result.getStatus());
+        verify(repository).transition(any(TrainingPlan.class), eq(com.shuyiwa.fitness.training.domain.TrainingPlanStatus.PUBLISHED),
+                eq("PUBLISH"), eq("coach-1"), eq("req-publish"), eq(null), any(TrainingConfirmation.class));
+    }
+
+    @Test
+    public void studentCannotPublishApprovedPlan() {
+        TrainingPlanRepository repository = mock(TrainingPlanRepository.class);
+        TrainingPlanService service = new TrainingPlanService(repository);
+        TrainingPlan plan = plan("plan-1", "student-1", "coach-1",
+                com.shuyiwa.fitness.training.domain.TrainingPlanStatus.APPROVED);
+        when(repository.findById("plan-1")).thenReturn(java.util.Optional.of(plan));
+
+        expectStatus(HttpStatus.FORBIDDEN, () -> service.publish(new TrainingActor("student-1",
+                Collections.singleton(TrainingActor.STUDENT), Collections.singleton("org-1"), "req-publish",
+                confirmation("fitness.training.plan.publish.v1", "PUBLISH_TRAINING_PLAN", "plan-1")),
+                "plan-1"));
+        verify(repository, never()).transition(any(TrainingPlan.class), any(), any(String.class),
+                any(String.class), any(String.class), any(), any(TrainingConfirmation.class));
+    }
+
+    private TrainingPlan plan(String id, String studentId, String coachId,
+                              com.shuyiwa.fitness.training.domain.TrainingPlanStatus status) {
+        TrainingPlan plan = new TrainingPlan();
+        plan.setId(id);
+        plan.setOrganizationId("org-1");
+        plan.setStudentId(studentId);
+        plan.setCoachId(coachId);
+        plan.setStatus(status);
+        return plan;
+    }
+
+    private TrainingConfirmation confirmation(String toolId, String action, String resource) {
+        return new TrainingConfirmation("confirmation-1", "jti-1", toolId, action, "org-1", resource,
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+    }
+
+    private TrainingReviewRequest reviewRequest(String decision, String comment) {
+        TrainingReviewRequest request = new TrainingReviewRequest();
+        request.setDecision(decision);
+        request.setComment(comment);
+        return request;
+    }
+
+    private void expectStatus(HttpStatus expected, Runnable action) {
+        try {
+            action.run();
+        } catch (com.shuyiwa.fitness.training.api.TrainingApiException exception) {
+            assertEquals(expected, exception.getStatus());
+            return;
+        }
+        throw new AssertionError("预期训练服务返回 " + expected + "，但操作成功");
     }
 
     private TrainingPlanRequest validDraftRequest() {

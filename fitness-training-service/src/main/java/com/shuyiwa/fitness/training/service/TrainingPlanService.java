@@ -171,6 +171,12 @@ public class TrainingPlanService {
 
     private void transition(TrainingPlan plan, TrainingPlanStatus target, TrainingActor actor,
                              String action, String comment, String toolId, String confirmationAction) {
+        // 即使是幂等重试，也必须先验证确认凭证。幂等只代表“已经成功写过就不再写”，
+        // 不能把一次缺少确认凭证的请求变成可读取当前结果的旁路；这样才能保持所有状态
+        // 变更入口都遵守同一条安全边界。
+        TrainingConfirmation confirmation = requireConfirmation(
+                actor, toolId, confirmationAction, plan.getOrganizationId(), plan.getId()
+        );
         if (repository.wasRequestApplied(plan.getId(), actor.getRequestId())) {
             // 客户端超时后重试时，第一次可能已经提交成功；幂等重试直接返回当前事实。
             return;
@@ -178,9 +184,6 @@ public class TrainingPlanService {
         if (!plan.getStatus().canTransitionTo(target)) {
             throw invalid("当前状态不能执行该操作: " + plan.getStatus());
         }
-        TrainingConfirmation confirmation = requireConfirmation(
-                actor, toolId, confirmationAction, plan.getOrganizationId(), plan.getId()
-        );
         if (!repository.transition(plan, target, action, actor.getUserId(), actor.getRequestId(), comment,
                 confirmation)) {
             throw new TrainingApiException(HttpStatus.CONFLICT, "训练计划已被其他请求修改，请重新读取后操作");

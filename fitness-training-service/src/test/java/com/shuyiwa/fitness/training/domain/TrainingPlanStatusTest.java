@@ -26,4 +26,10 @@ public class TrainingPlanStatusTest {
         assertTrue(TrainingPlanStatus.APPROVED.canTransitionTo(TrainingPlanStatus.PUBLISHED));
         assertFalse(TrainingPlanStatus.PENDING_REVIEW.canTransitionTo(TrainingPlanStatus.PUBLISHED));
     }
+
+    @Test
+    public void rejectedPlanCanBeResubmittedButCannotBePublishedDirectly() {
+        assertTrue(TrainingPlanStatus.REJECTED.canTransitionTo(TrainingPlanStatus.PENDING_REVIEW));
+        assertFalse(TrainingPlanStatus.REJECTED.canTransitionTo(TrainingPlanStatus.PUBLISHED));
+    }
 }
