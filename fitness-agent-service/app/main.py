@@ -14,6 +14,7 @@ from app.api.routes.admin_knowledge import router as admin_knowledge_router
 from app.api.routes.admin_notifications import router as admin_notifications_router
 from app.api.routes.admin_operations import router as admin_operations_router
 from app.api.routes.agent import router as agent_router
+from app.api.routes.capabilities import router as capabilities_router
 from app.api.routes.confirmations import router as confirmations_router
 from app.api.routes.health import router as health_router
 from app.api.routes.knowledge_review import router as knowledge_review_router
@@ -320,6 +321,7 @@ if runtime_settings.metrics_enabled:
     app.add_middleware(MetricsMiddleware, metrics=http_metrics)
 app.add_middleware(RequestContextMiddleware, service_name=runtime_settings.service_name)
 app.include_router(agent_router)
+app.include_router(capabilities_router)
 app.include_router(confirmations_router)
 app.include_router(memory_candidates_router)
 app.include_router(memories_router)

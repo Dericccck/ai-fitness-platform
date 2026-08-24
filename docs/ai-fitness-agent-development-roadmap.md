@@ -1442,6 +1442,9 @@ Booking 和 Fitness 的真实 dry-run、Agent 层角色矩阵、训练服务最�
    MySQL `agent_booking_operation`/`agent_booking_outbox` 只读核对，并会按同一 `event_id` 重投消息验证重复消费不增加通知。
    暂不接入短信、Push，也不为 Memory 增加模拟短信。
 3. 三角色最小前端：学员执行训练和确认 Memory，教练审核发布计划，管理员查看 Operations、知识库和审计。
+   已先补齐 Agent 的 `/api/v1/agent/capabilities` 能力目录：目录由 Tool Registry 自动生成，按签名角色过滤，
+   返回业务分组、中文能力说明、只读/写入属性和是否需要确认；带角色范围的版本号和私有 ETag，避免前端硬编码
+   菜单或复用其他角色的缓存。该接口只提供展示元数据，不替代 Tool Registry、Java Gateway 和确认凭证校验。
 4. 精简 Customer Service Agent：健身问答、业务查询、工单和人工转接；退款、医疗和争议问题必须人工处理。
 5. 评测、压测、故障恢复、备份恢复、监控告警、灰度发布和回滚。
 6. 最后处理复杂 PDF、OCR、表格、图片动作标注和知识库重建；语音能力作为可选扩展，不阻塞核心项目交付。
