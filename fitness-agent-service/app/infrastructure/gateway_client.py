@@ -168,6 +168,23 @@ class GatewayOperationsMetric(_GatewayModel):
     generated_at: datetime = Field(alias="generatedAt")
 
 
+class GatewayCustomerServiceTicket(_GatewayModel):
+    """客服服务返回的只读工单事实；空列表表示当前范围内没有工单。"""
+
+    id: str
+    organization_id: str = Field(alias="organizationId")
+    subject_user_id: str = Field(alias="subjectUserId")
+    category: str
+    subject: str
+    description: str
+    status: Literal["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]
+    related_resource_type: str | None = Field(default=None, alias="relatedResourceType")
+    related_resource_id: str | None = Field(default=None, alias="relatedResourceId")
+    created_at: datetime | None = Field(default=None, alias="createdAt")
+    updated_at: datetime | None = Field(default=None, alias="updatedAt")
+    resolved_at: datetime | None = Field(default=None, alias="resolvedAt")
+
+
 class GatewayBookingCreated(_GatewayModel):
     """创建预约后的稳定事实，包含扣减后的剩余课时。"""
 
@@ -389,6 +406,39 @@ class GatewayClient:
                 "bucket": bucket,
             },
             GatewayOperationsMetric,
+        )
+
+    async def list_customer_service_tickets(
+        self,
+        context: GatewayRequestContext,
+        organization_id: str,
+        *,
+        subject_user_id: str | None = None,
+        status: Literal["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"] | None = None,
+        limit: int | None = None,
+    ) -> list[GatewayCustomerServiceTicket]:
+        """查询客服工单；Agent 不能传 SQL 或任意过滤表达式。"""
+
+        return await self._get_list(
+            "/internal/agent-tools/v1/customer-service/tickets",
+            context,
+            {
+                "organizationId": organization_id,
+                "subjectUserId": subject_user_id,
+                "status": status,
+                "limit": limit,
+            },
+            GatewayCustomerServiceTicket,
+        )
+
+    async def get_customer_service_ticket(
+        self, context: GatewayRequestContext, organization_id: str, ticket_id: str
+    ) -> GatewayCustomerServiceTicket:
+        return await self._get(
+            f"/internal/agent-tools/v1/customer-service/tickets/{ticket_id}",
+            context,
+            {"organizationId": organization_id},
+            GatewayCustomerServiceTicket,
         )
 
     async def create_booking(

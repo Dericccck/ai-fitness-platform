@@ -1,12 +1,12 @@
 SHELL := /bin/sh
 
-.PHONY: agent-jwks-check agent-proactive-worker agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check
+.PHONY: agent-jwks-check agent-proactive-worker agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run
 
 AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run gateway-training-role-live-check gateway-training-write-live-check gateway-training-workflow-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check training-check training-run training-role-live-check training-role-visibility-live-check booking-check booking-it booking-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run gateway-training-role-live-check gateway-training-write-live-check gateway-training-workflow-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check training-check training-run training-role-live-check training-role-visibility-live-check booking-check booking-it booking-run customer-service-check customer-service-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
@@ -61,6 +61,8 @@ help:
 	@echo "  booking-check Build and test the appointment write service"
 	@echo "  booking-it    Run the opt-in real MySQL Booking create/reschedule/cancel integration test"
 	@echo "  booking-run  Start the appointment write service locally"
+	@echo "  customer-service-check Build and test the read-only customer service"
+	@echo "  customer-service-run  Start the customer service locally"
 	@echo "  legacy-java-diagnostic Reproduce the incomplete legacy Java build (expected to fail)"
 	@echo "  check        Run Agent and fitness core Gateway quality gates"
 
@@ -309,7 +311,13 @@ booking-it:
 booking-run:
 	./mvnw --batch-mode -f fitness-booking-service/pom.xml -s .mvn/settings.xml -Dmaven.repo.local=.mvn/repository spring-boot:run
 
+customer-service-check:
+	./mvnw --batch-mode -f fitness-customer-service/pom.xml -s .mvn/settings.xml -Dmaven.repo.local=.mvn/repository clean test
+
+customer-service-run:
+	./mvnw --batch-mode -f fitness-customer-service/pom.xml -s .mvn/settings.xml -Dmaven.repo.local=.mvn/repository spring-boot:run
+
 legacy-java-diagnostic:
 	./mvnw --batch-mode -DskipTests clean compile
 
-check: agent-check ocr-check gateway-check booking-check
+check: agent-check ocr-check gateway-check booking-check customer-service-check

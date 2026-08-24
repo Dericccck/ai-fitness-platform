@@ -2,6 +2,7 @@ package com.shuyiwa.fitness.gateway.api;
 
 import com.shuyiwa.fitness.gateway.security.AgentContext;
 import com.shuyiwa.fitness.gateway.config.BookingServiceClient;
+import com.shuyiwa.fitness.gateway.config.CustomerServiceClient;
 import com.shuyiwa.fitness.gateway.service.FitnessToolService;
 import com.shuyiwa.fitness.gateway.service.OperationsToolService;
 import org.springframework.format.annotation.DateTimeFormat;
@@ -31,12 +32,14 @@ public class AgentToolController {
     private final FitnessToolService service;
     private final BookingServiceClient bookingServiceClient;
     private final OperationsToolService operationsService;
+    private final CustomerServiceClient customerServiceClient;
 
     public AgentToolController(FitnessToolService service, BookingServiceClient bookingServiceClient,
-                               OperationsToolService operationsService) {
+                               OperationsToolService operationsService, CustomerServiceClient customerServiceClient) {
         this.service = service;
         this.bookingServiceClient = bookingServiceClient;
         this.operationsService = operationsService;
+        this.customerServiceClient = customerServiceClient;
     }
 
     @GetMapping("/me")
@@ -81,6 +84,28 @@ public class AgentToolController {
             @RequestParam(required = false) Integer limit
     ) {
         return service.appointments(context, organizationId, userId, from, to, limit);
+    }
+
+    @GetMapping("/customer-service/tickets")
+    public List<ToolViews.CustomerServiceTicketView> customerServiceTickets(
+            AgentContext context,
+            @RequestHeader("X-Request-ID") String requestId,
+            @RequestParam String organizationId,
+            @RequestParam(required = false) String subjectUserId,
+            @RequestParam(required = false) String status,
+            @RequestParam(required = false) Integer limit
+    ) {
+        return customerServiceClient.list(context, requestId, organizationId, subjectUserId, status, limit);
+    }
+
+    @GetMapping("/customer-service/tickets/{ticketId}")
+    public ToolViews.CustomerServiceTicketView customerServiceTicket(
+            AgentContext context,
+            @RequestHeader("X-Request-ID") String requestId,
+            @PathVariable String ticketId,
+            @RequestParam String organizationId
+    ) {
+        return customerServiceClient.get(context, requestId, organizationId, ticketId);
     }
 
     @GetMapping("/booking/availability")

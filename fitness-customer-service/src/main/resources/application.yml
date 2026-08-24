@@ -1,0 +1,23 @@
+server:
+  address: 0.0.0.0
+  port: ${CUSTOMER_SERVICE_SERVER_PORT:8084}
+
+spring:
+  application:
+    name: fitness-customer-service
+  datasource:
+    url: ${CUSTOMER_SERVICE_DB_URL:jdbc:mysql://127.0.0.1:3307/fitness?useUnicode=true&characterEncoding=utf-8&serverTimezone=Asia%2FShanghai}
+    username: ${CUSTOMER_SERVICE_DB_USERNAME:}
+    password: ${CUSTOMER_SERVICE_DB_PASSWORD:}
+    hikari:
+      maximum-pool-size: ${CUSTOMER_SERVICE_DB_MAX_POOL_SIZE:10}
+      connection-timeout: ${CUSTOMER_SERVICE_DB_CONNECTION_TIMEOUT_MS:3000}
+
+customer-service:
+  # 仅允许 Gateway 调用；生产环境必须由 Secret Manager 注入。
+  internal-service-token: ${CUSTOMER_SERVICE_INTERNAL_SERVICE_TOKEN:}
+  schema-init-enabled: ${CUSTOMER_SERVICE_SCHEMA_INIT_ENABLED:true}
+
+logging:
+  level:
+    com.shuyiwa.fitness.customer: INFO

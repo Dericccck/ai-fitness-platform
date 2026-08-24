@@ -179,6 +179,58 @@ public final class ToolViews {
     }
 
     /**
+     * 客服工单稳定视图。
+     *
+     * <p>当前只读，status 是业务事实状态；Agent 不能把查询结果解释成已经解决，也不能
+     * 通过这个 View 修改工单。description 已由客服服务控制长度和字段范围。</p>
+     */
+    public static final class CustomerServiceTicketView {
+        private final String id;
+        private final String organizationId;
+        private final String subjectUserId;
+        private final String category;
+        private final String subject;
+        private final String description;
+        private final String status;
+        private final String relatedResourceType;
+        private final String relatedResourceId;
+        private final Instant createdAt;
+        private final Instant updatedAt;
+        private final Instant resolvedAt;
+
+        public CustomerServiceTicketView(String id, String organizationId, String subjectUserId,
+                                         String category, String subject, String description,
+                                         String status, String relatedResourceType, String relatedResourceId,
+                                         Instant createdAt, Instant updatedAt, Instant resolvedAt) {
+            this.id = id;
+            this.organizationId = organizationId;
+            this.subjectUserId = subjectUserId;
+            this.category = category;
+            this.subject = subject;
+            this.description = description;
+            this.status = status;
+            this.relatedResourceType = relatedResourceType;
+            this.relatedResourceId = relatedResourceId;
+            this.createdAt = createdAt;
+            this.updatedAt = updatedAt;
+            this.resolvedAt = resolvedAt;
+        }
+
+        public String getId() { return id; }
+        public String getOrganizationId() { return organizationId; }
+        public String getSubjectUserId() { return subjectUserId; }
+        public String getCategory() { return category; }
+        public String getSubject() { return subject; }
+        public String getDescription() { return description; }
+        public String getStatus() { return status; }
+        public String getRelatedResourceType() { return relatedResourceType; }
+        public String getRelatedResourceId() { return relatedResourceId; }
+        public Instant getCreatedAt() { return createdAt; }
+        public Instant getUpdatedAt() { return updatedAt; }
+        public Instant getResolvedAt() { return resolvedAt; }
+    }
+
+    /**
      * 预约可用性预检结果。
      *
      * <p>这个视图只表达“当前时段是否满足已接入的预约规则”，不代表预约已经创建。

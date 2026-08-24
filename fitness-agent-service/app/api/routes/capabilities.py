@@ -47,6 +47,8 @@ _DISPLAY_NAMES = {
     "fitness.training.plan.publish.v1": "发布训练计划",
     "fitness.training.day.executions.list.v1": "查看训练执行记录",
     "fitness.training.day.record_execution.v1": "记录训练日执行结果",
+    "fitness.support.ticket.list.v1": "查看客服工单",
+    "fitness.support.ticket.get.v1": "查看客服工单详情",
     "fitness.memory.list.v1": "查看已确认的 Memory",
     "fitness.memory.save.v1": "保存或更新 Memory",
     "fitness.memory.revoke.v1": "撤销 Memory",
@@ -167,6 +169,8 @@ def _domain_for_tool(tool_id: str) -> str:
         return "MEMORY"
     if tool_id.startswith("fitness.operations."):
         return "OPERATIONS"
+    if tool_id.startswith("fitness.support."):
+        return "CUSTOMER_SERVICE"
     if tool_id.startswith("fitness."):
         return "BUSINESS"
     return "OTHER"

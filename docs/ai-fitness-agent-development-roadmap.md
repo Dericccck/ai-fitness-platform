@@ -1454,3 +1454,24 @@ Booking 和 Fitness 的真实 dry-run、Agent 层角色矩阵、训练服务最�
 
 本阶段继续遵守以下范围约束：忽略赛事、作品和活动运营遗留模块；不建设身体测量、疼痛/疲劳量表、阶段性
 自动调参等暂不需要的复杂训练业务；不把任意 Text-to-SQL、短信、Push 或语音作为当前阶段的完成条件。
+
+### 17.2 2026-08-24 当前执行步骤：Customer Service 第二切片
+
+Customer Service 第一切片已经完成路由、健身规则 RAG、动态业务只读查询和高风险安全边界。当前继续做第二切片，
+但保持客服范围精简：不建设自动人工转接，不接入短信/Push，不处理医疗诊断、退款赔付或合同争议的自动写入。
+
+本次已完成“工单业务事实只读基础”:
+
+- 新增独立 `fitness-customer-service` Spring Boot 服务，默认端口 `8084`，不依赖旧 Java 根项目。
+- 在现有本地 MySQL `fitness` 数据库新增 `agent_customer_service_ticket` 表和迁移版本表；表、字段、状态和后续幂等字段均有中文数据库注释。
+- 工单服务使用独立内部 Token，并重新校验 Gateway 传入的主体、角色、机构范围和请求 ID；学员/教练只能查自己的工单，管理员可查机构工单。
+- 只提供 `GET /internal/customer-service/v1/tickets` 和单条详情查询，没有 POST/PUT/DELETE，因此本轮不会创建真实工单。
+- Java Tool Gateway 新增客服服务客户端和两个只读接口，Python Agent 新增
+  `fitness.support.ticket.list.v1`、`fitness.support.ticket.get.v1` 两个工具，并加入 Customer Service 路由白名单。
+- 能力目录新增客服工单能力元数据；客服 Prompt 明确要求工单只能查询，不能声称创建或修改。
+
+验证结果：客服服务 Maven 测试构建通过；Gateway Maven 测试 `35` 项中 `33` 项通过、`2` 项因本地数据库未启用而跳过；
+Python 工具、Supervisor 和能力目录回归通过。当前工单表只建立结构，没有写入测试工单。
+
+下一步固定为“客服工单写入前的业务契约设计”，先补齐工单创建的分类、来源、请求幂等键、确认摘要、审计事件和管理员处理状态机，
+再通过 LangGraph `interrupt()` 接入“用户确认后创建工单”；在该步骤完成前，Agent 继续保持只读，不接入真实工单写入。

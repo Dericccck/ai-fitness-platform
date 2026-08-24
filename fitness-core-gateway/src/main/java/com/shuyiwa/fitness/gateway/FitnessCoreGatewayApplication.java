@@ -3,6 +3,7 @@ package com.shuyiwa.fitness.gateway;
 import com.shuyiwa.fitness.gateway.config.GatewayProperties;
 import com.shuyiwa.fitness.gateway.config.TrainingServiceProperties;
 import com.shuyiwa.fitness.gateway.config.BookingServiceProperties;
+import com.shuyiwa.fitness.gateway.config.CustomerServiceProperties;
 import org.springframework.boot.SpringApplication;
 import org.springframework.boot.autoconfigure.SpringBootApplication;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
@@ -15,7 +16,8 @@ import org.springframework.boot.context.properties.EnableConfigurationProperties
  * 访问健身核心数据，并在后续阶段增加经过审计的写工具。</p>
  */
 @SpringBootApplication
-@EnableConfigurationProperties({GatewayProperties.class, TrainingServiceProperties.class, BookingServiceProperties.class})
+@EnableConfigurationProperties({GatewayProperties.class, TrainingServiceProperties.class,
+        BookingServiceProperties.class, CustomerServiceProperties.class})
 public class FitnessCoreGatewayApplication {
 
     public static void main(String[] args) {

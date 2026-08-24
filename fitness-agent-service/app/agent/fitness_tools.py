@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import UTC, datetime, timedelta
-from typing import Any, cast
+from typing import Any, Literal, cast
 from zoneinfo import ZoneInfo
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -139,6 +139,20 @@ class BookingAvailabilityToolInput(OrganizationToolInput):
         if self.start_time >= self.end_time:
             raise ValueError("start_time must be earlier than end_time")
         return self
+
+
+class CustomerServiceTicketListToolInput(OrganizationToolInput):
+    """客服工单查询参数；普通用户最终只能看到自己的工单。"""
+
+    subject_user_id: str | None = Field(default=None, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+    status: Literal["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"] | None = None
+    limit: int = Field(default=20, ge=1, le=100)
+
+
+class CustomerServiceTicketGetToolInput(OrganizationToolInput):
+    """查询单个客服工单的稳定事实。"""
+
+    ticket_id: str = _ID_FIELD
 
 
 class BookingCreateToolInput(OrganizationToolInput):
@@ -788,6 +802,22 @@ def build_fitness_tool_registry(
             exclude_appointment_id=data.exclude_appointment_id,
         )
 
+    async def list_customer_service_tickets(raw: BaseModel, context: ToolContext) -> object:
+        data = cast(CustomerServiceTicketListToolInput, raw)
+        return await gateway.list_customer_service_tickets(
+            context.gateway_context,
+            data.organization_id,
+            subject_user_id=data.subject_user_id,
+            status=data.status,
+            limit=data.limit,
+        )
+
+    async def get_customer_service_ticket(raw: BaseModel, context: ToolContext) -> object:
+        data = cast(CustomerServiceTicketGetToolInput, raw)
+        return await gateway.get_customer_service_ticket(
+            context.gateway_context, data.organization_id, data.ticket_id
+        )
+
     async def get_training_plan(raw: BaseModel, context: ToolContext) -> object:
         data = cast(TrainingPlanToolInput, raw)
         return await gateway.get_training_plan(context.gateway_context, data.plan_id)
@@ -1127,6 +1157,24 @@ def build_fitness_tool_registry(
             description="检查指定教练和时间段是否满足当前已接入的预约规则；只读预检，不会创建预约或扣减课时。",
             input_model=BookingAvailabilityToolInput,
             handler=check_booking_availability,
+            allowed_roles=_READ_ROLES,
+            read_only=True,
+            requires_confirmation=False,
+        ),
+        ToolDefinition(
+            tool_id="fitness.support.ticket.list.v1",
+            description="查询当前权限范围内的客服工单；只读，不会创建或修改工单。",
+            input_model=CustomerServiceTicketListToolInput,
+            handler=list_customer_service_tickets,
+            allowed_roles=_READ_ROLES,
+            read_only=True,
+            requires_confirmation=False,
+        ),
+        ToolDefinition(
+            tool_id="fitness.support.ticket.get.v1",
+            description="查询一条当前权限范围内的客服工单详情；只读，不会改变工单状态。",
+            input_model=CustomerServiceTicketGetToolInput,
+            handler=get_customer_service_ticket,
             allowed_roles=_READ_ROLES,
             read_only=True,
             requires_confirmation=False,

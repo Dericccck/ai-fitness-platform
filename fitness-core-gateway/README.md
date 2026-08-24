@@ -1,6 +1,6 @@
 # Fitness Core Tool Gateway
 
-这是健身平台的独立 Java Tool Gateway，当前提供健身核心查询、训练计划写工具、预约创建、预约改约和预约取消写工具，以及管理员专用的固定经营指标查询：用户/学员、教练、机构、课程、合同、课时和预约。
+这是健身平台的独立 Java Tool Gateway，当前提供健身核心查询、客服工单只读查询、训练计划写工具、预约创建、预约改约和预约取消写工具，以及管理员专用的固定经营指标查询：用户/学员、教练、机构、课程、合同、课时和预约。
 
 赛事、作品、活动运营及其历史代码不属于本服务范围。本服务不依赖根目录旧 Java 项目的 Entity、Service 或组件扫描，避免遗留模块污染新的 Agent 业务边界。
 
@@ -12,6 +12,8 @@
 - `AgentContext` 包含用户主体、机构范围、角色、签发时间、过期时间和 nonce；Gateway 每次调用都会再次校验资源权限。
 - 当前已增加结构化训练计划 Tool、预约创建、预约改约和预约取消 Tool；预约可用性预检为只读工具。
   三种预约写操作都由独立 `fitness-booking-service` 持有业务 MySQL 写权限，必须具备确认凭证、幂等键、事务和审计。
+- 客服工单由独立 `fitness-customer-service` 持有表结构和后续写权限；本阶段 Gateway 只代理两个只读查询接口，
+  不创建、修改或关闭工单。
 
 ## 本地配置
 
@@ -38,6 +40,11 @@ cd /Users/a1-6/Desktop/fitness-backend
 ./mvnw --batch-mode -f fitness-core-gateway/pom.xml test
 ./mvnw --batch-mode -f fitness-core-gateway/pom.xml spring-boot:run
 ```
+
+如需启用客服工单只读查询，还需要配置 `GATEWAY_CUSTOMER_SERVICE_BASE_URL`（默认
+`http://127.0.0.1:8084`）和 `GATEWAY_CUSTOMER_SERVICE_TOKEN`；该 Token 必须与
+`CUSTOMER_SERVICE_INTERNAL_SERVICE_TOKEN` 完全一致。客服服务的数据库账号通过
+`CUSTOMER_SERVICE_DB_USERNAME`、`CUSTOMER_SERVICE_DB_PASSWORD` 注入，不能复用 Gateway 的只读账号配置。
 
 生产环境的密钥必须由 Secret Manager 注入，不能写入 `application.yml` 或提交到 Git。
 AgentContext 当前支持 `HS256` 和配置公钥环的 `RS256`；`GATEWAY_CONTEXT_SIGNING_ALGORITHM`
@@ -88,6 +95,8 @@ GET /internal/agent-tools/v1/organizations/{organizationId}
 GET /internal/agent-tools/v1/courses?organizationId=...
 GET /internal/agent-tools/v1/contracts?organizationId=...&userId=...
 GET /internal/agent-tools/v1/appointments?organizationId=...&userId=...&from=...&to=...
+GET /internal/agent-tools/v1/customer-service/tickets?organizationId=...&subjectUserId=...&status=...&limit=...
+GET /internal/agent-tools/v1/customer-service/tickets/{ticketId}?organizationId=...
 GET /internal/agent-tools/v1/booking/availability?organizationId=...&studentId=...&coachId=...&courseId=...&start=...&end=...
 GET /internal/agent-tools/v1/operations/metrics?organizationId=...&metric=APPOINTMENT_COUNT&from=2026-08-01&to=2026-08-15&bucket=DAY
 POST /internal/agent-tools/v1/appointments

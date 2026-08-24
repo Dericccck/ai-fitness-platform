@@ -170,6 +170,8 @@ def test_fitness_registry_exposes_only_versioned_specs() -> None:
         "fitness.memory.save.v1",
         "fitness.operations.metric.query.v1",
         "fitness.organization.get.v1",
+        "fitness.support.ticket.get.v1",
+        "fitness.support.ticket.list.v1",
         "fitness.training.day.executions.list.v1",
         "fitness.training.day.record_execution.v1",
         "fitness.training.plan.create_draft.v1",
