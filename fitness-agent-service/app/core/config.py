@@ -232,10 +232,11 @@ class Settings(BaseSettings):
     # 生命周期和 HTTP 请求生命周期耦合。RabbitMQ 事件进入 PostgreSQL Inbox 后再转为通知 Outbox。
     proactive_worker_enabled: bool = False
     proactive_rabbitmq_url: str = "amqp://fitness_agent:fitness_agent_secret@127.0.0.1:5672/"
-    proactive_rabbitmq_exchange: str = "fitness.booking.events"
+    proactive_rabbitmq_exchange: str = "fitness.domain.events"
     proactive_rabbitmq_queue: str = "fitness.proactive.events"
     proactive_rabbitmq_routing_key: str = (
-        "appointment.created,appointment.rescheduled,appointment.cancelled"
+        "appointment.created,appointment.rescheduled,appointment.cancelled,"
+        "training.plan.review_required,training.plan.published"
     )
     proactive_worker_batch_size: int = Field(default=50, ge=1, le=500)
     proactive_worker_poll_seconds: float = Field(default=2.0, ge=0.1, le=60)

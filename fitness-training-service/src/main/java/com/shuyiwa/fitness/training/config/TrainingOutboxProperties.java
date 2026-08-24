@@ -1,25 +1,19 @@
-package com.shuyiwa.fitness.booking.config;
+package com.shuyiwa.fitness.training.config;
 
 import org.springframework.boot.context.properties.ConfigurationProperties;
 
-/**
- * Booking Outbox 发布器配置。
- *
- * <p>发布器默认关闭，避免开发者尚未启动 RabbitMQ 时预约服务不断连接外部消息系统。
- * 生产环境开启后，只有 RabbitMQ publisher confirm 返回 ack，事件才会被标记为 PUBLISHED。</p>
- */
-@ConfigurationProperties(prefix = "booking.outbox")
-public class BookingOutboxProperties {
+/** 训练计划事件 Outbox 配置；默认关闭发布，避免本地服务未准备 RabbitMQ 时丢失业务写入。 */
+@ConfigurationProperties(prefix = "training.outbox")
+public class TrainingOutboxProperties {
     private boolean publisherEnabled;
-    private long fixedDelayMs = 1000;
+    private long fixedDelayMs = 1000L;
     private int batchSize = 20;
     private int maxAttempts = 8;
     private int claimLeaseSeconds = 60;
     private int retryBaseSeconds = 5;
-    private long confirmTimeoutMs = 5000;
+    private int confirmTimeoutMs = 5000;
     private String exchange = "fitness.domain.events";
-    private String queue = "fitness.booking.events";
-    private String routingKey = "appointment.created";
+    private String routingKey = "training.plan.published";
 
     public boolean isPublisherEnabled() { return publisherEnabled; }
     public void setPublisherEnabled(boolean publisherEnabled) { this.publisherEnabled = publisherEnabled; }
@@ -33,12 +27,10 @@ public class BookingOutboxProperties {
     public void setClaimLeaseSeconds(int claimLeaseSeconds) { this.claimLeaseSeconds = claimLeaseSeconds; }
     public int getRetryBaseSeconds() { return retryBaseSeconds; }
     public void setRetryBaseSeconds(int retryBaseSeconds) { this.retryBaseSeconds = retryBaseSeconds; }
-    public long getConfirmTimeoutMs() { return confirmTimeoutMs; }
-    public void setConfirmTimeoutMs(long confirmTimeoutMs) { this.confirmTimeoutMs = confirmTimeoutMs; }
+    public int getConfirmTimeoutMs() { return confirmTimeoutMs; }
+    public void setConfirmTimeoutMs(int confirmTimeoutMs) { this.confirmTimeoutMs = confirmTimeoutMs; }
     public String getExchange() { return exchange; }
     public void setExchange(String exchange) { this.exchange = exchange; }
-    public String getQueue() { return queue; }
-    public void setQueue(String queue) { this.queue = queue; }
     public String getRoutingKey() { return routingKey; }
     public void setRoutingKey(String routingKey) { this.routingKey = routingKey; }
 }

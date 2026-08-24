@@ -33,7 +33,7 @@ booking:
     claim-lease-seconds: ${BOOKING_OUTBOX_CLAIM_LEASE_SECONDS:60}
     retry-base-seconds: ${BOOKING_OUTBOX_RETRY_BASE_SECONDS:5}
     confirm-timeout-ms: ${BOOKING_OUTBOX_CONFIRM_TIMEOUT_MS:5000}
-    exchange: ${BOOKING_OUTBOX_EXCHANGE:fitness.booking.events}
+    exchange: ${BOOKING_OUTBOX_EXCHANGE:fitness.domain.events}
     queue: ${BOOKING_OUTBOX_QUEUE:fitness.booking.events}
     routing-key: ${BOOKING_OUTBOX_ROUTING_KEY:appointment.created}
 

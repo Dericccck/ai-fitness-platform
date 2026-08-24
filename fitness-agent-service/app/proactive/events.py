@@ -21,6 +21,7 @@ SUPPORTED_PROACTIVE_EVENT_TYPES = frozenset(
         "TRAINING_PLAN_REVIEW_REQUIRED",
     }
 )
+SUPPORTED_PROACTIVE_EVENT_SOURCES = frozenset({"booking", "training"})
 
 
 class ProactiveEventContractError(ValueError):
@@ -68,7 +69,7 @@ class ProactiveEventMessage(BaseModel):
             raise ProactiveEventContractError(
                 f"unsupported proactive event type: {message.event_type}"
             )
-        if message.source != "booking":
+        if message.source not in SUPPORTED_PROACTIVE_EVENT_SOURCES:
             raise ProactiveEventContractError(
                 f"unsupported proactive event source: {message.source}"
             )

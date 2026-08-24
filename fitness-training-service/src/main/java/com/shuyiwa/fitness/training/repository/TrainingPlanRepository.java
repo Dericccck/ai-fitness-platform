@@ -170,7 +170,38 @@ public class TrainingPlanRepository {
                         + "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 plan.getId(), action, actorId,
                 requestId, plan.getStatus().name(), target.name(), comment);
+        insertProactiveEvent(plan, target, requestId);
         return true;
+    }
+
+    /**
+     * 将审核/发布状态变化转换为主动提醒事件。
+     *
+     * <p>事件和状态审计位于同一个事务中：如果事件写入失败，训练计划状态也会回滚，避免
+     * 出现“页面显示已发布但 Agent 永远收不到通知”的双写不一致。请求 ID 进入 event_key，
+     * 因此同一次状态转换重试不会重复生成事件。</p>
+     */
+    private void insertProactiveEvent(TrainingPlan plan, TrainingPlanStatus target, String requestId) {
+        String eventType;
+        if (target == TrainingPlanStatus.PENDING_REVIEW) {
+            eventType = "TRAINING_PLAN_REVIEW_REQUIRED";
+        } else if (target == TrainingPlanStatus.PUBLISHED) {
+            eventType = "TRAINING_PLAN_PUBLISHED";
+        } else {
+            return;
+        }
+        String eventKey = "training-plan-" + eventType.toLowerCase() + ":" + plan.getId() + ":" + requestId;
+        String payload = "{\"planId\":\"" + escapeJson(plan.getId())
+                + "\",\"studentId\":\"" + escapeJson(plan.getStudentId())
+                + "\",\"coachId\":\"" + escapeJson(plan.getCoachId()) + "\"}";
+        jdbc.update("INSERT INTO agent_training_outbox "
+                        + "(event_key, event_type, aggregate_id, organization_id, payload) "
+                        + "VALUES (?, ?, ?, ?, ?)",
+                eventKey, eventType, plan.getId(), plan.getOrganizationId(), payload);
+    }
+
+    private static String escapeJson(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 
     /** 查询一个计划下已经明确提交的训练日执行记录。未执行训练日不会人为插入空记录。 */

@@ -18,6 +18,8 @@
 - 最小训练执行闭环支持学员对已发布计划的训练日标记 `COMPLETED`（已完成）或 `SKIPPED`（已跳过），
   保存执行日期、简短备注、当前版本和不可变审计；暂不保存逐组实绩、身体测量、疼痛或疲劳量表。
 - 独立 Maven 构建，不依赖不完整的旧 Java 赛事代码。
+- 计划进入 `PENDING_REVIEW`（待审核）或 `PUBLISHED`（已发布）时，在同一个 MySQL 事务中写入
+  `agent_training_outbox`；独立发布器通过 RabbitMQ 的共享领域事件 Exchange 投递，失败会有限重试并进入 `DEAD`（终态失败）。
 
 ## 启动与配置
 
@@ -39,6 +41,16 @@ TRAINING_INTERNAL_SERVICE_TOKEN
 生产环境应由独立迁移 Job 执行同一份 SQL 后设置 `TRAINING_SCHEMA_INIT_ENABLED=false`。
 当前环境无法下载 Flyway 依赖，因此暂时使用版本化 SQL 加版本表；后续统一迁移平台接入时不得
 修改业务表结构和迁移语义。
+
+训练计划主动提醒事件默认不发布。需要联调时，同时在 Training Service 和 Agent Proactive Worker
+配置 RabbitMQ，并将 `TRAINING_OUTBOX_PUBLISHER_ENABLED=true`、`AGENT_PROACTIVE_WORKER_ENABLED=true`
+显式打开。训练服务发布到共享 Exchange `fitness.domain.events`，路由键为：
+
+- `training.plan.review_required`：计划提交审核，通知负责教练。
+- `training.plan.published`：计划审核发布，通知对应学员。
+
+Agent 通过 `agent_proactive_event_inbox` 做事件幂等，再由现有通知 Outbox 投递站内通知；训练服务不直接
+访问 PostgreSQL，也不直接写 Agent 通知表。当前仍只接入 `IN_APP` 站内通知，不接短信或 Push。
 
 ## 内部 API
 

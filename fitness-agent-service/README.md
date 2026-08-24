@@ -438,14 +438,16 @@ IN_APP，不接入短信（包括模拟短信）或 Push；预约等主动提醒
 过滤，并且只返回投递摘要、错误码和渠道消息 ID，不返回用户主体 ID、业务聚合 ID、标题或正文；同时提供低基数
 Prometheus 指标 `fitness_agent_notification_delivery_attempts_total`，用于观察各渠道成功、可重试失败和最终失败数量。
 
-主动提醒第一版：Booking 服务会把预约创建、改约和取消事件包装为标准事件信封，发布到 RabbitMQ；
+主动提醒第一版：Booking 服务会把预约创建、改约和取消事件包装为标准事件信封，发布到共享领域事件 Exchange
+`fitness.domain.events`；Training Service 会把训练计划提交审核和发布事件写入自己的 Outbox 后发布到同一 Exchange；
 `make agent-proactive-worker` 启动独立 Proactive Worker。Worker 先把事件按 `event_id` 幂等写入
 `agent_proactive_event_inbox`，再根据事件中的学员/教练 ID 生成通知 Outbox，最后由已有的
 `agent-notification-worker` 投递到站内收件箱。事件 Inbox 和通知 Outbox 都有租约、有限重试、死信状态和去重键，
 因此 RabbitMQ 重投不会生成重复通知。启动本地链路前执行 `make infra-up-messaging`、`make agent-migrate`，
-并在 Booking 服务开启 `BOOKING_OUTBOX_PUBLISHER_ENABLED=true`；主动提醒 Worker 默认关闭，需显式设置
-`AGENT_PROACTIVE_WORKER_ENABLED=true`。训练计划发布和待审核事件已纳入契约和模板，等待 Training Service
-后续发布对应事件；短信、Push 和 Memory 模拟短信仍不在本阶段范围内。
+并在 Booking 服务开启 `BOOKING_OUTBOX_PUBLISHER_ENABLED=true`；Training Service 的对应开关为
+`TRAINING_OUTBOX_PUBLISHER_ENABLED=true`。主动提醒 Worker 默认关闭，需显式设置
+`AGENT_PROACTIVE_WORKER_ENABLED=true`。训练计划事件路由键为 `training.plan.review_required` 和
+`training.plan.published`；短信、Push 和 Memory 模拟短信仍不在本阶段范围内。
 
 使用 `make agent-proactive-live-check` 可执行主动提醒链路验收。脚本默认只检查 Agent/Gateway/Booking 健康状态、
 Agent PostgreSQL 和 RabbitMQ，不写入预约；确认使用本地测试数据后，追加 `ARGS=--execute` 才会执行一次真实预约，
