@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: agent-jwks-check agent-proactive-worker
+.PHONY: agent-jwks-check agent-proactive-worker agent-proactive-live-check
 
 AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
@@ -41,6 +41,7 @@ help:
 	@echo "  agent-session-summary-worker Start the short-term session summary cleanup worker locally"
 	@echo "  agent-notification-worker Start the in-app notification Outbox worker locally"
 	@echo "  agent-proactive-worker Start the RabbitMQ proactive event worker locally"
+	@echo "  agent-proactive-live-check Verify Booking -> RabbitMQ -> Agent Inbox -> IN_APP chain"
 	@echo "  agent-image  Build the production Agent container image"
 	@echo "  knowledge-manifest  Generate the local source and SHA-256 manifest"
 	@echo "  knowledge-validate  Validate PDF/DOCX parsing and report warnings"
@@ -188,6 +189,10 @@ agent-notification-worker:
 
 agent-proactive-worker:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.proactive_worker_main
+
+agent-proactive-live-check:
+	@test -n "$$AGENT_LIVE_AGENT_CONTEXT" || (echo "请先设置 AGENT_LIVE_AGENT_CONTEXT（认证服务签发的业务用户 Token）"; exit 1)
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/proactive_booking_live_check.py $(ARGS)
 
 agent-image:
 	docker build --file $(AGENT_DIR)/Dockerfile --tag fitness-agent-service:local $(AGENT_DIR)

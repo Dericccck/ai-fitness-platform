@@ -1299,6 +1299,22 @@ Memory 脱敏评测。
 7. **Memory 与主动提醒**：Memory 候选审批、通知模板和站内通知基础已完成；预约主动提醒已接入
    RabbitMQ 事件 Inbox、幂等消费和站内通知 Outbox，下一步补充本地 Booking 真实事件端到端验收以及训练计划
    发布/待审核事件发布。短信、Push 和 Memory 模拟短信继续不接入。
+
+   预约主动提醒真实验收不能只观察 Booking 写接口返回成功，还需要验证真实跨服务闭环：
+
+   ```text
+   Booking 事务
+     -> MySQL agent_booking_outbox
+     -> RabbitMQ fitness.booking.events
+     -> Agent agent_proactive_event_inbox
+     -> agent_notification_outbox
+     -> agent_in_app_notifications
+   ```
+
+   项目提供 `make agent-proactive-live-check` 验收脚本。默认模式只做配置和进程前置检查，不写预约；确认使用本地测试数据后，
+   显式追加 `ARGS=--execute` 才会批准一次真实预约并轮询上述三张 Agent 表。脚本不会直接删除 MySQL 业务数据，验收完成后
+   必须使用已有的取消预约确认流程清理测试预约。验收输出只打印脱敏后的事件 ID、预约聚合 ID 和各层状态计数，不打印
+   AgentContext、确认参数或通知正文。
 8. **Customer Service、评价投诉、语音和多端交互**：复用现有权限、审计、确认和数据生命周期边界，
    完成多端业务闭环。
 9. **最终知识文档优化与重建（阶段 12.1）**：恢复多角色按页审核、复杂 PDF 版式、Linux OCR、图文

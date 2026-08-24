@@ -447,6 +447,11 @@ Prometheus 指标 `fitness_agent_notification_delivery_attempts_total`，用于�
 `AGENT_PROACTIVE_WORKER_ENABLED=true`。训练计划发布和待审核事件已纳入契约和模板，等待 Training Service
 后续发布对应事件；短信、Push 和 Memory 模拟短信仍不在本阶段范围内。
 
+使用 `make agent-proactive-live-check` 可执行主动提醒链路验收。脚本默认只检查 Agent/Gateway/Booking 健康状态、
+Agent PostgreSQL 和 RabbitMQ，不写入预约；确认使用本地测试数据后，追加 `ARGS=--execute` 才会执行一次真实预约，
+并轮询事件 Inbox、通知 Outbox 和站内收件箱。脚本不会直接删除预约，验收完成后请通过已有的取消预约确认流程清理
+本地测试数据。
+
 检索引用接口为 `POST /api/v1/agent/knowledge/search`，只返回已完成权限过滤的来源引用，
 包括来源 URI、版本、章节、PDF 页码、Excel 工作表、表格序号/行范围和命中片段。离线评测
 样例位于 `evals/rag_smoke.json`，阈值位于 `evals/rag_thresholds.json`。本地执行
