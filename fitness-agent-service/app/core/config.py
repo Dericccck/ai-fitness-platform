@@ -228,6 +228,18 @@ class Settings(BaseSettings):
     notification_worker_metrics_port: int = Field(default=8093, ge=1, le=65535)
     # 未显式配置通知偏好时使用的本地时区；用户保存偏好后以用户自己的 IANA 时区为准。
     notification_default_timezone: str = "Asia/Shanghai"
+    # Proactive Agent 只在独立 Worker 中启用；API 进程不主动连接 RabbitMQ，避免把消息消费
+    # 生命周期和 HTTP 请求生命周期耦合。RabbitMQ 事件进入 PostgreSQL Inbox 后再转为通知 Outbox。
+    proactive_worker_enabled: bool = False
+    proactive_rabbitmq_url: str = "amqp://fitness_agent:fitness_agent_secret@127.0.0.1:5672/"
+    proactive_rabbitmq_exchange: str = "fitness.booking.events"
+    proactive_rabbitmq_queue: str = "fitness.proactive.events"
+    proactive_rabbitmq_routing_key: str = (
+        "appointment.created,appointment.rescheduled,appointment.cancelled"
+    )
+    proactive_worker_batch_size: int = Field(default=50, ge=1, le=500)
+    proactive_worker_poll_seconds: float = Field(default=2.0, ge=0.1, le=60)
+    proactive_worker_metrics_port: int = Field(default=8096, ge=1, le=65535)
     # 页面路由阈值由部署配置统一控制，上传者和 LLM 无权覆盖。默认值偏保守，
     # 用于把可能承载健身动作、姿态或风险信息的图片密集页送入专业审核。
     rag_pdf_min_image_area_ratio: float = Field(default=0.45, ge=0, le=1)

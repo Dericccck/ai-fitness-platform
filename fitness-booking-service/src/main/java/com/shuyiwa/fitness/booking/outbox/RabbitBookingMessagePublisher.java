@@ -26,12 +26,43 @@ public class RabbitBookingMessagePublisher implements BookingMessagePublisher {
     public void publish(BookingOutboxRepository.OutboxEvent event) throws Exception {
         CorrelationData correlation = new CorrelationData(event.eventKey);
         rabbitTemplate.convertAndSend(
-                properties.getExchange(), properties.getRoutingKey(), event.payload, correlation);
+                properties.getExchange(), routingKey(event.eventType), envelope(event), correlation);
         CorrelationData.Confirm confirm = correlation.getFuture().get(
                 properties.getConfirmTimeoutMs(), TimeUnit.MILLISECONDS);
         if (confirm == null || !confirm.isAck()) {
             String reason = confirm == null ? "empty broker confirmation" : confirm.getReason();
             throw new IllegalStateException("RabbitMQ publisher nack: " + reason);
         }
+    }
+
+    /**
+     * 将数据库 Outbox 行包装成跨服务事件信封。
+     *
+     * <p>原始 payload 只包含预约业务字段，Agent 还需要事件 ID、机构和事件类型完成
+     * 幂等、权限范围和通知路由，因此不能直接把原始 JSON 当作消息体发送。</p>
+     */
+    private static String envelope(BookingOutboxRepository.OutboxEvent event) {
+        return "{\"eventId\":\"" + escape(event.eventKey)
+                + "\",\"source\":\"booking\",\"eventType\":\""
+                + escape(event.eventType) + "\",\"aggregateId\":\""
+                + escape(event.aggregateId) + "\",\"organizationId\":\""
+                + escape(event.organizationId) + "\",\"payload\":" + event.payload + "}";
+    }
+
+    private static String routingKey(String eventType) {
+        switch (eventType) {
+            case "APPOINTMENT_CREATED":
+                return "appointment.created";
+            case "APPOINTMENT_RESCHEDULED":
+                return "appointment.rescheduled";
+            case "APPOINTMENT_CANCELLED":
+                return "appointment.cancelled";
+            default:
+                throw new IllegalArgumentException("unsupported booking event type: " + eventType);
+        }
+    }
+
+    private static String escape(String value) {
+        return value.replace("\\", "\\\\").replace("\"", "\\\"");
     }
 }

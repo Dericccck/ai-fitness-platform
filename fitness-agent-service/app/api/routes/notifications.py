@@ -80,9 +80,14 @@ class NotificationPreferenceResponse(BaseModel):
 async def get_notification_preference(
     request: Request,
     organization_id: str = Query(min_length=1, max_length=128),
-    notification_type: Literal["MEMORY_CANDIDATE_PENDING"] = Query(
-        default=DEFAULT_NOTIFICATION_TYPE
-    ),
+    notification_type: Literal[
+        "MEMORY_CANDIDATE_PENDING",
+        "APPOINTMENT_CREATED",
+        "APPOINTMENT_RESCHEDULED",
+        "APPOINTMENT_CANCELLED",
+        "TRAINING_PLAN_PUBLISHED",
+        "TRAINING_PLAN_REVIEW_REQUIRED",
+    ] = Query(default=DEFAULT_NOTIFICATION_TYPE),
     x_agent_context: str | None = Header(default=None),
 ) -> NotificationPreferenceResponse:
     """读取本人通知偏好；未配置时返回默认允许策略。"""
@@ -105,9 +110,14 @@ async def save_notification_preference(
     payload: NotificationPreferenceRequest,
     request: Request,
     organization_id: str = Query(min_length=1, max_length=128),
-    notification_type: Literal["MEMORY_CANDIDATE_PENDING"] = Query(
-        default=DEFAULT_NOTIFICATION_TYPE
-    ),
+    notification_type: Literal[
+        "MEMORY_CANDIDATE_PENDING",
+        "APPOINTMENT_CREATED",
+        "APPOINTMENT_RESCHEDULED",
+        "APPOINTMENT_CANCELLED",
+        "TRAINING_PLAN_PUBLISHED",
+        "TRAINING_PLAN_REVIEW_REQUIRED",
+    ] = Query(default=DEFAULT_NOTIFICATION_TYPE),
     x_agent_context: str | None = Header(default=None),
 ) -> NotificationPreferenceResponse:
     """保存本人通知偏好；这是设置页面的明确操作，不经过 Agent 工具确认。"""

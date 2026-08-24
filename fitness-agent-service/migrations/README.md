@@ -31,7 +31,7 @@ Worker 在发布事务内执行授权、安静时间和频率限制判断；未�
 
 0025 增加 `agent_notification_templates` 版本化通知模板表，并为站内通知增加标题、正文和模板版本快照。模板状态
 按 `DRAFT`、`APPROVED`、`PUBLISHED`、`RETIRED` 流转，Worker 只渲染已发布版本；历史收件箱内容不会随着模板升级
-而变化。当前只启用 `IN_APP` 渠道，短信、Push 和 RabbitMQ 仍由后续渠道适配器接入。
+而变化。当前只启用 `IN_APP` 渠道；短信和 Push 仍不接入，RabbitMQ 只作为主动提醒事件的跨服务输入。
 
 0026 增加 `agent_notification_template_events` 不可变模板生命周期审计表。创建草稿、审核和发布都必须携带唯一
 `operation_id`，同一操作重试返回原版本，不重复生成状态或审计事件；审计表只保存模板键、版本、操作者和状态快照，
@@ -52,6 +52,10 @@ Worker 在发布事务内执行授权、安静时间和频率限制判断；未�
 0033 增加确认单主动撤销时间和独立撤销幂等键。撤销接口只允许 `PENDING` 或 `APPROVED` 且尚未领取执行权的
 确认单进入 `CANCELLED`；重复撤销请求返回同一事实，执行中的确认单拒绝撤销，未消费 JTI 会在事务内清空并追加
 不可变 `CANCELLED` 事件。
+
+0034 增加 `agent_proactive_event_inbox` 主动提醒事件 Inbox，扩展预约、训练计划通知类型和已发布模板。RabbitMQ
+消息先按 `event_id` 幂等落库，再由独立 Worker 生成通知 Outbox；Inbox 和通知 Outbox 分别记录处理/投递状态，
+支持租约恢复、有限重试和死信，避免消息重投造成重复站内通知。
 
 0023 增加正式 Memory 和候选的正文保留期限字段、脱敏标记和 `REDACTED` 审计事件。正式 Memory 进入
 `REVOKED/EXPIRED` 后默认保留 90 天，候选进入 `APPROVED/REJECTED/EXPIRED` 后默认保留 30 天；期限到达后，

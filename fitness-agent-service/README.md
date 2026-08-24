@@ -425,17 +425,27 @@ AES-GCM 密文被清空，类型、稳定键、状态、哈希和生命周期审
 通知模板已通过 `0025` 接入版本化控制面：模板按“模板键 + 渠道 + 版本”保存，生命周期为 `DRAFT`（草稿）、
 `APPROVED`（已审核）、`PUBLISHED`（已发布）和 `RETIRED`（已退役）。Outbox Worker 只读取已发布的 `IN_APP`
 模板，并把标题、正文和模板版本作为渲染快照写入收件箱；模板后续升级不会改写历史通知。模板变量必须显式声明，
-不允许通过对象属性访问或未声明变量拼接正文；模板创建人与审核人不能是同一主体。当前 Memory 业务不接入短信（包括模拟短信）、
-Push 或 RabbitMQ。
+不允许通过对象属性访问或未声明变量拼接正文；模板创建人与审核人不能是同一主体。当前 Memory 业务仍只使用
+IN_APP，不接入短信（包括模拟短信）或 Push；预约等主动提醒事件通过独立 Proactive Worker 消费 RabbitMQ，
+不会把 RabbitMQ 供应商逻辑耦合进 Memory 业务。
 模板管理动作还通过 `0026` 写入不可变生命周期审计事件；创建、审核和发布都必须携带唯一 `operation_id`，网络重试
 会复用原结果，不重复生成版本或状态事件。审计只保存模板键、版本、操作者和状态，不保存模板正文。
 
 通知 Worker 已通过渠道适配器投递：当前 `IN_APP` 适配器将渲染快照写入站内收件箱，投递开始、成功和失败会写入
 `agent_notification_delivery_attempts`（`0027`）。失败会按照 Outbox 的有限重试进入 `RETRYABLE_FAILED` 或
-`FINAL_FAILED`；未来确有主动提醒或跨服务事件需求时，再新增 RabbitMQ、短信或 Push 适配器，不需要改动候选和 Outbox 业务逻辑。
+`FINAL_FAILED`；主动提醒事件通过独立 Proactive Worker 接入 RabbitMQ，不改变候选和通知 Outbox 的渠道边界。
 当前已增加管理员运维查询 `GET /api/v1/admin/notifications/delivery-attempts`，支持按机构、通知类型、渠道和投递状态
 过滤，并且只返回投递摘要、错误码和渠道消息 ID，不返回用户主体 ID、业务聚合 ID、标题或正文；同时提供低基数
 Prometheus 指标 `fitness_agent_notification_delivery_attempts_total`，用于观察各渠道成功、可重试失败和最终失败数量。
+
+主动提醒第一版：Booking 服务会把预约创建、改约和取消事件包装为标准事件信封，发布到 RabbitMQ；
+`make agent-proactive-worker` 启动独立 Proactive Worker。Worker 先把事件按 `event_id` 幂等写入
+`agent_proactive_event_inbox`，再根据事件中的学员/教练 ID 生成通知 Outbox，最后由已有的
+`agent-notification-worker` 投递到站内收件箱。事件 Inbox 和通知 Outbox 都有租约、有限重试、死信状态和去重键，
+因此 RabbitMQ 重投不会生成重复通知。启动本地链路前执行 `make infra-up-messaging`、`make agent-migrate`，
+并在 Booking 服务开启 `BOOKING_OUTBOX_PUBLISHER_ENABLED=true`；主动提醒 Worker 默认关闭，需显式设置
+`AGENT_PROACTIVE_WORKER_ENABLED=true`。训练计划发布和待审核事件已纳入契约和模板，等待 Training Service
+后续发布对应事件；短信、Push 和 Memory 模拟短信仍不在本阶段范围内。
 
 检索引用接口为 `POST /api/v1/agent/knowledge/search`，只返回已完成权限过滤的来源引用，
 包括来源 URI、版本、章节、PDF 页码、Excel 工作表、表格序号/行范围和命中片段。离线评测

@@ -21,6 +21,16 @@ from .outbox import NotificationOutboxRecord
 
 NotificationPolicyAction = Literal["ALLOW", "DEFER", "SUPPRESS"]
 DEFAULT_NOTIFICATION_TYPE = "MEMORY_CANDIDATE_PENDING"
+SUPPORTED_NOTIFICATION_TYPES = frozenset(
+    {
+        "MEMORY_CANDIDATE_PENDING",
+        "APPOINTMENT_CREATED",
+        "APPOINTMENT_RESCHEDULED",
+        "APPOINTMENT_CANCELLED",
+        "TRAINING_PLAN_PUBLISHED",
+        "TRAINING_PLAN_REVIEW_REQUIRED",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -250,7 +260,7 @@ def _validate_preference(
     timezone: str,
     minimum_interval_seconds: int,
 ) -> None:
-    if notification_type != DEFAULT_NOTIFICATION_TYPE:
+    if notification_type not in SUPPORTED_NOTIFICATION_TYPES:
         raise NotificationPreferenceValidationError("unsupported notification type")
     if (quiet_start is None) != (quiet_end is None):
         raise NotificationPreferenceValidationError(

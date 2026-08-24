@@ -27,11 +27,24 @@ public class BookingOutboxConfiguration {
     }
 
     @Bean
-    public Binding bookingEventsBinding(Queue bookingEventsQueue,
-                                        DirectExchange bookingEventsExchange,
-                                        BookingOutboxProperties properties) {
+    public Binding bookingCreatedEventsBinding(Queue bookingEventsQueue,
+                                               DirectExchange bookingEventsExchange) {
         return BindingBuilder.bind(bookingEventsQueue)
-                .to(bookingEventsExchange).with(properties.getRoutingKey());
+                .to(bookingEventsExchange).with("appointment.created");
+    }
+
+    @Bean
+    public Binding bookingRescheduledEventsBinding(Queue bookingEventsQueue,
+                                                   DirectExchange bookingEventsExchange) {
+        return BindingBuilder.bind(bookingEventsQueue)
+                .to(bookingEventsExchange).with("appointment.rescheduled");
+    }
+
+    @Bean
+    public Binding bookingCancelledEventsBinding(Queue bookingEventsQueue,
+                                                 DirectExchange bookingEventsExchange) {
+        return BindingBuilder.bind(bookingEventsQueue)
+                .to(bookingEventsExchange).with("appointment.cancelled");
     }
 
     @Bean

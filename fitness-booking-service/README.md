@@ -70,8 +70,10 @@ make booking-it
 ## Outbox 与 RabbitMQ
 
 预约事务会先把 `APPOINTMENT_CREATED`、`APPOINTMENT_RESCHEDULED` 或 `APPOINTMENT_CANCELLED` 写入 `agent_booking_outbox`。开启发布器后，服务会定时
-领取待发布事件，发送到 RabbitMQ，并等待 publisher confirm；只有收到 broker 的 ack 才把事件
-标记为 `PUBLISHED`。连接失败、nack 或超时会保留重试信息，超过最大次数进入 `DEAD`，不会静默丢失。
+领取待发布事件，包装为包含 `eventId`、`eventType`、`aggregateId`、`organizationId` 和业务路由字段的标准事件信封，
+发送到 RabbitMQ，并等待 publisher confirm；只有收到 broker 的 ack 才把事件标记为 `PUBLISHED`。连接失败、nack 或超时会保留重试信息，
+超过最大次数进入 `DEAD`，不会静默丢失。Direct Exchange 为三个预约事件分别绑定 routing key，Agent Proactive Worker
+使用独立队列消费，不会和 Booking 自己的队列竞争同一条事件。
 
 本地启动 RabbitMQ：
 
