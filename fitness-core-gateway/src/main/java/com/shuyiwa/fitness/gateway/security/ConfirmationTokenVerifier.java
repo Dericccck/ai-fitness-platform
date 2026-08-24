@@ -2,6 +2,7 @@ package com.shuyiwa.fitness.gateway.security;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shuyiwa.fitness.gateway.config.GatewayProperties;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
 
 import javax.crypto.Mac;
@@ -32,6 +33,13 @@ public class ConfirmationTokenVerifier {
     private final GatewayProperties properties;
     private final AgentContextPublicKeyProvider publicKeyProvider;
 
+    /**
+     * Spring 5.1 在类同时存在 public 和 package-private 构造函数时，不能可靠地推断
+     * 应该使用哪一个构造函数；如果不显式标注，启动阶段会退回寻找无参构造函数，最终
+     * 以 ``NoSuchMethodException`` 失败。这里明确指定生产构造函数，同时保留带公钥
+     * Provider 的包级构造函数供单元测试注入可控依赖。
+     */
+    @Autowired
     public ConfirmationTokenVerifier(ObjectMapper objectMapper, GatewayProperties properties) {
         this(
                 objectMapper,

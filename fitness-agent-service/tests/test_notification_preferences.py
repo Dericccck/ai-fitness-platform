@@ -49,6 +49,20 @@ def test_quiet_window_without_boundaries_is_disabled() -> None:
 
 
 @pytest.mark.parametrize(
+    "notification_type",
+    ["TRAINING_PLAN_REVIEW_REQUIRED", "TRAINING_PLAN_PUBLISHED"],
+)
+def test_training_notification_preferences_are_supported(notification_type: str) -> None:
+    _validate_preference(
+        notification_type=notification_type,
+        quiet_start=None,
+        quiet_end=None,
+        timezone="Asia/Shanghai",
+        minimum_interval_seconds=0,
+    )
+
+
+@pytest.mark.parametrize(
     "kwargs",
     [
         {"quiet_start": time(22, 0), "quiet_end": None},

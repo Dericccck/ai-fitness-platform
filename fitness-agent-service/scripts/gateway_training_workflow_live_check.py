@@ -366,21 +366,21 @@ DELETE FROM training_plan WHERE id = '{plan_id}';
         ]
     else:
         command = ["mysql"]
-    command.extend(
-        [
-            "--protocol=tcp",
-            "--default-character-set=utf8mb4",
-            "-h",
-            args.mysql_host,
-            "-P",
-            args.mysql_port,
-            "-u",
-            args.mysql_username,
-            args.mysql_database,
-            "--batch",
-            "--skip-column-names",
-        ]
-    )
+    # 宿主机客户端连接 Docker 映射端口（默认 3307），容器内客户端必须连接
+    # MySQL 容器自己的 3306。两种连接路径不能复用同一组 host/port 参数，
+    # 否则清理 SQL 会在业务流程成功后失败，留下本轮测试计划和 Outbox 记录。
+    connection_args = [
+        "--protocol=tcp",
+        "--default-character-set=utf8mb4",
+        "-u",
+        args.mysql_username,
+        args.mysql_database,
+        "--batch",
+        "--skip-column-names",
+    ]
+    if not args.mysql_container.strip():
+        connection_args[2:2] = ["-h", args.mysql_host, "-P", args.mysql_port]
+    command.extend(connection_args)
     result = subprocess.run(
         command,
         input=sql,
@@ -391,6 +391,44 @@ DELETE FROM training_plan WHERE id = '{plan_id}';
     )
     if result.returncode != 0:
         raise GatewayTrainingWorkflowError("测试计划清理失败，请根据输出的明确计划 ID 手工核对")
+
+
+async def _cleanup_agent_records(args: argparse.Namespace, plan_id: str) -> None:
+    """删除本轮计划在 Agent 侧产生的事件和通知测试数据。
+
+    Training MySQL 清理成功并不代表主动提醒链路没有副作用：事件 Inbox、通知 Outbox、
+    投递尝试和站内收件箱位于独立的 Agent PostgreSQL。它们同样必须按本轮明确的聚合
+    ID 精确清理，避免本地验收通知混入后续真实测试或前端收件箱。
+    """
+
+    database_url = args.agent_database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    connection = await asyncpg.connect(database_url)
+    try:
+        async with connection.transaction():
+            await connection.execute(
+                "DELETE FROM agent_in_app_notifications WHERE aggregate_id = $1", plan_id
+            )
+            await connection.execute(
+                """
+                DELETE FROM agent_notification_delivery_attempts
+                WHERE outbox_id IN (
+                    SELECT id FROM agent_notification_outbox WHERE aggregate_id = $1
+                )
+                """,
+                plan_id,
+            )
+            await connection.execute(
+                "DELETE FROM agent_notification_outbox WHERE aggregate_id = $1", plan_id
+            )
+            await connection.execute(
+                """
+                DELETE FROM agent_proactive_event_inbox
+                WHERE aggregate_id = $1 AND source = 'training'
+                """,
+                plan_id,
+            )
+    finally:
+        await connection.close()
 
 
 async def _check_proactive_preflight(args: argparse.Namespace) -> None:
@@ -752,6 +790,8 @@ async def run_check(args: argparse.Namespace) -> tuple[ProbeResult, ...]:
             if plan_id:
                 print(f"workflow_plan_id={plan_id}")
                 _cleanup(args, plan_id, tuple(workflow_requests))
+                if args.verify_proactive_chain:
+                    await _cleanup_agent_records(args, plan_id)
                 print("workflow_cleanup=completed")
 
     return tuple(results)

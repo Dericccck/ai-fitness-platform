@@ -458,7 +458,9 @@ Agent PostgreSQL 和 RabbitMQ，不写入预约；确认使用本地测试数据
 健康状态、Agent PostgreSQL 和 RabbitMQ 均可用；然后使用 `make gateway-training-proactive-live-check`。后者复用已有的训练计划角色工作流，
 依次创建草案、提交审核、审核通过和发布；发布后额外等待 `TRAINING_PLAN_REVIEW_REQUIRED` 与
 `TRAINING_PLAN_PUBLISHED` 两类事件完成 RabbitMQ、Agent Inbox、通知 Outbox 和站内收件箱链路，
-最后按本轮计划 ID 精确清理训练业务表与 `agent_training_outbox`。命令默认拒绝写入，只有显式设置
+最后按本轮计划 ID 同时精确清理 Training MySQL 与 Agent PostgreSQL 中的训练业务、事件 Inbox、通知 Outbox、
+投递尝试和站内收件箱记录。没有宿主机 `mysql` 客户端时默认使用 `fitness-mysql` 容器，可通过
+`GATEWAY_MYSQL_CONTAINER` 覆盖。命令默认拒绝写入，只有显式设置
 `GATEWAY_LIVE_EXECUTE_WORKFLOW_WRITES=1` 才会执行本地验收；同时需要开启 `TRAINING_OUTBOX_PUBLISHER_ENABLED=true`
 和 `AGENT_PROACTIVE_WORKER_ENABLED=true`，并在重启对应服务后运行。
 
