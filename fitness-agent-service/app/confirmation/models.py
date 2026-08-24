@@ -100,9 +100,11 @@ class ConfirmationRecord:
     expires_at: datetime
     approved_at: datetime | None = None
     rejected_at: datetime | None = None
+    cancelled_at: datetime | None = None
     execution_started_at: datetime | None = None
     finished_at: datetime | None = None
     decision_request_id: str | None = None
+    revocation_request_id: str | None = None
     credential_jti: str | None = None
     credential_consumed_at: datetime | None = None
     last_error_code: str | None = None
@@ -157,15 +159,21 @@ class ConfirmationRecord:
             version=self.version + 1,
         )
 
-    def cancel(self) -> ConfirmationRecord:
+    def cancel(self, now: datetime, revocation_request_id: str) -> ConfirmationRecord:
         """撤销尚未执行的批准或待确认动作。"""
 
         if self.authorization_status not in {"PENDING", "APPROVED"}:
             raise ConfirmationStateError("confirmation is not cancellable")
         if self.execution_status != "NOT_STARTED":
             raise ConfirmationStateError("started execution cannot be cancelled")
+        if self.is_expired(now):
+            raise ConfirmationStateError("expired confirmation cannot be cancelled")
+        if not revocation_request_id.strip():
+            raise ConfirmationStateError("revocation request id is required")
         return self._replace(
             authorization_status="CANCELLED",
+            cancelled_at=now,
+            revocation_request_id=revocation_request_id,
             credential_jti=None,
             version=self.version + 1,
         )

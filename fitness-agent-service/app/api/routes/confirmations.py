@@ -36,6 +36,18 @@ class ConfirmationDecisionRequest(BaseModel):
     )
 
 
+class ConfirmationRevocationRequest(BaseModel):
+    """确认撤销输入；撤销幂等键与批准决定键分离。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    revocation_request_id: str = Field(
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+
+
 class ConfirmationResponse(BaseModel):
     """供确认卡片和页面刷新使用的脱敏确认单状态。"""
 
@@ -58,6 +70,7 @@ class ConfirmationResponse(BaseModel):
     expires_at: datetime
     approved_at: datetime | None
     rejected_at: datetime | None
+    cancelled_at: datetime | None
     execution_started_at: datetime | None
     finished_at: datetime | None
     decision_request_id: str | None
@@ -148,6 +161,33 @@ async def decide_confirmation(
     )
 
 
+@router.post("/{confirmation_id}/revocations", response_model=ConfirmationResponse)
+async def revoke_confirmation(
+    confirmation_id: str,
+    payload: ConfirmationRevocationRequest,
+    request: Request,
+    x_agent_context: str | None = Header(default=None),
+    x_trace_id: str | None = Header(default=None),
+) -> ConfirmationResponse:
+    """撤销尚未执行的确认单；重复撤销请求按幂等键返回同一事实。"""
+
+    identity = _verify_identity(request, x_agent_context)
+    try:
+        record = await request.app.state.confirmation_service.revoke(
+            confirmation_id,
+            identity=identity,
+            revocation_request_id=payload.revocation_request_id,
+            trace_id=x_trace_id,
+        )
+    except ConfirmationNotFound as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="confirmation not found"
+        ) from exc
+    except (ConfirmationStateError, ValueError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return _to_response(record)
+
+
 def _verify_identity(request: Request, token: str | None) -> AgentIdentity:
     if not token:
         raise HTTPException(
@@ -182,6 +222,7 @@ def _to_response(record: ConfirmationRecord) -> ConfirmationResponse:
         expires_at=record.expires_at,
         approved_at=record.approved_at,
         rejected_at=record.rejected_at,
+        cancelled_at=record.cancelled_at,
         execution_started_at=record.execution_started_at,
         finished_at=record.finished_at,
         decision_request_id=record.decision_request_id,

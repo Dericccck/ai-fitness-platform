@@ -97,3 +97,24 @@ def test_retryable_failure_can_be_requeued_without_changing_approval() -> None:
     assert requeued.execution_status == "NOT_STARTED"
     assert requeued.credential_jti is None
     assert requeued.credential_consumed_at is None
+
+
+def test_confirmation_can_be_revoked_before_execution() -> None:
+    now = datetime.now(UTC)
+    approved = record().approve(now, "decision-1")
+
+    revoked = approved.cancel(now, "revoke-1")
+
+    assert revoked.authorization_status == "CANCELLED"
+    assert revoked.execution_status == "NOT_STARTED"
+    assert revoked.cancelled_at == now
+    assert revoked.revocation_request_id == "revoke-1"
+    assert revoked.credential_jti is None
+
+
+def test_running_confirmation_cannot_be_revoked() -> None:
+    now = datetime.now(UTC)
+    running = record().approve(now, "decision-1").issue_credential("jti-1", now).claim_execution(now)
+
+    with pytest.raises(ConfirmationStateError):
+        running.cancel(now, "revoke-1")

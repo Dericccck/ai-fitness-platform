@@ -205,8 +205,10 @@ Agent 节点或模型回调中自行拼接 Gateway URL。当前 Registry 已包�
 提交审核、审核、发布和训练日执行记录写工具；写工具具备确认标记和缺少凭证时的前置拒绝。确认单持久化、
 不可变确认事件、授权/执行状态分离、数据库幂等、参数加密、Checkpoint 脱敏、`interrupt()` 暂停、
 确认详情/决定 API、服务端恢复和真实 Gateway 执行已经完成。批准接口内部自动完成“持久化决定→
-恢复图→调用写工具”，不会把 Token 返回给客户端。当前仅保留 Java Gateway v1 HMAC 兼容凭证；
-预约写操作要等 v2 凭证消费闭环、幂等键和 Java 事务审计完成后再加入。
+恢复图→调用写工具”，不会把 Token 返回给客户端。确认详情/决定/撤销 API 已完成，撤销只允许
+尚未开始执行的确认单，并使用独立 `revocation_request_id` 幂等。确认凭证支持 Java Gateway v1
+HMAC 兼容模式和 Agent RSA 私钥签发的 RS256 模式；生产部署应优先使用 RS256，并继续补齐真实
+认证服务 JWKS 和故障演练。
 
 当前对话接口为 `POST /api/v1/agent/chat`。调用方必须传入认证服务签发的
 `X-Agent-Context`，以及 `conversation_id`、`message` 和可选 `locale`；写工具的正常产品流程不
@@ -280,6 +282,9 @@ Fitness Agent 的 dry-run 使用 `make agent-fitness-live-check`。当请求明�
 接口不会返回完整参数、参数哈希、密文或确认凭证；`APPROVE` 会在服务端继续恢复图并执行 Java
 Gateway，响应中的 `execution_status` 只反映真实工具结果。执行失败时接口返回暂时不可用或冲突，
 页面可以用同一个 `decision_request_id` 重试；不能新造一个业务参数绕过原确认单。
+用户可以通过 `POST /api/v1/agent/confirmations/{confirmation_id}/revocations` 撤销仍处于待确认或
+已批准但尚未开始执行的确认单；执行中或已完成的确认单不能撤销。撤销会在事务内清空未消费 JTI，
+并追加不可变 `CANCELLED` 事件。
 
 当前版本已接入 PostgreSQL LangGraph Checkpoint 和 Redis 会话锁：同一用户/组织/角色范围
 内的 `conversation_id` 会生成稳定的匿名 `thread_id`，不同身份即使使用相同会话 ID 也

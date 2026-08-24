@@ -227,6 +227,40 @@ class ConfirmationService:
             tuple(sorted(identity.roles)),
         )
 
+    async def revoke(
+        self,
+        confirmation_id: str,
+        *,
+        identity: AgentIdentity,
+        revocation_request_id: str,
+        trace_id: str | None,
+    ) -> ConfirmationRecord:
+        """撤销待确认或已批准但尚未执行的动作。
+
+        撤销是确认页面上的显式用户动作，不再套一层 ``interrupt()``；但仍必须经过
+        签名身份、机构范围、状态机和独立幂等键校验。底层事务会清空未消费 JTI，
+        从而阻止 Agent 后续恢复该确认单。
+        """
+
+        if not revocation_request_id.strip():
+            raise ValueError("revocation request id is required")
+        record = await self.repository.get_for_subject(
+            confirmation_id,
+            identity.subject,
+            tuple(sorted(identity.organization_ids)),
+        )
+        _ensure_identity_snapshot(record, identity)
+        return await self.repository.cancel(
+            confirmation_id,
+            identity.subject,
+            tuple(sorted(identity.organization_ids)),
+            trace_id,
+            identity.subject,
+            tuple(sorted(identity.roles)),
+            revocation_request_id,
+            datetime.now(UTC),
+        )
+
 
 def _ensure_identity_snapshot(record: ConfirmationRecord, identity: AgentIdentity) -> None:
     """确认阶段必须仍使用创建动作时的角色和完整机构范围。"""

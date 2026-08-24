@@ -74,6 +74,13 @@ class FakeConfirmationService:
         self.current = self.current.approve(datetime.now(UTC), kwargs["decision_request_id"])
         return self.current
 
+    async def revoke(self, confirmation_id: str, **kwargs: Any) -> ConfirmationRecord:
+        assert confirmation_id == self.current.id
+        self.current = self.current.cancel(
+            datetime.now(UTC), kwargs["revocation_request_id"]
+        )
+        return self.current
+
 
 class FakeSupervisor:
     async def resume_confirmation(self, confirmation_id: str, **kwargs: Any) -> None:
@@ -142,6 +149,34 @@ async def test_confirmation_api_rejects_extra_decision_fields() -> None:
                 "decision_request_id": "decision-1",
                 "organization_id": "attacker-org",
             },
+        )
+
+    assert response.status_code == 422
+
+
+async def test_confirmation_revocation_returns_cancelled_state() -> None:
+    app = build_app(FakeConfirmationService())
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/agent/confirmations/confirmation-1/revocations",
+            headers={"X-Agent-Context": "signed-context", "X-Trace-ID": "trace-revoke-1"},
+            json={"revocation_request_id": "revoke-1"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["authorization_status"] == "CANCELLED"
+    assert response.json()["cancelled_at"] is not None
+
+
+async def test_confirmation_revocation_rejects_extra_fields() -> None:
+    app = build_app(FakeConfirmationService())
+    transport = ASGITransport(app=app)
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/agent/confirmations/confirmation-1/revocations",
+            headers={"X-Agent-Context": "signed-context"},
+            json={"revocation_request_id": "revoke-1", "subject_user_id": "attacker"},
         )
 
     assert response.status_code == 422

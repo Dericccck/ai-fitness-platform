@@ -229,15 +229,25 @@ class ConfirmationRepository:
         trace_id: str | None,
         actor_user_id: str,
         actor_roles: Sequence[str],
+        revocation_request_id: str,
+        now: datetime,
     ) -> ConfirmationRecord:
-        """撤销尚未领取执行权的确认单，并记录操作者快照。"""
+        """撤销尚未领取执行权的确认单，并记录操作者快照。
+
+        撤销请求拥有独立幂等键，不能复用批准阶段的决定键。这样用户重复点击撤销
+        或网络重试时会返回同一撤销事实，而不会追加第二次状态变更。
+        """
 
         async with self._database.engine.begin() as connection:
             row = await self._select_for_update(
                 connection, confirmation_id, subject_user_id, organization_ids
             )
             record = _record_from_row(row)
-            cancelled = record.cancel()
+            if record.revocation_request_id == revocation_request_id:
+                return record
+            if record.authorization_status == "CANCELLED":
+                raise ConfirmationStateError("confirmation has already been revoked")
+            cancelled = record.cancel(now, revocation_request_id)
             await self._update_record(connection, cancelled, expected_version=record.version)
             await self._insert_event(
                 connection,
@@ -399,8 +409,10 @@ class ConfirmationRepository:
             UPDATE agent_action_confirmations SET
                 authorization_status = :authorization_status, execution_status = :execution_status,
                 version = :version, approved_at = :approved_at, rejected_at = :rejected_at,
+                cancelled_at = :cancelled_at,
                 execution_started_at = :execution_started_at, finished_at = :finished_at,
-                decision_request_id = :decision_request_id, credential_jti = :credential_jti,
+                decision_request_id = :decision_request_id, revocation_request_id = :revocation_request_id,
+                credential_jti = :credential_jti,
                 credential_consumed_at = :credential_consumed_at, last_error_code = :last_error_code
             WHERE id = :id AND version = :expected_version
             """
@@ -414,9 +426,11 @@ class ConfirmationRepository:
                 "version": record.version,
                 "approved_at": record.approved_at,
                 "rejected_at": record.rejected_at,
+                "cancelled_at": record.cancelled_at,
                 "execution_started_at": record.execution_started_at,
                 "finished_at": record.finished_at,
                 "decision_request_id": record.decision_request_id,
+                "revocation_request_id": record.revocation_request_id,
                 "credential_jti": record.credential_jti,
                 "credential_consumed_at": record.credential_consumed_at,
                 "last_error_code": record.last_error_code,
@@ -530,9 +544,11 @@ def _record_from_row(row: Any) -> ConfirmationRecord:
         expires_at=row["expires_at"],
         approved_at=row["approved_at"],
         rejected_at=row["rejected_at"],
+        cancelled_at=row["cancelled_at"],
         execution_started_at=row["execution_started_at"],
         finished_at=row["finished_at"],
         decision_request_id=row["decision_request_id"],
+        revocation_request_id=row["revocation_request_id"],
         credential_jti=row["credential_jti"],
         credential_consumed_at=row["credential_consumed_at"],
         last_error_code=row["last_error_code"],
