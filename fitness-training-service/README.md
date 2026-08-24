@@ -52,6 +52,12 @@ TRAINING_INTERNAL_SERVICE_TOKEN
 Agent 通过 `agent_proactive_event_inbox` 做事件幂等，再由现有通知 Outbox 投递站内通知；训练服务不直接
 访问 PostgreSQL，也不直接写 Agent 通知表。当前仍只接入 `IN_APP` 站内通知，不接短信或 Push。
 
+真实本地闭环先使用根目录命令 `make gateway-training-proactive-preflight` 做只读依赖检查，再使用
+`make gateway-training-proactive-live-check`；后者会复用 Gateway 训练角色工作流，
+在发布后等待两类训练事件的通知链路完成，再精确清理本轮训练计划和 Outbox 事件。该命令默认禁止写入，
+必须由操作者显式设置 `GATEWAY_LIVE_EXECUTE_WORKFLOW_WRITES=1`，并确保 Training Outbox Publisher 与 Agent
+Proactive Worker 已启用并重启。
+
 ## 内部 API
 
 存活检查：`GET /health`，成功返回 `{"status":"UP"}`。该接口不需要业务主体 Header；内部

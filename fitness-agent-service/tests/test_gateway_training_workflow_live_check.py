@@ -1,4 +1,6 @@
 from scripts.gateway_training_workflow_live_check import (
+    ProactiveEventObservation,
+    validate_proactive_event,
     validate_student_hidden,
     validate_transition,
     validate_visible,
@@ -28,4 +30,39 @@ def test_validate_visible_requires_published_plan() -> None:
     ).passed
     assert not validate_visible(
         "student-after-publish", 200, {"id": "plan-1", "status": "APPROVED"}, "plan-1"
+    ).passed
+
+
+def test_validate_proactive_event_requires_exactly_one_published_in_app_notification() -> None:
+    assert validate_proactive_event(
+        ProactiveEventObservation(
+            "event-1",
+            "TRAINING_PLAN_PUBLISHED",
+            "PROCESSED",
+            1,
+            1,
+            1,
+            ("student-1",),
+            ("student-1",),
+        ),
+        "student-1",
+    ).passed
+    assert not validate_proactive_event(
+        ProactiveEventObservation(
+            "event-1", "TRAINING_PLAN_PUBLISHED", "PENDING", 1, 0, 0, ("student-1",), ()
+        ),
+        "student-1",
+    ).passed
+    assert not validate_proactive_event(
+        ProactiveEventObservation(
+            "event-1",
+            "TRAINING_PLAN_PUBLISHED",
+            "PROCESSED",
+            2,
+            2,
+            2,
+            ("student-1",),
+            ("student-1",),
+        ),
+        "student-1",
     ).passed

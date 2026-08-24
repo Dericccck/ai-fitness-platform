@@ -1299,7 +1299,9 @@ Memory 脱敏评测。
 7. **Memory 与主动提醒**：Memory 候选审批、通知模板和站内通知基础已完成；预约主动提醒已接入
    RabbitMQ 事件 Inbox、幂等消费和站内通知 Outbox；训练服务也已把计划待审核/已发布状态变化接入事务内
    Outbox，并复用共享领域事件 Exchange。下一步是分别对 Booking 和 Training 的真实事件闭环做验收；
-   真实写操作仍需显式授权。短信、Push 和 Memory 模拟短信继续不接入。
+   已补充 `make gateway-training-proactive-preflight` 只读检查依赖，并补充 `make gateway-training-proactive-live-check`，
+   后者复用训练计划角色工作流并在精确清理前等待两类训练事件
+   完成 Inbox、通知 Outbox 和站内收件箱链路；真实写操作仍需显式授权。短信、Push 和 Memory 模拟短信继续不接入。
 
    预约主动提醒真实验收不能只观察 Booking 写接口返回成功，还需要验证真实跨服务闭环：
 
@@ -1317,6 +1319,8 @@ Memory 脱敏评测。
    必须使用已有的取消预约确认流程清理测试预约。训练事件由 `agent_training_outbox` 产生，发布后复用同一
    `agent_proactive_event_inbox -> agent_notification_outbox -> agent_in_app_notifications` 链路；验收输出只打印
    脱敏后的事件 ID、聚合 ID 和各层状态计数，不打印 AgentContext、确认参数或通知正文。
+   训练主动提醒验收还会验证：待审核事件只通知负责教练，已发布事件只通知对应学员；两类事件均必须达到
+   `PROCESSED`，各自产生一条 `PUBLISHED` 通知和一条站内收件箱记录，随后才执行本轮训练 Outbox 精确清理。
 8. **Customer Service、评价投诉、语音和多端交互**：复用现有权限、审计、确认和数据生命周期边界，
    完成多端业务闭环。
 9. **最终知识文档优化与重建（阶段 12.1）**：恢复多角色按页审核、复杂 PDF 版式、Linux OCR、图文

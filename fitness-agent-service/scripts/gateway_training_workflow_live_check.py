@@ -22,9 +22,12 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
+import aio_pika
+import asyncpg  # type: ignore[import-untyped]
 import httpx
 
 from scripts.issue_dev_agent_context import DevContextIssuerError, issue_token
@@ -50,6 +53,45 @@ class WorkflowRequest:
     request_id: str
     jti: str
     confirmation_id: str
+
+
+@dataclass(frozen=True)
+class ProactiveEventObservation:
+    """一条训练主动提醒事件及其下游通知状态摘要。"""
+
+    event_id: str
+    event_type: str
+    status: str
+    notification_outbox_count: int
+    published_notification_count: int
+    in_app_notification_count: int
+    notification_recipient_ids: tuple[str, ...]
+    in_app_recipient_ids: tuple[str, ...]
+
+
+def validate_proactive_event(
+    observation: ProactiveEventObservation, expected_recipient_id: str
+) -> ProbeResult:
+    """只有事件已处理且恰好生成一条已投递站内通知才算通过。"""
+
+    if (
+        observation.status == "PROCESSED"
+        and observation.notification_outbox_count == 1
+        and observation.published_notification_count == 1
+        and observation.in_app_notification_count == 1
+        and observation.notification_recipient_ids == (expected_recipient_id,)
+        and observation.in_app_recipient_ids == (expected_recipient_id,)
+    ):
+        return ProbeResult(
+            f"training-proactive-{observation.event_type.lower()}",
+            True,
+            "事件已进入 Inbox、通知 Outbox 和站内收件箱",
+        )
+    return ProbeResult(
+        f"training-proactive-{observation.event_type.lower()}",
+        False,
+        "事件或下游通知尚未完成",
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -85,6 +127,49 @@ def build_parser() -> argparse.ArgumentParser:
         "--mysql-container",
         default=os.getenv("GATEWAY_DB_CLEANUP_CONTAINER", ""),
         help="可选：通过 Docker 容器中的 mysql 客户端执行精确清理",
+    )
+    parser.add_argument(
+        "--verify-proactive-chain",
+        action="store_true",
+        default=os.getenv("GATEWAY_TRAINING_VERIFY_PROACTIVE_CHAIN") == "1",
+        help="发布后等待 Training -> RabbitMQ -> Agent 通知链路完成",
+    )
+    parser.add_argument(
+        "--preflight-only",
+        action="store_true",
+        help="只检查主动提醒依赖，不创建、审核或发布训练计划",
+    )
+    parser.add_argument(
+        "--agent-database-url",
+        default=os.getenv(
+            "AGENT_DATABASE_URL",
+            "postgresql+asyncpg://fitness_agent:fitness_agent@127.0.0.1:5433/fitness_agent",
+        ),
+        help="Agent PostgreSQL 地址，仅用于主动提醒链路验收",
+    )
+    parser.add_argument(
+        "--agent-url",
+        default=os.getenv("AGENT_LIVE_API_URL", "http://127.0.0.1:8090"),
+        help="Agent 服务地址，仅用于主动提醒链路前置检查",
+    )
+    parser.add_argument(
+        "--rabbitmq-url",
+        default=os.getenv(
+            "AGENT_PROACTIVE_RABBITMQ_URL",
+            "amqp://fitness_agent:fitness_agent_secret@127.0.0.1:5672/",
+        ),
+        help="RabbitMQ 地址，仅用于主动提醒链路前置检查",
+    )
+    parser.add_argument(
+        "--training-url",
+        default=os.getenv("TRAINING_LIVE_URL", "http://127.0.0.1:8082"),
+        help="Training Service 地址，仅用于主动提醒链路前置检查",
+    )
+    parser.add_argument(
+        "--proactive-poll-timeout-seconds",
+        type=float,
+        default=float(os.getenv("AGENT_LIVE_POLL_TIMEOUT_SECONDS", "90")),
+        help="等待训练事件下游链路完成的最长时间",
     )
     return parser
 
@@ -251,7 +336,13 @@ def _cleanup(args: argparse.Namespace, plan_id: str, requests: tuple[WorkflowReq
     if not args.mysql_username.strip() or not args.mysql_password:
         raise GatewayTrainingWorkflowError("缺少 MySQL 清理凭证，无法安全完成验收收尾")
     request_ids = ", ".join(f"'{request.request_id}'" for request in requests)
+    proactive_outbox_cleanup = (
+        f"DELETE FROM agent_training_outbox WHERE aggregate_id = '{plan_id}';"
+        if args.verify_proactive_chain
+        else ""
+    )
     sql = f"""
+{proactive_outbox_cleanup}
 DELETE FROM training_day_execution_audit WHERE plan_id = '{plan_id}';
 DELETE FROM training_day_execution WHERE plan_id = '{plan_id}';
 DELETE FROM training_plan_audit WHERE plan_id = '{plan_id}';
@@ -302,7 +393,154 @@ DELETE FROM training_plan WHERE id = '{plan_id}';
         raise GatewayTrainingWorkflowError("测试计划清理失败，请根据输出的明确计划 ID 手工核对")
 
 
+async def _check_proactive_preflight(args: argparse.Namespace) -> None:
+    """主动提醒验收前检查 Agent、Training、PostgreSQL 和 RabbitMQ。"""
+
+    database_url = args.agent_database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    if not database_url.strip() or not args.rabbitmq_url.strip():
+        raise GatewayTrainingWorkflowError("主动提醒验收缺少 Agent PostgreSQL 或 RabbitMQ 配置")
+    if args.proactive_poll_timeout_seconds <= 0:
+        raise GatewayTrainingWorkflowError("--proactive-poll-timeout-seconds 必须大于 0")
+    async with httpx.AsyncClient(timeout=min(args.timeout_seconds, 10.0)) as client:
+        for endpoint, path, label in (
+            (args.agent_url.rstrip("/"), "/health/ready", "Agent"),
+            (args.training_url.rstrip("/"), "/health", "Training Service"),
+        ):
+            try:
+                response = await client.get(endpoint + path)
+            except httpx.HTTPError as exc:
+                raise GatewayTrainingWorkflowError(f"{label} 健康检查无法连接") from exc
+            if response.status_code >= 400:
+                raise GatewayTrainingWorkflowError(
+                    f"{label} 健康检查返回 HTTP {response.status_code}"
+                )
+    connection = await asyncpg.connect(database_url)
+    try:
+        await connection.fetchval("SELECT 1")
+        await connection.fetchval("SELECT 1 FROM agent_proactive_event_inbox LIMIT 1")
+    finally:
+        await connection.close()
+    rabbit_connection = await aio_pika.connect_robust(args.rabbitmq_url)
+    await rabbit_connection.close()
+
+
+async def _probe_proactive_events(
+    connection: asyncpg.Connection,
+    *,
+    organization_id: str,
+    plan_id: str,
+    started_at: datetime,
+) -> tuple[ProactiveEventObservation, ...]:
+    """读取本轮计划的两类事件和下游通知状态，不读取通知正文。"""
+
+    rows = await connection.fetch(
+        """
+        SELECT event_id, event_type, status
+        FROM agent_proactive_event_inbox
+        WHERE organization_id = $1
+          AND aggregate_id = $2
+          AND source = 'training'
+          AND event_type IN ('TRAINING_PLAN_REVIEW_REQUIRED', 'TRAINING_PLAN_PUBLISHED')
+          AND created_at >= $3
+        ORDER BY event_type, created_at, event_id
+        """,
+        organization_id,
+        plan_id,
+        started_at,
+    )
+    observations: list[ProactiveEventObservation] = []
+    for row in rows:
+        event_id = str(row["event_id"])
+        notification_rows = await connection.fetch(
+            "SELECT status, subject_user_id FROM agent_notification_outbox WHERE dedupe_key LIKE $1",
+            f"proactive:{event_id}:%",
+        )
+        in_app_rows = await connection.fetch(
+            "SELECT subject_user_id FROM agent_in_app_notifications WHERE dedupe_key LIKE $1",
+            f"proactive:{event_id}:%",
+        )
+        observations.append(
+            ProactiveEventObservation(
+                event_id=event_id,
+                event_type=str(row["event_type"]),
+                status=str(row["status"]),
+                notification_outbox_count=len(notification_rows),
+                published_notification_count=sum(
+                    item["status"] == "PUBLISHED" for item in notification_rows
+                ),
+                in_app_notification_count=len(in_app_rows),
+                notification_recipient_ids=tuple(
+                    sorted({str(item["subject_user_id"]) for item in notification_rows})
+                ),
+                in_app_recipient_ids=tuple(
+                    sorted({str(item["subject_user_id"]) for item in in_app_rows})
+                ),
+            )
+        )
+    return tuple(observations)
+
+
+async def _wait_for_proactive_chain(
+    args: argparse.Namespace, *, organization_id: str, plan_id: str, started_at: datetime
+) -> tuple[ProbeResult, ...]:
+    """等待待审核和已发布两类事件都完成 Agent 通知链路。"""
+
+    database_url = args.agent_database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+    deadline = time.monotonic() + args.proactive_poll_timeout_seconds
+    connection = await asyncpg.connect(database_url)
+    last: tuple[ProactiveEventObservation, ...] = ()
+    try:
+        while time.monotonic() < deadline:
+            last = await _probe_proactive_events(
+                connection,
+                organization_id=organization_id,
+                plan_id=plan_id,
+                started_at=started_at,
+            )
+            by_type = {observation.event_type: observation for observation in last}
+            expected_types = {
+                "TRAINING_PLAN_REVIEW_REQUIRED",
+                "TRAINING_PLAN_PUBLISHED",
+            }
+            if expected_types.issubset(by_type) and all(
+                validate_proactive_event(
+                    by_type[event_type],
+                    args.coach_id
+                    if event_type == "TRAINING_PLAN_REVIEW_REQUIRED"
+                    else args.student_id,
+                ).passed
+                for event_type in expected_types
+            ):
+                return tuple(
+                    validate_proactive_event(
+                        by_type[event_type],
+                        args.coach_id
+                        if event_type == "TRAINING_PLAN_REVIEW_REQUIRED"
+                        else args.student_id,
+                    )
+                    for event_type in sorted(expected_types)
+                )
+            await asyncio.sleep(1)
+    finally:
+        await connection.close()
+    if not last:
+        raise GatewayTrainingWorkflowError("训练主动提醒验收超时，未收到 Training 事件")
+    summary = "; ".join(
+        f"{item.event_type}:status={item.status},outbox={item.notification_outbox_count},"
+        f"published={item.published_notification_count},in_app={item.in_app_notification_count}"
+        for item in last
+    )
+    raise GatewayTrainingWorkflowError(f"训练主动提醒链路未完成：{summary}")
+
+
 async def run_check(args: argparse.Namespace) -> tuple[ProbeResult, ...]:
+    if args.preflight_only:
+        await _check_proactive_preflight(args)
+        return (
+            ProbeResult(
+                "training-proactive-preflight", True, "Agent、Training、PostgreSQL、RabbitMQ 均可用"
+            ),
+        )
     if os.getenv("GATEWAY_LIVE_EXECUTE_WORKFLOW_WRITES") != "1":
         raise GatewayTrainingWorkflowError(
             "默认禁止工作流写入；确认本地夹具后设置 GATEWAY_LIVE_EXECUTE_WORKFLOW_WRITES=1"
@@ -320,6 +558,13 @@ async def run_check(args: argparse.Namespace) -> tuple[ProbeResult, ...]:
         raise GatewayTrainingWorkflowError(f"缺少配置：{', '.join(missing)}")
     if args.timeout_seconds <= 0:
         raise GatewayTrainingWorkflowError("--timeout-seconds 必须大于 0")
+    if args.verify_proactive_chain:
+        try:
+            await _check_proactive_preflight(args)
+        except (asyncpg.PostgresError, aio_pika.exceptions.AMQPError) as exc:
+            raise GatewayTrainingWorkflowError(
+                "主动提醒 PostgreSQL 或 RabbitMQ 前置检查失败"
+            ) from exc
 
     organization_id, student_id, coach_id = args.organization_id, args.student_id, args.coach_id
     contexts = {
@@ -336,6 +581,7 @@ async def run_check(args: argparse.Namespace) -> tuple[ProbeResult, ...]:
     plan_id: str | None = None
     workflow_requests: list[WorkflowRequest] = []
     results: list[ProbeResult] = []
+    started_at = datetime.now(UTC)
 
     async with httpx.AsyncClient(timeout=args.timeout_seconds) as client:
         try:
@@ -493,6 +739,15 @@ async def run_check(args: argparse.Namespace) -> tuple[ProbeResult, ...]:
                         plan_id,
                     )
                 )
+            if args.verify_proactive_chain:
+                results.extend(
+                    await _wait_for_proactive_chain(
+                        args,
+                        organization_id=organization_id,
+                        plan_id=plan_id,
+                        started_at=started_at,
+                    )
+                )
         finally:
             if plan_id:
                 print(f"workflow_plan_id={plan_id}")
@@ -505,7 +760,13 @@ async def run_check(args: argparse.Namespace) -> tuple[ProbeResult, ...]:
 def main() -> int:
     try:
         results = asyncio.run(run_check(build_parser().parse_args()))
-    except GatewayTrainingWorkflowError as exc:
+    except (
+        GatewayTrainingWorkflowError,
+        asyncpg.PostgresError,
+        aio_pika.exceptions.AMQPError,
+        OSError,
+        ValueError,
+    ) as exc:
         print(f"Gateway 训练完整工作流验收失败：{exc}", file=sys.stderr)
         return 1
     for result in results:

@@ -1,12 +1,12 @@
 SHELL := /bin/sh
 
-.PHONY: agent-jwks-check agent-proactive-worker agent-proactive-live-check
+.PHONY: agent-jwks-check agent-proactive-worker agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check
 
 AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run gateway-training-role-live-check gateway-training-write-live-check gateway-training-workflow-live-check training-check training-run training-role-live-check training-role-visibility-live-check booking-check booking-it booking-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run gateway-training-role-live-check gateway-training-write-live-check gateway-training-workflow-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check training-check training-run training-role-live-check training-role-visibility-live-check booking-check booking-it booking-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
@@ -52,6 +52,8 @@ help:
 	@echo "  gateway-training-role-live-check  Check Gateway-to-Training role visibility without writes"
 	@echo "  gateway-training-write-live-check  Verify Gateway training confirmation write, idempotency and JTI replay"
 	@echo "  gateway-training-workflow-live-check  Verify full Gateway training review/publish workflow with exact cleanup"
+	@echo "  gateway-training-proactive-preflight  Check Training proactive dependencies without writes"
+	@echo "  gateway-training-proactive-live-check  Verify Training events through RabbitMQ to Agent IN_APP notifications"
 	@echo "  training-check Build and test the structured training service"
 	@echo "  training-run  Start the structured training service locally"
 	@echo "  training-role-live-check  Check training health and student draft denial without writes"
@@ -279,6 +281,24 @@ gateway-training-workflow-live-check:
 	@test -n "$$GATEWAY_DB_PASSWORD" || (echo "请先设置 GATEWAY_DB_PASSWORD 供精确清理"; exit 1)
 	@test "$$FITNESS_DEV_CONTEXT_ISSUER" = "1" || (echo "请设置 FITNESS_DEV_CONTEXT_ISSUER=1"; exit 1)
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/gateway_training_workflow_live_check.py
+
+gateway-training-proactive-preflight:
+	@test -n "$$AGENT_DATABASE_URL" || (echo "请先设置 AGENT_DATABASE_URL"; exit 1)
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/gateway_training_workflow_live_check.py --verify-proactive-chain --preflight-only
+
+gateway-training-proactive-live-check:
+	@test "$$GATEWAY_LIVE_EXECUTE_WORKFLOW_WRITES" = "1" || (echo "默认禁止工作流写入，请设置 GATEWAY_LIVE_EXECUTE_WORKFLOW_WRITES=1"; exit 1)
+	@test -n "$$GATEWAY_INTERNAL_SERVICE_TOKEN" || (echo "请先设置 GATEWAY_INTERNAL_SERVICE_TOKEN"; exit 1)
+	@test -n "$$GATEWAY_CONTEXT_SIGNING_SECRET" || (echo "请先设置 GATEWAY_CONTEXT_SIGNING_SECRET"; exit 1)
+	@test -n "$$GATEWAY_CONFIRMATION_SIGNING_SECRET" || (echo "请先设置 GATEWAY_CONFIRMATION_SIGNING_SECRET"; exit 1)
+	@test -n "$$GATEWAY_DB_USERNAME" || (echo "请先设置 GATEWAY_DB_USERNAME 供精确清理"; exit 1)
+	@test -n "$$GATEWAY_DB_PASSWORD" || (echo "请先设置 GATEWAY_DB_PASSWORD 供精确清理"; exit 1)
+	@test -n "$$TRAINING_LIVE_ORGANIZATION_ID" || (echo "请先设置 TRAINING_LIVE_ORGANIZATION_ID"; exit 1)
+	@test -n "$$TRAINING_LIVE_STUDENT_ID" || (echo "请先设置 TRAINING_LIVE_STUDENT_ID"; exit 1)
+	@test -n "$$TRAINING_LIVE_COACH_ID" || (echo "请先设置 TRAINING_LIVE_COACH_ID"; exit 1)
+	@test "$$FITNESS_DEV_CONTEXT_ISSUER" = "1" || (echo "请设置 FITNESS_DEV_CONTEXT_ISSUER=1"; exit 1)
+	@test -n "$$AGENT_DATABASE_URL" || (echo "请先设置 AGENT_DATABASE_URL"; exit 1)
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/gateway_training_workflow_live_check.py --verify-proactive-chain
 
 booking-check:
 	./mvnw --batch-mode -f fitness-booking-service/pom.xml -s .mvn/settings.xml -Dmaven.repo.local=.mvn/repository clean test

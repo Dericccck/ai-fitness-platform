@@ -454,6 +454,14 @@ Agent PostgreSQL 和 RabbitMQ，不写入预约；确认使用本地测试数据
 并轮询事件 Inbox、通知 Outbox 和站内收件箱。脚本不会直接删除预约，验收完成后请通过已有的取消预约确认流程清理
 本地测试数据。
 
+训练计划主动提醒可先使用 `make gateway-training-proactive-preflight` 做只读检查，确认 Agent readiness、Training
+健康状态、Agent PostgreSQL 和 RabbitMQ 均可用；然后使用 `make gateway-training-proactive-live-check`。后者复用已有的训练计划角色工作流，
+依次创建草案、提交审核、审核通过和发布；发布后额外等待 `TRAINING_PLAN_REVIEW_REQUIRED` 与
+`TRAINING_PLAN_PUBLISHED` 两类事件完成 RabbitMQ、Agent Inbox、通知 Outbox 和站内收件箱链路，
+最后按本轮计划 ID 精确清理训练业务表与 `agent_training_outbox`。命令默认拒绝写入，只有显式设置
+`GATEWAY_LIVE_EXECUTE_WORKFLOW_WRITES=1` 才会执行本地验收；同时需要开启 `TRAINING_OUTBOX_PUBLISHER_ENABLED=true`
+和 `AGENT_PROACTIVE_WORKER_ENABLED=true`，并在重启对应服务后运行。
+
 检索引用接口为 `POST /api/v1/agent/knowledge/search`，只返回已完成权限过滤的来源引用，
 包括来源 URI、版本、章节、PDF 页码、Excel 工作表、表格序号/行范围和命中片段。离线评测
 样例位于 `evals/rag_smoke.json`，阈值位于 `evals/rag_thresholds.json`。本地执行
