@@ -29,6 +29,7 @@ public class JwksPublicKeyProvider implements AgentContextPublicKeyProvider {
     private static final String RSA_KEY_TYPE = "RSA";
     private static final String RSA_SIGNATURE_ALGORITHM = "RS256";
     private static final int MAX_KEYS = 50;
+    private static final long UNKNOWN_KID_REFRESH_COOLDOWN_SECONDS = 30L;
     private final ObjectMapper objectMapper;
     private final String jwksUrl;
     private final long cacheSeconds;
@@ -103,17 +104,45 @@ public class JwksPublicKeyProvider implements AgentContextPublicKeyProvider {
         }
         CacheSnapshot current = cache;
         Instant now = clock.instant();
+        boolean refreshed = false;
         if (current == null || !now.isBefore(current.expiresAt)) {
             synchronized (this) {
                 current = cache;
                 if (current == null || !now.isBefore(current.expiresAt)) {
                     current = refresh(jwksUrl, now);
                     cache = current;
+                    refreshed = true;
                 }
             }
         }
-        return current.keys.get(keyId);
+        PublicKey publicKey = current.keys.get(keyId);
+        if (publicKey != null || refreshed) {
+            return publicKey;
+        }
+
+        // 认证服务轮换到新 kid 后，新 Token 可能早于缓存 TTL 出现。未知 kid 只触发
+        // 一次受控刷新，并设置冷却窗口，避免攻击者伪造大量 kid 打爆认证服务。
+        synchronized (this) {
+            current = cache;
+            if (current == null) {
+                return null;
+            }
+            publicKey = current.keys.get(keyId);
+            if (publicKey != null) {
+                return publicKey;
+            }
+            if (lastUnknownKidRefreshAt != null
+                    && now.isBefore(lastUnknownKidRefreshAt.plusSeconds(UNKNOWN_KID_REFRESH_COOLDOWN_SECONDS))) {
+                return null;
+            }
+            lastUnknownKidRefreshAt = now;
+            current = refresh(jwksUrl, now);
+            cache = current;
+            return current.keys.get(keyId);
+        }
     }
+
+    private Instant lastUnknownKidRefreshAt;
 
     private CacheSnapshot refresh(String jwksUrl, Instant now) {
         try {

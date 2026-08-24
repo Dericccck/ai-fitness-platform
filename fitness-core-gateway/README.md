@@ -51,6 +51,8 @@ AgentContext 当前支持 `HS256` 和配置公钥环的 `RS256`；`GATEWAY_CONTE
 默认不配置外部 JWKS，未配置时公钥更新仍由部署配置完成。
 配置 `GATEWAY_CONTEXT_VERIFICATION_JWKS_URL` 后，Gateway 会按 `kid` 从标准 JWKS 文档读取
 RSA 公钥并在短期缓存内复用；缓存过期且认证服务不可用时，RS256 请求会 fail-closed。
+如果收到缓存中不存在的 `kid`，Gateway 会触发一次受控刷新以支持提前发生的密钥轮换；
+未知 `kid` 刷新带有 30 秒冷却窗口，防止恶意请求反复打认证服务。
 `GATEWAY_CONFIRMATION_SIGNING_SECRET` 必须与 Agent 的 `AGENT_CONFIRMATION_SIGNING_SECRET`
 逐字节一致；确认凭证当前支持 HMAC v1 和 RS256。使用 RS256 时配置
 `GATEWAY_CONFIRMATION_SIGNING_ALGORITHM=RS256`、按 `kid` 配置

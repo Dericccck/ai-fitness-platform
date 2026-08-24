@@ -28,6 +28,8 @@ class _JwksSnapshot:
 class JwksPublicKeyProvider:
     """按 kid 获取 JWKS RSA 公钥，并在有效期内复用快照。"""
 
+    _UNKNOWN_KID_REFRESH_COOLDOWN_SECONDS = 30
+
     def __init__(
         self,
         url: str,
@@ -40,6 +42,7 @@ class JwksPublicKeyProvider:
         self.timeout_seconds = timeout_seconds
         self._snapshot: _JwksSnapshot | None = None
         self._lock = threading.Lock()
+        self._last_unknown_kid_refresh_at: float | None = None
 
     def get_public_key(self, key_id: str) -> RSAPublicKey | None:
         """返回公钥；JWKS 未配置时返回 None，配置但刷新失败时 fail-closed。"""
@@ -48,13 +51,37 @@ class JwksPublicKeyProvider:
             return None
         now = time.monotonic()
         snapshot = self._snapshot
+        refreshed = False
         if snapshot is None or now >= snapshot.expires_at:
             with self._lock:
                 snapshot = self._snapshot
                 if snapshot is None or now >= snapshot.expires_at:
                     snapshot = self._refresh(now)
                     self._snapshot = snapshot
-        return snapshot.keys.get(key_id)
+                    refreshed = True
+        public_key = snapshot.keys.get(key_id)
+        if public_key is not None or refreshed:
+            return public_key
+
+        # 密钥轮换时新 kid 可能早于缓存 TTL 出现。只对当前缓存没有的 kid 触发一次
+        # 受控刷新，并设置冷却窗口，避免攻击者伪造大量 kid 让 Agent 反复请求认证服务。
+        with self._lock:
+            snapshot = self._snapshot
+            if snapshot is None:
+                return None
+            public_key = snapshot.keys.get(key_id)
+            if public_key is not None:
+                return public_key
+            last_refresh = self._last_unknown_kid_refresh_at
+            if (
+                last_refresh is not None
+                and now < last_refresh + self._UNKNOWN_KID_REFRESH_COOLDOWN_SECONDS
+            ):
+                return None
+            self._last_unknown_kid_refresh_at = now
+            snapshot = self._refresh(now)
+            self._snapshot = snapshot
+            return snapshot.keys.get(key_id)
 
     def _refresh(self, now: float) -> _JwksSnapshot:
         try:

@@ -52,3 +52,72 @@ def test_jwks_provider_fails_closed_when_refresh_fails(monkeypatch: pytest.Monke
 
     with pytest.raises(JwksUnavailableError, match="JWKS is unavailable"):
         provider.get_public_key("rsa-v1")
+
+
+def test_jwks_provider_refreshes_once_for_a_rotated_unknown_kid(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_numbers = private_key.public_key().public_numbers()
+    key_fields = {
+        "kty": "RSA",
+        "alg": "RS256",
+        "use": "sig",
+        "n": _base64url(public_numbers.n),
+        "e": _base64url(public_numbers.e),
+    }
+    documents = [
+        {"keys": [{**key_fields, "kid": "rsa-v1"}]},
+        {"keys": [{**key_fields, "kid": "rsa-v2"}]},
+    ]
+    calls = 0
+
+    def fake_get(url: str, timeout: float) -> httpx.Response:
+        nonlocal calls
+        document = documents[min(calls, len(documents) - 1)]
+        calls += 1
+        return httpx.Response(200, json=document, request=httpx.Request("GET", url))
+
+    monkeypatch.setattr("app.infrastructure.jwks.httpx.get", fake_get)
+    monkeypatch.setattr("app.infrastructure.jwks.time.monotonic", lambda: 1.0)
+    provider = JwksPublicKeyProvider("https://issuer.test/.well-known/jwks.json")
+
+    # 第一次请求加载旧 key，第二次请求发现未知 kid 并触发受控刷新。
+    assert provider.get_public_key("rsa-v1") is not None
+    assert provider.get_public_key("rsa-v2") is not None
+    assert calls == 2
+
+
+def test_jwks_provider_fails_closed_when_rotated_kid_refresh_fails(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_numbers = private_key.public_key().public_numbers()
+    document = {
+        "keys": [
+            {
+                "kid": "rsa-v1",
+                "kty": "RSA",
+                "alg": "RS256",
+                "use": "sig",
+                "n": _base64url(public_numbers.n),
+                "e": _base64url(public_numbers.e),
+            }
+        ]
+    }
+    calls = 0
+
+    def fake_get(url: str, timeout: float) -> httpx.Response:
+        nonlocal calls
+        calls += 1
+        if calls == 1:
+            return httpx.Response(200, json=document, request=httpx.Request("GET", url))
+        raise httpx.ConnectError("issuer unavailable")
+
+    monkeypatch.setattr("app.infrastructure.jwks.httpx.get", fake_get)
+    provider = JwksPublicKeyProvider("https://issuer.test/.well-known/jwks.json")
+    assert provider.get_public_key("rsa-v1") is not None
+
+    with pytest.raises(JwksUnavailableError):
+        provider.get_public_key("rsa-v2")
+    assert calls == 2
