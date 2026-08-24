@@ -172,6 +172,14 @@ async def test_supervisor_forces_booking_create_tool_for_explicit_create_request
     assert _forced_write_tool_name("BOOKING", "查询明天可约时间") is None
 
 
+def test_supervisor_forces_customer_service_ticket_for_explicit_submit_request() -> None:
+    assert (
+        _forced_write_tool_name("CUSTOMER_SERVICE", "请帮我提交客服工单，反馈预约状态异常")
+        == "fitness_support_ticket_create_v1"
+    )
+    assert _forced_write_tool_name("CUSTOMER_SERVICE", "查询我的客服工单") is None
+
+
 async def test_supervisor_uses_session_summary_after_checkpoint_compaction() -> None:
     models = FakeModels(
         [
@@ -419,11 +427,11 @@ async def test_customer_service_knowledge_question_uses_rag_but_business_query_d
     assert "知识引用：预约取消规则需要在开课前完成。" in str(models.messages_seen[0])
 
 
-def test_customer_service_prompt_declares_no_write_and_no_fake_ticket() -> None:
+def test_customer_service_prompt_declares_confirmation_and_no_fake_ticket() -> None:
     prompt = _system_prompt("CUSTOMER_SERVICE", "zh-CN")
 
     assert "只能通过只读工具查询" in prompt
-    assert "不得声称已经创建工单" in prompt
+    assert "尚未创建工单" in prompt
     assert "不提供诊断、用药或治疗建议" in prompt
 
 
