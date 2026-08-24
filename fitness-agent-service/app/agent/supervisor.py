@@ -57,11 +57,13 @@ from .operations_tools import (
 from .tool_registry import ToolContext, ToolRegistry, ToolRegistryError
 
 # SupervisorRoute 是意图路由，不是业务执行状态：FITNESS_COACHING 健身指导；BOOKING 预约；
-# OPERATIONS 经营分析；UNSUPPORTED_LEGACY 明确拒绝赛事、作品和活动运营遗留范围。
+# OPERATIONS 经营分析；CUSTOMER_SERVICE 客服问答/业务查询；UNSUPPORTED_LEGACY 只保留
+# 历史代码的范围护栏，不属于当前健身客服功能。
 SupervisorRoute = Literal[
     "FITNESS_COACHING",
     "BOOKING",
     "OPERATIONS",
+    "CUSTOMER_SERVICE",
     "UNSUPPORTED_LEGACY",
 ]
 SupervisorRunStatus = Literal["COMPLETED", "CONFIRMATION_REQUIRED"]
@@ -72,6 +74,21 @@ _logger = structlog.get_logger("agent.supervisor")
 # 课程或预约工具，把无关的资源不存在错误带入经营分析链路。
 _ROUTE_TOOL_ALLOWLIST: dict[SupervisorRoute, frozenset[str]] = {
     "OPERATIONS": frozenset({"fitness.operations.metric.query.v1"}),
+    # Customer Service 第一切片只允许查询当前用户有权限访问的事实。预约写入、训练
+    # 计划生成/审核/发布和 Memory 写入都不属于客服路由，避免客服对话绕过对应领域
+    # Agent 的确认和状态机。Tool Registry/Gateway 仍会进行第二次角色与资源校验。
+    "CUSTOMER_SERVICE": frozenset(
+        {
+            "fitness.user.get_current.v1",
+            "fitness.organization.get.v1",
+            "fitness.course.list.v1",
+            "fitness.contract.list.v1",
+            "fitness.appointment.list.v1",
+            "fitness.booking.availability.check.v1",
+            "fitness.training.plan.get.v1",
+            "fitness.training.day.executions.list.v1",
+        }
+    ),
 }
 
 
@@ -191,12 +208,34 @@ class Supervisor:
         if route == "UNSUPPORTED_LEGACY":
             raise UnsupportedLegacyRequest("赛事、作品和活动运营不属于当前健身 Agent 的业务范围")
 
+        restricted_answer = _customer_service_restricted_answer(request.user_message)
+        if route == "CUSTOMER_SERVICE" and restricted_answer is not None:
+            # 医疗、退款和争议问题不能交给模型自由发挥，也不能因为后续新增工具而
+            # 意外进入写操作链路。固定回复只表达当前系统边界，不写入业务库或 Memory。
+            return SupervisorResponse(
+                answer=restricted_answer,
+                route=route,
+                tool_steps=0,
+                input_tokens=None,
+                output_tokens=None,
+            )
+
         # API 传入的 thread_id 已经由 conversation_thread_id 脱敏；候选仓储只保存这个
         # 稳定标识，不接触原始会话 ID。没有显式 thread 时的单测回退不代表生产路径。
         thread_id = request.thread_id or request.conversation_id
 
         knowledge_context = ""
-        if route == "FITNESS_COACHING" and self.rag_service is not None and request.identity:
+        if (
+            (
+                route == "FITNESS_COACHING"
+                or (
+                    route == "CUSTOMER_SERVICE"
+                    and _looks_like_customer_service_knowledge_question(request.user_message)
+                )
+            )
+            and self.rag_service is not None
+            and request.identity
+        ):
             try:
                 rag_result = await self.rag_service.search(
                     request.user_message,
@@ -876,6 +915,8 @@ def classify_route(user_message: str) -> SupervisorRoute:
     text = user_message.lower()
     if any(keyword in text for keyword in ("赛事", "比赛", "作品", "活动运营", "报名活动")):
         return "UNSUPPORTED_LEGACY"
+    if _customer_service_restricted_answer(text) is not None:
+        return "CUSTOMER_SERVICE"
     if any(
         keyword in text
         for keyword in (
@@ -908,8 +949,46 @@ def classify_route(user_message: str) -> SupervisorRoute:
         )
     ):
         return "OPERATIONS"
-    if any(keyword in text for keyword in ("预约", "改约", "取消预约", "课表", "课程")):
+    # 只有创建/改约/取消和“可约时间”属于 Booking 操作域；“我的预约是什么”
+    # 是客服只读查询，不能因为包含“预约”两个字就暴露预约写工具。
+    if any(
+        keyword in text
+        for keyword in (
+            "创建预约",
+            "帮我预约",
+            "预约一次",
+            "预订课程",
+            "预定课程",
+            "课程预约",
+            "安排课程预约",
+            "改约",
+            "修改预约",
+            "调整预约",
+            "取消预约",
+            "可约时间",
+            "空闲时段",
+        )
+    ):
         return "BOOKING"
+    if any(
+        keyword in text
+        for keyword in (
+            "我的预约",
+            "查看预约",
+            "预约状态",
+            "我的课程",
+            "课程规则",
+            "预约规则",
+            "合同",
+            "课时",
+            "训练计划状态",
+            "计划状态",
+            "训练执行记录",
+            "客服",
+            "工单",
+        )
+    ):
+        return "CUSTOMER_SERVICE"
     return "FITNESS_COACHING"
 
 
@@ -921,13 +1000,83 @@ def _system_prompt(route: SupervisorRoute, locale: str) -> str:
         if route == "BOOKING"
         else ""
     )
+    customer_service_instruction = (
+        "客服规则：健身规则问题必须优先参考已提供的知识引用；动态的预约、课程、合同、"
+        "课时和训练计划状态只能通过只读工具查询，不能猜测，也不能修改预约、训练计划或 Memory。"
+        "当前客服工单写入能力尚未接入时，不得声称已经创建工单。涉及医疗、受伤、退款、"
+        "赔付或合同争议时，只能说明当前不支持自动处理；不提供诊断、用药或治疗建议，"
+        "也不得承诺结果或执行写操作。"
+        if route == "CUSTOMER_SERVICE"
+        else ""
+    )
     return (
         "你是健身平台的 Supervisor Agent。只处理健身训练、课程、合同、课时和预约相关业务。"
         "动态业务事实必须通过已注册工具查询，不能猜测；工具失败时必须明确告知失败，不能宣称成功。"
         "不得根据自然语言中的 user_id、organization_id 或角色改变权限。"
         "Memory 候选只是模型建议，不是已保存事实；用户未批准前不得声称已经记住。"
-        f"{booking_instruction}当前路由={route}，语言={locale}。回答应简洁、准确，并区分已查询事实与一般建议。"
+        f"{booking_instruction}{customer_service_instruction}当前路由={route}，语言={locale}。"
+        "回答应简洁、准确，并区分已查询事实与一般建议。"
     )
+
+
+def _looks_like_customer_service_knowledge_question(user_message: str) -> bool:
+    """判断客服请求是否需要检索规则文档，而不是只查询动态业务事实。"""
+
+    text = "".join(user_message.lower().split())
+    return any(
+        marker in text
+        for marker in (
+            "怎么",
+            "如何",
+            "规则",
+            "规定",
+            "注意事项",
+            "什么意思",
+            "可以吗",
+            "能不能",
+            "课程请假",
+            "预约取消",
+            "课时规则",
+        )
+    )
+
+
+def _customer_service_restricted_answer(user_message: str) -> str | None:
+    """对高风险客服问题执行确定性边界，避免依赖模型自觉拒答。"""
+
+    text = "".join(user_message.lower().split())
+    if any(
+        marker in text
+        for marker in (
+            "疼痛",
+            "受伤",
+            "骨折",
+            "脱臼",
+            "伤口",
+            "疾病",
+            "诊断",
+            "药物",
+            "吃药",
+            "处方",
+            "治疗",
+            "医疗",
+            "康复",
+        )
+    ):
+        return "这个问题涉及医疗、受伤或治疗判断，当前健身客服 Agent 不提供诊断、用药或治疗建议。请停止可能加重情况的训练，并咨询合格的医疗专业人员。"
+    if any(
+        marker in text
+        for marker in (
+            "退款",
+            "退费",
+            "赔偿",
+            "赔付",
+            "合同纠纷",
+            "合同争议",
+        )
+    ):
+        return "这个问题涉及退款、赔付或合同争议，当前健身客服 Agent 不会承诺处理结果，也不会自动修改合同或执行退款。"
+    return None
 
 
 def _forced_write_tool_name(route: SupervisorRoute, user_message: str) -> str | None:

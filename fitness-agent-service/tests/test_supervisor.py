@@ -69,6 +69,20 @@ class FakeSessionSummaryService:
         return "用户目标是改善体能；动态课程需要重新查询。"
 
 
+class FakeRagResult:
+    def as_prompt_context(self) -> str:
+        return "知识引用：预约取消规则需要在开课前完成。"
+
+
+class FakeRagService:
+    def __init__(self) -> None:
+        self.queries: list[str] = []
+
+    async def search(self, query: str, _: Any) -> FakeRagResult:
+        self.queries.append(query)
+        return FakeRagResult()
+
+
 def build_registry(calls: list[dict[str, Any]]) -> ToolRegistry:
     registry = ToolRegistry()
 
@@ -81,7 +95,7 @@ def build_registry(calls: list[dict[str, Any]]) -> ToolRegistry:
 
     registry.register(
         ToolDefinition(
-            tool_id="fitness.test.lookup.v1",
+            tool_id="fitness.course.list.v1",
             description="测试用的健身只读查询工具",
             input_model=ToolInput,
             handler=handler,
@@ -114,7 +128,7 @@ async def test_supervisor_runs_model_tool_model_cycle_and_returns_real_result() 
                 tool_calls=(
                     ModelToolCall(
                         call_id="call-1",
-                        name="fitness.test.lookup.v1",
+                        name="fitness.course.list.v1",
                         arguments={"value": "课程"},
                     ),
                 ),
@@ -138,7 +152,7 @@ async def test_supervisor_runs_model_tool_model_cycle_and_returns_real_result() 
     response = await supervisor.invoke(request())
 
     assert response.answer == "已查询到真实课程结果。"
-    assert response.route == "BOOKING"
+    assert response.route == "CUSTOMER_SERVICE"
     assert response.tool_steps == 1
     assert response.input_tokens == 18
     assert response.output_tokens == 10
@@ -322,6 +336,10 @@ async def test_supervisor_rejects_legacy_business_scope_before_model_call() -> N
 
 def test_supervisor_route_guard_covers_fitness_business_boundaries() -> None:
     assert classify_route("帮我安排下周课程预约") == "BOOKING"
+    assert classify_route("我的预约是什么时间") == "CUSTOMER_SERVICE"
+    assert classify_route("我的合同还有多少课时") == "CUSTOMER_SERVICE"
+    assert classify_route("请告诉我预约规则") == "CUSTOMER_SERVICE"
+    assert classify_route("查询明天可约时间") == "BOOKING"
     assert classify_route("查看本月经营报表") == "OPERATIONS"
     assert classify_route("查看本月课程预约量") == "OPERATIONS"
     assert classify_route("查看本月完课量") == "OPERATIONS"
@@ -330,6 +348,83 @@ def test_supervisor_route_guard_covers_fitness_business_boundaries() -> None:
     assert classify_route("查看本月教练预约量") == "OPERATIONS"
     assert classify_route("我想制定减脂训练计划") == "FITNESS_COACHING"
     assert classify_route("查询比赛报名") == "UNSUPPORTED_LEGACY"
+
+
+async def test_customer_service_only_exposes_read_tools() -> None:
+    models = FakeModels([ModelTurn(content="已查询到你的预约信息。", tool_calls=())])
+    supervisor = Supervisor(cast(ModelGateway, models), build_registry([]))
+
+    response = await supervisor.invoke(request("我的预约是什么时间"))
+
+    assert response.route == "CUSTOMER_SERVICE"
+    assert models.tools_seen[0]
+    assert all(
+        tool["function"]["name"] == "fitness_course_list_v1" for tool in models.tools_seen[0]
+    )
+    assert all(
+        "create" not in tool["function"]["name"]
+        and "cancel" not in tool["function"]["name"]
+        and "publish" not in tool["function"]["name"]
+        for tool in models.tools_seen[0]
+    )
+
+
+async def test_customer_service_rejects_medical_request_before_model_call() -> None:
+    models = FakeModels([])
+    supervisor = Supervisor(cast(ModelGateway, models), build_registry([]))
+
+    response = await supervisor.invoke(request("我的膝盖疼痛应该吃什么药"))
+
+    assert response.route == "CUSTOMER_SERVICE"
+    assert response.tool_steps == 0
+    assert "不提供诊断、用药或治疗建议" in response.answer
+    assert models.tools_seen == []
+
+
+async def test_customer_service_knowledge_question_uses_rag_but_business_query_does_not() -> None:
+    rag = FakeRagService()
+    identity = AgentIdentity(
+        subject="student-1",
+        organization_ids=frozenset({"org-1"}),
+        roles=frozenset({"STUDENT"}),
+        issued_at=1,
+        expires_at=2,
+    )
+    models = FakeModels(
+        [
+            ModelTurn(content="规则是开课前取消。", tool_calls=()),
+            ModelTurn(content="你的预约在明天九点。", tool_calls=()),
+        ]
+    )
+    supervisor = Supervisor(cast(ModelGateway, models), build_registry([]), rag_service=rag)  # type: ignore[arg-type]
+
+    await supervisor.invoke(
+        SupervisorRequest(
+            user_message="请告诉我预约取消规则",
+            gateway_context=GatewayRequestContext(signed_context="signed-context"),
+            conversation_id="conversation-customer-service-1",
+            identity=identity,
+        )
+    )
+    await supervisor.invoke(
+        SupervisorRequest(
+            user_message="我的预约是什么时间",
+            gateway_context=GatewayRequestContext(signed_context="signed-context"),
+            conversation_id="conversation-customer-service-2",
+            identity=identity,
+        )
+    )
+
+    assert rag.queries == ["请告诉我预约取消规则"]
+    assert "知识引用：预约取消规则需要在开课前完成。" in str(models.messages_seen[0])
+
+
+def test_customer_service_prompt_declares_no_write_and_no_fake_ticket() -> None:
+    prompt = _system_prompt("CUSTOMER_SERVICE", "zh-CN")
+
+    assert "只能通过只读工具查询" in prompt
+    assert "不得声称已经创建工单" in prompt
+    assert "不提供诊断、用药或治疗建议" in prompt
 
 
 def test_booking_prompt_requires_write_tool_and_confirmation_flow() -> None:
