@@ -13,7 +13,9 @@ final class CustomerServiceViews {
         public String id;
         public String organizationId;
         public String subjectUserId;
+        public String createdByUserId;
         public String category;
+        public String source;
         public String subject;
         public String description;
         public String status;
@@ -24,9 +26,9 @@ final class CustomerServiceViews {
         public Instant resolvedAt;
 
         ToolViews.CustomerServiceTicketView toToolView() {
-            return new ToolViews.CustomerServiceTicketView(id, organizationId, subjectUserId, category,
-                    subject, description, status, relatedResourceType, relatedResourceId, createdAt,
-                    updatedAt, resolvedAt);
+            return new ToolViews.CustomerServiceTicketView(id, organizationId, subjectUserId,
+                    createdByUserId, category, source, subject, description, status, relatedResourceType,
+                    relatedResourceId, createdAt, updatedAt, resolvedAt);
         }
     }
 }

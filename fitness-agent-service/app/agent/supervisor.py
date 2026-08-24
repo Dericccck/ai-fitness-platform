@@ -89,6 +89,7 @@ _ROUTE_TOOL_ALLOWLIST: dict[SupervisorRoute, frozenset[str]] = {
             "fitness.training.day.executions.list.v1",
             "fitness.support.ticket.list.v1",
             "fitness.support.ticket.get.v1",
+            "fitness.support.ticket.create.v1",
         }
     ),
 }
@@ -1004,8 +1005,8 @@ def _system_prompt(route: SupervisorRoute, locale: str) -> str:
     )
     customer_service_instruction = (
         "客服规则：健身规则问题必须优先参考已提供的知识引用；动态的预约、课程、合同、"
-        "课时、训练计划和客服工单状态只能通过只读工具查询，不能猜测，也不能修改预约、训练计划、"
-        "Memory 或客服工单。"
+        "课时、训练计划和客服工单状态只能通过只读工具查询，不能猜测；只有用户明确要求提交问题时，"
+        "才可以调用创建工单工具，并必须等待 interrupt 确认，不能修改预约、训练计划、Memory 或已有工单。"
         "当前客服工单写入能力尚未接入时，不得声称已经创建工单。涉及医疗、受伤、退款、"
         "赔付或合同争议时，只能说明当前不支持自动处理；不提供诊断、用药或治疗建议，"
         "也不得承诺结果或执行写操作。"

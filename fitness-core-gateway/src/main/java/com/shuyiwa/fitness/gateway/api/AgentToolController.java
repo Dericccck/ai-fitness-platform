@@ -108,6 +108,16 @@ public class AgentToolController {
         return customerServiceClient.get(context, requestId, organizationId, ticketId);
     }
 
+    @PostMapping("/customer-service/tickets")
+    public ToolViews.CustomerServiceTicketView createCustomerServiceTicket(
+            AgentContext context,
+            @RequestHeader("X-Request-ID") String requestId,
+            @RequestHeader("X-Confirmation-Token") String confirmationToken,
+            @RequestBody CustomerServiceToolInputs.CreateInput input
+    ) {
+        return customerServiceClient.create(context, requestId, confirmationToken, input);
+    }
+
     @GetMapping("/booking/availability")
     public ToolViews.BookingAvailabilityView bookingAvailability(
             AgentContext context,

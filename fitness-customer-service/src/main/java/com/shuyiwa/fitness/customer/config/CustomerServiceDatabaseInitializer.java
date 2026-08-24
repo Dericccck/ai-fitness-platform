@@ -37,10 +37,12 @@ public class CustomerServiceDatabaseInitializer {
         ResourceDatabasePopulator populator = new ResourceDatabasePopulator();
         populator.addScript(new ClassPathResource(
                 "db/migration/V20260824_001__create_customer_service_ticket.sql"));
+        populator.addScript(new ClassPathResource(
+                "db/migration/V20260824_002__add_customer_service_write_audit.sql"));
         populator.setContinueOnError(false);
         populator.execute(dataSource);
         // 读取版本用于日志/诊断，也能尽早暴露连接到了错误数据库的问题。
         jdbc.queryForObject("SELECT version FROM customer_service_schema_version WHERE version = ?",
-                new Object[]{"V20260824_001"}, String.class);
+                new Object[]{"V20260824_002"}, String.class);
     }
 }

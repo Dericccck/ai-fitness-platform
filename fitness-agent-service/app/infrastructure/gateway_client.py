@@ -174,7 +174,9 @@ class GatewayCustomerServiceTicket(_GatewayModel):
     id: str
     organization_id: str = Field(alias="organizationId")
     subject_user_id: str = Field(alias="subjectUserId")
+    created_by_user_id: str = Field(alias="createdByUserId")
     category: str
+    source: str
     subject: str
     description: str
     status: Literal["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]
@@ -438,6 +440,16 @@ class GatewayClient:
             f"/internal/agent-tools/v1/customer-service/tickets/{ticket_id}",
             context,
             {"organizationId": organization_id},
+            GatewayCustomerServiceTicket,
+        )
+
+    async def create_customer_service_ticket(
+        self, context: GatewayRequestContext, payload: dict[str, Any]
+    ) -> GatewayCustomerServiceTicket:
+        return await self._post(
+            "/internal/agent-tools/v1/customer-service/tickets",
+            context,
+            payload,
             GatewayCustomerServiceTicket,
         )
 

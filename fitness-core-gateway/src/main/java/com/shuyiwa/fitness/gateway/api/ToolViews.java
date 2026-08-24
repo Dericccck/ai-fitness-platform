@@ -181,14 +181,16 @@ public final class ToolViews {
     /**
      * 客服工单稳定视图。
      *
-     * <p>当前只读，status 是业务事实状态；Agent 不能把查询结果解释成已经解决，也不能
+     * <p>status 是客服业务事实状态；Agent 不能把查询结果解释成已经解决，也不能
      * 通过这个 View 修改工单。description 已由客服服务控制长度和字段范围。</p>
      */
     public static final class CustomerServiceTicketView {
         private final String id;
         private final String organizationId;
         private final String subjectUserId;
+        private final String createdByUserId;
         private final String category;
+        private final String source;
         private final String subject;
         private final String description;
         private final String status;
@@ -199,13 +201,15 @@ public final class ToolViews {
         private final Instant resolvedAt;
 
         public CustomerServiceTicketView(String id, String organizationId, String subjectUserId,
-                                         String category, String subject, String description,
+                                         String createdByUserId, String category, String source, String subject, String description,
                                          String status, String relatedResourceType, String relatedResourceId,
                                          Instant createdAt, Instant updatedAt, Instant resolvedAt) {
             this.id = id;
             this.organizationId = organizationId;
             this.subjectUserId = subjectUserId;
+            this.createdByUserId = createdByUserId;
             this.category = category;
+            this.source = source;
             this.subject = subject;
             this.description = description;
             this.status = status;
@@ -219,7 +223,9 @@ public final class ToolViews {
         public String getId() { return id; }
         public String getOrganizationId() { return organizationId; }
         public String getSubjectUserId() { return subjectUserId; }
+        public String getCreatedByUserId() { return createdByUserId; }
         public String getCategory() { return category; }
+        public String getSource() { return source; }
         public String getSubject() { return subject; }
         public String getDescription() { return description; }
         public String getStatus() { return status; }

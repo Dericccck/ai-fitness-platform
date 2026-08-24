@@ -39,8 +39,29 @@ public class CustomerServiceSecurityInterceptor implements HandlerInterceptor {
             throw new CustomerServiceSecurityException("缺少业务主体或请求标识");
         }
         request.setAttribute(ACTOR_ATTRIBUTE,
-                new CustomerServiceActor(userId, roles, organizationIds, requestId));
+                new CustomerServiceActor(userId, roles, organizationIds, requestId,
+                        parseConfirmation(request)));
         return true;
+    }
+
+    private CustomerServiceConfirmation parseConfirmation(HttpServletRequest request) {
+        if (!"POST".equalsIgnoreCase(request.getMethod())) {
+            return null;
+        }
+        String confirmationId = trim(request.getHeader("X-Confirmation-Id"));
+        String jti = trim(request.getHeader("X-Confirmation-JTI"));
+        String toolId = trim(request.getHeader("X-Confirmation-Tool-ID"));
+        String action = trim(request.getHeader("X-Confirmation-Action"));
+        String organizationId = trim(request.getHeader("X-Confirmation-Organization-ID"));
+        String resource = trim(request.getHeader("X-Confirmation-Resource"));
+        String payloadHash = trim(request.getHeader("X-Confirmation-Payload-Hash"));
+        if (confirmationId.isEmpty() || jti.isEmpty() || toolId.isEmpty() || action.isEmpty()
+                || organizationId.isEmpty() || resource.isEmpty()
+                || !payloadHash.matches("[0-9a-fA-F]{64}")) {
+            throw new CustomerServiceSecurityException("客服工单写入缺少完整确认声明");
+        }
+        return new CustomerServiceConfirmation(confirmationId, jti, toolId, action,
+                organizationId, resource, payloadHash);
     }
 
     private static Set<String> split(String value) {

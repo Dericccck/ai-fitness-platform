@@ -2,8 +2,8 @@
 
 Tool Registry 是模型和业务系统之间的唯一工具入口。模型只能选择已经注册的
 工具；工具输入必须先通过 Pydantic Schema 校验；工具执行失败也必须回传真实失败，
-不能被 Supervisor 或模型包装成“已经成功”。这里暂时只放基础设施和只读工具，后续
-写工具必须继续遵守确认凭证、幂等键和 Java Gateway 权限校验。确认凭证来自上游确认流程，
+不能被 Supervisor 或模型包装成“已经成功”。写工具必须继续遵守确认凭证、幂等键和
+Java Gateway 权限校验。确认凭证来自上游确认流程，
 不进入模型的工具参数 Schema。
 """
 
@@ -271,11 +271,21 @@ class ToolRegistry:
         # 为其他学员处理业务，仍由 Gateway 校验组织成员关系和教练绑定关系。
         elevated_roles = {"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "COACH"}
         if "STUDENT" in identity.roles and not identity.roles.intersection(elevated_roles):
-            for field_name in ("student_id", "user_id"):
+            for field_name in ("student_id", "user_id", "subject_user_id"):
                 field_key = self._model_field_key(definition, field_name)
                 if field_key is not None:
                     self._remove_model_alias(definition, bound, field_key)
                     bound[field_key] = identity.subject
+
+        # 客服工单允许管理员/教练替学员提交，但省略 subjectUserId 时必须有确定的
+        # 业务主体。这里把“未指定服务对象”归一化为当前签名主体，使确认摘要里的
+        # resource、Gateway 二次验签时的 resource，以及最终落库的 subject_user_id
+        # 完全一致；否则管理员空参数会在确认阶段使用 current-user，却在 Gateway
+        # 阶段被解释成管理员 subject，形成不可恢复的确认凭证不一致。
+        subject_field = self._model_field_key(definition, "subject_user_id")
+        if subject_field is not None and not bound.get(subject_field):
+            self._remove_model_alias(definition, bound, subject_field)
+            bound[subject_field] = identity.subject
         return bound
 
     @staticmethod

@@ -170,6 +170,7 @@ def test_fitness_registry_exposes_only_versioned_specs() -> None:
         "fitness.memory.save.v1",
         "fitness.operations.metric.query.v1",
         "fitness.organization.get.v1",
+        "fitness.support.ticket.create.v1",
         "fitness.support.ticket.get.v1",
         "fitness.support.ticket.list.v1",
         "fitness.training.day.executions.list.v1",
@@ -182,8 +183,8 @@ def test_fitness_registry_exposes_only_versioned_specs() -> None:
         "fitness.training.plan.submit_review.v1",
         "fitness.user.get_current.v1",
     ]
-    assert sum(spec["read_only"] is False for spec in specs) == 10
-    assert sum(spec["requires_confirmation"] is True for spec in specs) == 10
+    assert sum(spec["read_only"] is False for spec in specs) == 11
+    assert sum(spec["requires_confirmation"] is True for spec in specs) == 11
     assert all("." not in spec["model_name"] for spec in specs)
     assert all(spec["model_name"].replace("_", "").isalnum() for spec in specs)
     registry = build_fitness_tool_registry(cast(GatewayClient, FakeGateway()))

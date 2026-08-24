@@ -1,6 +1,6 @@
 # Fitness Core Tool Gateway
 
-这是健身平台的独立 Java Tool Gateway，当前提供健身核心查询、客服工单只读查询、训练计划写工具、预约创建、预约改约和预约取消写工具，以及管理员专用的固定经营指标查询：用户/学员、教练、机构、课程、合同、课时和预约。
+这是健身平台的独立 Java Tool Gateway，当前提供健身核心查询、客服工单查询与确认创建、训练计划写工具、预约创建、预约改约和预约取消写工具，以及管理员专用的固定经营指标查询：用户/学员、教练、机构、课程、合同、课时和预约。
 
 赛事、作品、活动运营及其历史代码不属于本服务范围。本服务不依赖根目录旧 Java 项目的 Entity、Service 或组件扫描，避免遗留模块污染新的 Agent 业务边界。
 
@@ -12,8 +12,8 @@
 - `AgentContext` 包含用户主体、机构范围、角色、签发时间、过期时间和 nonce；Gateway 每次调用都会再次校验资源权限。
 - 当前已增加结构化训练计划 Tool、预约创建、预约改约和预约取消 Tool；预约可用性预检为只读工具。
   三种预约写操作都由独立 `fitness-booking-service` 持有业务 MySQL 写权限，必须具备确认凭证、幂等键、事务和审计。
-- 客服工单由独立 `fitness-customer-service` 持有表结构和后续写权限；本阶段 Gateway 只代理两个只读查询接口，
-  不创建、修改或关闭工单。
+- 客服工单由独立 `fitness-customer-service` 持有表结构和写权限；Gateway 只代理版本化查询和确认创建，
+  不允许 Agent 直接访问客服数据库，也不提供 Agent 自动修改/关闭工单。
 
 ## 本地配置
 
@@ -41,7 +41,7 @@ cd /Users/a1-6/Desktop/fitness-backend
 ./mvnw --batch-mode -f fitness-core-gateway/pom.xml spring-boot:run
 ```
 
-如需启用客服工单只读查询，还需要配置 `GATEWAY_CUSTOMER_SERVICE_BASE_URL`（默认
+如需启用客服工单查询/创建，还需要配置 `GATEWAY_CUSTOMER_SERVICE_BASE_URL`（默认
 `http://127.0.0.1:8084`）和 `GATEWAY_CUSTOMER_SERVICE_TOKEN`；该 Token 必须与
 `CUSTOMER_SERVICE_INTERNAL_SERVICE_TOKEN` 完全一致。客服服务的数据库账号通过
 `CUSTOMER_SERVICE_DB_USERNAME`、`CUSTOMER_SERVICE_DB_PASSWORD` 注入，不能复用 Gateway 的只读账号配置。
@@ -87,7 +87,7 @@ GATEWAY_IT_ORGANIZATION_ID='真实测试机构 ID' \
 make gateway-check
 ```
 
-## 当前只读工具
+## 当前工具接口
 
 ```text
 GET /internal/agent-tools/v1/me
@@ -97,6 +97,7 @@ GET /internal/agent-tools/v1/contracts?organizationId=...&userId=...
 GET /internal/agent-tools/v1/appointments?organizationId=...&userId=...&from=...&to=...
 GET /internal/agent-tools/v1/customer-service/tickets?organizationId=...&subjectUserId=...&status=...&limit=...
 GET /internal/agent-tools/v1/customer-service/tickets/{ticketId}?organizationId=...
+POST /internal/agent-tools/v1/customer-service/tickets
 GET /internal/agent-tools/v1/booking/availability?organizationId=...&studentId=...&coachId=...&courseId=...&start=...&end=...
 GET /internal/agent-tools/v1/operations/metrics?organizationId=...&metric=APPOINTMENT_COUNT&from=2026-08-01&to=2026-08-15&bucket=DAY
 POST /internal/agent-tools/v1/appointments

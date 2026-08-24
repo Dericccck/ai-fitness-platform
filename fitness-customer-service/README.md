@@ -6,9 +6,10 @@
 ## 当前范围
 
 - 使用本地 `fitness` MySQL 数据库中的 `agent_customer_service_ticket` 表；表和字段均有中文注释。
-- 只提供经过内部 Token、角色、机构范围和主体身份校验的只读查询接口。
+- 提供经过内部 Token、角色、机构范围和主体身份校验的工单查询接口，以及必须经过确认凭证的工单创建接口。
 - 学员/教练只能查询自己的工单；组织管理员可以查询本机构工单；系统管理员可以查询授权机构范围内的工单。
-- 本阶段不会创建、修改或关闭真实工单，因此不会产生业务写入。
+- 工单创建只允许分类、标题、描述和可选关联资源；来源固定为 `AGENT`，状态固定从 `OPEN` 开始。
+- 创建使用 `X-Request-ID` 幂等，确认 JTI 消费、工单创建和 `CREATED` 审计必须在同一事务内完成；本服务当前不提供 Agent 自动改派、关闭或解决工单。
 
 ## 本地启动
 
@@ -27,5 +28,6 @@ make customer-service-run
 
 - `GET /internal/customer-service/v1/tickets?organizationId=...`
 - `GET /internal/customer-service/v1/tickets/{ticketId}?organizationId=...`
+- `POST /internal/customer-service/v1/tickets`（必须带完整确认声明，仅由 Gateway 调用）
 
 接口只能由 Java Tool Gateway 调用，Agent 不得直连本服务或数据库。

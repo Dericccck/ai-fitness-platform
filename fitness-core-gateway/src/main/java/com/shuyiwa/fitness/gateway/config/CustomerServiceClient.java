@@ -1,7 +1,10 @@
 package com.shuyiwa.fitness.gateway.config;
 
 import com.shuyiwa.fitness.gateway.api.ToolViews;
+import com.shuyiwa.fitness.gateway.api.CustomerServiceToolInputs;
 import com.shuyiwa.fitness.gateway.security.AgentContext;
+import com.shuyiwa.fitness.gateway.security.ConfirmationTokenClaims;
+import com.shuyiwa.fitness.gateway.security.ConfirmationTokenVerifier;
 import com.shuyiwa.fitness.gateway.security.GatewayForbiddenException;
 import com.shuyiwa.fitness.gateway.security.GatewayResourceNotFoundException;
 import org.springframework.http.HttpEntity;
@@ -19,7 +22,7 @@ import java.util.List;
 import java.util.stream.Collectors;
 
 /**
- * Gateway 到客服工单服务的固定只读客户端。
+ * Gateway 到客服工单服务的固定客户端。
  *
  * <p>客服服务的所有查询都带上 Gateway 已验证的用户、角色、机构和请求 ID；Agent
  * 不能通过查询参数伪造主体，也不能绕过 Gateway 直接访问客服数据库。</p>
@@ -29,11 +32,14 @@ public class CustomerServiceClient {
 
     private final RestTemplate restTemplate;
     private final CustomerServiceProperties properties;
+    private final ConfirmationTokenVerifier confirmationTokenVerifier;
 
     public CustomerServiceClient(RestTemplate customerServiceRestTemplate,
-                                 CustomerServiceProperties properties) {
+                                 CustomerServiceProperties properties,
+                                 ConfirmationTokenVerifier confirmationTokenVerifier) {
         this.restTemplate = customerServiceRestTemplate;
         this.properties = properties;
+        this.confirmationTokenVerifier = confirmationTokenVerifier;
     }
 
     public List<ToolViews.CustomerServiceTicketView> list(AgentContext context, String requestId,
@@ -61,6 +67,24 @@ public class CustomerServiceClient {
                         + "/internal/customer-service/v1/tickets/" + ticketId)
                 .queryParam("organizationId", organizationId).toUriString();
         return exchange(url, context, requestId, CustomerServiceViews.Ticket.class).toToolView();
+    }
+
+    public ToolViews.CustomerServiceTicketView create(AgentContext context, String requestId,
+                                                      String confirmationToken,
+                                                      CustomerServiceToolInputs.CreateInput input) {
+        String subjectUserId = input.getSubjectUserId() == null
+                ? context.getSubjectUserId() : input.getSubjectUserId();
+        String resource = input.getOrganizationId() + ":" + subjectUserId;
+        ConfirmationTokenClaims claims = confirmationTokenVerifier.verify(
+                confirmationToken, context, "fitness.support.ticket.create.v1",
+                "CREATE_CUSTOMER_SERVICE_TICKET", resource, requestId);
+        if (!input.getOrganizationId().equals(claims.getOrganizationId())) {
+            throw new GatewayForbiddenException("confirmation organization does not match request");
+        }
+        requireOrganization(context, input.getOrganizationId());
+        return exchangePost(properties.getBaseUrl().replaceAll("/$", "")
+                        + "/internal/customer-service/v1/tickets", context, requestId, claims, input,
+                CustomerServiceViews.Ticket.class).toToolView();
     }
 
     private <T> T exchange(String url, AgentContext context, String requestId, Class<T> responseType) {
@@ -91,6 +115,53 @@ public class CustomerServiceClient {
         } catch (RestClientException exception) {
             throw new IllegalStateException("customer service is temporarily unavailable", exception);
         }
+    }
+
+    private <T> T exchangePost(String url, AgentContext context, String requestId,
+                               ConfirmationTokenClaims claims, Object body, Class<T> responseType) {
+        if (properties.getInternalServiceToken().trim().isEmpty()) {
+            throw new IllegalStateException("customer service internal token is not configured");
+        }
+        HttpHeaders headers = baseHeaders(context, requestId);
+        headers.set("X-Confirmation-Id", claims.getConfirmationId());
+        headers.set("X-Confirmation-JTI", claims.getJti());
+        headers.set("X-Confirmation-Tool-ID", claims.getToolId());
+        headers.set("X-Confirmation-Action", claims.getAction());
+        headers.set("X-Confirmation-Organization-ID", claims.getOrganizationId());
+        headers.set("X-Confirmation-Resource", claims.getResource());
+        headers.set("X-Confirmation-Payload-Hash", claims.getPayloadHash());
+        try {
+            ResponseEntity<T> response = restTemplate.exchange(
+                    url, HttpMethod.POST, new HttpEntity<>(body, headers), responseType);
+            if (response.getBody() == null) {
+                throw new IllegalStateException("customer service returned an empty response");
+            }
+            return response.getBody();
+        } catch (HttpClientErrorException exception) {
+            if (exception.getStatusCode().value() == 403) {
+                throw new GatewayForbiddenException("customer service resource is outside the authorized scope");
+            }
+            if (exception.getStatusCode().value() == 404) {
+                throw new GatewayResourceNotFoundException("customer service ticket was not found");
+            }
+            if (exception.getStatusCode().value() == 409) {
+                throw new com.shuyiwa.fitness.gateway.security.GatewayConflictException(
+                        "customer service ticket request conflicts with an existing request");
+            }
+            throw new IllegalArgumentException("customer service rejected the request");
+        } catch (RestClientException exception) {
+            throw new IllegalStateException("customer service is temporarily unavailable", exception);
+        }
+    }
+
+    private HttpHeaders baseHeaders(AgentContext context, String requestId) {
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Internal-Service-Token", properties.getInternalServiceToken());
+        headers.set("X-Actor-User-Id", context.getSubjectUserId());
+        headers.set("X-Actor-Roles", String.join(",", context.getRoles()));
+        headers.set("X-Actor-Organization-Ids", String.join(",", context.getOrganizationIds()));
+        headers.set("X-Request-ID", requestId);
+        return headers;
     }
 
     private void requireOrganization(AgentContext context, String organizationId) {

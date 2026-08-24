@@ -155,6 +155,27 @@ class CustomerServiceTicketGetToolInput(OrganizationToolInput):
     ticket_id: str = _ID_FIELD
 
 
+class CustomerServiceTicketCreateToolInput(OrganizationToolInput):
+    """创建客服工单参数；执行前必须由用户在 interrupt 确认卡中批准。"""
+
+    model_config = ConfigDict(extra="forbid", populate_by_name=True)
+
+    subject_user_id: str | None = Field(
+        default=None,
+        alias="subjectUserId",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+    category: Literal["GENERAL", "APPOINTMENT", "TRAINING_PLAN", "COURSE", "CONTRACT"]
+    subject: str = Field(min_length=1, max_length=255)
+    description: str = Field(min_length=1, max_length=5000)
+    related_resource_type: str | None = Field(
+        default=None, alias="relatedResourceType", max_length=64
+    )
+    related_resource_id: str | None = Field(default=None, alias="relatedResourceId", max_length=128)
+
+
 class BookingCreateToolInput(OrganizationToolInput):
     """创建预约参数；必须在确认恢复后才会真正调用 Gateway 写接口。"""
 
@@ -379,6 +400,14 @@ def _cancel_booking_payload(data: BookingCancelToolInput) -> dict[str, object]:
     return data.model_dump(mode="json", by_alias=True)
 
 
+def _create_customer_service_ticket_payload(
+    data: CustomerServiceTicketCreateToolInput,
+) -> dict[str, object]:
+    """创建工单的唯一 Payload，确认摘要和最终 Gateway 请求共用。"""
+
+    return data.model_dump(mode="json", by_alias=True, exclude_none=True)
+
+
 def _review_training_plan_payload(data: ReviewTrainingPlanToolInput) -> dict[str, object]:
     """生成审核 Payload，避免摘要构造和 Gateway 调用各维护一份字段映射。"""
 
@@ -440,6 +469,22 @@ def _create_booking_summary(data: BaseModel, _: Mapping[str, object] | None) -> 
         organization_id=typed.organization_id,
         resource_type="appointment",
         resource_id=typed.contract_id,
+    )
+
+
+def _create_customer_service_ticket_summary(
+    data: BaseModel, _: Mapping[str, object] | None
+) -> dict[str, object]:
+    typed = cast(CustomerServiceTicketCreateToolInput, data)
+    return _summary(
+        "创建健身客服工单",
+        "CREATE_CUSTOMER_SERVICE_TICKET",
+        "OPEN",
+        _create_customer_service_ticket_payload(typed),
+        None,
+        organization_id=typed.organization_id,
+        resource_type="customer_service_ticket",
+        resource_id=f"{typed.organization_id}:{typed.subject_user_id or 'current-user'}",
     )
 
 
@@ -602,6 +647,27 @@ def _create_booking_policy() -> ConfirmationPolicy:
         summary_builder=_create_booking_summary,
         resource_id_builder=lambda raw: cast(BookingCreateToolInput, raw).contract_id,
         organization_id_builder=lambda raw: cast(BookingCreateToolInput, raw).organization_id,
+    )
+
+
+def _create_customer_service_ticket_policy() -> ConfirmationPolicy:
+    return ConfirmationPolicy(
+        action="CREATE_CUSTOMER_SERVICE_TICKET",
+        resource_type="customer_service_ticket",
+        risk_level="WRITE",
+        operation="创建健身客服工单",
+        target_status="OPEN",
+        payload_builder=lambda raw: _create_customer_service_ticket_payload(
+            cast(CustomerServiceTicketCreateToolInput, raw)
+        ),
+        summary_builder=_create_customer_service_ticket_summary,
+        organization_id_builder=lambda raw: (
+            cast(CustomerServiceTicketCreateToolInput, raw).organization_id
+        ),
+        resource_id_builder=lambda raw: (
+            f"{cast(CustomerServiceTicketCreateToolInput, raw).organization_id}:"
+            f"{cast(CustomerServiceTicketCreateToolInput, raw).subject_user_id or 'current-user'}"
+        ),
     )
 
 
@@ -816,6 +882,13 @@ def build_fitness_tool_registry(
         data = cast(CustomerServiceTicketGetToolInput, raw)
         return await gateway.get_customer_service_ticket(
             context.gateway_context, data.organization_id, data.ticket_id
+        )
+
+    async def create_customer_service_ticket(raw: BaseModel, context: ToolContext) -> object:
+        data = cast(CustomerServiceTicketCreateToolInput, raw)
+        return await gateway.create_customer_service_ticket(
+            context.gateway_context,
+            _create_customer_service_ticket_payload(data),
         )
 
     async def get_training_plan(raw: BaseModel, context: ToolContext) -> object:
@@ -1178,6 +1251,19 @@ def build_fitness_tool_registry(
             allowed_roles=_READ_ROLES,
             read_only=True,
             requires_confirmation=False,
+        ),
+        ToolDefinition(
+            tool_id="fitness.support.ticket.create.v1",
+            description=(
+                "用户明确要求提交健身业务问题时创建客服工单；必须先通过 interrupt 展示标题、"
+                "分类和描述并获得用户确认，不能因普通咨询自动创建。"
+            ),
+            input_model=CustomerServiceTicketCreateToolInput,
+            handler=create_customer_service_ticket,
+            allowed_roles=_READ_ROLES,
+            read_only=False,
+            requires_confirmation=True,
+            confirmation_policy=_create_customer_service_ticket_policy(),
         ),
     ) + build_operations_tool_definitions(
         gateway,

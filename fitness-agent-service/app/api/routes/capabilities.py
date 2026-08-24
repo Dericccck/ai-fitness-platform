@@ -49,6 +49,7 @@ _DISPLAY_NAMES = {
     "fitness.training.day.record_execution.v1": "记录训练日执行结果",
     "fitness.support.ticket.list.v1": "查看客服工单",
     "fitness.support.ticket.get.v1": "查看客服工单详情",
+    "fitness.support.ticket.create.v1": "提交客服工单",
     "fitness.memory.list.v1": "查看已确认的 Memory",
     "fitness.memory.save.v1": "保存或更新 Memory",
     "fitness.memory.revoke.v1": "撤销 Memory",
