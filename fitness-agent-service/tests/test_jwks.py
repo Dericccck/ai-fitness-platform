@@ -121,3 +121,46 @@ def test_jwks_provider_fails_closed_when_rotated_kid_refresh_fails(
     with pytest.raises(JwksUnavailableError):
         provider.get_public_key("rsa-v2")
     assert calls == 2
+
+
+def test_jwks_provider_rejects_empty_document() -> None:
+    with pytest.raises(JwksUnavailableError, match="no keys"):
+        from app.infrastructure.jwks import _parse_jwks
+
+        _parse_jwks({"keys": []})
+
+
+def test_jwks_provider_rejects_duplicate_kid() -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    public_numbers = private_key.public_key().public_numbers()
+    key = {
+        "kid": "same-kid",
+        "kty": "RSA",
+        "alg": "RS256",
+        "use": "sig",
+        "n": _base64url(public_numbers.n),
+        "e": _base64url(public_numbers.e),
+    }
+
+    with pytest.raises(JwksUnavailableError):
+        from app.infrastructure.jwks import _parse_jwks
+
+        _parse_jwks({"keys": [key, dict(key)]})
+
+
+def test_jwks_provider_rejects_weak_rsa_key() -> None:
+    private_key = rsa.generate_private_key(public_exponent=65537, key_size=1024)
+    public_numbers = private_key.public_key().public_numbers()
+    key = {
+        "kid": "weak-rsa",
+        "kty": "RSA",
+        "alg": "RS256",
+        "use": "sig",
+        "n": _base64url(public_numbers.n),
+        "e": _base64url(public_numbers.e),
+    }
+
+    with pytest.raises(JwksUnavailableError):
+        from app.infrastructure.jwks import _parse_jwks
+
+        _parse_jwks({"keys": [key]})

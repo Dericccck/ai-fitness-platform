@@ -28,6 +28,7 @@ public class JwksPublicKeyProvider implements AgentContextPublicKeyProvider {
 
     private static final String RSA_KEY_TYPE = "RSA";
     private static final String RSA_SIGNATURE_ALGORITHM = "RS256";
+    private static final int MIN_RSA_KEY_BITS = 2048;
     private static final int MAX_KEYS = 50;
     private static final long UNKNOWN_KID_REFRESH_COOLDOWN_SECONDS = 30L;
     private final ObjectMapper objectMapper;
@@ -171,7 +172,8 @@ public class JwksPublicKeyProvider implements AgentContextPublicKeyProvider {
         try {
             JsonNode root = objectMapper.readTree(document);
             JsonNode keysNode = root == null ? null : root.get("keys");
-            if (keysNode == null || !keysNode.isArray() || keysNode.size() > MAX_KEYS) {
+            if (keysNode == null || !keysNode.isArray()
+                    || keysNode.size() == 0 || keysNode.size() > MAX_KEYS) {
                 throw new GatewaySecurityException("invalid agent context JWKS");
             }
             Map<String, PublicKey> keys = new HashMap<>();
@@ -184,8 +186,18 @@ public class JwksPublicKeyProvider implements AgentContextPublicKeyProvider {
                 }
                 byte[] modulus = Base64.getUrlDecoder().decode(text(keyNode, "n"));
                 byte[] exponent = Base64.getUrlDecoder().decode(text(keyNode, "e"));
+                BigInteger modulusValue = new BigInteger(1, modulus);
+                BigInteger exponentValue = new BigInteger(1, exponent);
+                // 与 Agent 侧保持一致：拒绝弱密钥、偶数指数和重复 kid，避免两端
+                // 对同一份认证服务 JWKS 得出不同的安全结论。
+                if (keys.containsKey(keyId)
+                        || modulusValue.bitLength() < MIN_RSA_KEY_BITS
+                        || exponentValue.compareTo(BigInteger.valueOf(3L)) < 0
+                        || !exponentValue.testBit(0)) {
+                    throw new GatewaySecurityException("invalid agent context RSA key");
+                }
                 RSAPublicKeySpec spec = new RSAPublicKeySpec(
-                        new BigInteger(1, modulus), new BigInteger(1, exponent)
+                        modulusValue, exponentValue
                 );
                 PublicKey publicKey = KeyFactory.getInstance("RSA").generatePublic(spec);
                 keys.put(keyId, publicKey);

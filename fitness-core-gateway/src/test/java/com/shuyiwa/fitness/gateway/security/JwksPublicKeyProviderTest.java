@@ -106,6 +106,62 @@ public class JwksPublicKeyProviderTest {
         provider.getPublicKey("rsa-v2");
     }
 
+    @Test(expected = GatewaySecurityException.class)
+    public void rejectsEmptyJwksDocument() {
+        JwksPublicKeyProvider provider = new JwksPublicKeyProvider(
+                new ObjectMapper(), "https://issuer.test/jwks", 300, 2_000
+        ) {
+            @Override
+            protected String fetchJwksDocument(String jwksUrl) {
+                return "{\"keys\":[]}";
+            }
+        };
+        provider.getPublicKey("rsa-v1");
+    }
+
+    @Test(expected = GatewaySecurityException.class)
+    public void rejectsDuplicateKid() throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+        generator.initialize(2048);
+        java.security.interfaces.RSAPublicKey publicKey =
+                (java.security.interfaces.RSAPublicKey) generator.generateKeyPair().getPublic();
+        Map<String, Object> key = jwk("same-kid", publicKey);
+        Map<String, Object> document = Collections.singletonMap(
+                "keys", java.util.Arrays.asList(key, new HashMap<>(key))
+        );
+        String body = new ObjectMapper().writeValueAsString(document);
+        JwksPublicKeyProvider provider = new JwksPublicKeyProvider(
+                new ObjectMapper(), "https://issuer.test/jwks", 300, 2_000
+        ) {
+            @Override
+            protected String fetchJwksDocument(String jwksUrl) {
+                return body;
+            }
+        };
+        provider.getPublicKey("same-kid");
+    }
+
+    @Test(expected = GatewaySecurityException.class)
+    public void rejectsWeakRsaKey() throws Exception {
+        KeyPairGenerator generator = KeyPairGenerator.getInstance("RSA");
+        generator.initialize(1024);
+        java.security.interfaces.RSAPublicKey publicKey =
+                (java.security.interfaces.RSAPublicKey) generator.generateKeyPair().getPublic();
+        Map<String, Object> document = Collections.singletonMap(
+                "keys", Collections.singletonList(jwk("weak-rsa", publicKey))
+        );
+        String body = new ObjectMapper().writeValueAsString(document);
+        JwksPublicKeyProvider provider = new JwksPublicKeyProvider(
+                new ObjectMapper(), "https://issuer.test/jwks", 300, 2_000
+        ) {
+            @Override
+            protected String fetchJwksDocument(String jwksUrl) {
+                return body;
+            }
+        };
+        provider.getPublicKey("weak-rsa");
+    }
+
     private static JwksPublicKeyProvider providerWithDocuments(
             Map<String, Object> firstDocument,
             Map<String, Object> secondDocument,

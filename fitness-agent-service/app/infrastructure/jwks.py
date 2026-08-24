@@ -28,6 +28,7 @@ class _JwksSnapshot:
 class JwksPublicKeyProvider:
     """按 kid 获取 JWKS RSA 公钥，并在有效期内复用快照。"""
 
+    _MIN_RSA_KEY_BITS = 2048
     _UNKNOWN_KID_REFRESH_COOLDOWN_SECONDS = 30
 
     def __init__(
@@ -101,6 +102,8 @@ def _parse_jwks(payload: Any) -> dict[str, RSAPublicKey]:
         raise JwksUnavailableError("invalid agent context JWKS")
     if len(payload["keys"]) > 50:
         raise JwksUnavailableError("agent context JWKS contains too many keys")
+    if not payload["keys"]:
+        raise JwksUnavailableError("agent context JWKS contains no keys")
 
     result: dict[str, RSAPublicKey] = {}
     for item in payload["keys"]:
@@ -113,7 +116,14 @@ def _parse_jwks(payload: Any) -> dict[str, RSAPublicKey]:
             raise JwksUnavailableError("invalid agent context JWKS key use")
         modulus = int.from_bytes(_decode_base64url(_required_text(item, "n")), "big")
         exponent = int.from_bytes(_decode_base64url(_required_text(item, "e")), "big")
-        if modulus <= 0 or exponent <= 0:
+        # JWKS 是认证边界，不是普通配置文件：过短的 RSA 密钥会降低离线破解成本，
+        # 重复 kid 会让不同实现对“哪把公钥生效”产生歧义。因此在进入缓存前统一拒绝。
+        if (
+            key_id in result
+            or modulus.bit_length() < JwksPublicKeyProvider._MIN_RSA_KEY_BITS
+            or exponent < 3
+            or exponent % 2 == 0
+        ):
             raise JwksUnavailableError("invalid agent context RSA key")
         result[key_id] = RSAPublicNumbers(exponent, modulus).public_key()
     return result

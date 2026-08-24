@@ -1430,9 +1430,10 @@ Booking 和 Fitness 的真实 dry-run、Agent 层角色矩阵、训练服务最�
 
 完成 Fitness 验收后，按以下顺序继续：
 
-1. 先使用 `make agent-jwks-check` 对接真实认证服务的 JWKS 地址，验证公钥轮换、缓存失效、认证服务不可用和恢复场景；随后补齐
-   AgentContext/确认凭证的生产故障演练。当前只是通用 JWKS 客户端，不能
-   把本地配置的公钥或测试 JWKS 当成生产认证服务。
+1. JWKS 安全边界已补齐：Agent 与 Java Gateway 都拒绝空文档、重复 `kid`、弱于 2048 位的 RSA
+   公钥和不符合 RS256 约定的字段；生产配置还强制认证服务 JWKS 使用 HTTPS，且保留缓存过期
+   fail-closed 与未知 `kid` 受控刷新。接下来仍需使用 `make agent-jwks-check` 对接真实认证服务的
+   JWKS 地址，验证公钥轮换、缓存失效、认证服务不可用和恢复场景；不能把本地测试 JWKS 当成生产认证服务。
 2. Proactive Agent 第一版已完成基础闭环：Booking 预约事件通过 RabbitMQ 标准事件信封进入 Agent
    PostgreSQL Inbox，按 `event_id` 幂等消费后写入现有通知 Outbox，再由 `IN_APP` 渠道投递预约创建、改约和取消提醒；
    训练计划发布/待审核事件契约和模板已预留，待 Training Service 发布对应事件后接通。暂不接入短信、Push，也不为

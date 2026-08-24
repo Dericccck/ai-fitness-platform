@@ -1,5 +1,6 @@
 from functools import lru_cache
 from typing import Literal
+from urllib.parse import urlparse
 
 from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -297,8 +298,16 @@ class Settings(BaseSettings):
             or self.gateway_context_verification_public_key_ring
         ):
             errors.append("GATEWAY_CONTEXT_VERIFICATION_JWKS_URL or public key ring is required")
+        if self.gateway_context_verification_jwks_url.strip():
+            parsed_jwks_url = urlparse(self.gateway_context_verification_jwks_url)
+            if parsed_jwks_url.scheme != "https" or not parsed_jwks_url.netloc:
+                errors.append("GATEWAY_CONTEXT_VERIFICATION_JWKS_URL must use HTTPS")
+        if not self.gateway_context_signing_key_id.strip():
+            errors.append("GATEWAY_CONTEXT_SIGNING_KEY_ID is required")
         if self.confirmation_signing_algorithm != "RS256":
             errors.append("AGENT_CONFIRMATION_SIGNING_ALGORITHM must be RS256")
+        if not self.confirmation_signing_key_id.strip():
+            errors.append("AGENT_CONFIRMATION_SIGNING_KEY_ID is required")
         if not self.confirmation_signing_private_key_pem.strip():
             errors.append("AGENT_CONFIRMATION_SIGNING_PRIVATE_KEY_PEM is required")
         if errors:

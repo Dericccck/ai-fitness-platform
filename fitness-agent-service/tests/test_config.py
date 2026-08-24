@@ -79,3 +79,15 @@ def test_production_authentication_contract_accepts_rs256_and_jwks() -> None:
     )
 
     assert settings.environment == "production"
+
+
+def test_production_rejects_non_https_jwks_url() -> None:
+    with pytest.raises(ValidationError, match="must use HTTPS"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            gateway_context_signing_algorithm="RS256",
+            gateway_context_verification_jwks_url="http://issuer.example/.well-known/jwks.json",
+            confirmation_signing_algorithm="RS256",
+            confirmation_signing_private_key_pem="-----BEGIN PRIVATE KEY-----\nprivate\n-----END PRIVATE KEY-----",
+        )
