@@ -1,5 +1,7 @@
 SHELL := /bin/sh
 
+.PHONY: agent-jwks-check
+
 AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
@@ -31,6 +33,7 @@ help:
 	@echo "  agent-fitness-live-check Check Fitness draft confirmation flow; --execute enables real draft write"
 	@echo "  agent-dev-context Sign a 5-minute local-only organization admin AgentContext"
 	@echo "  agent-session-summary-eval Run deterministic session summary security gates"
+	@echo "  agent-jwks-check Verify a real authentication service JWKS URL and kid"
 	@echo "  agent-run    Start the Agent API locally"
 	@echo "  agent-reindex-worker Start the knowledge index rebuild worker locally"
 	@echo "  agent-memory-expiry-worker Start the Memory candidate expiry worker locally"
@@ -118,6 +121,11 @@ agent-session-summary-eval:
 
 agent-security-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.rag.security_cli
+
+agent-jwks-check:
+	@test -n "$$JWKS_URL" || (echo "请先设置 JWKS_URL（认证服务标准 JWKS 地址）"; exit 1)
+	@test -n "$$JWKS_KID" || (echo "请先设置 JWKS_KID（当前认证签名 kid）"; exit 1)
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/jwks_live_check.py
 
 ocr-sync:
 	cd fitness-ocr-service && UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --extra dev

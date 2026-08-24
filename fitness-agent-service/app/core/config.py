@@ -1,7 +1,7 @@
 from functools import lru_cache
 from typing import Literal
 
-from pydantic import AliasChoices, Field
+from pydantic import AliasChoices, Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -263,6 +263,36 @@ class Settings(BaseSettings):
     operations_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
     gateway_max_retries: int = Field(default=2, ge=0, le=5)
     gateway_retry_backoff_seconds: float = Field(default=0.1, ge=0, le=5)
+
+    @model_validator(mode="after")
+    def validate_production_authentication_contract(self) -> "Settings":
+        """阻止生产环境以本地 HMAC 或空公钥配置启动。
+
+        本地和测试环境允许使用 HMAC，便于离线开发；生产环境必须使用 RS256，
+        AgentContext 的验签公钥必须来自认证服务 JWKS 或受控公钥环，确认凭证
+        则必须由 Secret Manager 注入 RSA 私钥。这样配置错误会在进程启动时暴露，
+        而不是等第一条真实用户请求才失败。
+        """
+
+        if self.environment != "production":
+            return self
+        errors: list[str] = []
+        if self.gateway_context_signing_algorithm != "RS256":
+            errors.append("GATEWAY_CONTEXT_SIGNING_ALGORITHM must be RS256")
+        if not (
+            self.gateway_context_verification_jwks_url.strip()
+            or self.gateway_context_verification_public_key_ring
+        ):
+            errors.append("GATEWAY_CONTEXT_VERIFICATION_JWKS_URL or public key ring is required")
+        if self.confirmation_signing_algorithm != "RS256":
+            errors.append("AGENT_CONFIRMATION_SIGNING_ALGORITHM must be RS256")
+        if not self.confirmation_signing_private_key_pem.strip():
+            errors.append("AGENT_CONFIRMATION_SIGNING_PRIVATE_KEY_PEM is required")
+        if errors:
+            raise ValueError(
+                "production authentication contract is incomplete: " + "; ".join(errors)
+            )
+        return self
 
     @property
     def embedding_effective_api_key(self) -> str:

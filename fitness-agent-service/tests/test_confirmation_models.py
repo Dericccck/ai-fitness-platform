@@ -114,7 +114,9 @@ def test_confirmation_can_be_revoked_before_execution() -> None:
 
 def test_running_confirmation_cannot_be_revoked() -> None:
     now = datetime.now(UTC)
-    running = record().approve(now, "decision-1").issue_credential("jti-1", now).claim_execution(now)
+    running = (
+        record().approve(now, "decision-1").issue_credential("jti-1", now).claim_execution(now)
+    )
 
     with pytest.raises(ConfirmationStateError):
         running.cancel(now, "revoke-1")

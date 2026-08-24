@@ -18,6 +18,7 @@ from typing import Any, cast
 from cryptography.exceptions import InvalidSignature
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPublicKey
 
 from app.infrastructure.jwks import JwksPublicKeyProvider
 
@@ -104,8 +105,12 @@ class AgentContextVerifier:
                     raise AgentContextVerificationError("invalid agent context signature")
             else:
                 public_key_pem = self.verification_public_key_ring.get(key_id, "")
+                public_key: RSAPublicKey | None
                 if public_key_pem:
-                    public_key = serialization.load_pem_public_key(public_key_pem.encode("utf-8"))
+                    public_key = cast(
+                        RSAPublicKey,
+                        serialization.load_pem_public_key(public_key_pem.encode("utf-8")),
+                    )
                 elif self.jwks_provider is not None:
                     public_key = self.jwks_provider.get_public_key(key_id)
                 else:
@@ -120,9 +125,7 @@ class AgentContextVerifier:
                         hashes.SHA256(),
                     )
                 except InvalidSignature as exc:
-                    raise AgentContextVerificationError(
-                        "invalid agent context signature"
-                    ) from exc
+                    raise AgentContextVerificationError("invalid agent context signature") from exc
             subject = _required_text(claims, "sub")
             organizations = _required_string_set(claims, "orgs")
             roles = _required_string_set(claims, "roles")

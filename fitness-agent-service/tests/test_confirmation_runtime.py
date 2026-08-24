@@ -19,12 +19,17 @@ from .test_tool_registry import FakeGateway
 def test_token_resource_accepts_java_camel_case_payload() -> None:
     """恢复确认单时必须按 Java canonical payload 提取 org/student 资源范围。"""
 
-    record = SimpleNamespace(resource_id=None, resource_type="training_plan", subject_user_id="user-1")
+    record = SimpleNamespace(
+        resource_id=None, resource_type="training_plan", subject_user_id="user-1"
+    )
 
-    assert _token_resource(
-        record,
-        {"organizationId": "org-1", "studentId": "student-1"},
-    ) == "org-1:student-1"
+    assert (
+        _token_resource(
+            record,
+            {"organizationId": "org-1", "studentId": "student-1"},
+        )
+        == "org-1:student-1"
+    )
 
 
 class OneWriteModel:

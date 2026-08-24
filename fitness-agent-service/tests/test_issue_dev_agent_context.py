@@ -137,14 +137,16 @@ def test_agent_verifier_accepts_rs256_with_public_key_ring(
     payload_part = base64.urlsafe_b64encode(payload).rstrip(b"=").decode("ascii")
     signature = private_key.sign(payload, padding.PKCS1v15(), hashes.SHA256())
     rsa_token = (
-        payload_part
-        + "."
-        + base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
+        payload_part + "." + base64.urlsafe_b64encode(signature).rstrip(b"=").decode("ascii")
     )
-    public_key_pem = private_key.public_key().public_bytes(
-        serialization.Encoding.PEM,
-        serialization.PublicFormat.SubjectPublicKeyInfo,
-    ).decode("utf-8")
+    public_key_pem = (
+        private_key.public_key()
+        .public_bytes(
+            serialization.Encoding.PEM,
+            serialization.PublicFormat.SubjectPublicKeyInfo,
+        )
+        .decode("utf-8")
+    )
 
     identity = AgentContextVerifier(
         "",

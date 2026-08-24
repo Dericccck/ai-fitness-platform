@@ -76,9 +76,7 @@ class FakeConfirmationService:
 
     async def revoke(self, confirmation_id: str, **kwargs: Any) -> ConfirmationRecord:
         assert confirmation_id == self.current.id
-        self.current = self.current.cancel(
-            datetime.now(UTC), kwargs["revocation_request_id"]
-        )
+        self.current = self.current.cancel(datetime.now(UTC), kwargs["revocation_request_id"])
         return self.current
 
 

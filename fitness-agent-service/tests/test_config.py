@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from app.core.config import Settings
 
 
@@ -58,3 +61,21 @@ def test_local_embedding_and_reranker_configuration_is_explicit() -> None:
     assert settings.embedding_configured is True
     assert settings.embedding_dimensions == 1024
     assert settings.reranker_configured is True
+
+
+def test_production_requires_asymmetric_authentication_contract() -> None:
+    with pytest.raises(ValidationError, match="production authentication contract is incomplete"):
+        Settings(_env_file=None, environment="production")
+
+
+def test_production_authentication_contract_accepts_rs256_and_jwks() -> None:
+    settings = Settings(
+        _env_file=None,
+        environment="production",
+        gateway_context_signing_algorithm="RS256",
+        gateway_context_verification_jwks_url="https://issuer.example/.well-known/jwks.json",
+        confirmation_signing_algorithm="RS256",
+        confirmation_signing_private_key_pem="-----BEGIN PRIVATE KEY-----\nprivate\n-----END PRIVATE KEY-----",
+    )
+
+    assert settings.environment == "production"

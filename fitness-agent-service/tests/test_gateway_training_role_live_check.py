@@ -55,4 +55,6 @@ def test_validate_confirmation_required_accepts_gateway_boundary_rejection() -> 
 def test_validate_execution_list_requires_json_array() -> None:
     assert validate_execution_list("published-executions", 200, []).passed is True
     assert validate_execution_list("published-executions", 200, {}).passed is False
-    assert validate_execution_list("published-executions", 403, {"code": "FORBIDDEN"}).passed is False
+    assert (
+        validate_execution_list("published-executions", 403, {"code": "FORBIDDEN"}).passed is False
+    )

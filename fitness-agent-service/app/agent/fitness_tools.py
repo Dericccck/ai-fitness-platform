@@ -270,16 +270,12 @@ class TrainingItemInput(BaseModel):
     # Gateway 的 JSON 字段就会发生漂移，Gateway 会拒绝执行高风险写操作。
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
-    exercise_name: str = Field(
-        alias="exerciseName", min_length=1, max_length=128
-    )
+    exercise_name: str = Field(alias="exerciseName", min_length=1, max_length=128)
     sort_order: int = Field(alias="sortOrder", ge=1, le=100)
     sets: int = Field(ge=1, le=100)
     reps: str = Field(min_length=1, max_length=64)
     rest_seconds: int | None = Field(alias="restSeconds", default=None, ge=0, le=3600)
-    target_weight_kg: float | None = Field(
-        alias="targetWeightKg", default=None, ge=0, le=1000
-    )
+    target_weight_kg: float | None = Field(alias="targetWeightKg", default=None, ge=0, le=1000)
     target_rpe: float | None = Field(alias="targetRpe", default=None, ge=0, le=10)
     notes: str | None = Field(default=None, max_length=1000)
 
@@ -301,16 +297,13 @@ class CreateTrainingDraftToolInput(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
     organization_id: str = Field(
-        alias="organizationId", min_length=1, max_length=128,
-        pattern=r"^[A-Za-z0-9._:-]+$"
+        alias="organizationId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"
     )
     student_id: str = Field(
-        alias="studentId", min_length=1, max_length=128,
-        pattern=r"^[A-Za-z0-9._:-]+$"
+        alias="studentId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"
     )
     coach_id: str = Field(
-        alias="coachId", min_length=1, max_length=128,
-        pattern=r"^[A-Za-z0-9._:-]+$"
+        alias="coachId", min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$"
     )
     title: str = Field(min_length=1, max_length=128)
     goal_type: str = Field(alias="goalType", min_length=1, max_length=32)

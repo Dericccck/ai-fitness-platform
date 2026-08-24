@@ -16,7 +16,9 @@ def upgrade() -> None:
 
     op.add_column(
         "agent_action_confirmations",
-        sa.Column("cancelled_at", sa.DateTime(timezone=True), nullable=True, comment="主动撤销时间"),
+        sa.Column(
+            "cancelled_at", sa.DateTime(timezone=True), nullable=True, comment="主动撤销时间"
+        ),
     )
     op.add_column(
         "agent_action_confirmations",

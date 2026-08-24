@@ -71,6 +71,23 @@
   在短期缓存内复用；缓存过期且认证服务不可用时，RS256 请求会 fail-closed。收到缓存中不存在的
   `kid` 时会触发一次受控刷新，刷新冷却窗口为 30 秒，兼顾密钥轮换收敛和认证服务保护。
 
+生产认证配置门禁：`ENVIRONMENT=production` 时，Agent 会在启动阶段强制要求
+`GATEWAY_CONTEXT_SIGNING_ALGORITHM=RS256`、配置 `GATEWAY_CONTEXT_VERIFICATION_JWKS_URL`
+或受控的公钥环，并配置由 Secret Manager 注入的
+`AGENT_CONFIRMATION_SIGNING_PRIVATE_KEY_PEM`。配置不完整时进程直接启动失败，避免把本地
+HMAC 或空公钥配置误部署到生产环境。本地和测试环境仍可使用 HMAC 兼容模式。
+
+真实认证服务 JWKS 验收使用只读脚本，不会写业务库、消费凭证或打印公钥内容：
+
+```bash
+export JWKS_URL='https://认证服务.example.com/.well-known/jwks.json'
+export JWKS_KID='auth-context-v1'
+make agent-jwks-check
+```
+
+脚本会验证 JWKS 地址可访问、响应符合标准格式且包含指定 `kid`；未配置真实认证服务地址时，
+不要用本地测试 JWKS 结果替代生产验收。
+
 ## 本地启动
 
 以下命令均在仓库根目录执行；本地环境模板会启用 ClamAV，模型密钥仍需按个人环境补充。

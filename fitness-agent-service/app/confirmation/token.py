@@ -13,9 +13,11 @@ import hmac
 import json
 import time
 from dataclasses import dataclass
+from typing import cast
 
 from cryptography.hazmat.primitives import hashes, serialization
 from cryptography.hazmat.primitives.asymmetric import padding
+from cryptography.hazmat.primitives.asymmetric.rsa import RSAPrivateKey
 
 from app.confirmation.models import ConfirmationRecord
 
@@ -86,10 +88,15 @@ class ConfirmationTokenIssuer:
         ).encode("utf-8")
         encoded_payload = _base64url(payload_bytes)
         if self.signing_algorithm == "HS256":
-            signature = hmac.new(self.secret.encode("utf-8"), payload_bytes, hashlib.sha256).digest()
+            signature = hmac.new(
+                self.secret.encode("utf-8"), payload_bytes, hashlib.sha256
+            ).digest()
         else:
-            private_key = serialization.load_pem_private_key(
-                self.signing_private_key_pem.encode("utf-8"), password=None
+            private_key = cast(
+                RSAPrivateKey,
+                serialization.load_pem_private_key(
+                    self.signing_private_key_pem.encode("utf-8"), password=None
+                ),
             )
             signature = private_key.sign(payload_bytes, padding.PKCS1v15(), hashes.SHA256())
         return f"{encoded_payload}.{_base64url(signature)}"
