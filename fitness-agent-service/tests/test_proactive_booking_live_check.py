@@ -22,6 +22,10 @@ def _args(**overrides: object) -> argparse.Namespace:
         "timeout_seconds": 90.0,
         "poll_timeout_seconds": 90.0,
         "execute": False,
+        "booking_mysql_container": "",
+        "booking_mysql_database": "fitness",
+        "booking_mysql_username": "",
+        "event_exchange": "fitness.domain.events",
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -41,6 +45,34 @@ def test_build_config_requires_signed_context(monkeypatch: pytest.MonkeyPatch) -
 
     with pytest.raises(ProactiveBookingLiveCheckError, match="AGENT_LIVE_AGENT_CONTEXT"):
         build_config(_args())
+
+
+def test_build_config_requires_booking_mysql_for_real_execution(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENT_LIVE_AGENT_CONTEXT", "signed-context")
+    monkeypatch.setenv("BOOKING_DB_USERNAME", "fitness")
+    monkeypatch.setenv("BOOKING_DB_PASSWORD", "secret")
+
+    with pytest.raises(ProactiveBookingLiveCheckError, match="BOOKING_DB_CONTAINER"):
+        build_config(_args(execute=True))
+
+
+def test_build_config_reads_booking_mysql_secret_only_from_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AGENT_LIVE_AGENT_CONTEXT", "signed-context")
+    monkeypatch.setenv("BOOKING_DB_PASSWORD", "secret")
+
+    config = build_config(
+        _args(
+            execute=True,
+            booking_mysql_container="fitness-mysql",
+            booking_mysql_username="fitness",
+        )
+    )
+
+    assert config.booking_mysql_password == "secret"
 
 
 @pytest.mark.parametrize(

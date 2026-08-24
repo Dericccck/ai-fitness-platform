@@ -450,9 +450,11 @@ Prometheus 指标 `fitness_agent_notification_delivery_attempts_total`，用于�
 `training.plan.published`；短信、Push 和 Memory 模拟短信仍不在本阶段范围内。
 
 使用 `make agent-proactive-live-check` 可执行主动提醒链路验收。脚本默认只检查 Agent/Gateway/Booking 健康状态、
-Agent PostgreSQL 和 RabbitMQ，不写入预约；确认使用本地测试数据后，追加 `ARGS=--execute` 才会执行一次真实预约，
-并轮询事件 Inbox、通知 Outbox 和站内收件箱。脚本不会直接删除预约，验收完成后请通过已有的取消预约确认流程清理
-本地测试数据。
+Agent PostgreSQL 和 RabbitMQ，不写入预约；确认使用本地测试数据后，追加 `ARGS=--execute` 才会执行一次真实预约。
+真实模式还必须提供 `BOOKING_DB_CONTAINER`、`BOOKING_DB_USERNAME` 和 `BOOKING_DB_PASSWORD`，脚本通过容器内
+MySQL 客户端只读核对本轮 `agent_booking_operation` 和 `agent_booking_outbox`，确认 Booking Outbox 已为
+`PUBLISHED`，再按同一 `event_id` 重投一次 RabbitMQ 消息，验证 Agent Inbox 和站内通知数量不增长。脚本不会直接删除预约，
+验收完成后请通过已有的取消预约确认流程清理本地测试数据。
 
 训练计划主动提醒可先使用 `make gateway-training-proactive-preflight` 做只读检查，确认 Agent readiness、Training
 健康状态、Agent PostgreSQL 和 RabbitMQ 均可用；然后使用 `make gateway-training-proactive-live-check`。后者复用已有的训练计划角色工作流，

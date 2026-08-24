@@ -1315,8 +1315,10 @@ Memory 脱敏评测。
    ```
 
    项目提供 `make agent-proactive-live-check` 验收脚本。默认模式只做配置和进程前置检查，不写预约；确认使用本地测试数据后，
-   显式追加 `ARGS=--execute` 才会批准一次真实预约并轮询上述三张 Agent 表。脚本不会直接删除 MySQL 业务数据，验收完成后
-   必须使用已有的取消预约确认流程清理测试预约。训练事件由 `agent_training_outbox` 产生，发布后复用同一
+   显式追加 `ARGS=--execute` 才会批准一次真实预约；真实模式还必须配置 Booking MySQL 容器和账号，脚本只读核对
+   `agent_booking_operation` 与 `agent_booking_outbox` 已发布，再轮询上述三张 Agent 表，并按同一 `event_id` 重投一次消息验证
+   幂等。脚本不会直接删除 MySQL 业务数据，验收完成后必须使用已有的取消预约确认流程清理测试预约。训练事件由
+   `agent_training_outbox` 产生，发布后复用同一
    `agent_proactive_event_inbox -> agent_notification_outbox -> agent_in_app_notifications` 链路；验收输出只打印
    脱敏后的事件 ID、聚合 ID 和各层状态计数，不打印 AgentContext、确认参数或通知正文。
    训练主动提醒验收还会验证：待审核事件只通知负责教练，已发布事件只通知对应学员；两类事件均必须达到
@@ -1436,8 +1438,9 @@ Booking 和 Fitness 的真实 dry-run、Agent 层角色矩阵、训练服务最�
    JWKS 地址，验证公钥轮换、缓存失效、认证服务不可用和恢复场景；不能把本地测试 JWKS 当成生产认证服务。
 2. Proactive Agent 第一版已完成基础闭环：Booking 预约事件通过 RabbitMQ 标准事件信封进入 Agent
    PostgreSQL Inbox，按 `event_id` 幂等消费后写入现有通知 Outbox，再由 `IN_APP` 渠道投递预约创建、改约和取消提醒；
-   训练计划发布/待审核事件契约和模板已预留，待 Training Service 发布对应事件后接通。暂不接入短信、Push，也不为
-   Memory 增加模拟短信。下一步是用本地 RabbitMQ 和真实 Booking Outbox 做端到端验收，并补充训练事件发布。
+   训练计划发布/待审核事件也已由 Training Service Outbox 接入共享 Exchange。主动提醒验收脚本现已增加 Booking
+   MySQL `agent_booking_operation`/`agent_booking_outbox` 只读核对，并会按同一 `event_id` 重投消息验证重复消费不增加通知。
+   暂不接入短信、Push，也不为 Memory 增加模拟短信。
 3. 三角色最小前端：学员执行训练和确认 Memory，教练审核发布计划，管理员查看 Operations、知识库和审计。
 4. 精简 Customer Service Agent：健身问答、业务查询、工单和人工转接；退款、医疗和争议问题必须人工处理。
 5. 评测、压测、故障恢复、备份恢复、监控告警、灰度发布和回滚。

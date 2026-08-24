@@ -3,7 +3,8 @@
 默认只检查 Agent、Gateway、PostgreSQL、Redis 和 Booking 服务的可用性，不会写入预约。
 只有调用者显式传入 ``--execute``（或设置 ``AGENT_LIVE_EXECUTE_WRITES=1``）时，才会
 批准预约确认单并触发一次真实的本地测试预约。写入完成后，本脚本会轮询 Agent PostgreSQL，
-确认预约事件已经依次进入事件 Inbox、生成通知 Outbox，并由站内通知 Worker 投递到收件箱。
+确认 Booking Outbox 已发布，预约事件已经依次进入事件 Inbox、生成通知 Outbox，并由站内通知 Worker 投递到收件箱；
+随后会重投同一个事件，确认幂等键不会产生第二条通知。
 
 本脚本不直接删除预约，也不绕过 Booking 业务服务做 SQL 清理。执行真实写入前，调用者必须
 使用专门的本地测试数据；验收完成后应通过已有的取消预约确认流程清理测试预约，避免测试工具
@@ -14,12 +15,13 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import json
 import os
+import subprocess
 import sys
 import time
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
 from typing import Any
 
 import aio_pika
@@ -46,6 +48,11 @@ class LiveCheckConfig:
     timeout_seconds: float
     poll_timeout_seconds: float
     execute: bool
+    booking_mysql_container: str
+    booking_mysql_database: str
+    booking_mysql_username: str
+    booking_mysql_password: str
+    event_exchange: str
 
 
 @dataclass(frozen=True)
@@ -59,6 +66,18 @@ class ProactiveChainResult:
     published_notification_count: int
     in_app_notification_count: int
     expected_notification_count: int
+
+
+@dataclass(frozen=True)
+class BookingOutboxEvent:
+    """从 Booking MySQL 只读查询到的本轮预约 Outbox 事实。"""
+
+    event_key: str
+    event_type: str
+    aggregate_id: str
+    organization_id: str
+    status: str
+    payload: dict[str, Any]
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -124,6 +143,26 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.getenv("AGENT_LIVE_EXECUTE_WRITES") == "1",
         help="显式批准并执行一次本地测试预约；默认只做链路前置检查",
     )
+    parser.add_argument(
+        "--booking-mysql-container",
+        default=os.getenv("BOOKING_DB_CONTAINER", ""),
+        help="真实写入验收使用的 Booking MySQL 容器名，例如 fitness-mysql",
+    )
+    parser.add_argument(
+        "--booking-mysql-database",
+        default=os.getenv("BOOKING_DB_NAME", "fitness"),
+        help="Booking MySQL 数据库名，默认 fitness",
+    )
+    parser.add_argument(
+        "--booking-mysql-username",
+        default=os.getenv("BOOKING_DB_USERNAME", ""),
+        help="Booking MySQL 只读验收账号；密码只从 BOOKING_DB_PASSWORD 读取",
+    )
+    parser.add_argument(
+        "--event-exchange",
+        default=os.getenv("AGENT_PROACTIVE_RABBITMQ_EXCHANGE", "fitness.domain.events"),
+        help="主动提醒事件交换机名称",
+    )
     return parser
 
 
@@ -145,6 +184,17 @@ def build_config(args: argparse.Namespace) -> LiveCheckConfig:
         raise ProactiveBookingLiveCheckError("缺少 AGENT_DATABASE_URL")
     if args.timeout_seconds <= 0 or args.poll_timeout_seconds <= 0:
         raise ProactiveBookingLiveCheckError("timeout 参数必须大于 0")
+    booking_mysql_container = str(args.booking_mysql_container).strip()
+    booking_mysql_username = str(args.booking_mysql_username).strip()
+    booking_mysql_password = os.getenv("BOOKING_DB_PASSWORD", "").strip()
+    if args.execute and not booking_mysql_container:
+        raise ProactiveBookingLiveCheckError(
+            "真实链路验收必须提供 BOOKING_DB_CONTAINER，用于只读核对 Booking Outbox"
+        )
+    if args.execute and (not booking_mysql_username or not booking_mysql_password):
+        raise ProactiveBookingLiveCheckError(
+            "真实链路验收必须提供 BOOKING_DB_USERNAME/BOOKING_DB_PASSWORD"
+        )
     return LiveCheckConfig(
         endpoint=args.endpoint.rstrip("/"),
         gateway_endpoint=args.gateway_url.rstrip("/"),
@@ -157,6 +207,11 @@ def build_config(args: argparse.Namespace) -> LiveCheckConfig:
         timeout_seconds=args.timeout_seconds,
         poll_timeout_seconds=args.poll_timeout_seconds,
         execute=bool(args.execute),
+        booking_mysql_container=booking_mysql_container,
+        booking_mysql_database=str(args.booking_mysql_database).strip(),
+        booking_mysql_username=booking_mysql_username,
+        booking_mysql_password=booking_mysql_password,
+        event_exchange=str(args.event_exchange).strip(),
     )
 
 
@@ -311,13 +366,170 @@ async def _wait_for_execution(
     raise ProactiveBookingLiveCheckError("等待预约业务写入超时")
 
 
+def _sql_literal(value: str) -> str:
+    """把已知为字符串的验收参数安全编码为 MySQL 字符串字面量。"""
+
+    return "'" + value.replace("'", "''") + "'"
+
+
+def _run_booking_mysql_select(config: LiveCheckConfig, query: str) -> list[str]:
+    """通过显式指定的容器只执行 SELECT，不允许验收脚本修改 Booking 数据。"""
+
+    command = [
+        "docker",
+        "exec",
+        "-i",
+        config.booking_mysql_container,
+        "mysql",
+        "--protocol=TCP",
+        "--batch",
+        "--raw",
+        "--skip-column-names",
+        "-u",
+        config.booking_mysql_username,
+        config.booking_mysql_database,
+    ]
+    environment = {**os.environ, "MYSQL_PWD": config.booking_mysql_password}
+    result = subprocess.run(
+        command,
+        input=query + "\n",
+        text=True,
+        capture_output=True,
+        check=False,
+        timeout=10,
+        env=environment,
+    )
+    if result.returncode != 0:
+        raise ProactiveBookingLiveCheckError("Booking MySQL 只读查询失败")
+    return [line for line in result.stdout.splitlines() if line.strip()]
+
+
+def _find_booking_appointment_id(config: LiveCheckConfig, request_id: str) -> str | None:
+    """通过 Booking 业务操作表把本轮请求绑定到唯一预约 ID。"""
+
+    query = (
+        "SELECT appointment_id FROM agent_booking_operation WHERE request_id = "
+        + _sql_literal(request_id)
+        + " LIMIT 1;"
+    )
+    rows = _run_booking_mysql_select(config, query)
+    if not rows or not rows[0].strip():
+        return None
+    return rows[0].strip()
+
+
+def _find_booking_outbox_event(
+    config: LiveCheckConfig, *, appointment_id: str
+) -> BookingOutboxEvent | None:
+    """读取本轮预约创建事件，确认 Outbox 已由 Booking 发布器标记为 PUBLISHED。"""
+
+    query = (
+        "SELECT event_key,event_type,aggregate_id,organization_id,status,payload "
+        "FROM agent_booking_outbox WHERE aggregate_id = "
+        + _sql_literal(appointment_id)
+        + " AND event_type = 'APPOINTMENT_CREATED' ORDER BY id DESC LIMIT 1;"
+    )
+    rows = _run_booking_mysql_select(config, query)
+    if not rows:
+        return None
+    fields = rows[0].split("\t", 5)
+    if len(fields) != 6:
+        raise ProactiveBookingLiveCheckError("Booking Outbox 查询结果字段不完整")
+    try:
+        payload = json.loads(fields[5])
+    except ValueError as exc:
+        raise ProactiveBookingLiveCheckError("Booking Outbox payload 不是合法 JSON") from exc
+    if not isinstance(payload, dict):
+        raise ProactiveBookingLiveCheckError("Booking Outbox payload 不是 JSON 对象")
+    return BookingOutboxEvent(
+        event_key=fields[0],
+        event_type=fields[1],
+        aggregate_id=fields[2],
+        organization_id=fields[3],
+        status=fields[4],
+        payload=payload,
+    )
+
+
+async def _wait_for_booking_outbox(
+    config: LiveCheckConfig, *, request_id: str
+) -> BookingOutboxEvent:
+    """等待业务操作和 Outbox 发布完成，避免只凭 Agent 下游结果判定成功。"""
+
+    deadline = time.monotonic() + config.poll_timeout_seconds
+    appointment_id: str | None = None
+    last_status = "NOT_FOUND"
+    while time.monotonic() < deadline:
+        if appointment_id is None:
+            appointment_id = await asyncio.to_thread(
+                _find_booking_appointment_id, config, request_id
+            )
+        if appointment_id is not None:
+            event = await asyncio.to_thread(
+                _find_booking_outbox_event, config, appointment_id=appointment_id
+            )
+            if event is not None:
+                last_status = event.status
+                if event.status == "PUBLISHED":
+                    return event
+                if event.status == "DEAD":
+                    raise ProactiveBookingLiveCheckError("Booking Outbox 已进入 DEAD")
+        await asyncio.sleep(1)
+    raise ProactiveBookingLiveCheckError(
+        f"等待 Booking Outbox 发布超时，appointment_id={appointment_id}, status={last_status}"
+    )
+
+
+def _event_routing_key(event_type: str) -> str:
+    """与 Booking Rabbit 发布器保持一致，用于受控重复投递验收。"""
+
+    routing_keys = {
+        "APPOINTMENT_CREATED": "appointment.created",
+        "APPOINTMENT_RESCHEDULED": "appointment.rescheduled",
+        "APPOINTMENT_CANCELLED": "appointment.cancelled",
+    }
+    try:
+        return routing_keys[event_type]
+    except KeyError as exc:
+        raise ProactiveBookingLiveCheckError("不支持的 Booking Outbox 事件类型") from exc
+
+
+async def _republish_duplicate_event(config: LiveCheckConfig, event: BookingOutboxEvent) -> None:
+    """把同一 Outbox 信封再次投递，验证 Agent Inbox 的 event_id 幂等。"""
+
+    envelope = {
+        "eventId": event.event_key,
+        "source": "booking",
+        "eventType": event.event_type,
+        "aggregateId": event.aggregate_id,
+        "organizationId": event.organization_id,
+        "payload": event.payload,
+    }
+    connection = await aio_pika.connect_robust(config.rabbitmq_url)
+    try:
+        channel = await connection.channel()
+        exchange = await channel.declare_exchange(
+            config.event_exchange, aio_pika.ExchangeType.DIRECT, durable=True
+        )
+        await exchange.publish(
+            aio_pika.Message(
+                body=json.dumps(envelope, ensure_ascii=False, separators=(",", ":")).encode(),
+                content_type="application/json",
+                delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+            ),
+            routing_key=_event_routing_key(event.event_type),
+        )
+    finally:
+        await connection.close()
+
+
 async def _probe_chain(
     connection: asyncpg.Connection,
     *,
     organization_id: str,
-    started_at: datetime,
+    event_id: str,
 ) -> ProactiveChainResult | None:
-    """查询一条新事件及其下游状态；找不到时返回 None 继续轮询。"""
+    """按 Booking Outbox 的 event_id 查询下游状态，避免误读其他并发事件。"""
 
     event = await connection.fetchrow(
         """
@@ -325,12 +537,12 @@ async def _probe_chain(
         FROM agent_proactive_event_inbox
         WHERE organization_id = $1
           AND event_type = 'APPOINTMENT_CREATED'
-          AND created_at >= $2
+          AND event_id = $2
         ORDER BY created_at DESC, event_id DESC
         LIMIT 1
         """,
         organization_id,
-        started_at,
+        event_id,
     )
     if event is None:
         return None
@@ -367,7 +579,7 @@ async def _probe_chain(
     )
 
 
-async def _wait_for_chain(config: LiveCheckConfig, *, started_at: datetime) -> ProactiveChainResult:
+async def _wait_for_chain(config: LiveCheckConfig, *, event_id: str) -> ProactiveChainResult:
     """等待事件 Inbox、通知 Outbox 和站内收件箱全部达到终态。"""
 
     deadline = time.monotonic() + config.poll_timeout_seconds
@@ -378,7 +590,7 @@ async def _wait_for_chain(config: LiveCheckConfig, *, started_at: datetime) -> P
             last = await _probe_chain(
                 connection,
                 organization_id=config.organization_id,
-                started_at=started_at,
+                event_id=event_id,
             )
             if last is not None and (
                 last.event_status == "PROCESSED"
@@ -403,6 +615,30 @@ async def _wait_for_chain(config: LiveCheckConfig, *, started_at: datetime) -> P
     )
 
 
+async def _assert_duplicate_does_not_grow(
+    config: LiveCheckConfig, *, event_id: str, baseline: ProactiveChainResult
+) -> None:
+    """重复投递后轮询一小段时间，确认 Inbox 和通知数量没有增长。"""
+
+    deadline = time.monotonic() + min(config.poll_timeout_seconds, 10.0)
+    connection = await asyncpg.connect(config.database_url)
+    try:
+        while time.monotonic() < deadline:
+            current = await _probe_chain(
+                connection,
+                organization_id=config.organization_id,
+                event_id=event_id,
+            )
+            if current is not None and (
+                current.notification_outbox_count > baseline.notification_outbox_count
+                or current.in_app_notification_count > baseline.in_app_notification_count
+            ):
+                raise ProactiveBookingLiveCheckError("重复投递导致通知数量增长，event_id 幂等失效")
+            await asyncio.sleep(1)
+    finally:
+        await connection.close()
+
+
 async def run_live_check(config: LiveCheckConfig) -> None:
     """执行前置检查，并按需运行一次真实主动提醒验收。"""
 
@@ -410,7 +646,6 @@ async def run_live_check(config: LiveCheckConfig) -> None:
         await _run_preflight(config)
     except (asyncpg.PostgresError, aio_pika.exceptions.AMQPError) as exc:
         raise ProactiveBookingLiveCheckError("PostgreSQL 或 RabbitMQ 前置检查失败") from exc
-    started_at = datetime.now(UTC)
     if not config.execute:
         print("主动提醒真实链路前置检查通过（未执行真实预约写入）")
         print("如需验收完整链路，请确认使用本地测试数据后追加 --execute")
@@ -432,8 +667,16 @@ async def run_live_check(config: LiveCheckConfig) -> None:
         await _decide_confirmation(client, config, confirmation_id, request_id)
         await _wait_for_execution(client, config, confirmation_id)
 
-    result = await _wait_for_chain(config, started_at=started_at)
+    booking_event = await _wait_for_booking_outbox(config, request_id=request_id)
+    result = await _wait_for_chain(config, event_id=booking_event.event_key)
+    await _republish_duplicate_event(config, booking_event)
+    await _assert_duplicate_does_not_grow(
+        config,
+        event_id=booking_event.event_key,
+        baseline=result,
+    )
     print("预约主动提醒真实链路验收通过")
+    print(f"booking_outbox_event_id={booking_event.event_key}")
     print(f"event_id={result.event_id}")
     print(f"appointment_id={result.aggregate_id}")
     print(
@@ -443,6 +686,7 @@ async def run_live_check(config: LiveCheckConfig) -> None:
         f"in_app={result.in_app_notification_count}; "
         f"expected={result.expected_notification_count}"
     )
+    print("重复投递验收通过：Inbox 和站内通知数量未增长")
     print("请使用已有取消预约确认流程清理本次本地测试预约；本脚本不会直接删除业务数据")
 
 
