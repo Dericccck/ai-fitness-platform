@@ -23,6 +23,9 @@ export CUSTOMER_SERVICE_INTERNAL_SERVICE_TOKEN='与 Gateway 客服服务配置�
 make customer-service-check
 make customer-service-run
 
+# 真实客服工单验收前的只读环境检查，不会创建工单
+make agent-customer-service-preflight
+
 # 默认只做客服确认单无写入联调
 make agent-customer-service-live-check
 
@@ -50,6 +53,9 @@ make gateway-customer-service-role-live-check
 
 默认端口为 `8084`。生产环境应关闭 `CUSTOMER_SERVICE_SCHEMA_INIT_ENABLED`，由独立迁移任务执行
 `src/main/resources/db/migration/V20260824_001__create_customer_service_ticket.sql`。
+
+`GET /health/live` 是进程存活探针，只返回 `{"status":"ok"}`，不访问 MySQL，也不代表客服工单
+业务已经就绪。真实验收前应先运行 `agent-customer-service-preflight`，再按受控写入脚本的开关和授权要求执行。
 
 ## 内部接口
 

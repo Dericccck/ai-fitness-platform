@@ -1549,3 +1549,14 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
 
 下一步仍固定为：在用户明确授权并确认 `fitness-mysql` 是本地测试库后，执行一次真实客服工单受控验收；
 否则继续补充离线协议测试，不执行任何客服业务写入。
+
+本轮新增真实客服验收前的只读环境门禁：
+
+- 客服服务新增 `GET /health/live`，只确认 `8084` 进程可以响应，不访问 MySQL，不代表工单业务已经就绪。
+- 新增 `make agent-customer-service-preflight`，依次检查 Agent 存活、Agent 就绪、Java Gateway 存活、客服服务存活，
+  并确认当前 Shell 提供 `AGENT_LIVE_AGENT_CONTEXT`；该命令不调用 DeepSeek、不访问客服工单接口、不执行写操作。
+- 新增 `test_customer_service_live_preflight.py`，覆盖 Agent readiness 异常、客服存活响应、探针顺序和超时门禁。
+- 客服服务 Maven 测试当前为 `12` 项全部通过，客服前置检查相关 Agent 测试为 `20` 项全部通过。
+
+下一步仍然是：先运行该只读前置检查，确认本地 Agent、Gateway、客服服务均已启动；只有在用户明确授权并确认
+`fitness-mysql` 为本地测试库后，才执行真实工单受控验收。
