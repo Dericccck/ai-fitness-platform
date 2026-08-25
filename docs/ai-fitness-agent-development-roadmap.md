@@ -1526,3 +1526,15 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
 - 相同 `request_id`、不同 `payload_hash`：在查询确认 JTI 前直接返回 `409`，避免把一个业务请求绑定到两组参数。
 - 相同 `request_id` 的并发插入竞争：捕获唯一键冲突后读取已存在工单，不重复消费确认或写入审计。
 - 已消费 JTI 即使命中相同 `request_id` 也返回 `409`；这条规则与前述安全复用互斥，防止幂等路径掩盖凭证重放。
+
+本轮继续补齐 Gateway 客服客户端的下游异常契约测试：
+
+- 新增 `fitness-core-gateway/src/test/java/com/shuyiwa/fitness/gateway/config/CustomerServiceClientTest.java`，
+  验证客服列表响应能够转换为稳定的 Tool View，并且请求会透传内部 Token、签名主体、角色、机构和 `request_id`。
+- 验证下游 `403` 统一映射为 Gateway 权限拒绝、`404` 映射为资源不存在、`5xx` 和网络异常映射为暂时不可用；
+  空响应不会被误判为空列表，缺少客服内部 Token 时不会发起下游请求。
+- Gateway 客服客户端测试已通过；本轮仍未执行真实客服工单写入，也没有改变客服业务范围。
+
+下一步固定为“客服服务真实受控写入验收前的全链路回归”：先确认本地 `fitness-mysql` 测试库和清理账号，
+再由用户明确授权后执行受控脚本，验证 Agent `interrupt()`、Gateway 异常边界、客服服务幂等/JTI/审计和中文编码。
+若暂不授权真实写入，则继续补充离线协议测试，不把模拟测试标记为真实验收通过。

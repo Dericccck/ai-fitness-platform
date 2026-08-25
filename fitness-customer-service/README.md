@@ -61,3 +61,6 @@ make gateway-customer-service-role-live-check
 
 仓储自动化测试覆盖四类写入边界：新 JTI 的安全幂等复用、参数摘要冲突、并发唯一键竞争和已消费
 JTI 重放；这些测试只使用 Mockito，不会连接本地 MySQL。真实数据库写入仍必须通过受控验收脚本执行。
+
+Gateway 的 `CustomerServiceClientTest` 另外覆盖下游 `403`、`404`、`5xx`、网络异常、空响应和缺少
+内部 Token 的统一错误语义，并验证内部身份与机构请求头会被透传；这些测试同样不写入客服数据库。
