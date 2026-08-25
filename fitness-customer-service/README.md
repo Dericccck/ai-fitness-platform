@@ -58,3 +58,6 @@ make gateway-customer-service-role-live-check
 - `POST /internal/customer-service/v1/tickets`（必须带完整确认声明，仅由 Gateway 调用）
 
 接口只能由 Java Tool Gateway 调用，Agent 不得直连本服务或数据库。
+
+仓储自动化测试覆盖四类写入边界：新 JTI 的安全幂等复用、参数摘要冲突、并发唯一键竞争和已消费
+JTI 重放；这些测试只使用 Mockito，不会连接本地 MySQL。真实数据库写入仍必须通过受控验收脚本执行。
