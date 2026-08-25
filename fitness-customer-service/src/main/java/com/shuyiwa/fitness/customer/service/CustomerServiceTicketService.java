@@ -5,6 +5,8 @@ import com.shuyiwa.fitness.customer.api.CustomerServiceTicketView;
 import com.shuyiwa.fitness.customer.api.CustomerServiceTicketCreateRequest;
 import com.shuyiwa.fitness.customer.repository.CustomerServiceTicketRepository;
 import com.shuyiwa.fitness.customer.security.CustomerServiceActor;
+import com.shuyiwa.fitness.customer.security.CustomerServiceConfirmation;
+import com.shuyiwa.fitness.customer.security.CustomerServiceSecurityException;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
@@ -52,10 +54,6 @@ public class CustomerServiceTicketService {
 
     public CustomerServiceTicketView create(CustomerServiceActor actor,
                                              CustomerServiceTicketCreateRequest request) {
-        if (actor.getConfirmation() == null) {
-            throw new org.springframework.web.server.ResponseStatusException(
-                    org.springframework.http.HttpStatus.UNAUTHORIZED, "客服工单写入必须有确认凭证");
-        }
         requireOrganization(actor, request.getOrganizationId());
         String subjectUserId = request.getSubjectUserId();
         if (subjectUserId == null || subjectUserId.trim().isEmpty()) {
@@ -63,10 +61,36 @@ public class CustomerServiceTicketService {
         }
         if (!actor.isAdministrator() && !actor.getUserId().equals(subjectUserId)) {
             throw new org.springframework.web.server.ResponseStatusException(
-                    org.springframework.http.HttpStatus.FORBIDDEN, "只能为自己创建客服工单");
+                org.springframework.http.HttpStatus.FORBIDDEN, "只能为自己创建客服工单");
         }
         validate(request);
+        validateConfirmation(actor.getConfirmation(), request.getOrganizationId(), subjectUserId);
         return repository.insert(actor, request, subjectUserId);
+    }
+
+    /**
+     * 在业务服务再次核对确认声明，形成 Gateway 之外的纵深防御。
+     *
+     * <p>Gateway 已经验证了签名 Token，但内部服务不能只相信请求头“看起来完整”。如果
+     * 内部 Token 被错误复用或客服服务被绕过，工具、动作、机构和资源仍必须与本次工单
+     * 创建契约一致；否则请求在进入事务前直接拒绝。</p>
+     */
+    private void validateConfirmation(CustomerServiceConfirmation confirmation,
+                                      String organizationId, String subjectUserId) {
+        if (confirmation == null) {
+            throw new CustomerServiceSecurityException("客服工单写入必须有确认凭证");
+        }
+        if (!"fitness.support.ticket.create.v1".equals(confirmation.getToolId())
+                || !"CREATE_CUSTOMER_SERVICE_TICKET".equals(confirmation.getAction())) {
+            throw new CustomerServiceSecurityException("客服工单确认动作不匹配");
+        }
+        if (!organizationId.equals(confirmation.getOrganizationId())) {
+            throw new CustomerServiceSecurityException("客服工单确认机构不匹配");
+        }
+        String expectedResource = organizationId + ":" + subjectUserId;
+        if (!expectedResource.equals(confirmation.getResource())) {
+            throw new CustomerServiceSecurityException("客服工单确认资源不匹配");
+        }
     }
 
     private void validate(CustomerServiceTicketCreateRequest request) {

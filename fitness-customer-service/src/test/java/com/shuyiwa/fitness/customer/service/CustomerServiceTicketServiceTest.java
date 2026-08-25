@@ -53,7 +53,7 @@ public class CustomerServiceTicketServiceTest {
         service.list(actor("student-1", "STUDENT"), "org-2", null, null, 20);
     }
 
-    @Test(expected = org.springframework.web.server.ResponseStatusException.class)
+    @Test(expected = com.shuyiwa.fitness.customer.security.CustomerServiceSecurityException.class)
     public void ticketCreationRequiresConfirmation() {
         CustomerServiceTicketCreateRequest request = createRequest();
         service.create(actor("student-1", "STUDENT"), request);
@@ -75,6 +75,17 @@ public class CustomerServiceTicketServiceTest {
                 "admin-1", Collections.singleton("ORGANIZATION_ADMIN"),
                 Collections.singleton("org-1"), "request-1", confirmation), request).getId());
         verify(repository).insert(any(CustomerServiceActor.class), eq(request), eq("admin-1"));
+    }
+
+    @Test(expected = com.shuyiwa.fitness.customer.security.CustomerServiceSecurityException.class)
+    public void creationRejectsConfirmationForAnotherAction() {
+        CustomerServiceTicketCreateRequest request = createRequest();
+        CustomerServiceConfirmation confirmation = new CustomerServiceConfirmation(
+                "confirmation-1", "jti-1", "fitness.booking.create.v1",
+                "CREATE_APPOINTMENT", "org-1", "org-1:student-1",
+                "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        service.create(new CustomerServiceActor("student-1", Collections.singleton("STUDENT"),
+                Collections.singleton("org-1"), "request-1", confirmation), request);
     }
 
     private static CustomerServiceTicketCreateRequest createRequest() {

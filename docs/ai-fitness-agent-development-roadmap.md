@@ -1485,3 +1485,6 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
 本轮先补充无写入联调脚本 `make agent-customer-service-live-check`：它会调用真实 Agent/DeepSeek
 生成客服工单确认单，校验路由和动作后自动拒绝确认单，不会写入 MySQL。由于当前客服服务还没有安全的测试工单删除接口，
 脚本刻意不提供 `--execute`；真实写入验收要等隔离测试数据和清理方案准备好后再单独授权。
+
+在进入真实写入前又补充了客服服务侧的纵深防御：即使请求已经通过 Gateway，客服服务仍会核对确认工具 ID、动作、
+机构 ID 和 `organization_id:subject_user_id` 资源标识；不匹配时在事务前返回 `403`，不会消费 JTI 或写入工单。
