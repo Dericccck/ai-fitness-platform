@@ -63,9 +63,9 @@ public class CustomerServiceTicketRepository {
     /**
      * 在一个事务中创建工单、消费确认 JTI 并写入审计。
      *
-     * <p>同一 request_id 重试时直接复用原工单；如果相同 request_id 携带了不同的参数摘要，
-     * 则返回冲突，防止幂等键被错误复用。JTI 消费放在业务写入之后但仍在同一事务内，
-     * 任一步失败都会整体回滚。</p>
+     * <p>同一 request_id 携带新的确认 JTI 且参数摘要一致时复用原工单；如果相同 request_id
+     * 携带了不同摘要，或重放已经消费过的 JTI，则返回冲突，防止幂等键和确认凭证相互掩盖。
+     * JTI 消费放在业务写入之后但仍在同一事务内，任一步失败都会整体回滚。</p>
      */
     @Transactional
     public CustomerServiceTicketView insert(CustomerServiceActor actor,
@@ -78,6 +78,7 @@ public class CustomerServiceTicketRepository {
             if (!existing.get().payloadHash.equalsIgnoreCase(confirmation.getPayloadHash())) {
                 throw new CustomerServiceConflictException("客服工单请求 ID 已绑定其他内容");
             }
+            ensureConfirmationNotConsumed(confirmation.getJti());
             return findById(request.getOrganizationId(), existing.get().id)
                     .orElseThrow(() -> new IllegalStateException("客服工单幂等记录不存在"));
         }
@@ -98,6 +99,7 @@ public class CustomerServiceTicketRepository {
             if (!raced.payloadHash.equalsIgnoreCase(confirmation.getPayloadHash())) {
                 throw new CustomerServiceConflictException("客服工单请求 ID 已绑定其他内容");
             }
+            ensureConfirmationNotConsumed(confirmation.getJti());
             return findById(request.getOrganizationId(), raced.id)
                     .orElseThrow(() -> new IllegalStateException("客服工单幂等记录不存在"));
         }
@@ -125,6 +127,22 @@ public class CustomerServiceTicketRepository {
         }
     }
 
+    /**
+     * 幂等复用不能掩盖确认凭证重放。
+     *
+     * <p>新的确认凭证可以在相同 request_id 和相同参数下安全复用已有工单；但如果本次
+     * 请求携带的 JTI 已经被消费，说明是同一份凭证重放，必须返回冲突而不是把幂等查询
+     * 伪装成一次成功执行。</p>
+     */
+    private void ensureConfirmationNotConsumed(String jti) {
+        Integer count = jdbc.queryForObject(
+                "SELECT COUNT(1) FROM agent_customer_service_confirmation_consumption WHERE jti = ?",
+                new Object[]{jti}, Integer.class);
+        if (count != null && count > 0) {
+            throw new CustomerServiceConflictException("确认凭证已被消费，不能重放");
+        }
+    }
+
     private Optional<ExistingTicket> findByRequestId(String requestId) {
         List<ExistingTicket> result = jdbc.query(
                 "SELECT id, payload_hash FROM agent_customer_service_ticket WHERE create_request_id = ?",
@@ -133,11 +151,11 @@ public class CustomerServiceTicketRepository {
         return result.isEmpty() ? Optional.empty() : Optional.of(result.get(0));
     }
 
-    private static final class ExistingTicket {
+    static final class ExistingTicket {
         private final String id;
         private final String payloadHash;
 
-        private ExistingTicket(String id, String payloadHash) {
+        ExistingTicket(String id, String payloadHash) {
             this.id = id;
             this.payloadHash = payloadHash;
         }
