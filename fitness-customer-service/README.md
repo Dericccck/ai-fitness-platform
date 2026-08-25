@@ -11,6 +11,8 @@
 - 工单创建只允许分类、标题、描述和可选关联资源；来源固定为 `AGENT`，状态固定从 `OPEN` 开始。
 - 创建使用 `X-Request-ID` 幂等，确认 JTI 消费、工单创建和 `CREATED` 审计必须在同一事务内完成；本服务当前不提供 Agent 自动改派、关闭或解决工单。
 - 客服服务不会只相信完整的确认请求头，还会再次核对工具 ID、动作、机构和资源标识，形成 Gateway 之外的纵深防御。
+- 真实写入验收使用 Agent 项目的受控脚本；测试工单携带随机 `request_id`，验收后只删除本轮
+  `request_id` 对应的工单、确认消费和审计，不允许按机构、状态或时间范围批量清理。
 
 ## 本地启动
 
@@ -20,7 +22,20 @@ export CUSTOMER_SERVICE_DB_PASSWORD=fitness_dev_2026
 export CUSTOMER_SERVICE_INTERNAL_SERVICE_TOKEN='与 Gateway 客服服务配置相同的内部 Token'
 make customer-service-check
 make customer-service-run
+
+# 默认只做客服确认单无写入联调
+make agent-customer-service-live-check
+
+# 只有确认使用本机测试数据且允许自动清理时，才执行受控写入验收
+export CUSTOMER_SERVICE_LIVE_ALLOW_WRITE=1
+export CUSTOMER_SERVICE_LIVE_CLEANUP=1
+make agent-customer-service-write-live-check
 ```
+
+受控写入验收还要求 `GATEWAY_DB_USERNAME`、`GATEWAY_DB_PASSWORD` 和
+`AGENT_LIVE_AGENT_CONTEXT`。脚本只接受回环 Agent 地址，并且 Makefile 和脚本都要求显式写入开关；
+不应在生产或共享数据库中运行。脚本会验证确认批准、`AGENT/OPEN` 工单、一次性确认消费、
+`CREATED` 审计和中文内容编码，然后在 `finally` 中精确清理。
 
 默认端口为 `8084`。生产环境应关闭 `CUSTOMER_SERVICE_SCHEMA_INIT_ENABLED`，由独立迁移任务执行
 `src/main/resources/db/migration/V20260824_001__create_customer_service_ticket.sql`。

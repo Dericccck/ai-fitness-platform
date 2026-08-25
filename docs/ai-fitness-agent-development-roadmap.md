@@ -1491,3 +1491,21 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
 
 准备验收时又修正了幂等与一次性凭证的边界：相同 `request_id`、相同参数但携带新的确认 JTI 可以复用已有工单；
 如果携带的 JTI 已经消费过，则返回 `409`，不能被幂等查询路径伪装成再次执行成功。
+
+本轮完成了“客服工单受控写入验收脚本”，但没有执行真实写入：
+
+- 新增 `scripts/customer_service_write_live_check.py`，与无写入脚本分离；脚本只有在命令行
+  `--execute`、`CUSTOMER_SERVICE_LIVE_ALLOW_WRITE=1` 和 `CUSTOMER_SERVICE_LIVE_CLEANUP=1` 同时满足时才会继续。
+- Agent 地址必须是 `127.0.0.1`、`localhost` 或 `::1`；MySQL 必须有显式账号密码，并支持宿主机
+  `mysql` 客户端或明确指定的 `fitness-mysql` 容器，避免把测试写入发送到共享或生产环境。
+- 每轮生成随机会话、随机 `request_id` 和随机中文测试标识；写入前确认该幂等键不存在，写入后按
+  精确 `request_id` 读取工单、确认消费和 `CREATED` 审计，验证工单来源为 `AGENT`、状态为 `OPEN`、
+  三类记录各一条，并检查中文测试标识确实以 UTF-8 保存。
+- 清理使用事务，顺序为客服审计 → 确认 JTI 消费 → 工单；SQL 不包含机构、状态、时间范围或通配条件，
+  清理后再次查询确认工单数量为零。即使 Agent 执行失败，也会在 `finally` 中尝试清理本轮 request_id。
+- Makefile 新增 `agent-customer-service-write-live-check`，默认不运行；本轮只完成脚本和自动化门禁测试，
+  没有替用户批准真实客服工单，也没有新增自动关闭、人工转接、短信或 Push。
+
+下一步固定为：在用户明确授权且确认 `fitness-mysql` 为本地测试库后，执行一次该受控脚本；随后补充
+基于真实数据库事实的幂等重复请求、参数摘要冲突、越权主体和中文编码回归证据。若不执行真实写入，
+则继续完善自动化测试，不应伪造“真实验收已通过”。

@@ -1,12 +1,12 @@
 SHELL := /bin/sh
 
-.PHONY: agent-jwks-check agent-proactive-worker agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-live-check
+.PHONY: agent-jwks-check agent-proactive-worker agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-live-check agent-customer-service-write-live-check
 
 AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
-.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-customer-service-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run gateway-training-role-live-check gateway-training-write-live-check gateway-training-workflow-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check training-check training-run training-role-live-check training-role-visibility-live-check booking-check booking-it booking-run customer-service-check customer-service-run legacy-java-diagnostic check
+.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-customer-service-live-check agent-customer-service-write-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run gateway-training-role-live-check gateway-training-write-live-check gateway-training-workflow-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check training-check training-run training-role-live-check training-role-visibility-live-check booking-check booking-it booking-run customer-service-check customer-service-run legacy-java-diagnostic check
 
 help:
 	@echo "Available targets:"
@@ -32,6 +32,7 @@ help:
 	@echo "  agent-booking-live-check Check Booking confirmation flow; --execute enables real appointment write"
 	@echo "  agent-fitness-live-check Check Fitness draft confirmation flow; --execute enables real draft write"
 	@echo "  agent-customer-service-live-check Check customer ticket confirmation flow; always rejects and does not write"
+	@echo "  agent-customer-service-write-live-check Run opt-in customer ticket write acceptance with exact cleanup"
 	@echo "  agent-dev-context Sign a 5-minute local-only organization admin AgentContext"
 	@echo "  agent-session-summary-eval Run deterministic session summary security gates"
 	@echo "  agent-jwks-check Verify a real authentication service JWKS URL and kid"
@@ -321,6 +322,14 @@ customer-service-run:
 agent-customer-service-live-check:
 	@test -n "$$AGENT_LIVE_AGENT_CONTEXT" || (echo "请先设置 AGENT_LIVE_AGENT_CONTEXT（认证服务签发的业务用户 Token）"; exit 1)
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/customer_service_live_check.py
+
+agent-customer-service-write-live-check:
+	@test "$$CUSTOMER_SERVICE_LIVE_ALLOW_WRITE" = "1" || (echo "默认禁止写入，请设置 CUSTOMER_SERVICE_LIVE_ALLOW_WRITE=1"; exit 1)
+	@test "$$CUSTOMER_SERVICE_LIVE_CLEANUP" = "1" || (echo "必须设置 CUSTOMER_SERVICE_LIVE_CLEANUP=1 才允许写入"; exit 1)
+	@test -n "$$AGENT_LIVE_AGENT_CONTEXT" || (echo "请先设置 AGENT_LIVE_AGENT_CONTEXT（认证服务签发的业务用户 Token）"; exit 1)
+	@test -n "$$GATEWAY_DB_USERNAME" || (echo "请先设置 GATEWAY_DB_USERNAME 供精确清理"; exit 1)
+	@test -n "$$GATEWAY_DB_PASSWORD" || (echo "请先设置 GATEWAY_DB_PASSWORD 供精确清理"; exit 1)
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/customer_service_write_live_check.py --execute
 
 legacy-java-diagnostic:
 	./mvnw --batch-mode -DskipTests clean compile
