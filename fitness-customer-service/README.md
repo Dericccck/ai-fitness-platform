@@ -30,12 +30,23 @@ make agent-customer-service-live-check
 export CUSTOMER_SERVICE_LIVE_ALLOW_WRITE=1
 export CUSTOMER_SERVICE_LIVE_CLEANUP=1
 make agent-customer-service-write-live-check
+
+# 只读验证管理员、教练、学员的工单权限边界，不会写入客服数据
+export CUSTOMER_SERVICE_LIVE_ORGANIZATION_ID='本地测试机构 ID'
+export CUSTOMER_SERVICE_LIVE_STUDENT_ID='本地测试学员 ID'
+export CUSTOMER_SERVICE_LIVE_COACH_ID='本地测试教练 ID'
+export CUSTOMER_SERVICE_LIVE_ADMIN_ID='本地测试管理员 ID'
+export FITNESS_DEV_CONTEXT_ISSUER=1
+make gateway-customer-service-role-live-check
 ```
 
 受控写入验收还要求 `GATEWAY_DB_USERNAME`、`GATEWAY_DB_PASSWORD` 和
 `AGENT_LIVE_AGENT_CONTEXT`。脚本只接受回环 Agent 地址，并且 Makefile 和脚本都要求显式写入开关；
 不应在生产或共享数据库中运行。脚本会验证确认批准、`AGENT/OPEN` 工单、一次性确认消费、
 `CREATED` 审计和中文内容编码，然后在 `finally` 中精确清理。
+
+角色只读联调只调用 Gateway 的 `GET /internal/agent-tools/v1/customer-service/tickets`，验证学员、
+教练和管理员的主体范围及机构范围；它不会调用 LLM，也不会创建客服工单。
 
 默认端口为 `8084`。生产环境应关闭 `CUSTOMER_SERVICE_SCHEMA_INIT_ENABLED`，由独立迁移任务执行
 `src/main/resources/db/migration/V20260824_001__create_customer_service_ticket.sql`。
