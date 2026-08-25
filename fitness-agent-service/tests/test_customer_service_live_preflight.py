@@ -114,3 +114,42 @@ async def test_preflight_rejects_non_positive_timeout() -> None:
                 timeout_seconds=0,
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_preflight_disables_system_proxy_for_local_health_checks(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """本地探针必须绕过代理，避免代理 502 掩盖服务未启动。"""
+
+    captured: dict[str, object] = {}
+
+    class FakeClient:
+        async def __aenter__(self) -> "FakeClient":
+            return self
+
+        async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
+            return None
+
+    def fake_client(**kwargs: object) -> FakeClient:
+        captured.update(kwargs)
+        return FakeClient()
+
+    monkeypatch.setenv("AGENT_LIVE_AGENT_CONTEXT", "signed-context")
+    monkeypatch.setattr(preflight.httpx, "AsyncClient", fake_client)
+    monkeypatch.setattr(
+        preflight,
+        "_get_json",
+        AsyncMock(side_effect=lambda client, name, url: preflight.ProbeResult(name, True, url)),
+    )
+
+    await run_preflight(
+        Namespace(
+            agent_url="http://127.0.0.1:8090",
+            gateway_url="http://127.0.0.1:8081",
+            customer_service_url="http://127.0.0.1:8084",
+            timeout_seconds=1.0,
+        )
+    )
+
+    assert captured["trust_env"] is False

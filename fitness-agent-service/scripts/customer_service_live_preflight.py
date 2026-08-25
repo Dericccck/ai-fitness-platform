@@ -136,7 +136,9 @@ async def run_preflight(args: argparse.Namespace) -> tuple[ProbeResult, ...]:
         bool(signed_context),
         "已提供签名上下文" if signed_context else "未提供签名上下文",
     )
-    async with httpx.AsyncClient(timeout=args.timeout_seconds) as client:
+    # 健康检查目标是本机服务，不能让 HTTP_PROXY/HTTPS_PROXY 把 127.0.0.1
+    # 转发到外部代理，否则服务未启动时可能得到代理的 502，掩盖真正原因。
+    async with httpx.AsyncClient(timeout=args.timeout_seconds, trust_env=False) as client:
         results = [
             context_result,
             await _get_json(client, "agent-live", args.agent_url.rstrip("/") + "/health/live"),

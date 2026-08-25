@@ -57,6 +57,8 @@ make gateway-customer-service-role-live-check
 `GET /health/live` 是进程存活探针，只返回 `{"status":"ok"}`，不访问 MySQL。`GET /health/ready` 会只读检查
 MySQL 连接、最新客服表结构版本和内部 Token 配置，返回脱敏的 `ready/not_ready` 状态，不返回密钥或异常正文。
 真实验收前应先运行 `agent-customer-service-preflight`，再按受控写入脚本的开关和授权要求执行。
+该 preflight 对本地健康检查会绕过系统 HTTP 代理；如果客服服务未启动，会直接报告无法连接 `8084`，不会把
+代理返回的 `502` 当成客服服务业务响应。
 
 ## 内部接口
 
