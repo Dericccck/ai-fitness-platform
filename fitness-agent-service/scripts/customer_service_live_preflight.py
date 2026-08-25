@@ -88,6 +88,21 @@ def validate_live_response(name: str, payload: Any) -> ProbeResult:
     return ProbeResult(name, False, "存活探针返回状态异常")
 
 
+def validate_customer_service_readiness(payload: Any) -> ProbeResult:
+    """校验客服服务就绪结果，但不输出数据库和 Token 的详细配置。"""
+
+    if not isinstance(payload, dict) or not isinstance(payload.get("checks"), dict):
+        return ProbeResult("customer-service-ready", False, "响应不是合法 readiness 结构")
+    checks = payload["checks"]
+    failed = [name for name, value in checks.items() if value != "ok"]
+    if payload.get("status") != "ready" or failed:
+        detail = "未就绪字段=" + ",".join(sorted(str(name) for name in failed))
+        if not failed:
+            detail = "状态非 ready"
+        return ProbeResult("customer-service-ready", False, detail)
+    return ProbeResult("customer-service-ready", True, "数据库、客服表结构和内部 Token 已就绪")
+
+
 async def _get_json(client: httpx.AsyncClient, name: str, url: str) -> ProbeResult:
     """访问探针并收敛网络、HTTP 和 JSON 异常为安全诊断结果。"""
 
@@ -104,6 +119,8 @@ async def _get_json(client: httpx.AsyncClient, name: str, url: str) -> ProbeResu
     return (
         validate_agent_readiness(payload)
         if name == "agent-ready"
+        else validate_customer_service_readiness(payload)
+        if name == "customer-service-ready"
         else validate_live_response(name, payload)
     )
 
@@ -129,6 +146,11 @@ async def run_preflight(args: argparse.Namespace) -> tuple[ProbeResult, ...]:
                 client,
                 "customer-service-live",
                 args.customer_service_url.rstrip("/") + "/health/live",
+            ),
+            await _get_json(
+                client,
+                "customer-service-ready",
+                args.customer_service_url.rstrip("/") + "/health/ready",
             ),
         ]
     return tuple(results)

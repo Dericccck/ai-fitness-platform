@@ -9,6 +9,7 @@ from scripts.customer_service_live_preflight import (
     CustomerServicePreflightError,
     run_preflight,
     validate_agent_readiness,
+    validate_customer_service_readiness,
     validate_live_response,
 )
 
@@ -50,6 +51,28 @@ def test_customer_service_preflight_accepts_only_ok_live_status() -> None:
     assert validate_live_response("customer-service-live", {"status": "down"}).passed is False
 
 
+def test_customer_service_preflight_accepts_ready_customer_service() -> None:
+    result = validate_customer_service_readiness(
+        {
+            "status": "ready",
+            "checks": {"database": "ok", "schema": "ok", "internal_token": "ok"},
+        }
+    )
+
+    assert result.passed is True
+
+
+def test_customer_service_preflight_rejects_missing_customer_service_schema() -> None:
+    result = validate_customer_service_readiness(
+        {
+            "status": "not_ready",
+            "checks": {"database": "ok", "schema": "failed", "internal_token": "ok"},
+        }
+    )
+
+    assert result.passed is False
+
+
 @pytest.mark.asyncio
 async def test_preflight_checks_customer_service_without_business_request(
     monkeypatch: pytest.MonkeyPatch,
@@ -75,8 +98,9 @@ async def test_preflight_checks_customer_service_without_business_request(
         "agent-ready",
         "gateway-live",
         "customer-service-live",
+        "customer-service-ready",
     ]
-    assert probe.await_count == 4
+    assert probe.await_count == 5
 
 
 @pytest.mark.asyncio
