@@ -4,6 +4,7 @@ import pytest
 
 from app.agent.fitness_tools import build_fitness_tool_registry
 from app.agent.tool_registry import ToolConfirmationNormalizationError
+from app.confirmation.service import _organization_from_input
 from app.confirmation.normalization import (
     ConfirmationNormalizationContext,
     ConfirmationResourceSnapshot,
@@ -104,6 +105,18 @@ def test_booking_payload_uses_java_gateway_camel_case_contract() -> None:
     assert '"organizationId":"org-1"' in canonical
     assert '"startTime":"2026-08-20T10:00:00Z"' in canonical
     assert '"organization_id"' not in canonical
+
+
+def test_customer_service_ticket_creation_uses_input_organization_scope() -> None:
+    """客服创建确认不能误用资源型动作的 Gateway 占位机构。"""
+
+    assert (
+        _organization_from_input(
+            "fitness.support.ticket.create.v1",
+            {"organization_id": "org-1", "category": "APPOINTMENT"},
+        )
+        == "org-1"
+    )
 
 
 def test_booking_confirmation_uses_bound_organization_id() -> None:
