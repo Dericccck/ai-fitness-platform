@@ -1599,3 +1599,14 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
 下一步固定为：运行 `make release-check` 并记录全量质量门禁结果；通过后进入最终可靠性阶段，补齐
 可观测性告警、备份/恢复验证、服务重启与消息重复投递故障演练、压测和灰度/回滚检查。继续忽略赛事、作品、
 活动运营、短信、Push、人工转接以及暂不需要的复杂训练业务；不再扩展客服自动关闭、自动改派或赔付能力。
+
+本轮已开始最终可靠性阶段的第一项“可观测性与告警基线”：
+
+- 增加 `deployment/observability/prometheus.yml`，采集 Agent API 与独立 Worker 的低基数 Metrics；
+  本地 Docker Desktop 通过 `host.docker.internal` 访问宿主机服务，生产环境必须替换为服务发现或内网地址。
+- 增加 `deployment/observability/fitness-agent-alerts.yml`，覆盖 Agent 不可用、HTTP 5xx 比例、P95 延迟、
+  请求堆积、Operations 审计失败、后台维护失败和站内通知投递失败。
+- Docker Compose 新增可选 `agent-prometheus` 和持久化数据卷；`make observability-up` 可以和现有
+  OpenTelemetry Collector 一起启动。Prometheus 负责 Metrics/告警，OTel Collector 负责 Trace，两者不互相替代。
+- 告警标签不包含机构 ID、用户 ID、工单 ID、确认单 ID 或 request_id；具体问题通过告警时间窗关联结构化日志和 Trace。
+- 当前配置只完成本地规则与采集基线，不代表已接入企业 Alertmanager、值班系统或生产监控网络；这些属于后续生产演练。

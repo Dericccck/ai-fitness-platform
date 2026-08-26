@@ -1,0 +1,38 @@
+# 健身 Agent 可观测性与告警
+
+## 本地启动
+
+先启动 Agent API（默认 `8090`），再启动观测组件：
+
+```bash
+docker compose -f deployment/docker-compose.agent-infra.yml --profile observability up -d agent-prometheus agent-otel-collector
+```
+
+Prometheus 地址为 <http://127.0.0.1:9090>，Agent Metrics 地址为
+<http://127.0.0.1:8090/metrics>。OpenTelemetry Collector 继续负责 Trace 接收和本地调试输出，
+Prometheus 负责抓取 Metrics；两条链路职责不同，不用 Trace 代替指标告警。
+
+## 告警范围
+
+`fitness-agent-alerts.yml` 当前覆盖：
+
+- Agent 进程不可用、HTTP 5xx 比例、P95 延迟和请求堆积；
+- Operations 审计失败；
+- Memory、会话摘要、通知等后台维护批次失败；
+- 站内通知投递失败。
+
+告警标签只使用 `severity`、`service` 等固定值，不包含机构 ID、用户 ID、工单 ID、确认单 ID 或
+`request_id`。具体请求必须通过告警时间窗口、结构化日志和 Trace 关联，避免把业务标识直接放进
+Prometheus 时间序列。
+
+## 生产接入要求
+
+本地配置只用于验证规则加载和 Metrics 抓取。生产环境还必须：
+
+1. 使用服务发现或内网地址替换 `host.docker.internal`；
+2. 给 Prometheus 配置持久化存储、容量保留策略和访问控制；
+3. 将 Prometheus 告警转发到企业 Alertmanager/值班系统，并为 `critical` 和 `warning` 配置不同升级策略；
+4. 将告警与既有 OTLP Trace、结构化日志、数据库和 RabbitMQ 监控关联；
+5. 对告警规则做值班演练，确认 Agent 宕机、审计失败和通知失败都能在预期时间内发现。
+
+本配置不会自动发送短信、Push 或外部通知，也不会改变健身业务的写入确认流程。

@@ -1,0 +1,33 @@
+global:
+  # 本地开发使用较短采集周期，便于观察 Agent 请求和 Worker 状态；生产环境应根据
+  # Prometheus 容量、告警时效和服务数量单独调整，不能把本地值直接照搬到生产。
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+rule_files:
+  - /etc/prometheus/rules/fitness-agent-alerts.yml
+
+scrape_configs:
+  - job_name: fitness-agent
+    metrics_path: /metrics
+    static_configs:
+      # Docker Desktop 可以通过 host.docker.internal 访问宿主机上的 Agent API。
+      # 生产部署应替换为服务发现或内网地址，并限制 Prometheus 到 Metrics 的网络访问。
+      - targets: ["host.docker.internal:8090"]
+        labels:
+          service: fitness-agent
+          environment: local
+
+  # Worker 使用独立端口暴露同一套低基数指标。Worker 未启动时这里可能是 DOWN，
+  # 当前只采集而不对可选 Worker 配置“进程宕机”告警，避免未启用的 Worker 产生误报。
+  - job_name: fitness-agent-workers
+    metrics_path: /metrics
+    static_configs:
+      - targets:
+          - "host.docker.internal:8092"
+          - "host.docker.internal:8094"
+          - "host.docker.internal:8095"
+          - "host.docker.internal:8096"
+        labels:
+          service: fitness-agent-worker
+          environment: local

@@ -48,6 +48,26 @@ services:
       - "4317:4317"
       - "4318:4318"
 
+  agent-prometheus:
+    # 仅作为本地 Metrics 抓取与规则验证组件；生产环境应固定镜像 digest，
+    # 并把数据目录放到受控持久化存储，不直接复用本地卷。
+    image: prom/prometheus:v2.54.1
+    container_name: fitness-agent-prometheus
+    restart: unless-stopped
+    profiles: ["observability"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+      - "--storage.tsdb.path=/prometheus"
+      - "--web.enable-lifecycle"
+    volumes:
+      - ./observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/fitness-agent-alerts.yml:/etc/prometheus/rules/fitness-agent-alerts.yml:ro
+      - fitness-agent-prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+
   agent-minio:
     image: minio/minio:RELEASE.2025-02-18T16-25-55Z
     container_name: fitness-agent-minio
@@ -110,3 +130,4 @@ volumes:
   fitness-agent-clamav-data:
   fitness-agent-ocr-models:
   fitness-agent-rabbitmq-data:
+  fitness-agent-prometheus-data:

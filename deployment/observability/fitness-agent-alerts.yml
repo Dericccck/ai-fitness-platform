@@ -1,0 +1,85 @@
+groups:
+  - name: fitness-agent-availability
+    interval: 30s
+    rules:
+      - alert: FitnessAgentDown
+        expr: up{job="fitness-agent"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          service: fitness-agent
+        annotations:
+          summary: "健身 Agent 服务不可用"
+          description: "Prometheus 连续 2 分钟无法抓取 Agent Metrics；请先检查进程、端口和容器网络。"
+
+      - alert: FitnessAgentHighHttp5xxRate
+        expr: |
+          (
+            sum(rate(fitness_agent_http_requests_total{job="fitness-agent",status=~"5.."}[5m]))
+            /
+            clamp_min(sum(rate(fitness_agent_http_requests_total{job="fitness-agent"}[5m])), 0.001)
+          ) > 0.05
+          and sum(rate(fitness_agent_http_requests_total{job="fitness-agent"}[5m])) > 0.1
+        for: 5m
+        labels:
+          severity: warning
+          service: fitness-agent
+        annotations:
+          summary: "健身 Agent HTTP 5xx 比例过高"
+          description: "最近 5 分钟 HTTP 5xx 比例超过 5%；请结合 request_id、Trace 和下游依赖日志定位。"
+
+      - alert: FitnessAgentHighP95Latency
+        expr: |
+          histogram_quantile(
+            0.95,
+            sum by (le) (
+              rate(fitness_agent_http_request_duration_seconds_bucket{job="fitness-agent"}[5m])
+            )
+          ) > 2
+        for: 10m
+        labels:
+          severity: warning
+          service: fitness-agent
+        annotations:
+          summary: "健身 Agent P95 请求延迟过高"
+          description: "最近 10 分钟 HTTP 请求 P95 延迟超过 2 秒；请检查模型、RAG、Gateway 和数据库耗时。"
+
+      - alert: FitnessAgentRequestsBacklogged
+        expr: sum(fitness_agent_http_requests_in_progress{job="fitness-agent"}) > 100
+        for: 5m
+        labels:
+          severity: warning
+          service: fitness-agent
+        annotations:
+          summary: "健身 Agent 请求持续堆积"
+          description: "正在处理的 HTTP 请求连续 5 分钟超过 100；请检查线程/协程、模型超时和下游连接池。"
+
+  - name: fitness-agent-business-safety
+    interval: 30s
+    rules:
+      - alert: FitnessAgentOperationsAuditFailed
+        expr: increase(fitness_agent_operations_query_events_total{job="fitness-agent",event="AUDIT_FAILED"}[10m]) > 0
+        labels:
+          severity: critical
+          service: fitness-agent
+        annotations:
+          summary: "经营查询审计写入失败"
+          description: "Operations 查询出现审计失败；系统应保持 fail-closed，需检查 PostgreSQL 和审计表。"
+
+      - alert: FitnessAgentMaintenanceFailed
+        expr: increase(fitness_agent_maintenance_runs_total{job=~"fitness-agent|fitness-agent-workers",status="failed"}[10m]) > 0
+        labels:
+          severity: warning
+          service: fitness-agent
+        annotations:
+          summary: "健身 Agent 后台维护任务失败"
+          description: "候选清理、Memory 保留、会话摘要或通知 Worker 最近 10 分钟出现失败批次。"
+
+      - alert: FitnessAgentNotificationDeliveryFailed
+        expr: increase(fitness_agent_notification_delivery_attempts_total{job=~"fitness-agent|fitness-agent-workers",status=~"RETRYABLE_FAILED|FINAL_FAILED"}[10m]) > 0
+        labels:
+          severity: warning
+          service: fitness-agent
+        annotations:
+          summary: "健身 Agent 站内通知投递失败"
+          description: "最近 10 分钟存在通知投递失败；请检查通知 Outbox、模板、渠道适配器和重试次数。"
