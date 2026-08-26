@@ -1610,3 +1610,13 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
   OpenTelemetry Collector 一起启动。Prometheus 负责 Metrics/告警，OTel Collector 负责 Trace，两者不互相替代。
 - 告警标签不包含机构 ID、用户 ID、工单 ID、确认单 ID 或 request_id；具体问题通过告警时间窗关联结构化日志和 Trace。
 - 当前配置只完成本地规则与采集基线，不代表已接入企业 Alertmanager、值班系统或生产监控网络；这些属于后续生产演练。
+
+本轮继续补充最终可靠性阶段的第二项“消息可靠性故障演练基线”：
+
+- 新增 `fitness-agent-service/tests/test_proactive_reliability.py` 和根目录
+  `make agent-proactive-reliability-check`，覆盖 RabbitMQ 消息重复投递去重、非法消息进入死信、不确认数据库事务
+  失败消息、Worker 处理失败后的可重试状态，以及 Worker 重启后重新领取并完成处理。
+- 测试锁定“先写入 Inbox 事务并提交，再 ACK RabbitMQ 消息”的边界，同时验证通知 Outbox 与 Inbox 已处理状态
+  位于同一 PostgreSQL 事务边界内，避免 ACK 成功但业务状态丢失或重复产生通知。
+- 本轮是确定性故障边界回归，不连接真实 RabbitMQ、不创建预约/训练计划、不写 MySQL；真实 RabbitMQ 连接断开、
+  重复投递和 PostgreSQL 重启后的本地容器演练仍安排在下一步。
