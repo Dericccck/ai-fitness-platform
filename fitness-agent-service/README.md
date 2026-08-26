@@ -463,6 +463,12 @@ RabbitMQ 重复投递同一个预约事件，验证 Inbox 只有一条记录、�
 事件和通知数据，并在结束时精确删除，不调用 Booking/Training/客服接口，也不修改 MySQL 业务事实。RabbitMQ
 容器断电、网络隔离和 PostgreSQL 容器重启仍需要按发布演练手册人工执行，并观察监控与日志。
 
+PostgreSQL 备份恢复可使用 `make agent-postgres-backup-restore-check` 验收。该命令默认只检查容器、源库和
+`pg_dump`/`pg_restore` 是否可用；追加 `ARGS=--execute` 后，会生成 Custom Format 逻辑备份，在
+`fitness-agent-postgres` 中创建唯一临时数据库并恢复，再逐表比较 public schema 的记录数，最后自动删除临时库。
+它不会清空、覆盖或删除源数据库，也不修改 MySQL 业务库。该检查只证明本地备份可恢复，生产环境仍需补充对象存储
+生命周期、备份加密、跨可用区副本、WAL/PITR、恢复时间目标和定期灾备演练。
+
 训练计划主动提醒可先使用 `make gateway-training-proactive-preflight` 做只读检查，确认 Agent readiness、Training
 健康状态、Agent PostgreSQL 和 RabbitMQ 均可用；然后使用 `make gateway-training-proactive-live-check`。后者复用已有的训练计划角色工作流，
 依次创建草案、提交审核、审核通过和发布；发布后额外等待 `TRAINING_PLAN_REVIEW_REQUIRED` 与

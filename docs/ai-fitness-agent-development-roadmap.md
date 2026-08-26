@@ -1630,3 +1630,11 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
   并删除唯一临时 RabbitMQ 队列；不会触碰 Booking、Training、客服或 MySQL 业务事实。
 - RabbitMQ 容器断电、网络隔离和 PostgreSQL 容器重启仍不在脚本中自动执行，后续按人工故障演练步骤完成并检查告警、日志、
   重试和恢复结果。
+
+本轮继续补充最终可靠性阶段的第三项“PostgreSQL 备份恢复验证”：
+
+- 新增 `scripts/postgres_backup_restore_check.py` 和 `make agent-postgres-backup-restore-check`。默认只检查本地
+  PostgreSQL 容器和备份工具；显式 `ARGS=--execute` 后生成 Custom Format 逻辑备份，恢复到唯一临时数据库，
+  逐表比较 public schema 记录数，并在结束时删除临时数据库。
+- 验收不清空、不覆盖源数据库，也不修改 MySQL 业务事实；本轮只证明本地逻辑备份可恢复，生产级对象存储、加密、
+  跨可用区副本、WAL/PITR、RTO/RPO 和定期灾备演练仍需后续完成。
