@@ -1620,3 +1620,13 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
   位于同一 PostgreSQL 事务边界内，避免 ACK 成功但业务状态丢失或重复产生通知。
 - 本轮是确定性故障边界回归，不连接真实 RabbitMQ、不创建预约/训练计划、不写 MySQL；真实 RabbitMQ 连接断开、
   重复投递和 PostgreSQL 重启后的本地容器演练仍安排在下一步。
+
+本轮进一步提供真实基础设施验收脚本：
+
+- 新增 `scripts/proactive_reliability_live_check.py` 和 `make agent-proactive-reliability-live-check`。默认只读检查；
+  显式 `ARGS=--execute` 时，脚本启动唯一临时队列的 Proactive Worker，使用真实 RabbitMQ 重复投递临时预约事件，
+  验证 PostgreSQL Inbox 去重、两名接收人的通知 Outbox 生成，以及停止/重启 Worker 后 PENDING 事件的恢复处理。
+- 脚本只写入自身生成的临时主动提醒数据，结束时按外键依赖顺序删除通知收件箱、投递尝试、通知 Outbox 和事件 Inbox，
+  并删除唯一临时 RabbitMQ 队列；不会触碰 Booking、Training、客服或 MySQL 业务事实。
+- RabbitMQ 容器断电、网络隔离和 PostgreSQL 容器重启仍不在脚本中自动执行，后续按人工故障演练步骤完成并检查告警、日志、
+  重试和恢复结果。
