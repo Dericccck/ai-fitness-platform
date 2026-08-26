@@ -1,4 +1,5 @@
 from argparse import Namespace
+from typing import Self
 from unittest.mock import AsyncMock
 
 import pytest
@@ -159,7 +160,7 @@ def _write_config() -> WriteCheckConfig:
 
 
 class _FakeAsyncClient:
-    async def __aenter__(self) -> "_FakeAsyncClient":
+    async def __aenter__(self) -> Self:
         return self
 
     async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
@@ -193,13 +194,17 @@ async def test_run_check_cleans_exact_request_after_success(
     )
     monkeypatch.setattr(write_check.httpx, "AsyncClient", lambda **_: _FakeAsyncClient())
     monkeypatch.setattr(write_check, "_ensure_request_id_is_new", lambda *_: None)
-    monkeypatch.setattr(write_check, "_post_chat", AsyncMock(return_value={"route": "CUSTOMER_SERVICE"}))
+    monkeypatch.setattr(
+        write_check, "_post_chat", AsyncMock(return_value={"route": "CUSTOMER_SERVICE"})
+    )
     monkeypatch.setattr(
         write_check,
         "_validate_confirmation_response",
         lambda *_: ("confirmation-1", "创建客服工单"),
     )
-    monkeypatch.setattr(write_check, "_get_confirmation", AsyncMock(side_effect=confirmation_states))
+    monkeypatch.setattr(
+        write_check, "_get_confirmation", AsyncMock(side_effect=confirmation_states)
+    )
     monkeypatch.setattr(
         write_check,
         "_decide_confirmation",
@@ -207,7 +212,9 @@ async def test_run_check_cleans_exact_request_after_success(
     )
     monkeypatch.setattr(write_check, "_read_ticket_fact", lambda *_: _valid_ticket_fact())
     monkeypatch.setattr(write_check, "_validate_ticket_fact", lambda *_: None)
-    monkeypatch.setattr(write_check, "_cleanup", lambda _config, request_id: cleaned_request_ids.append(request_id))
+    monkeypatch.setattr(
+        write_check, "_cleanup", lambda _config, request_id: cleaned_request_ids.append(request_id)
+    )
 
     await write_check.run_check(_write_config())
 
@@ -227,13 +234,17 @@ async def test_run_check_cleans_exact_request_when_fact_validation_fails(
     )
     monkeypatch.setattr(write_check.httpx, "AsyncClient", lambda **_: _FakeAsyncClient())
     monkeypatch.setattr(write_check, "_ensure_request_id_is_new", lambda *_: None)
-    monkeypatch.setattr(write_check, "_post_chat", AsyncMock(return_value={"route": "CUSTOMER_SERVICE"}))
+    monkeypatch.setattr(
+        write_check, "_post_chat", AsyncMock(return_value={"route": "CUSTOMER_SERVICE"})
+    )
     monkeypatch.setattr(
         write_check,
         "_validate_confirmation_response",
         lambda *_: ("confirmation-1", "创建客服工单"),
     )
-    monkeypatch.setattr(write_check, "_get_confirmation", AsyncMock(side_effect=confirmation_states))
+    monkeypatch.setattr(
+        write_check, "_get_confirmation", AsyncMock(side_effect=confirmation_states)
+    )
     monkeypatch.setattr(
         write_check,
         "_decide_confirmation",
@@ -245,7 +256,9 @@ async def test_run_check_cleans_exact_request_when_fact_validation_fails(
         raise CustomerServiceWriteLiveCheckError("模拟事实校验失败")
 
     monkeypatch.setattr(write_check, "_validate_ticket_fact", reject_fact)
-    monkeypatch.setattr(write_check, "_cleanup", lambda _config, request_id: cleaned_request_ids.append(request_id))
+    monkeypatch.setattr(
+        write_check, "_cleanup", lambda _config, request_id: cleaned_request_ids.append(request_id)
+    )
 
     with pytest.raises(CustomerServiceWriteLiveCheckError, match="模拟事实校验失败"):
         await write_check.run_check(_write_config())

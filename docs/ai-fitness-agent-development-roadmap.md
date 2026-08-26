@@ -1149,7 +1149,7 @@ Memory、主动提醒、客服、多端交互和上线演练完成后执行。�
 
 ## 17. 当前实施状态与下一步
 
-截至 2026-08-15，已经完成：
+截至 2026-08-26，已经完成：
 
 - 现有健身业务和角色初步盘点。
 - Git 初始化、GitHub 绑定、敏感配置忽略和硬编码阿里云密钥移除。
@@ -1574,3 +1574,28 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
 本轮修复了客服只读 preflight 的本地代理误报：健康检查客户端现在强制 `trust_env=False`，绕过
 `HTTP_PROXY/HTTPS_PROXY`，避免客服服务未启动时把代理返回的 `502` 误判成客服服务自身错误；并新增测试
 锁定该行为。真实运行时如果 `8084` 未启动，会准确报告“无法连接服务”，不会再显示代理响应。
+
+### 17.3 2026-08-26 当前执行步骤：客服真实验收完成与统一发布门禁
+
+客服工单真实受控验收已经完成，之前“尚未执行真实工单创建”的历史记录以本节最新状态为准：
+
+- 使用本地 Docker `fitness-mysql` 测试库和真实组织管理员 AgentContext，执行了
+  `agent-customer-service-write-live-check`；真实链路经过 Agent、LangGraph `interrupt()`、确认批准、
+  Java Gateway、独立客服服务和 MySQL。
+- 本次真实验收结果为 `authorization_status=APPROVED`、`execution_status=SUCCEEDED`，验证了
+  `AGENT/OPEN` 工单、确认 JTI 一次性消费、`CREATED` 审计、中文 UTF-8 内容和按 `request_id` 精确清理。
+- 测试工单和客服业务审计数据已清理；PostgreSQL 确认主表保留成功确认记录，作为不可变操作审计轨迹，
+  不属于业务测试数据残留。
+- 修复了客服创建 Payload 的 Java/Python 字段协议：Python 内部字段仍可使用 `organization_id`，
+  跨服务 JSON 必须输出 Java Gateway 约定的 `organizationId`；同时 Gateway 对外继续返回统一 401，
+  服务端按字段记录脱敏鉴权失败原因，便于按 request_id 定位协议漂移。
+- 新增根目录 `make release-check` 统一发布质量门禁，串联 Agent 全量测试、RAG 评测、Operations
+  趋势/对比/策略评测、会话摘要评测、安全门禁、OCR、Gateway、Training、Booking 和 Customer Service
+  的确定性检查。该门禁不调用 DeepSeek、不启动服务、不写入预约/训练计划/客服工单；真实业务验收仍必须
+  通过各自显式授权的 live-check 执行。
+- 本轮代码提交为 `61c478e`《修复客服工单跨服务确认协议与鉴权诊断》。当前 `.idea` 启动配置含本地敏感变量，
+  仍保持未提交。
+
+下一步固定为：运行 `make release-check` 并记录全量质量门禁结果；通过后进入最终可靠性阶段，补齐
+可观测性告警、备份/恢复验证、服务重启与消息重复投递故障演练、压测和灰度/回滚检查。继续忽略赛事、作品、
+活动运营、短信、Push、人工转接以及暂不需要的复杂训练业务；不再扩展客服自动关闭、自动改派或赔付能力。

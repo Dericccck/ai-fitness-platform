@@ -69,9 +69,7 @@ def validate_agent_readiness(payload: Any) -> ProbeResult:
 
     if not isinstance(payload, dict) or not isinstance(payload.get("checks"), dict):
         return ProbeResult("agent-ready", False, "响应不是合法 readiness 结构")
-    failed = [
-        name for name, value in payload["checks"].items() if not _value_is_ready(value)
-    ]
+    failed = [name for name, value in payload["checks"].items() if not _value_is_ready(value)]
     if payload.get("status") != "ready" or failed:
         detail = "未就绪字段=" + ",".join(sorted(str(name) for name in failed))
         if not failed:

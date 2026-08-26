@@ -4,12 +4,12 @@ import pytest
 
 from app.agent.fitness_tools import build_fitness_tool_registry
 from app.agent.tool_registry import ToolConfirmationNormalizationError
-from app.confirmation.service import _organization_from_input
 from app.confirmation.normalization import (
     ConfirmationNormalizationContext,
     ConfirmationResourceSnapshot,
     canonical_json_bytes,
 )
+from app.confirmation.service import _organization_from_input
 from app.infrastructure.gateway_client import GatewayClient
 
 from .test_tool_registry import FakeGateway

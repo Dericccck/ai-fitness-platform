@@ -1,5 +1,5 @@
 from argparse import Namespace
-from typing import Any
+from typing import Any, Self
 from unittest.mock import AsyncMock
 
 import pytest
@@ -78,9 +78,7 @@ async def test_preflight_checks_customer_service_without_business_request(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.setenv("AGENT_LIVE_AGENT_CONTEXT", "signed-context")
-    probe = AsyncMock(
-        side_effect=lambda client, name, url: preflight.ProbeResult(name, True, url)
-    )
+    probe = AsyncMock(side_effect=lambda client, name, url: preflight.ProbeResult(name, True, url))
     monkeypatch.setattr(preflight, "_get_json", probe)
 
     results = await run_preflight(
@@ -125,7 +123,7 @@ async def test_preflight_disables_system_proxy_for_local_health_checks(
     captured: dict[str, object] = {}
 
     class FakeClient:
-        async def __aenter__(self) -> "FakeClient":
+        async def __aenter__(self) -> Self:
             return self
 
         async def __aexit__(self, exc_type: object, exc: object, tb: object) -> None:
