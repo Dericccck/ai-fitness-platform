@@ -347,6 +347,7 @@ def test_supervisor_route_guard_covers_fitness_business_boundaries() -> None:
     assert classify_route("我的预约是什么时间") == "CUSTOMER_SERVICE"
     assert classify_route("我的合同还有多少课时") == "CUSTOMER_SERVICE"
     assert classify_route("请告诉我预约规则") == "CUSTOMER_SERVICE"
+    assert classify_route("请提交客服工单，反馈预约状态异常") == "CUSTOMER_SERVICE"
     assert classify_route("查询明天可约时间") == "BOOKING"
     assert classify_route("查看本月经营报表") == "OPERATIONS"
     assert classify_route("查看本月课程预约量") == "OPERATIONS"

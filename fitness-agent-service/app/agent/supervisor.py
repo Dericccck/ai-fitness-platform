@@ -920,6 +920,12 @@ def classify_route(user_message: str) -> SupervisorRoute:
         return "UNSUPPORTED_LEGACY"
     if _customer_service_restricted_answer(text) is not None:
         return "CUSTOMER_SERVICE"
+    # 明确的客服工单写入意图必须优先于“预约状态”等经营指标关键词。
+    # 例如“提交客服工单，反馈预约状态异常”虽然包含“预约状态”，但它不是经营报表查询，
+    # 而是要求客服受理问题。若先命中 OPERATIONS，模型会拿到错误的指标工具，
+    # 既无法创建工单，也会让真实受控验收暴露出路由歧义。
+    if _looks_like_customer_service_write_request(text):
+        return "CUSTOMER_SERVICE"
     if any(
         keyword in text
         for keyword in (
@@ -1083,6 +1089,24 @@ def _customer_service_restricted_answer(user_message: str) -> str | None:
     return None
 
 
+def _looks_like_customer_service_write_request(user_message: str) -> bool:
+    """识别高置信度的客服工单提交意图，避免被业务查询关键词覆盖。"""
+
+    text = user_message.replace(" ", "")
+    return any(
+        keyword in text
+        for keyword in (
+            "提交工单",
+            "创建工单",
+            "提交客服工单",
+            "提交客服问题",
+            "帮我提交",
+            "帮我反馈问题",
+            "联系健身客服",
+        )
+    )
+
+
 def _forced_write_tool_name(route: SupervisorRoute, user_message: str) -> str | None:
     """为明确的 Booking 或客服工单写意图选择强制工具。
 
@@ -1093,19 +1117,7 @@ def _forced_write_tool_name(route: SupervisorRoute, user_message: str) -> str | 
     """
 
     if route == "CUSTOMER_SERVICE":
-        text = user_message.replace(" ", "")
-        if any(
-            keyword in text
-            for keyword in (
-                "提交工单",
-                "创建工单",
-                "提交客服工单",
-                "提交客服问题",
-                "帮我提交",
-                "帮我反馈问题",
-                "联系健身客服",
-            )
-        ):
+        if _looks_like_customer_service_write_request(user_message):
             return "fitness_support_ticket_create_v1"
         return None
     if route != "BOOKING":
