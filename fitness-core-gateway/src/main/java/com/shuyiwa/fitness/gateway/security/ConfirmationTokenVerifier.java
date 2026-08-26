@@ -89,14 +89,29 @@ public class ConfirmationTokenVerifier {
             String confirmationId = string(payload, "confirmation_id");
             String payloadHash = string(payload, "payload_hash");
             String jti = string(payload, "jti");
-            if (!context.getSubjectUserId().equals(subjectUserId)
-                    || !toolId.equals(tokenToolId)
-                    || !action.equals(tokenAction)
-                    || !resource.equals(tokenResource)
-                    || !requestId.equals(tokenRequestId)
-                    || !context.canAccessOrganization(organizationId)
-                    || !payloadHash.matches("[0-9a-fA-F]{64}")) {
-                throw new GatewaySecurityException("confirmation token scope mismatch");
+            // 客户端仍只得到统一 401，避免借此探测授权边界；服务端按字段区分失败原因，
+            // 便于定位 Agent 与 Gateway 的确认协议漂移。日志只包含字段名，不记录 Token
+            // 内容、用户输入或任何参数值。
+            if (!context.getSubjectUserId().equals(subjectUserId)) {
+                throw scopeMismatch("subject");
+            }
+            if (!toolId.equals(tokenToolId)) {
+                throw scopeMismatch("tool");
+            }
+            if (!action.equals(tokenAction)) {
+                throw scopeMismatch("action");
+            }
+            if (!resource.equals(tokenResource)) {
+                throw scopeMismatch("resource");
+            }
+            if (!requestId.equals(tokenRequestId)) {
+                throw scopeMismatch("request_id");
+            }
+            if (!context.canAccessOrganization(organizationId)) {
+                throw scopeMismatch("organization");
+            }
+            if (!payloadHash.matches("[0-9a-fA-F]{64}")) {
+                throw scopeMismatch("payload_hash");
             }
             long exp = Long.parseLong(string(payload, "exp"));
             if (exp <= Instant.now().getEpochSecond()) {
@@ -191,5 +206,9 @@ public class ConfirmationTokenVerifier {
             throw new GatewaySecurityException("confirmation token field is missing");
         }
         return value.toString();
+    }
+
+    private static GatewaySecurityException scopeMismatch(String field) {
+        return new GatewaySecurityException("confirmation token scope mismatch: " + field);
     }
 }

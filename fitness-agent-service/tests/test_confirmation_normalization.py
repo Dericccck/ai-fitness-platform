@@ -110,13 +110,24 @@ def test_booking_payload_uses_java_gateway_camel_case_contract() -> None:
 def test_customer_service_ticket_creation_uses_input_organization_scope() -> None:
     """客服创建确认不能误用资源型动作的 Gateway 占位机构。"""
 
-    assert (
-        _organization_from_input(
-            "fitness.support.ticket.create.v1",
-            {"organization_id": "org-1", "category": "APPOINTMENT"},
-        )
-        == "org-1"
+    raw = {
+        "organization_id": "org-1",
+        "category": "APPOINTMENT",
+        "subject": "预约状态异常",
+        "description": "请客服核查预约状态。",
+    }
+    assert _organization_from_input("fitness.support.ticket.create.v1", raw) == "org-1"
+    registry = build_fitness_tool_registry(cast(GatewayClient, FakeGateway()))
+    action = registry.normalize_confirmation(
+        "fitness.support.ticket.create.v1",
+        raw,
+        context=context(),
+        organization_id="org-1",
     )
+
+    canonical = action.canonical_payload.decode("utf-8")
+    assert '"organizationId":"org-1"' in canonical
+    assert '"organization_id"' not in canonical
 
 
 def test_booking_confirmation_uses_bound_organization_id() -> None:

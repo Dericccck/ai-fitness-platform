@@ -160,6 +160,17 @@ class CustomerServiceTicketCreateToolInput(OrganizationToolInput):
 
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
+    # 客服服务通过 Java Gateway 接收 camelCase JSON；这里不能直接沿用只读工具的
+    # snake_case 机构字段，否则 Gateway 会读不到 organizationId，确认凭证的资源
+    # 范围就会与实际请求不一致。模型仍可用 organization_id 生成，跨服务序列化时
+    # 统一输出 organizationId。
+    organization_id: str = Field(
+        alias="organizationId",
+        min_length=1,
+        max_length=128,
+        pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+
     subject_user_id: str | None = Field(
         default=None,
         alias="subjectUserId",
