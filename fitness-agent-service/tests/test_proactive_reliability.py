@@ -5,11 +5,14 @@
 真实环境仍需使用专用测试数据执行跨服务 live-check，不能用本文件替代生产演练。
 """
 
+import asyncio
 from datetime import UTC, datetime
 from typing import Any, Self
+from unittest.mock import AsyncMock
 
 import pytest
 
+import app.proactive.rabbit_consumer as rabbit_consumer_module
 from app.proactive.events import ProactiveEventMessage
 from app.proactive.rabbit_consumer import ProactiveRabbitConsumer, reconnect_delay
 from app.proactive.repository import ProactiveEventRecord
@@ -104,6 +107,31 @@ def test_rabbitmq_reconnect_delay_rejects_invalid_configuration() -> None:
         reconnect_delay(0, initial_seconds=1, max_seconds=10)
     with pytest.raises(ValueError, match="initial"):
         reconnect_delay(1, initial_seconds=11, max_seconds=10)
+
+
+@pytest.mark.asyncio
+async def test_consumer_reconnects_after_initial_connection_failure(monkeypatch) -> None:
+    """首次连接失败后必须退避重试，不能让消费任务永久退出。"""
+
+    consumer = _consumer(_FakeConsumerRepository())
+    consumer.reconnect_initial_seconds = 0.5
+    consumer.reconnect_max_seconds = 2.0
+    consume_connection = AsyncMock(
+        side_effect=[ConnectionError("broker unavailable"), asyncio.CancelledError()]
+    )
+    reconnect_waits: list[float] = []
+
+    async def fake_sleep(seconds: float) -> None:
+        reconnect_waits.append(seconds)
+
+    monkeypatch.setattr(consumer, "_consume_connection", consume_connection)
+    monkeypatch.setattr(rabbit_consumer_module.asyncio, "sleep", fake_sleep)
+
+    with pytest.raises(asyncio.CancelledError):
+        await consumer.run_forever()
+
+    assert consume_connection.await_count == 2
+    assert reconnect_waits == [0.5]
 
 
 @pytest.mark.asyncio
