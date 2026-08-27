@@ -6,11 +6,12 @@
 1. 同一个事件通过真实 RabbitMQ 重复投递两次，最终只能有一条 Inbox 记录和两条通知 Outbox；
 2. Worker 停止期间向持久化队列发布多条事件，恢复后全部处理且不重复；
 3. Worker 停止期间把一个临时事件留在 PostgreSQL Inbox，Worker 重启后能够继续处理；
-4. 所有临时 PostgreSQL 数据和 RabbitMQ 队列在结束时按唯一 ID 清理。
+4. 所有临时 PostgreSQL 数据和 RabbitMQ 队列在结束时按唯一 ID 清理；
+5. 显式传入 ``--network-recovery`` 时，暂停并恢复本地 RabbitMQ 容器，验证消费连接恢复。
 
 默认只执行依赖前置检查；必须显式传入 ``--execute`` 才会启动临时 Worker 并产生测试数据。
-真实 RabbitMQ 容器断电、PostgreSQL 容器重启和网络隔离属于需要人工观察的故障注入，不在
-脚本中自动执行，避免脚本误操作用户正在使用的 Docker 服务。
+真实 RabbitMQ 容器断电、PostgreSQL 容器重启和网络隔离默认不执行；``--network-recovery`` 是唯一
+显式允许的本地 RabbitMQ 短暂暂停入口，仍要求用户确认当前没有真实业务消息。
 """
 
 from __future__ import annotations
@@ -47,6 +48,9 @@ class LiveCheckConfig:
     organization_id: str
     poll_timeout_seconds: float
     execute: bool
+    network_recovery: bool
+    docker_container: str
+    network_pause_seconds: float
 
 
 @dataclass(frozen=True)
@@ -111,6 +115,22 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.getenv("AGENT_LIVE_EXECUTE_WRITES") == "1",
         help="启动临时 Worker 并执行真实 RabbitMQ/PostgreSQL 验收",
     )
+    parser.add_argument(
+        "--network-recovery",
+        action="store_true",
+        help="显式暂停并恢复本地 RabbitMQ 容器，执行连接恢复验收；必须同时传入 --execute",
+    )
+    parser.add_argument(
+        "--docker-container",
+        default=os.getenv("AGENT_PROACTIVE_RABBITMQ_CONTAINER", "fitness-agent-rabbitmq"),
+        help="网络演练使用的 RabbitMQ 容器名，默认 fitness-agent-rabbitmq",
+    )
+    parser.add_argument(
+        "--network-pause-seconds",
+        type=float,
+        default=8.0,
+        help="RabbitMQ 暂停持续时间，默认 8 秒",
+    )
     return parser
 
 
@@ -127,6 +147,15 @@ def build_config(args: argparse.Namespace) -> LiveCheckConfig:
         raise ProactiveReliabilityLiveCheckError("organization_id 不能为空")
     if args.poll_timeout_seconds <= 0:
         raise ProactiveReliabilityLiveCheckError("poll-timeout-seconds 必须大于 0")
+    if args.network_pause_seconds <= 0:
+        raise ProactiveReliabilityLiveCheckError("network-pause-seconds 必须大于 0")
+    if args.network_recovery and not args.execute:
+        raise ProactiveReliabilityLiveCheckError(
+            "--network-recovery 必须与 --execute 一起使用；默认不会暂停 Docker 容器"
+        )
+    docker_container = str(args.docker_container).strip()
+    if args.network_recovery and not docker_container:
+        raise ProactiveReliabilityLiveCheckError("docker-container 不能为空")
     return LiveCheckConfig(
         rabbitmq_url=rabbitmq_url,
         database_url=database_url.replace("postgresql+asyncpg://", "postgresql://", 1),
@@ -135,6 +164,9 @@ def build_config(args: argparse.Namespace) -> LiveCheckConfig:
         organization_id=str(args.organization_id).strip(),
         poll_timeout_seconds=float(args.poll_timeout_seconds),
         execute=bool(args.execute),
+        network_recovery=bool(args.network_recovery),
+        docker_container=docker_container,
+        network_pause_seconds=float(args.network_pause_seconds),
     )
 
 
@@ -246,7 +278,9 @@ async def _queue_message_count(config: LiveCheckConfig, queue_name: str) -> int:
     try:
         channel = await connection.channel()
         queue = await channel.declare_queue(queue_name, passive=True)
-        return int(queue.declaration_result.message_count)
+        # aio-pika 在部分 Broker 响应中允许 message_count 为空；空值按没有待投递消息
+        # 处理，避免验收脚本因为类型或协议差异直接中断。
+        return int(queue.declaration_result.message_count or 0)
     finally:
         await connection.close()
 
@@ -423,13 +457,75 @@ async def _cleanup_events(config: LiveCheckConfig, events: list[ReliabilityEvent
         await connection.close()
 
 
+def _set_rabbitmq_container_paused(config: LiveCheckConfig, *, paused: bool) -> None:
+    """执行明确授权的本地容器暂停/恢复，不接受 Shell 字符串拼接。"""
+
+    action = "pause" if paused else "unpause"
+    try:
+        subprocess.run(
+            ["docker", action, config.docker_container],
+            check=True,
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as exc:
+        raise ProactiveReliabilityLiveCheckError(
+            f"RabbitMQ 容器 {action} 失败：{config.docker_container}"
+        ) from exc
+
+
+async def _run_network_recovery_check(config: LiveCheckConfig) -> None:
+    """暂停并恢复本地 RabbitMQ，验证已建立消费连接可以恢复。
+
+    该演练只使用唯一临时队列；暂停的是共享 Broker 容器，因此必须由显式参数触发。
+    消息发布放在 Broker 恢复后，避免把其他业务消息误作为本轮验收数据；消息堆积和
+    未确认重投递由既有的可靠性验收覆盖。
+    """
+
+    queue_name = f"fitness.proactive.network-recovery.{uuid.uuid4().hex}"
+    event = _new_event(config, suffix="network-recovery")
+    worker: Popen[Any] | None = None
+    paused = False
+    try:
+        worker = _start_worker(config, queue_name)
+        await _wait_for_queue(config, queue_name, worker)
+        _set_rabbitmq_container_paused(config, paused=True)
+        paused = True
+        print(f"RabbitMQ 已暂停 {config.network_pause_seconds:g} 秒，等待 Worker 触发连接恢复")
+        await asyncio.sleep(config.network_pause_seconds)
+        _set_rabbitmq_container_paused(config, paused=False)
+        paused = False
+        await _publish_events(config, [event])
+        result = await _wait_for_processed(config, event)
+        print("RabbitMQ 连接中断恢复验收通过")
+        print(
+            f"event={event.event_id}; inbox={result[1]}; notification_outbox={result[2]}; "
+            f"pause_seconds={config.network_pause_seconds:g}"
+        )
+    finally:
+        if paused:
+            _set_rabbitmq_container_paused(config, paused=False)
+        await _stop_worker(worker)
+        try:
+            await _cleanup_events(config, [event])
+        finally:
+            await _delete_queue(config, queue_name)
+
+
 async def run_live_check(config: LiveCheckConfig) -> None:
     """运行前置检查和可选的真实重复投递/重启恢复验收。"""
 
     await run_preflight(config)
     if not config.execute:
         print("主动提醒可靠性前置检查通过（未启动临时 Worker，未写入测试数据）")
-        print("如需执行真实 RabbitMQ/PostgreSQL 验收，请追加 --execute")
+        print(
+            "如需执行真实 RabbitMQ/PostgreSQL 验收，请追加 --execute；网络演练需额外追加 --network-recovery"
+        )
+        return
+
+    if config.network_recovery:
+        await _run_network_recovery_check(config)
         return
 
     queue_name = f"fitness.proactive.reliability.{uuid.uuid4().hex}"

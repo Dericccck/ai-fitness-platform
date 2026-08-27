@@ -62,18 +62,14 @@ Inbox 或通知 Outbox。演练结束后再次执行该命令，并确认 Rabbit
 运行本地测试 Worker；演练期间不要执行预约、训练计划发布或客服工单真实写入。
 
 ```bash
-# 终端 A：启动唯一临时队列的可靠性验收，先保持终端不要关闭
-make agent-proactive-reliability-live-check ARGS=--execute
+# 只在本地隔离环境执行；该参数会暂停共享 RabbitMQ 容器约 8 秒
+make agent-proactive-reliability-live-check \
+  ARGS="--execute --network-recovery --network-pause-seconds 8"
 
-# 终端 B：只在本地隔离环境执行，模拟 Broker 网络/进程暂不可达
-docker pause fitness-agent-rabbitmq
-# 等待 10 秒，观察 Agent Worker 日志中的重连退避记录
-docker unpause fitness-agent-rabbitmq
-
-# 恢复后重新检查基础设施与积压消息
+# 恢复后重新检查基础设施与遗留任务
 make agent-recovery-check ARGS=--strict-stale
 ```
 
-通过标准：Worker 没有永久退出；未 ACK 的消息最终重新进入 Inbox 处理；Inbox 的同一 `event_id` 仍只有一条；
-每个收件人的通知 Outbox 仍最多一条；恢复检查通过且没有异常积压。`docker pause` 是共享容器级故障注入，
-本项目不在自动化脚本中执行，避免误暂停用户正在使用的 RabbitMQ。
+通过标准：Worker 没有永久退出；RabbitMQ 恢复后临时事件能够被消费；Inbox 的同一 `event_id` 仍只有一条；
+每个收件人的通知 Outbox 仍最多一条；恢复检查通过且没有异常积压。`--network-recovery` 是显式的共享容器级
+故障注入，默认命令不会执行；不要在有真实业务消息或其他消费者时运行。

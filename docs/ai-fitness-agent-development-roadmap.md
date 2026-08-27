@@ -1670,6 +1670,8 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
 - 新增重连退避的确定性单元测试，并在 `deployment/operations/recovery-drill.md` 增加人工 `docker pause/unpause`
   网络中断演练步骤、观察项和通过标准。由于该命令会影响共享 RabbitMQ 及所有连接，项目不会在自动化脚本中隐式执行。
 - Settings 加载阶段现在会拒绝“最大重连退避小于初始退避”的不一致配置，避免 Worker 启动后才暴露恢复参数错误。
+- `proactive_reliability_live_check.py` 增加显式 `--network-recovery` 演练模式：仅在同时传入 `--execute` 时暂停
+  本地 RabbitMQ 容器约定时长，恢复后通过唯一临时队列验证消费连接和消息处理；默认模式仍不会修改 Docker 状态。
 
 下一步固定为：在本地隔离环境按手册进行一次人工 RabbitMQ 中断/恢复观察；记录重连日志、队列积压、Inbox 去重和
 通知 Outbox 结果。观察完成后再进入可靠性阶段的压力/限流与灰度回滚检查。
