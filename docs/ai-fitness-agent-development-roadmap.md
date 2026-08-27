@@ -1655,6 +1655,7 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
   检查立即通过，PostgreSQL 重启后第一次就绪检查短暂返回 `503/AdminShutdown`，等待约 2 秒后自动恢复，Checkpoint
   记录仍为 `173`，Inbox/通知 Outbox 超时记录均为 `0`。
 - PostgreSQL 重启恢复后复跑真实主动提醒可靠性验收通过：重复事件 Inbox 为 `1`、通知 Outbox 为 `2`，Worker
-  重启恢复事件也为 Inbox `1`、通知 Outbox `2`，临时数据按脚本清理。
+  重启恢复事件也为 Inbox `1`、通知 Outbox `2`；本轮进一步在 Worker 停止期间形成队列堆积 `3` 条，重启后 `3` 条
+  均恢复处理，临时数据按脚本清理。
 - `service_recovery_check.py` 增加 Agent 就绪探针的有界重试窗口，避免把正常连接池重连误报为永久故障；窗口耗尽
   仍会 fail-closed。该优化不放宽线上健康探针，线上流量在未就绪期间仍会被拒绝。

@@ -4,8 +4,9 @@
 临时 RabbitMQ 队列、事件 ID 和聚合 ID，验证 Agent 自己的事件 Inbox 与通知 Outbox：
 
 1. 同一个事件通过真实 RabbitMQ 重复投递两次，最终只能有一条 Inbox 记录和两条通知 Outbox；
-2. Worker 停止期间把一个临时事件留在 PostgreSQL Inbox，Worker 重启后能够继续处理；
-3. 所有临时 PostgreSQL 数据和 RabbitMQ 队列在结束时按唯一 ID 清理。
+2. Worker 停止期间向持久化队列发布多条事件，恢复后全部处理且不重复；
+3. Worker 停止期间把一个临时事件留在 PostgreSQL Inbox，Worker 重启后能够继续处理；
+4. 所有临时 PostgreSQL 数据和 RabbitMQ 队列在结束时按唯一 ID 清理。
 
 默认只执行依赖前置检查；必须显式传入 ``--execute`` 才会启动临时 Worker 并产生测试数据。
 真实 RabbitMQ 容器断电、PostgreSQL 容器重启和网络隔离属于需要人工观察的故障注入，不在
@@ -180,8 +181,13 @@ def _envelope(event: ReliabilityEvent) -> dict[str, Any]:
     }
 
 
-async def _publish_duplicate(config: LiveCheckConfig, event: ReliabilityEvent) -> None:
-    """向真实 Exchange 连续发布两次同一 event_id，模拟网络重试或发布端重复发送。"""
+async def _publish_events(
+    config: LiveCheckConfig, events: list[ReliabilityEvent], *, copies: int = 1
+) -> None:
+    """向真实 Exchange 发布事件；调用方可用 copies 模拟发布端重复发送。"""
+
+    if copies < 1:
+        raise ProactiveReliabilityLiveCheckError("事件发布次数必须大于 0")
 
     connection = await aio_pika.connect_robust(config.rabbitmq_url)
     try:
@@ -189,18 +195,25 @@ async def _publish_duplicate(config: LiveCheckConfig, event: ReliabilityEvent) -
         exchange = await channel.declare_exchange(
             config.event_exchange, aio_pika.ExchangeType.DIRECT, durable=True
         )
-        body = json.dumps(_envelope(event), ensure_ascii=False, separators=(",", ":")).encode()
-        for _ in range(2):
-            await exchange.publish(
-                aio_pika.Message(
-                    body=body,
-                    content_type="application/json",
-                    delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
-                ),
-                routing_key=config.routing_key,
-            )
+        for event in events:
+            body = json.dumps(_envelope(event), ensure_ascii=False, separators=(",", ":")).encode()
+            for _ in range(copies):
+                await exchange.publish(
+                    aio_pika.Message(
+                        body=body,
+                        content_type="application/json",
+                        delivery_mode=aio_pika.DeliveryMode.PERSISTENT,
+                    ),
+                    routing_key=config.routing_key,
+                )
     finally:
         await connection.close()
+
+
+async def _publish_duplicate(config: LiveCheckConfig, event: ReliabilityEvent) -> None:
+    """向真实 Exchange 连续发布两次同一 event_id，模拟网络重试或发布端重复发送。"""
+
+    await _publish_events(config, [event], copies=2)
 
 
 async def _wait_for_queue(config: LiveCheckConfig, queue_name: str, process: Popen[Any]) -> None:
@@ -224,6 +237,33 @@ async def _wait_for_queue(config: LiveCheckConfig, queue_name: str, process: Pop
             await connection.close()
         await asyncio.sleep(0.2)
     raise ProactiveReliabilityLiveCheckError("等待临时 RabbitMQ 队列声明超时")
+
+
+async def _queue_message_count(config: LiveCheckConfig, queue_name: str) -> int:
+    """读取临时队列当前待投递数量，不消费消息。"""
+
+    connection = await aio_pika.connect_robust(config.rabbitmq_url)
+    try:
+        channel = await connection.channel()
+        queue = await channel.declare_queue(queue_name, passive=True)
+        return int(queue.declaration_result.message_count)
+    finally:
+        await connection.close()
+
+
+async def _wait_for_queue_depth(config: LiveCheckConfig, queue_name: str, expected: int) -> int:
+    """确认 Worker 停止期间发布的消息确实在 RabbitMQ 队列中持久化。"""
+
+    deadline = time.monotonic() + min(config.poll_timeout_seconds, 10.0)
+    last_count = 0
+    while time.monotonic() < deadline:
+        last_count = await _queue_message_count(config, queue_name)
+        if last_count >= expected:
+            return last_count
+        await asyncio.sleep(0.2)
+    raise ProactiveReliabilityLiveCheckError(
+        f"RabbitMQ 临时队列未形成预期堆积：expected={expected}, actual={last_count}"
+    )
 
 
 async def _wait_for_processed(
@@ -395,7 +435,8 @@ async def run_live_check(config: LiveCheckConfig) -> None:
     queue_name = f"fitness.proactive.reliability.{uuid.uuid4().hex}"
     duplicate_event = _new_event(config, suffix="duplicate")
     restart_event = _new_event(config, suffix="restart")
-    events = [duplicate_event, restart_event]
+    backlog_events = [_new_event(config, suffix=f"backlog-{index}") for index in range(3)]
+    events = [duplicate_event, restart_event, *backlog_events]
     worker: Popen[Any] | None = None
     try:
         worker = _start_worker(config, queue_name)
@@ -407,9 +448,12 @@ async def run_live_check(config: LiveCheckConfig) -> None:
         await _stop_worker(worker)
         worker = None
         await _insert_pending_event(config, restart_event)
+        await _publish_events(config, backlog_events)
+        backlog_depth = await _wait_for_queue_depth(config, queue_name, len(backlog_events))
         worker = _start_worker(config, queue_name)
         await _wait_for_queue(config, queue_name, worker)
         restart_result = await _wait_for_processed(config, restart_event)
+        backlog_results = [await _wait_for_processed(config, event) for event in backlog_events]
 
         print("主动提醒真实可靠性验收通过")
         print(
@@ -419,6 +463,9 @@ async def run_live_check(config: LiveCheckConfig) -> None:
         print(
             f"restart_event={restart_event.event_id}; "
             f"inbox={restart_result[1]}; notification_outbox={restart_result[2]}"
+        )
+        print(
+            f"queue_backlog_before_restart={backlog_depth}; recovered_events={len(backlog_results)}"
         )
     finally:
         await _stop_worker(worker)

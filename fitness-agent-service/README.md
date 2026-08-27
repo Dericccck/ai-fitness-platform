@@ -459,7 +459,7 @@ MySQL 客户端只读核对本轮 `agent_booking_operation` 和 `agent_booking_o
 主动提醒基础设施可靠性可使用 `make agent-proactive-reliability-live-check` 验收。该脚本默认只做 PostgreSQL
 表和 RabbitMQ 连接前置检查；追加 `ARGS=--execute` 后，脚本会启动使用唯一临时队列的 Proactive Worker，向真实
 RabbitMQ 重复投递同一个预约事件，验证 Inbox 只有一条记录、通知 Outbox 只有两个接收目标；随后停止 Worker，
-在 PostgreSQL Inbox 写入一个临时待处理事件，再启动 Worker 验证进程重启后的恢复处理。测试只写入自身生成的临时
+在 RabbitMQ 临时队列中发布 3 条事件并在 PostgreSQL Inbox 写入一个临时待处理事件，再启动 Worker 验证消息堆积和进程重启后的恢复处理。测试只写入自身生成的临时
 事件和通知数据，并在结束时精确删除，不调用 Booking/Training/客服接口，也不修改 MySQL 业务事实。RabbitMQ
 容器断电、网络隔离和 PostgreSQL 容器重启仍需要按发布演练手册人工执行，并观察监控与日志。
 
