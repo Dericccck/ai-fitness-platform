@@ -17,6 +17,18 @@ async def live() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@router.get("/version")
+async def version(request: Request) -> dict[str, str]:
+    """返回发布验收所需的最小版本信息，不暴露密钥和完整运行配置。"""
+
+    settings = request.app.state.settings
+    return {
+        "service": settings.service_name,
+        "version": settings.service_version,
+        "environment": settings.environment,
+    }
+
+
 @router.get("/ready")
 async def ready(request: Request, response: Response) -> dict[str, object]:
     """流量就绪探针。
