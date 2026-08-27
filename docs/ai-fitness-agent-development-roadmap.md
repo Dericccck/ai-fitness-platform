@@ -1648,3 +1648,13 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
   应用进程的顺序、观察项与通过标准；脚本和手册都不会自动停止用户正在运行的 Agent/Gateway。
 - 当前完成的是重启后的依赖恢复检查和 Worker 状态恢复基线；RabbitMQ 网络隔离、PostgreSQL 进程崩溃、Checkpoint
   断点续跑和生产告警联动仍需按手册继续演练，不能仅凭健康探针宣称灾备完成。
+
+本轮完成一次本地逐组件重启演练并优化恢复检查：
+
+- 依次重启 `fitness-agent-redis`、`fitness-agent-postgres` 和 `fitness-agent-rabbitmq`；Redis、RabbitMQ 重启后
+  检查立即通过，PostgreSQL 重启后第一次就绪检查短暂返回 `503/AdminShutdown`，等待约 2 秒后自动恢复，Checkpoint
+  记录仍为 `173`，Inbox/通知 Outbox 超时记录均为 `0`。
+- PostgreSQL 重启恢复后复跑真实主动提醒可靠性验收通过：重复事件 Inbox 为 `1`、通知 Outbox 为 `2`，Worker
+  重启恢复事件也为 Inbox `1`、通知 Outbox `2`，临时数据按脚本清理。
+- `service_recovery_check.py` 增加 Agent 就绪探针的有界重试窗口，避免把正常连接池重连误报为永久故障；窗口耗尽
+  仍会 fail-closed。该优化不放宽线上健康探针，线上流量在未就绪期间仍会被拒绝。

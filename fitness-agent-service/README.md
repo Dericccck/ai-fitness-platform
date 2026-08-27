@@ -473,6 +473,8 @@ PostgreSQL 备份恢复可使用 `make agent-postgres-backup-restore-check` 验�
 存活、PostgreSQL、LangGraph Checkpoint 表、Redis 临时键读写和 RabbitMQ Exchange，并统计超过租约时间仍处于
 `PROCESSING` 的主动提醒 Inbox/通知 Outbox。默认只告警不阻断，使用 `ARGS=--strict-stale` 时发现疑似卡死记录会
 返回失败。该命令不会自动重启服务；本地逐组件重启步骤见 `deployment/operations/recovery-drill.md`。
+Agent 就绪探针在重启后的数据库连接池短暂重连窗口内会有限重试（默认 30 秒），仍保持未就绪即拒绝流量；可通过
+`ARGS="--ready-retry-seconds 60"` 调整验收等待窗口。
 
 训练计划主动提醒可先使用 `make gateway-training-proactive-preflight` 做只读检查，确认 Agent readiness、Training
 健康状态、Agent PostgreSQL 和 RabbitMQ 均可用；然后使用 `make gateway-training-proactive-live-check`。后者复用已有的训练计划角色工作流，

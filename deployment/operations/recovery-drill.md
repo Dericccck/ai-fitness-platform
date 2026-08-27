@@ -11,6 +11,8 @@ make agent-recovery-check
 
 检查通过后记录 Agent `/health/ready`、Prometheus、RabbitMQ 管理台和 PostgreSQL 当前状态。
 `stale_inbox` 与 `stale_notification_outbox` 应为 `0`；如果不是 `0`，先处理遗留任务，不要把旧故障混入本轮结果。
+数据库刚重启时 Agent 的 Checkpoint 连接池可能在短暂窗口内返回 503，检查脚本默认会在 30 秒内重试；超过窗口
+仍未就绪才视为故障。
 
 ## 2. 服务恢复演练
 

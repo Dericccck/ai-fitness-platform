@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
+import time
 import uuid
 from dataclasses import dataclass
 
@@ -38,6 +39,7 @@ class RecoveryConfig:
     rabbitmq_url: str
     event_exchange: str
     timeout_seconds: float
+    ready_retry_seconds: float
     stale_lock_seconds: int
     strict_stale: bool
 
@@ -89,6 +91,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="单项检查超时时间，默认 10 秒",
     )
     parser.add_argument(
+        "--ready-retry-seconds",
+        type=float,
+        default=float(os.getenv("AGENT_RECOVERY_READY_RETRY_SECONDS", "30")),
+        help="Agent 就绪探针在重启重连窗口内的最长等待时间，默认 30 秒",
+    )
+    parser.add_argument(
         "--stale-lock-seconds",
         type=int,
         default=int(os.getenv("AGENT_RECOVERY_STALE_LOCK_SECONDS", "300")),
@@ -107,6 +115,8 @@ def build_config(args: argparse.Namespace) -> RecoveryConfig:
 
     if args.timeout_seconds <= 0:
         raise ServiceRecoveryCheckError("timeout-seconds 必须大于 0")
+    if args.ready_retry_seconds <= 0 or args.ready_retry_seconds > 300:
+        raise ServiceRecoveryCheckError("ready-retry-seconds 必须在 0 到 300 秒之间")
     if args.stale_lock_seconds < 1:
         raise ServiceRecoveryCheckError("stale-lock-seconds 必须大于 0")
     return RecoveryConfig(
@@ -119,6 +129,7 @@ def build_config(args: argparse.Namespace) -> RecoveryConfig:
         rabbitmq_url=str(args.rabbitmq_url).strip(),
         event_exchange=str(args.event_exchange).strip(),
         timeout_seconds=float(args.timeout_seconds),
+        ready_retry_seconds=float(args.ready_retry_seconds),
         stale_lock_seconds=int(args.stale_lock_seconds),
         strict_stale=bool(args.strict_stale),
     )
@@ -133,6 +144,33 @@ async def _check_http(client: httpx.AsyncClient, url: str, path: str, label: str
         raise ServiceRecoveryCheckError(f"{label} 无法连接") from exc
     if response.status_code >= 400:
         raise ServiceRecoveryCheckError(f"{label} 返回 HTTP {response.status_code}")
+
+
+async def _check_agent_ready(client: httpx.AsyncClient, config: RecoveryConfig) -> None:
+    """在有界重连窗口内重试就绪探针，仍然保持 fail-closed。
+
+    数据库容器重启后，Agent 的普通 SQL 连接可能很快重连，但 LangGraph Checkpoint
+    连接池中的旧连接会先收到 ``AdminShutdown``。此时继续返回 503 可以阻止流量进入；
+    这里仅在验收脚本中等待有限时间，确认连接池自动恢复后再判定通过，避免把正常恢复窗口
+    误报成永久故障。超过窗口仍未就绪则返回失败。
+    """
+
+    deadline = time.monotonic() + config.ready_retry_seconds
+    last_status: int | None = None
+    while time.monotonic() < deadline:
+        try:
+            response = await client.get(config.agent_url + "/health/ready")
+        except httpx.HTTPError as exc:
+            raise ServiceRecoveryCheckError("Agent 就绪检查无法连接") from exc
+        if response.status_code < 400:
+            return
+        last_status = response.status_code
+        if response.status_code < 500:
+            raise ServiceRecoveryCheckError(f"Agent 就绪检查返回 HTTP {response.status_code}")
+        await asyncio.sleep(0.5)
+    raise ServiceRecoveryCheckError(
+        f"Agent 在 {config.ready_retry_seconds:g} 秒内未恢复就绪，最后 HTTP {last_status}"
+    )
 
 
 async def _check_database(config: RecoveryConfig) -> tuple[int, int, int]:
@@ -218,7 +256,7 @@ async def run(config: RecoveryConfig) -> None:
         trust_env=False,
     ) as client:
         await _check_http(client, config.agent_url, "/health/live", "Agent 存活检查")
-        await _check_http(client, config.agent_url, "/health/ready", "Agent 就绪检查")
+        await _check_agent_ready(client, config)
         await _check_http(client, config.gateway_url, "/health/live", "Gateway 存活检查")
 
     checkpoint_count, inbox_stale, outbox_stale = await _check_database(config)
