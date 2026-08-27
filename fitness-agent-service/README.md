@@ -469,6 +469,11 @@ PostgreSQL 备份恢复可使用 `make agent-postgres-backup-restore-check` 验�
 它不会清空、覆盖或删除源数据库，也不修改 MySQL 业务库。该检查只证明本地备份可恢复，生产环境仍需补充对象存储
 生命周期、备份加密、跨可用区副本、WAL/PITR、恢复时间目标和定期灾备演练。
 
+服务或容器重启后可执行 `make agent-recovery-check`。该检查会以不信任系统代理的方式验证 Agent 存活/就绪、Gateway
+存活、PostgreSQL、LangGraph Checkpoint 表、Redis 临时键读写和 RabbitMQ Exchange，并统计超过租约时间仍处于
+`PROCESSING` 的主动提醒 Inbox/通知 Outbox。默认只告警不阻断，使用 `ARGS=--strict-stale` 时发现疑似卡死记录会
+返回失败。该命令不会自动重启服务；本地逐组件重启步骤见 `deployment/operations/recovery-drill.md`。
+
 训练计划主动提醒可先使用 `make gateway-training-proactive-preflight` 做只读检查，确认 Agent readiness、Training
 健康状态、Agent PostgreSQL 和 RabbitMQ 均可用；然后使用 `make gateway-training-proactive-live-check`。后者复用已有的训练计划角色工作流，
 依次创建草案、提交审核、审核通过和发布；发布后额外等待 `TRAINING_PLAN_REVIEW_REQUIRED` 与

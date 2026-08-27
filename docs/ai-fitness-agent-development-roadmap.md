@@ -1638,3 +1638,13 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
   逐表比较 public schema 记录数，并在结束时删除临时数据库。
 - 验收不清空、不覆盖源数据库，也不修改 MySQL 业务事实；本轮只证明本地逻辑备份可恢复，生产级对象存储、加密、
   跨可用区副本、WAL/PITR、RTO/RPO 和定期灾备演练仍需后续完成。
+
+本轮继续补充最终可靠性阶段的第四项“服务重启恢复检查与演练手册”：
+
+- 新增 `scripts/service_recovery_check.py` 和 `make agent-recovery-check`，检查 Agent 存活/就绪、Gateway 存活、
+  PostgreSQL、LangGraph Checkpoint 表、Redis 临时读写、RabbitMQ Exchange，以及主动提醒 Inbox/通知 Outbox 的超时
+  `PROCESSING` 记录。
+- 新增 `deployment/operations/recovery-drill.md`，规定本地隔离环境中逐组件重启 Redis、PostgreSQL、RabbitMQ 和
+  应用进程的顺序、观察项与通过标准；脚本和手册都不会自动停止用户正在运行的 Agent/Gateway。
+- 当前完成的是重启后的依赖恢复检查和 Worker 状态恢复基线；RabbitMQ 网络隔离、PostgreSQL 进程崩溃、Checkpoint
+  断点续跑和生产告警联动仍需按手册继续演练，不能仅凭健康探针宣称灾备完成。
