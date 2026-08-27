@@ -31,6 +31,8 @@ async def run() -> None:
             exchange_name=settings.proactive_rabbitmq_exchange,
             queue_name=settings.proactive_rabbitmq_queue,
             routing_key=settings.proactive_rabbitmq_routing_key,
+            reconnect_initial_seconds=settings.proactive_rabbitmq_reconnect_initial_seconds,
+            reconnect_max_seconds=settings.proactive_rabbitmq_reconnect_max_seconds,
         )
         worker = ProactiveEventWorker(
             app.state.database,

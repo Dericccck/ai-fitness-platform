@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import asyncio
+from typing import cast
+
 import aio_pika
 import structlog
 from aio_pika import ExchangeType
@@ -13,6 +16,25 @@ from .events import ProactiveEventContractError, ProactiveEventMessage
 from .repository import ProactiveEventRepository
 
 _logger = structlog.get_logger("proactive.rabbit_consumer")
+
+
+def reconnect_delay(attempt: int, *, initial_seconds: float, max_seconds: float) -> float:
+    """计算 RabbitMQ 重连退避时间。
+
+    网络故障时不能让 Worker 忙循环连接 RabbitMQ，否则会放大 Broker 和网络压力；
+    这里采用有上限的指数退避。attempt 从 1 开始，调用方可以把重连次数写入
+    结构化日志，但不能把机构 ID 或用户 ID 放进日志字段。
+    """
+
+    if attempt < 1:
+        raise ValueError("attempt must be greater than zero")
+    if initial_seconds <= 0 or max_seconds <= 0:
+        raise ValueError("reconnect delays must be greater than zero")
+    if initial_seconds > max_seconds:
+        raise ValueError("initial reconnect delay cannot exceed max delay")
+    # 30 次之后已经达到常见的最大退避范围，限制指数位数也避免异常长时间故障
+    # 导致无界整数增长；最终等待时间仍由 max_seconds 统一封顶。
+    return cast(float, min(max_seconds, initial_seconds * (2 ** min(attempt - 1, 30))))
 
 
 class ProactiveRabbitConsumer:
@@ -31,6 +53,8 @@ class ProactiveRabbitConsumer:
         exchange_name: str,
         queue_name: str,
         routing_key: str,
+        reconnect_initial_seconds: float = 1.0,
+        reconnect_max_seconds: float = 30.0,
     ) -> None:
         self.database = database
         self.repository = repository
@@ -38,9 +62,49 @@ class ProactiveRabbitConsumer:
         self.exchange_name = exchange_name
         self.queue_name = queue_name
         self.routing_key = routing_key
+        if reconnect_initial_seconds <= 0:
+            raise ValueError("reconnect_initial_seconds must be greater than zero")
+        if reconnect_max_seconds < reconnect_initial_seconds:
+            raise ValueError("reconnect_max_seconds must not be smaller than initial delay")
+        self.reconnect_initial_seconds = reconnect_initial_seconds
+        self.reconnect_max_seconds = reconnect_max_seconds
 
     async def run_forever(self) -> None:
-        """声明 Direct Exchange 拓扑并持续消费；连接断开由 robust connection 自动恢复。"""
+        """持续消费并在初始连接或消费循环失败后自动重连。
+
+        ``connect_robust`` 能恢复已经建立的连接，但初次连接失败、拓扑声明失败或
+        消费循环因未确认消息异常退出时，仍需要由应用层重新创建连接和 Channel。
+        外层循环保证 Worker 不会因为一次 RabbitMQ 故障永久退出；消息只有在 Inbox
+        事务提交后才 ACK，因此重连后仍会重新投递未确认消息。
+        """
+
+        attempt = 0
+        while True:
+            try:
+                await self._consume_connection()
+                # 正常返回通常意味着连接被主动关闭；下一轮仍重新建立连接。
+                attempt = 0
+            except asyncio.CancelledError:
+                raise
+            # 消费循环中的数据库事务异常也必须进入重连路径，否则未 ACK 消息会留在
+            # Broker 中而消费任务已经永久退出。CancelledError 已在上方单独放行。
+            except Exception as exc:  # noqa: BLE001
+                attempt += 1
+                delay = reconnect_delay(
+                    attempt,
+                    initial_seconds=self.reconnect_initial_seconds,
+                    max_seconds=self.reconnect_max_seconds,
+                )
+                _logger.warning(
+                    "proactive_rabbitmq_reconnect_scheduled",
+                    attempt=attempt,
+                    delay_seconds=delay,
+                    error_type=type(exc).__name__,
+                )
+                await asyncio.sleep(delay)
+
+    async def _consume_connection(self) -> None:
+        """创建一次连接并声明拓扑；该方法失败后由外层负责退避重连。"""
 
         connection = await aio_pika.connect_robust(self.url)
         try:

@@ -11,7 +11,7 @@ from typing import Any, Self
 import pytest
 
 from app.proactive.events import ProactiveEventMessage
-from app.proactive.rabbit_consumer import ProactiveRabbitConsumer
+from app.proactive.rabbit_consumer import ProactiveRabbitConsumer, reconnect_delay
 from app.proactive.repository import ProactiveEventRecord
 from app.proactive.worker import ProactiveEventWorker
 
@@ -86,6 +86,24 @@ def _consumer(repository: _FakeConsumerRepository) -> ProactiveRabbitConsumer:
         queue_name="fitness.proactive.events",
         routing_key="appointment.created",
     )
+
+
+def test_rabbitmq_reconnect_delay_is_bounded_exponential() -> None:
+    """重连间隔逐步增加但不能超过上限，避免网络故障时连接忙循环。"""
+
+    assert reconnect_delay(1, initial_seconds=1, max_seconds=10) == 1
+    assert reconnect_delay(2, initial_seconds=1, max_seconds=10) == 2
+    assert reconnect_delay(4, initial_seconds=1, max_seconds=10) == 8
+    assert reconnect_delay(5, initial_seconds=1, max_seconds=10) == 10
+
+
+def test_rabbitmq_reconnect_delay_rejects_invalid_configuration() -> None:
+    """退避配置错误必须在启动前暴露，不能静默退化成零秒重试。"""
+
+    with pytest.raises(ValueError, match="attempt"):
+        reconnect_delay(0, initial_seconds=1, max_seconds=10)
+    with pytest.raises(ValueError, match="initial"):
+        reconnect_delay(1, initial_seconds=11, max_seconds=10)
 
 
 @pytest.mark.asyncio

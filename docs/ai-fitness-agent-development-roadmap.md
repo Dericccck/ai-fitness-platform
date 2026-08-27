@@ -1659,3 +1659,16 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
   均恢复处理，临时数据按脚本清理。
 - `service_recovery_check.py` 增加 Agent 就绪探针的有界重试窗口，避免把正常连接池重连误报为永久故障；窗口耗尽
   仍会 fail-closed。该优化不放宽线上健康探针，线上流量在未就绪期间仍会被拒绝。
+
+本轮补充最终可靠性阶段的第五项“RabbitMQ 连接中断恢复能力”：
+
+- `ProactiveRabbitConsumer` 增加应用层重连循环。除了 `aio-pika` 已建立连接的自动恢复外，初始连接失败、拓扑声明
+  失败、消费循环异常退出时，也会重新创建连接和 Channel，不会因为一次 RabbitMQ 网络故障让消费任务永久退出。
+- 重连采用有上限的指数退避，默认从 1 秒开始、最大 30 秒；结构化日志记录固定的 `attempt`、`delay_seconds` 和
+  异常类型，不记录机构 ID、用户 ID、Token 或数据库密码。消息仍遵循“Inbox 事务提交后才 ACK”，因此未确认消息
+  在恢复后可以重新投递，Inbox 和通知 Outbox 的幂等约束继续生效。
+- 新增重连退避的确定性单元测试，并在 `deployment/operations/recovery-drill.md` 增加人工 `docker pause/unpause`
+  网络中断演练步骤、观察项和通过标准。由于该命令会影响共享 RabbitMQ 及所有连接，项目不会在自动化脚本中隐式执行。
+
+下一步固定为：在本地隔离环境按手册进行一次人工 RabbitMQ 中断/恢复观察；记录重连日志、队列积压、Inbox 去重和
+通知 Outbox 结果。观察完成后再进入可靠性阶段的压力/限流与灰度回滚检查。

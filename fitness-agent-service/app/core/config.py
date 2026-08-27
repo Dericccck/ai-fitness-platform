@@ -242,6 +242,10 @@ class Settings(BaseSettings):
     proactive_worker_batch_size: int = Field(default=50, ge=1, le=500)
     proactive_worker_poll_seconds: float = Field(default=2.0, ge=0.1, le=60)
     proactive_worker_metrics_port: int = Field(default=8096, ge=1, le=65535)
+    # RabbitMQ 网络抖动或 Broker 重启时由消费器使用有上限的指数退避重连，避免
+    # 连接失败形成忙循环；生产环境可按 Broker 和告警恢复窗口调整，但不能关闭重连。
+    proactive_rabbitmq_reconnect_initial_seconds: float = Field(default=1.0, gt=0, le=30)
+    proactive_rabbitmq_reconnect_max_seconds: float = Field(default=30.0, gt=0, le=300)
     # 页面路由阈值由部署配置统一控制，上传者和 LLM 无权覆盖。默认值偏保守，
     # 用于把可能承载健身动作、姿态或风险信息的图片密集页送入专业审核。
     rag_pdf_min_image_area_ratio: float = Field(default=0.45, ge=0, le=1)
