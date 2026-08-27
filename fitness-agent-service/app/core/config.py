@@ -283,6 +283,22 @@ class Settings(BaseSettings):
     gateway_retry_backoff_seconds: float = Field(default=0.1, ge=0, le=5)
 
     @model_validator(mode="after")
+    def validate_recovery_configuration(self) -> "Settings":
+        """在服务启动阶段校验 RabbitMQ 重连退避范围。
+
+        最大退避时间小于初始时间会让配置语义失真，并可能在故障时形成异常的
+        重连节奏。提前拒绝这类配置，避免 Worker 启动后才暴露问题。
+        """
+
+        if self.proactive_rabbitmq_reconnect_max_seconds < (
+            self.proactive_rabbitmq_reconnect_initial_seconds
+        ):
+            raise ValueError(
+                "proactive RabbitMQ max reconnect delay must not be smaller than initial delay"
+            )
+        return self
+
+    @model_validator(mode="after")
     def validate_production_authentication_contract(self) -> "Settings":
         """阻止生产环境以本地 HMAC 或空公钥配置启动。
 

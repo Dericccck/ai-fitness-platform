@@ -63,6 +63,17 @@ def test_local_embedding_and_reranker_configuration_is_explicit() -> None:
     assert settings.reranker_configured is True
 
 
+def test_rabbitmq_reconnect_delays_are_validated_at_settings_load() -> None:
+    """最大退避时间小于初始时间时，配置加载阶段必须直接失败。"""
+
+    with pytest.raises(ValidationError, match="max reconnect delay"):
+        Settings(
+            _env_file=None,
+            proactive_rabbitmq_reconnect_initial_seconds=10,
+            proactive_rabbitmq_reconnect_max_seconds=5,
+        )
+
+
 def test_production_requires_asymmetric_authentication_contract() -> None:
     with pytest.raises(ValidationError, match="production authentication contract is incomplete"):
         Settings(_env_file=None, environment="production")
