@@ -1675,3 +1675,14 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
 
 下一步固定为：在本地隔离环境按手册进行一次人工 RabbitMQ 中断/恢复观察；记录重连日志、队列积压、Inbox 去重和
 通知 Outbox 结果。观察完成后再进入可靠性阶段的压力/限流与灰度回滚检查。
+
+本轮开始补充最终可靠性阶段的“压力与限流验收基线”：
+
+- 新增 `scripts/rate_limit_load_check.py` 和 `make agent-rate-limit-load-check`。默认只检查 Redis 可用性；显式
+  `ARGS=--execute` 时，使用唯一临时 Key 并发执行固定窗口计数，验证允许数严格等于限额、超额请求被拒绝且
+  TTL 有效，结束后删除临时 Key。
+- 该验收不调用 DeepSeek、Java Gateway、MySQL 或 PostgreSQL 业务接口，不使用真实机构/用户标识；参数有上限，
+  防止把本地验收命令误用成无限压力工具。它验证的是 Operations 资源保护层，不等同于生产容量压测。
+
+下一步仍为：在确认没有真实业务消息后执行 RabbitMQ 网络中断恢复演练；随后再基于压测环境补充 Agent API 的
+容量基线、限流阈值调优以及灰度发布/回滚检查。
