@@ -1686,3 +1686,12 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
 
 下一步仍为：在确认没有真实业务消息后执行 RabbitMQ 网络中断恢复演练；随后再基于压测环境补充 Agent API 的
 容量基线、限流阈值调优以及灰度发布/回滚检查。
+
+本轮已完成 RabbitMQ 网络中断恢复真实演练：
+
+- 演练前确认 RabbitMQ 队列消息数和消费者数均为 `0`，没有运行中的 Booking、Training 或客服容器；仅在本地
+  测试环境暂停 `fitness-agent-rabbitmq` 约 8 秒，避免把真实业务消息混入故障场景。
+- 恢复后唯一临时事件被成功消费，Inbox 为 `1` 条、通知 Outbox 为 `2` 条；RabbitMQ 容器最终状态为
+  `running=true`、`paused=false`。
+- 演练后的严格恢复检查通过：Checkpoint 记录 `173`，Redis/RabbitMQ 正常，超时 Inbox 和通知 Outbox 均为 `0`。
+  这证明当前本地实现已完成一次连接中断后的恢复闭环，但不代表生产多节点 Broker、跨可用区或容量目标已经验收。
