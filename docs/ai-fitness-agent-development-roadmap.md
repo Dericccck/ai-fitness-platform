@@ -1695,3 +1695,15 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
   `running=true`、`paused=false`。
 - 演练后的严格恢复检查通过：Checkpoint 记录 `173`，Redis/RabbitMQ 正常，超时 Inbox 和通知 Outbox 均为 `0`。
   这证明当前本地实现已完成一次连接中断后的恢复闭环，但不代表生产多节点 Broker、跨可用区或容量目标已经验收。
+
+本轮开始补充最终可靠性阶段的“Agent HTTP 容量基线”：
+
+- 新增 `scripts/agent_capacity_check.py` 和 `make agent-capacity-check`，只允许访问 `/health/live` 或
+  `/health/ready`，默认只发送一次只读请求；显式 `ARGS=--execute` 才进行有限并发基线。
+- 基线输出 HTTP 状态分布、成功数、P50/P95/最大延迟；请求数和并发数有上限，客户端关闭系统代理环境读取，避免
+  本地代理把结果污染成代理延迟或 502。脚本不调用 DeepSeek、RAG、Gateway，也不写任何业务数据。
+- 该基线用于验证 HTTP 进程和健康检查路径的基本承载能力，不等同于包含 LLM、RAG、数据库和 Gateway 的生产容量压测；
+  生产压测仍需独立环境、固定数据集、成本预算、并发阶梯和回滚窗口。
+- 本地实际结果：`/health/live` 以 20 并发发送 100 次请求，全部 HTTP 200，P50 `44.8ms`、P95 `130.2ms`、最大
+  `215.6ms`；`/health/ready` 以 10 并发发送 50 次请求，全部 HTTP 200，P50 `11.7ms`、P95 `188.2ms`、最大
+  `190.9ms`。该结果仅作为当前开发机基线，不作为生产 SLO 承诺。
