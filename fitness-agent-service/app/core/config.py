@@ -336,6 +336,66 @@ class Settings(BaseSettings):
             )
         return self
 
+    @model_validator(mode="after")
+    def validate_production_runtime_contract(self) -> "Settings":
+        """阻止生产环境沿用本地开发依赖或不安全的默认值。
+
+        生产配置错误通常不会在进程启动时立刻暴露：例如数据库仍指向 localhost、知识原文件
+        仍写入本地磁盘，或者 OCR/ClamAV/Trace 没有接通。这样的实例可能能通过存活探针，
+        但会在真实上传、检索或故障排查时才失败。因此这里只校验“必须具备”的部署契约，
+        不打印密钥内容，也不要求每个 Worker 都在同一份环境变量里启用。
+        """
+
+        if self.environment != "production":
+            return self
+
+        errors: list[str] = []
+        if self.api_docs_enabled:
+            errors.append("AGENT_API_DOCS_ENABLED must be false")
+        if not self.metrics_enabled:
+            errors.append("AGENT_METRICS_ENABLED must be true")
+        if not self.otel_configured:
+            errors.append(
+                "AGENT_OTEL_ENABLED and AGENT_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT are required"
+            )
+        if not self.llm_configured:
+            errors.append("DEEPSEEK_API_KEY and DEEPSEEK_MODEL are required")
+        if not self.gateway_configured:
+            errors.append(
+                "AGENT_GATEWAY_BASE_URL and AGENT_GATEWAY_INTERNAL_SERVICE_TOKEN are required"
+            )
+        if not self.confirmation_encryption_key_base64.strip():
+            errors.append("AGENT_CONFIRMATION_ENCRYPTION_KEY_BASE64 is required")
+        if self.rag_storage_backend != "s3":
+            errors.append("AGENT_RAG_STORAGE_BACKEND must be s3")
+        if not (
+            self.rag_s3_endpoint_url.strip()
+            and self.rag_s3_bucket.strip()
+            and self.rag_s3_access_key.strip()
+            and self.rag_s3_secret_key.strip()
+        ):
+            errors.append("S3 endpoint, bucket and credentials are required")
+        if self.rag_malware_scanner_backend != "clamav":
+            errors.append("AGENT_RAG_MALWARE_SCANNER_BACKEND must be clamav")
+        if self.rag_ocr_backend != "http" or not self.rag_ocr_endpoint_url.strip():
+            errors.append("AGENT_RAG_OCR_BACKEND=http and AGENT_RAG_OCR_ENDPOINT_URL are required")
+        if self._uses_local_host(self.database_url):
+            errors.append("AGENT_DATABASE_URL must not use localhost in production")
+        if self._uses_local_host(self.redis_url):
+            errors.append("AGENT_REDIS_URL must not use localhost in production")
+        if self._uses_local_host(self.gateway_base_url):
+            errors.append("AGENT_GATEWAY_BASE_URL must not use localhost in production")
+        if errors:
+            raise ValueError("production runtime contract is incomplete: " + "; ".join(errors))
+        return self
+
+    @staticmethod
+    def _uses_local_host(value: str) -> bool:
+        """判断连接地址是否仍指向本机，避免生产实例误连自身或宿主机默认端口。"""
+
+        parsed = urlparse(value.strip())
+        return parsed.hostname in {"127.0.0.1", "localhost", "::1"}
+
     @property
     def embedding_effective_api_key(self) -> str:
         """返回 Embedding 实际使用的密钥。

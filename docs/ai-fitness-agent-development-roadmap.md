@@ -1742,3 +1742,15 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
 备份恢复 RTO/RPO、真实监控告警联动和灰度回滚演练。PDF 目录过滤、页眉页脚去重、表格识别、断词修复以及图片密集页的
 OCR/动作标注仍按约定放到项目最后，不影响当前健身 Agent 业务闭环；赛事、作品、活动运营、短信、Push、人工转接和复杂
 训练管理继续忽略。
+
+本轮开始补充“生产运行时配置契约”：
+
+- `Settings` 在 `production` 环境启动时拒绝本地数据库、Redis 和 Gateway 地址，避免实例误连开发机默认端口。
+- 生产必须显式开启 Metrics 和 OTLP Trace，关闭 API 文档；LLM、Gateway 服务间 Token、确认单加密密钥、S3 对象存储、
+  ClamAV 和独立 OCR 服务配置不完整时直接拒绝启动。
+- 生产知识原文件必须使用 S3 兼容对象存储，不能使用本地目录；恶意文件扫描必须使用 ClamAV，图片密集页处理必须配置
+  HTTP OCR 服务。这些校验只检查是否配置，不会打印或记录密钥内容。
+- 更新 `deployment/environments/agent.production.env.example`，补充数据库和 Redis 连接配置占位符，提醒部署平台必须注入
+  真实地址与 Secret。开发、测试和本地环境不受该生产契约影响。
+- 新增生产配置回归测试；本轮 Agent 完整回归为 `392 passed`、`9 skipped`，无失败。下一步继续补齐不可变镜像清单、迁移
+  兼容性检查和生产备份恢复指标。
