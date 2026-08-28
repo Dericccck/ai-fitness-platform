@@ -1618,6 +1618,14 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
   失败消息、Worker 处理失败后的可重试状态，以及 Worker 重启后重新领取并完成处理。
 - 测试锁定“先写入 Inbox 事务并提交，再 ACK RabbitMQ 消息”的边界，同时验证通知 Outbox 与 Inbox 已处理状态
   位于同一 PostgreSQL 事务边界内，避免 ACK 成功但业务状态丢失或重复产生通知。
+
+本轮修复统一发布门禁的 ClamAV 配置边界：
+
+- `make agent-security-check` 和 `make release-check` 执行的是本地真实 ClamAV INSTREAM 验收，
+  现在由 Make 目标显式将扫描后端固定为 `clamav`；扫描地址和端口仍从 Agent 环境配置读取，
+  不会把生产地址或密钥写入仓库。
+- 这样可以避免本地 `.env` 为了允许结构检查而配置为 `structural` 时，统一发布门禁误判为代码失败；
+  如果本地 ClamAV 未启动，门禁会明确在真实连接处失败，而不是静默跳过病毒扫描。
 - 本轮是确定性故障边界回归，不连接真实 RabbitMQ、不创建预约/训练计划、不写 MySQL；真实 RabbitMQ 连接断开、
   重复投递和 PostgreSQL 重启后的本地容器演练仍安排在下一步。
 
@@ -1716,3 +1724,21 @@ Agent 客服工具、Supervisor 和 Tool Registry 回归通过。当前未执行
   状态；传入 `--expected-version` 后，版本不匹配或依赖未就绪会直接失败，避免旧实例在回滚/灰度期间接收流量。
 - 该检查不负责切换镜像、修改配置或执行数据库回滚；生产发布系统仍需提供不可变镜像、目标版本切换、旧版本保留、
   数据库向前/向后兼容迁移和自动回滚策略。本地当前只完成“回滚动作后的实例验收”。
+
+本轮完成统一 `release-check` 发布质量门禁：
+
+- Agent 代码质量检查全部通过：Ruff、格式检查和 mypy 均通过；全量测试共 `400` 项，其中 `392 passed`、`8 skipped`、
+  无失败。跳过项是未启用真实数据库夹具的 PostgreSQL 集成测试，不代表单元逻辑失败。
+- RAG 评测、Operations 趋势/对比/策略评测、会话摘要安全评测全部达到阈值；ClamAV 真实 INSTREAM 验收验证了正常文件
+  通过、EICAR 测试签名拒绝。
+- OCR 服务检查、Fitness Core Gateway、Training、Booking 和 Customer Service 的构建与测试全部通过；其中 Booking 的
+  MySQL 集成测试仍按设计在未显式启用真实业务夹具时跳过，其他 Booking 测试通过。
+- 根目录 `make release-check` 最终退出码为 `0`。该门禁只覆盖确定性检查和服务构建，不调用 DeepSeek，不创建预约、训练
+  计划或客服工单；真实业务写入仍由各自带确认机制的 live-check 单独授权执行。
+- 本轮还修复了 `agent-security-check` 的配置边界：门禁显式选择 ClamAV，扫描地址和端口仍由本地/部署环境提供，避免
+  `.env` 中选择 `structural` 时被误判为安全验收通过。
+
+当前最终可靠性阶段的确定性门禁已闭环；后续重点转为发布材料和生产准备，包括不可变镜像/配置清单、数据库迁移兼容性、
+备份恢复 RTO/RPO、真实监控告警联动和灰度回滚演练。PDF 目录过滤、页眉页脚去重、表格识别、断词修复以及图片密集页的
+OCR/动作标注仍按约定放到项目最后，不影响当前健身 Agent 业务闭环；赛事、作品、活动运营、短信、Push、人工转接和复杂
+训练管理继续忽略。

@@ -138,7 +138,7 @@ agent-session-summary-eval:
 		--cases evals/session_summary_samples.json --thresholds evals/session_summary_thresholds.json
 
 agent-security-check:
-	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.rag.security_cli
+	cd $(AGENT_DIR) && AGENT_RAG_MALWARE_SCANNER_BACKEND=clamav UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.rag.security_cli
 
 agent-jwks-check:
 	@test -n "$$JWKS_URL" || (echo "请先设置 JWKS_URL（认证服务标准 JWKS 地址）"; exit 1)
