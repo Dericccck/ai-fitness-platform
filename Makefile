@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: agent-jwks-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check
+.PHONY: agent-jwks-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-migration-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check
 
 AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
@@ -52,6 +52,7 @@ help:
 	@echo "  agent-rate-limit-load-check Verify concurrent Redis rate limiting without business writes"
 	@echo "  agent-capacity-check Verify Agent HTTP capacity baseline without business writes"
 	@echo "  agent-release-rollback-check Verify Agent version, liveness and readiness after release/rollback"
+	@echo "  agent-migration-check Verify Alembic migration chain and bidirectional contract"
 	@echo "  agent-proactive-live-check Verify Booking -> RabbitMQ -> Agent Inbox -> IN_APP chain"
 	@echo "  agent-image  Build the production Agent container image"
 	@echo "  knowledge-manifest  Generate the local source and SHA-256 manifest"
@@ -227,6 +228,9 @@ agent-capacity-check:
 agent-release-rollback-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/release_rollback_check.py $(ARGS)
 
+agent-migration-check:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/migration_contract_check.py
+
 agent-proactive-live-check:
 	@test -n "$$AGENT_LIVE_AGENT_CONTEXT" || (echo "请先设置 AGENT_LIVE_AGENT_CONTEXT（认证服务签发的业务用户 Token）"; exit 1)
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/proactive_booking_live_check.py $(ARGS)
@@ -353,7 +357,7 @@ customer-service-run:
 # 发布门禁只组合确定性测试、离线评测和静态安全检查，不启动服务、不调用 DeepSeek，
 # 也不会执行预约、训练计划、客服工单等任何真实业务写入。真实 HTTP 验收仍必须
 # 使用各业务专用的、显式授权的 live-check 命令，避免把发布检查误当成生产演练。
-release-check: agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check ocr-check gateway-check training-check booking-check customer-service-check
+release-check: agent-check agent-migration-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check ocr-check gateway-check training-check booking-check customer-service-check
 
 agent-customer-service-preflight:
 	@test -n "$$AGENT_LIVE_AGENT_CONTEXT" || (echo "请先设置 AGENT_LIVE_AGENT_CONTEXT（认证服务签发的业务用户 Token）"; exit 1)

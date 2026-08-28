@@ -50,6 +50,9 @@ jobs:
       - name: Test
         run: uv run pytest
 
+      - name: Database migration contract
+        run: uv run python scripts/migration_contract_check.py
+
       - name: RAG evaluation quality gate
         run: uv run python -m app.rag.evaluation_cli --cases evals/rag_smoke.json --thresholds evals/rag_thresholds.json
 

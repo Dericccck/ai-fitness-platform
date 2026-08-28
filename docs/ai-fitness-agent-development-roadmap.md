@@ -1754,3 +1754,14 @@ OCR/动作标注仍按约定放到项目最后，不影响当前健身 Agent 业
   真实地址与 Secret。开发、测试和本地环境不受该生产契约影响。
 - 新增生产配置回归测试；本轮 Agent 完整回归为 `392 passed`、`9 skipped`，无失败。下一步继续补齐不可变镜像清单、迁移
   兼容性检查和生产备份恢复指标。
+
+本轮完成“数据库迁移兼容性基础检查”：
+
+- 新增 `scripts/migration_contract_check.py` 和 `make agent-migration-check`，只通过 AST 读取迁移声明，
+  不执行 `upgrade()`，避免发布前检查意外修改数据库。
+- 检查 35 个 Alembic 版本的 `revision` 唯一性、`down_revision` 父版本引用、单一 head，以及每个版本是否同时提供
+  `upgrade()` 和 `downgrade()`；当前根版本为 `20260812_0001`，head 为 `20260824_0035`，检查通过。
+- 已接入根目录 `release-check` 和 GitHub Actions CI。异常场景测试覆盖未知父版本、多 head 和缺少 downgrade，
+  防止迁移链断裂进入发布流程。
+- 该检查是迁移链和代码入口的基础门禁，不等同于真实 PostgreSQL 空库升级、带数据升级、回滚和锁等待验证；这些需要
+  在隔离数据库中执行，并纳入后续 RTO/RPO 与发布演练。
