@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: agent-jwks-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-migration-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check
+.PHONY: agent-jwks-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-migration-check agent-migration-live-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check
 
 AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
@@ -53,6 +53,7 @@ help:
 	@echo "  agent-capacity-check Verify Agent HTTP capacity baseline without business writes"
 	@echo "  agent-release-rollback-check Verify Agent version, liveness and readiness after release/rollback"
 	@echo "  agent-migration-check Verify Alembic migration chain and bidirectional contract"
+	@echo "  agent-migration-live-check Verify real PostgreSQL migration upgrade and rollback"
 	@echo "  agent-proactive-live-check Verify Booking -> RabbitMQ -> Agent Inbox -> IN_APP chain"
 	@echo "  agent-image  Build the production Agent container image"
 	@echo "  knowledge-manifest  Generate the local source and SHA-256 manifest"
@@ -230,6 +231,9 @@ agent-release-rollback-check:
 
 agent-migration-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/migration_contract_check.py
+
+agent-migration-live-check:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/migration_live_check.py $(ARGS)
 
 agent-proactive-live-check:
 	@test -n "$$AGENT_LIVE_AGENT_CONTEXT" || (echo "请先设置 AGENT_LIVE_AGENT_CONTEXT（认证服务签发的业务用户 Token）"; exit 1)

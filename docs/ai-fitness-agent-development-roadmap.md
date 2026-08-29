@@ -1765,3 +1765,13 @@ OCR/动作标注仍按约定放到项目最后，不影响当前健身 Agent 业
   防止迁移链断裂进入发布流程。
 - 该检查是迁移链和代码入口的基础门禁，不等同于真实 PostgreSQL 空库升级、带数据升级、回滚和锁等待验证；这些需要
   在隔离数据库中执行，并纳入后续 RTO/RPO 与发布演练。
+
+本轮完成 PostgreSQL 空库迁移真实验收：
+
+- 新增 `scripts/migration_live_check.py` 和 `make agent-migration-live-check`。默认只检查 PostgreSQL 容器和 Alembic
+  工具；只有显式传入 `ARGS=--execute` 才会创建唯一临时数据库、执行 `upgrade head`、读取版本并执行 `downgrade base`。
+- 本地实际升级到 `20260824_0035` 用时约 `1.20s`，回滚到 `base` 用时约 `0.80s`；回滚后 public 业务表为 `0`，临时数据库
+  已清理，残留检查结果为 `0`。脚本不会覆盖现有 `fitness_agent` 数据库，也不会修改 MySQL 业务库。
+- 修复了 `createdb` 管理库参数的拼接问题，并增加参数注入边界测试。Agent 完整回归为 `398 passed`、`9 skipped`，无失败。
+- 当前只完成空库结构升级/回滚；带已有业务数据的兼容性、迁移锁等待、在线迁移耗时和生产 RTO/RPO 仍需在隔离预发布库继续
+  验证，不能把本地临时库结果直接当作生产灾备结论。
