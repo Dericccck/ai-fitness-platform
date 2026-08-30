@@ -139,7 +139,7 @@ agent-lock:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv lock --python 3.11
 
 agent-sync:
-	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --locked --all-extras --dev
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --locked --extra eval --extra dev
 
 agent-migrate:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run alembic upgrade head
@@ -156,6 +156,19 @@ agent-check:
 agent-eval:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.rag.evaluation_cli \
 		--cases evals/rag_smoke.json --thresholds evals/rag_thresholds.json
+
+agent-trulens-eval:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --extra eval python -m app.evaluation.trulens_cli \
+		--cases evals/trulens_smoke.json --thresholds evals/trulens_thresholds.json
+
+agent-trulens-judge:
+	@test -n "$$TRULENS_JUDGE_API_KEY" || (echo "请先设置 TRULENS_JUDGE_API_KEY（仅用于受控离线评测）"; exit 1)
+	cd $(AGENT_DIR) && TRULENS_JUDGE_API_KEY=$(TRULENS_JUDGE_API_KEY) UV_CACHE_DIR=$(UV_CACHE_DIR) \
+		uv run --extra eval python -m app.evaluation.trulens_cli --judge \
+		--cases evals/trulens_smoke.json --thresholds evals/trulens_thresholds.json
+
+agent-trulens-dashboard:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --extra dashboard python -m app.evaluation.trulens_dashboard
 
 agent-operations-eval:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.agent.operations_evaluation \

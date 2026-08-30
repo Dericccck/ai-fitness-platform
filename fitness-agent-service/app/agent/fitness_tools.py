@@ -814,6 +814,7 @@ def build_fitness_tool_registry(
     operations_rate_limit_window_seconds: int = 60,
     operations_query_timeout_seconds: float | None = None,
     operations_metrics: HttpMetrics | None = None,
+    telemetry: Any | None = None,
 ) -> ToolRegistry:
     """创建进程级健身工具注册表。
 
@@ -822,7 +823,7 @@ def build_fitness_tool_registry(
     角色、确认和幂等元数据，而不是让模型或业务 Agent 自由调用 HTTP 客户端。
     """
 
-    registry = ToolRegistry()
+    registry = ToolRegistry(telemetry=telemetry)
 
     # 延迟导入是有意的：生成服务需要复用本文件中的训练计划 Schema，若在模块顶部
     # 导入会形成循环依赖。函数执行时本模块已经完成加载，仍然保持单一 Schema 来源。

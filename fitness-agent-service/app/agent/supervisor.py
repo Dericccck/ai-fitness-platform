@@ -20,6 +20,7 @@ from langgraph.types import Command, interrupt
 
 from app.confirmation.models import ConfirmationStateError
 from app.confirmation.service import ConfirmationService
+from app.evaluation.telemetry import TruLensTelemetry
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.cache import SessionLockManager, SessionLockUnavailable
 from app.infrastructure.gateway_client import (
@@ -167,6 +168,7 @@ class Supervisor:
         # 保留此参数是为了兼容当前单元测试和旧的内嵌装配；正式应用使用上面的
         # Service，因为它还负责跨请求持久化和用户批准/拒绝。
         memory_candidate_extractor: MemoryCandidateExtractionService | None = None,
+        telemetry: TruLensTelemetry | None = None,
     ) -> None:
         self.models = models
         self.tools = tools
@@ -178,6 +180,7 @@ class Supervisor:
         self.memory_candidate_service = memory_candidate_service
         self.session_summary_service = session_summary_service
         self.memory_candidate_extractor = memory_candidate_extractor
+        self.telemetry = telemetry or TruLensTelemetry.disabled()
         self._domain_graphs: dict[SupervisorRoute, Any] = {}
         self._graph = self._build_graph()
 
@@ -188,6 +191,28 @@ class Supervisor:
         return dict(self._domain_graphs)
 
     async def invoke(self, request: SupervisorRequest) -> SupervisorResponse:
+        with self.telemetry.request(
+            request_id=request.gateway_context.request_id,
+            trace_id=request.gateway_context.trace_id,
+            conversation_id=request.conversation_id,
+            user_message=request.user_message,
+        ) as request_span:
+            response = await self._invoke(request)
+            self.telemetry.set_attributes(
+                request_span,
+                {
+                    "fitness.agent.route": response.route,
+                    "fitness.agent.tool_steps": response.tool_steps,
+                    "fitness.agent.input_tokens": response.input_tokens,
+                    "fitness.agent.output_tokens": response.output_tokens,
+                },
+            )
+            self.telemetry.finish_request(
+                request_span, answer=response.answer, status=response.status
+            )
+            return response
+
+    async def _invoke(self, request: SupervisorRequest) -> SupervisorResponse:
         """执行一次可恢复的 Supervisor 状态图。"""
 
         route = classify_route(request.user_message)
@@ -470,6 +495,41 @@ class Supervisor:
         return response
 
     async def resume_confirmation(
+        self,
+        confirmation_id: str,
+        *,
+        identity: AgentIdentity,
+        gateway_context: GatewayRequestContext,
+        thread_id: str,
+    ) -> SupervisorResponse:
+        with self.telemetry.request(
+            request_id=gateway_context.request_id,
+            trace_id=gateway_context.trace_id,
+            conversation_id=thread_id,
+            user_message=None,
+            route="CONFIRMATION_RESUME",
+        ) as request_span:
+            response = await self._resume_confirmation(
+                confirmation_id,
+                identity=identity,
+                gateway_context=gateway_context,
+                thread_id=thread_id,
+            )
+            self.telemetry.set_attributes(
+                request_span,
+                {
+                    "fitness.agent.route": response.route,
+                    "fitness.agent.tool_steps": response.tool_steps,
+                    "fitness.agent.input_tokens": response.input_tokens,
+                    "fitness.agent.output_tokens": response.output_tokens,
+                },
+            )
+            self.telemetry.finish_request(
+                request_span, answer=response.answer, status=response.status
+            )
+            return response
+
+    async def _resume_confirmation(
         self,
         confirmation_id: str,
         *,

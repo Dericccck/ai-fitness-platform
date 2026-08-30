@@ -51,6 +51,15 @@ dev = [
     "pypdf>=5,<7",
     "ruff>=0.8,<1.0",
 ]
+eval = [
+    "jsonschema>=4.23,<5.0",
+    "trulens-core==2.10.0",
+    "trulens-feedback==2.10.0",
+    "trulens-providers-openai==2.10.0",
+]
+dashboard = [
+    "trulens-dashboard==2.10.0",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]

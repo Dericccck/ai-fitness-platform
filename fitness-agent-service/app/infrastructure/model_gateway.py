@@ -6,6 +6,7 @@ from typing import Any
 from openai import AsyncOpenAI, OpenAIError
 
 from app.core.config import Settings
+from app.evaluation.telemetry import TruLensTelemetry
 
 
 class ModelConfigurationError(RuntimeError):
@@ -55,8 +56,9 @@ class ModelGateway:
     结构化输出的响应格式稳定。
     """
 
-    def __init__(self, settings: Settings) -> None:
+    def __init__(self, settings: Settings, telemetry: TruLensTelemetry | None = None) -> None:
         self.settings = settings
+        self.telemetry = telemetry or TruLensTelemetry.disabled()
 
         # AsyncOpenAI 构造时要求非空密钥，因此未配置环境使用不可用占位值完成
         # 对象装配。chat/embed 会在任何网络请求发生前检查 configured 并明确抛错，
@@ -89,15 +91,15 @@ class ModelGateway:
         if not self.settings.llm_configured:
             raise ModelConfigurationError("LLM provider is not configured")
 
-        try:
-            response = await self._llm.chat.completions.create(
-                model=self.settings.llm_model,
-                messages=messages,  # type: ignore[arg-type]
-                temperature=temperature,
-                extra_body=_deepseek_extra_body(self.settings.llm_thinking_enabled),
-            )
-        except OpenAIError as exc:
-            raise ModelResponseError("LLM provider request failed") from exc
+        response = await self._create_completion(
+            {
+                "model": self.settings.llm_model,
+                "messages": messages,
+                "temperature": temperature,
+                "extra_body": _deepseek_extra_body(self.settings.llm_thinking_enabled),
+            },
+            kind="chat",
+        )
         return response.choices[0].message.content or ""
 
     async def chat_json(
@@ -143,10 +145,7 @@ class ModelGateway:
             "response_format": {"type": "json_object"},
             "extra_body": _deepseek_extra_body(self.settings.llm_thinking_enabled),
         }
-        try:
-            response = await self._llm.chat.completions.create(**request)
-        except OpenAIError as exc:
-            raise ModelResponseError("LLM provider request failed") from exc
+        response = await self._create_completion(request, kind="json")
         if not response.choices:
             raise ModelResponseError("LLM returned no choices")
         content = response.choices[0].message.content or ""
@@ -200,10 +199,7 @@ class ModelGateway:
                 if force_tool_name
                 else "auto"
             )
-        try:
-            response = await self._llm.chat.completions.create(**request)
-        except OpenAIError as exc:
-            raise ModelResponseError("LLM provider request failed") from exc
+        response = await self._create_completion(request, kind="tool_calling")
         if not response.choices:
             raise ModelResponseError("LLM returned no choices")
 
@@ -250,6 +246,43 @@ class ModelGateway:
             input=texts,
         )
         return [item.embedding for item in response.data]
+
+    async def _create_completion(self, request: dict[str, Any], *, kind: str) -> Any:
+        """Call the provider once and emit bounded generation telemetry."""
+
+        messages = request.get("messages", [])
+        with self.telemetry.span(
+            "fitness.agent.generation",
+            attributes={
+                "fitness.agent.generation_kind": kind,
+                "fitness.agent.model": self.settings.llm_model,
+                "fitness.agent.input_message_count": len(messages),
+            },
+        ) as generation_span:
+            try:
+                response = await self._llm.chat.completions.create(**request)
+            except OpenAIError as exc:
+                self.telemetry.set_attributes(
+                    generation_span,
+                    {"fitness.agent.generation_status": "failed"},
+                )
+                raise ModelResponseError("LLM provider request failed") from exc
+            usage = getattr(response, "usage", None)
+            self.telemetry.set_attributes(
+                generation_span,
+                {
+                    "fitness.agent.generation_status": "succeeded",
+                    "fitness.agent.input_tokens": getattr(usage, "prompt_tokens", None),
+                    "fitness.agent.output_tokens": getattr(usage, "completion_tokens", None),
+                },
+            )
+            if response.choices:
+                self.telemetry.set_text(
+                    generation_span,
+                    "fitness.agent.generation.output",
+                    response.choices[0].message.content,
+                )
+            return response
 
     def _embed_local(self, texts: list[str]) -> list[list[float]]:
         """在线程池中执行本地 BGE-M3，避免阻塞 FastAPI 事件循环。"""

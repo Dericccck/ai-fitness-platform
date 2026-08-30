@@ -1,0 +1,8 @@
+{
+  "answer_non_empty": 1.0,
+  "answer_has_citation": 1.0,
+  "answer_relevance": 0.6,
+  "groundedness": 0.6,
+  "context_relevance": 0.6,
+  "tool_selection": 0.6
+}

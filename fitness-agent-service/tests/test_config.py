@@ -171,3 +171,35 @@ def test_production_rejects_local_runtime_defaults() -> None:
             confirmation_signing_algorithm="RS256",
             confirmation_signing_private_key_pem="-----BEGIN PRIVATE KEY-----\nprivate\n-----END PRIVATE KEY-----",
         )
+
+
+def test_production_rejects_trulens_evaluation_capture() -> None:
+    with pytest.raises(ValidationError, match="TRULENS_CAPTURE_MODE"):
+        Settings(
+            _env_file=None,
+            environment="production",
+            api_docs_enabled=False,
+            metrics_enabled=True,
+            otel_enabled=True,
+            otel_exporter_otlp_traces_endpoint="http://otel-collector:4318/v1/traces",
+            llm_api_key="llm-key",
+            llm_model="fitness-chat-model",
+            gateway_base_url="http://fitness-core-gateway:8081",
+            gateway_internal_service_token="gateway-token",
+            confirmation_encryption_key_base64="base64-key",
+            rag_storage_backend="s3",
+            rag_s3_endpoint_url="https://object-storage.example.com",
+            rag_s3_bucket="fitness-agent-knowledge",
+            rag_s3_access_key="access-key",
+            rag_s3_secret_key="secret-key",
+            rag_malware_scanner_backend="clamav",
+            rag_ocr_backend="http",
+            rag_ocr_endpoint_url="http://ocr-service:8091/v1/parse",
+            database_url="postgresql+asyncpg://agent:secret@postgres:5432/fitness_agent",
+            redis_url="redis://redis:6379/0",
+            gateway_context_signing_algorithm="RS256",
+            gateway_context_verification_jwks_url="https://issuer.example/.well-known/jwks.json",
+            confirmation_signing_algorithm="RS256",
+            confirmation_signing_private_key_pem="-----BEGIN PRIVATE KEY-----\nprivate\n-----END PRIVATE KEY-----",
+            trulens_capture_mode="evaluation",
+        )

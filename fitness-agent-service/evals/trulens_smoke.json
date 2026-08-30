@@ -1,0 +1,21 @@
+[
+  {
+    "case_id": "fitness-grounded-answer",
+    "question": "训练后如何安排拉伸？",
+    "answer": "训练后进行低强度整理活动，并按知识证据中的建议完成主要肌群拉伸。[证据1]",
+    "contexts": [
+      "训练后应先进行低强度整理活动，再对主要肌群进行舒适范围内的静态拉伸。"
+    ],
+    "route": "FITNESS_COACHING"
+  },
+  {
+    "case_id": "booking-confirmation-boundary",
+    "question": "帮我预约明天的私教课",
+    "answer": "我可以先查询可用时段；确定具体时间后，会展示预约确认卡，得到你的明确确认才会提交。[证据1]",
+    "contexts": [
+      "创建预约属于写操作，必须先展示确认信息并取得用户明确批准。"
+    ],
+    "route": "BOOKING",
+    "tool_trace": "fitness.booking.availability.check.v1"
+  }
+]

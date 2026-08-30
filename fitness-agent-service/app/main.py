@@ -30,6 +30,7 @@ from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import HttpMetrics, MetricsMiddleware
 from app.core.telemetry import configure_tracing
+from app.evaluation.telemetry import TruLensTelemetry
 from app.infrastructure.agent_context import AgentContextVerifier
 from app.infrastructure.cache import Cache, SessionLockManager
 from app.infrastructure.database import CheckpointStore, Database
@@ -84,6 +85,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     """
 
     settings = get_settings()
+    app.state.trulens_telemetry = TruLensTelemetry(settings)
 
     # app.state 承担轻量依赖容器的职责。数据库、Checkpoint、Redis、Tool Registry 和
     # LangGraph Supervisor 都在这里统一装配，避免业务 Agent 自行读取环境变量或创建连接。
@@ -104,7 +106,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             timeout_seconds=settings.gateway_context_verification_jwks_timeout_seconds,
         ),
     )
-    app.state.models = ModelGateway(settings)
+    app.state.models = ModelGateway(settings, telemetry=app.state.trulens_telemetry)
     app.state.reranker = RerankerClient(settings)
     app.state.knowledge_repository = KnowledgeRepository(app.state.database)
     parser_registry = DocumentParserRegistry(
@@ -130,6 +132,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         vector_weight=settings.rag_vector_weight,
         keyword_weight=settings.rag_keyword_weight,
         rrf_k=settings.rag_rrf_k,
+        telemetry=app.state.trulens_telemetry,
     )
     app.state.document_ingestion = DocumentIngestionService(
         app.state.knowledge_repository,
@@ -225,6 +228,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         operations_rate_limit_window_seconds=settings.operations_rate_limit_window_seconds,
         operations_query_timeout_seconds=settings.operations_query_timeout_seconds,
         operations_metrics=http_metrics,
+        telemetry=app.state.trulens_telemetry,
     )
     # 确认参数进入 PostgreSQL 前必须经过应用层加密；密钥缺失时拒绝启动，避免形成
     # “看似持久化、实际明文落库”的不安全降级路径。
@@ -296,6 +300,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             confirmation_service=app.state.confirmation_service,
             memory_candidate_service=app.state.memory_candidate_service,
             session_summary_service=app.state.session_summary_service,
+            telemetry=app.state.trulens_telemetry,
         )
         yield
     finally:

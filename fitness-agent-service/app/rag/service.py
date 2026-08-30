@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 
+from app.evaluation.telemetry import TruLensTelemetry
 from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient, RerankResult
 
@@ -75,6 +76,7 @@ class RagService:
         vector_weight: float = 0.6,
         keyword_weight: float = 0.4,
         rrf_k: int = 60,
+        telemetry: TruLensTelemetry | None = None,
     ) -> None:
         self.repository = repository
         self.models = models
@@ -91,6 +93,7 @@ class RagService:
         self.vector_weight = vector_weight
         self.keyword_weight = keyword_weight
         self.rrf_k = rrf_k
+        self.telemetry = telemetry or TruLensTelemetry.disabled()
 
     async def index_chunks(
         self,
@@ -134,6 +137,19 @@ class RagService:
         return embeddings
 
     async def search(self, query: str, scope: RetrievalScope) -> RagSearchResult:
+        with self.telemetry.span(
+            "fitness.agent.retrieval",
+            attributes={"fitness.agent.retrieval.scope_roles": sorted(scope.roles)},
+        ) as retrieval_span:
+            result = await self._search(query, scope)
+            self.telemetry.finish_retrieval(
+                retrieval_span,
+                query=query,
+                contexts=[chunk.content for chunk in result.chunks],
+            )
+            return result
+
+    async def _search(self, query: str, scope: RetrievalScope) -> RagSearchResult:
         """完成服务端 ACL 过滤和真实重排序后返回证据。"""
 
         if not query.strip():

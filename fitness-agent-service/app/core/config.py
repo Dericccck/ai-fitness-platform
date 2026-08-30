@@ -39,6 +39,31 @@ class Settings(BaseSettings):
     otel_export_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     otel_trace_sample_ratio: float = Field(default=0.1, ge=0, le=1)
 
+    # TruLens uses the existing OTEL provider for bounded semantic spans.  Evaluation
+    # capture is opt-in because it may contain redacted user text; production should
+    # normally use metadata mode and run Judge evaluation in a restricted environment.
+    trulens_enabled: bool = False
+    trulens_capture_mode: Literal["disabled", "metadata", "evaluation"] = "disabled"
+    trulens_capture_max_chars: int = Field(default=2000, ge=256, le=8000)
+    trulens_database_url: str = Field(
+        default="sqlite:///./var/trulens/trulens.sqlite",
+        validation_alias=AliasChoices("TRULENS_DATABASE_URL", "AGENT_TRULENS_DATABASE_URL"),
+    )
+    trulens_judge_enabled: bool = False
+    trulens_judge_base_url: str = Field(
+        default="https://api.deepseek.com",
+        validation_alias=AliasChoices("TRULENS_JUDGE_BASE_URL", "AGENT_TRULENS_JUDGE_BASE_URL"),
+    )
+    trulens_judge_api_key: str = Field(
+        default="",
+        validation_alias=AliasChoices("TRULENS_JUDGE_API_KEY", "AGENT_TRULENS_JUDGE_API_KEY"),
+    )
+    trulens_judge_model: str = Field(
+        default="deepseek-v4-flash",
+        validation_alias=AliasChoices("TRULENS_JUDGE_MODEL", "AGENT_TRULENS_JUDGE_MODEL"),
+    )
+    trulens_judge_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
+
     database_url: str = (
         "postgresql+asyncpg://fitness_agent:fitness_agent@127.0.0.1:5433/fitness_agent"
     )
@@ -359,6 +384,8 @@ class Settings(BaseSettings):
             errors.append(
                 "AGENT_OTEL_ENABLED and AGENT_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT are required"
             )
+        if self.trulens_capture_mode == "evaluation":
+            errors.append("AGENT_TRULENS_CAPTURE_MODE=evaluation is not allowed in production")
         if not self.llm_configured:
             errors.append("DEEPSEEK_API_KEY and DEEPSEEK_MODEL are required")
         if not self.gateway_configured:

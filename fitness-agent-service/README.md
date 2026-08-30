@@ -62,6 +62,9 @@
   或队列消费者接管，不依赖单个 API 进程内存。
 - Prometheus：低基数 HTTP 请求量、耗时、并发和构建信息指标。
 - OpenTelemetry：可选 OTLP/HTTP Trace 导出，默认关闭且不发送 Prompt 或用户档案。
+- TruLens：通过现有 OpenTelemetry Provider 接收 Supervisor、模型生成、RAG 检索和工具调用的
+  语义 Span；内容采集默认关闭，`evaluation` 模式只保存脱敏且限长的文本。TruLens 不参与权限、
+  确认或事务决策，相关确定性门禁仍是发布依据。
 - 写操作确认：训练计划写工具会先生成确定性确认摘要和加密参数，写入 PostgreSQL 确认单后通过
   LangGraph `interrupt()` 暂停；批准接口会在服务端持久化决定后使用同一 `thread_id` 调用
   `Command(resume=...)`，从加密参数恢复并通过短时确认凭证调用 Java Gateway。确认凭证兼容
@@ -226,6 +229,35 @@ Python 版本固定为 3.11，`uv.lock` 是依赖事实源；CI 和本地均使�
   `AGENT_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`。
 - OTLP 鉴权信息使用标准 `OTEL_EXPORTER_OTLP_HEADERS` 注入，不得写入环境模板。
 - HTTP 指标只使用路由模板，不使用用户 ID、原始 URL、Prompt 或 Tool 参数作为标签。
+
+### TruLens 评测
+
+TruLens 是独立的离线/受控评测能力，不在在线请求中同步调用 Judge。安装评测依赖并执行确定性
+契约评测：
+
+```bash
+make agent-sync
+make agent-trulens-eval
+```
+
+如果要启用 DeepSeek Judge，只在受控评测环境注入 `TRULENS_JUDGE_API_KEY`，然后执行
+`make agent-trulens-judge`。Judge 使用 `TRULENS_JUDGE_BASE_URL`、`TRULENS_JUDGE_MODEL`，
+结果默认持久化到 `TRULENS_DATABASE_URL` 指向的独立数据库；不要复用业务数据库或 Checkpoint
+数据库。默认本地地址是 `sqlite:///./var/trulens/trulens.sqlite`，生产建议使用单独的
+PostgreSQL 库和只允许评测服务访问的账号。
+
+开发/预发布如需查看 TruLens Dashboard，先安装 dashboard extra，再执行
+`make agent-trulens-dashboard`。Dashboard 只读评测库，不应暴露到公网。
+
+运行模式约束如下：
+
+- `AGENT_TRULENS_ENABLED=false` 或 `AGENT_TRULENS_CAPTURE_MODE=disabled`：完全不产生 TruLens 业务 Span。
+- `AGENT_TRULENS_CAPTURE_MODE=metadata`：只产生路由、状态、工具 ID、耗时和 Token 等低基数元数据，适合生产。
+- `AGENT_TRULENS_CAPTURE_MODE=evaluation`：额外产生脱敏、限长的问题、答案和检索上下文，只适合受控评测环境。
+
+TruLens 不能替代既有的 RAG Recall/MRR、Operations 策略、角色权限、确认凭证和会话安全评测；
+它补充回答相关性、上下文相关性和 groundedness 等语义指标。评测样例位于
+`evals/trulens_smoke.json`，阈值位于 `evals/trulens_thresholds.json`。
 
 环境分层和 Secret 管理规则见 `deployment/environments/README.md`。
 

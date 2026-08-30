@@ -36,7 +36,7 @@ jobs:
           cache-dependency-glob: fitness-agent-service/uv.lock
 
       - name: Install locked dependencies
-        run: uv sync --locked --all-extras --dev
+        run: uv sync --locked --extra eval --extra dev
 
       - name: Lint
         run: uv run ruff check .
@@ -86,6 +86,9 @@ jobs:
 
       - name: Operations query policy evaluation quality gate
         run: uv run python -m app.agent.operations_policy_evaluation --cases evals/operations_policy_smoke.json --thresholds evals/operations_policy_thresholds.json
+
+      - name: TruLens deterministic evaluation contract
+        run: uv run --extra eval python -m app.evaluation.trulens_cli --no-persist --cases evals/trulens_smoke.json --thresholds evals/trulens_thresholds.json
 
       - name: Build production container image
         run: docker build --file Dockerfile --tag fitness-agent-service:${{ github.sha }} .

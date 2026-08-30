@@ -25,6 +25,7 @@ from app.confirmation.normalization import (
     NormalizedConfirmationAction,
     normalize_confirmation_action,
 )
+from app.evaluation.telemetry import TruLensTelemetry, hash_identifier
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.gateway_client import GatewayClientError, GatewayRequestContext
 
@@ -191,9 +192,14 @@ class ToolDefinition:
 class ToolRegistry:
     """集中管理工具定义，并强制执行 Schema、审计和错误边界。"""
 
-    def __init__(self, audit_sink: ToolAuditSink | None = None) -> None:
+    def __init__(
+        self,
+        audit_sink: ToolAuditSink | None = None,
+        telemetry: TruLensTelemetry | None = None,
+    ) -> None:
         self._definitions: dict[str, ToolDefinition] = {}
         self._audit_sink = audit_sink or LoggingToolAuditSink()
+        self._telemetry = telemetry or TruLensTelemetry.disabled()
 
     def register(self, definition: ToolDefinition) -> None:
         """注册工具并检查版本、角色和写操作安全元数据。"""
@@ -350,6 +356,39 @@ class ToolRegistry:
             ) from exc
 
     async def invoke(
+        self,
+        tool_id: str,
+        raw_input: Mapping[str, Any],
+        context: ToolContext,
+    ) -> Any:
+        safe_tool_id = tool_id if _TOOL_ID_PATTERN.fullmatch(tool_id) else "<invalid>"
+        with self._telemetry.span(
+            "fitness.agent.tool",
+            attributes={
+                "fitness.agent.tool_id": safe_tool_id,
+                "fitness.agent.tool_request_id_hash": hash_identifier(
+                    context.gateway_context.request_id
+                ),
+            },
+        ) as tool_span:
+            try:
+                result = await self._invoke(tool_id, raw_input, context)
+            except Exception as exc:
+                self._telemetry.set_attributes(
+                    tool_span,
+                    {
+                        "fitness.agent.tool_status": "failed",
+                        "fitness.agent.tool_error_type": type(exc).__name__,
+                    },
+                )
+                raise
+            self._telemetry.set_attributes(
+                tool_span,
+                {"fitness.agent.tool_status": "succeeded"},
+            )
+            return result
+
+    async def _invoke(
         self,
         tool_id: str,
         raw_input: Mapping[str, Any],
