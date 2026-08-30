@@ -1932,3 +1932,6 @@ PDF 深度解析的剩余收尾顺序固定为：
 3. 补齐企业 Alertmanager HTTPS 值班路由、升级策略和灰度/回滚演练；
 4. 在独立预发布环境执行包含 Agent、LLM、RAG、Gateway 和数据库的容量压测；
 5. 以上证据齐全后再更新“生产就绪”结论。当前只能描述为“本地企业化验收完成”，不能描述为生产上线。
+
+具体执行顺序、通过标准和证据留存格式统一见 `deployment/operations/production-readiness-checklist.md`；
+该清单只覆盖生产化工作，不重新引入已明确排除的 OCR、短信、人工转接和复杂训练扩展。
