@@ -29,6 +29,8 @@ class CheckConfig:
     password: str
     timeout_seconds: int
     execute: bool
+    lock_check: bool = False
+    lock_hold_seconds: float = 3.0
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -78,6 +80,17 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.getenv("AGENT_LIVE_EXECUTE_WRITES") == "1",
         help="创建临时数据库并真实执行 upgrade head/downgrade base",
     )
+    parser.add_argument(
+        "--lock-check",
+        action="store_true",
+        help="在 0034->0035 迁移前持有表读锁，验证迁移等待和恢复",
+    )
+    parser.add_argument(
+        "--lock-hold-seconds",
+        type=float,
+        default=3.0,
+        help="锁等待验收持锁秒数，默认 3 秒",
+    )
     return parser
 
 
@@ -101,12 +114,18 @@ def build_config(args: argparse.Namespace) -> CheckConfig:
         raise MigrationLiveCheckError("port 必须在 1 到 65535 之间")
     if args.timeout_seconds < 10 or args.timeout_seconds > 1800:
         raise MigrationLiveCheckError("timeout-seconds 必须在 10 到 1800 秒之间")
+    if args.lock_hold_seconds < 1 or args.lock_hold_seconds > 30:
+        raise MigrationLiveCheckError("lock-hold-seconds 必须在 1 到 30 秒之间")
+    if args.lock_check and not args.execute:
+        raise MigrationLiveCheckError("--lock-check 必须与 --execute 一起使用")
     return CheckConfig(
         **values,
         port=int(args.port),
         password=str(args.password),
         timeout_seconds=int(args.timeout_seconds),
         execute=bool(args.execute),
+        lock_check=bool(args.lock_check),
+        lock_hold_seconds=float(args.lock_hold_seconds),
     )
 
 
@@ -231,6 +250,140 @@ def _drop_database(config: CheckConfig, database: str) -> None:
     )
 
 
+def _start_lock_holder(config: CheckConfig, database: str) -> subprocess.Popen[str]:
+    """启动只在临时库运行的锁持有进程，模拟线上长事务读取通知表。"""
+
+    command = [
+        "docker",
+        "exec",
+        "-i",
+        "-e",
+        f"PGPASSWORD={config.password}",
+        config.container,
+        "psql",
+        "-X",
+        "-v",
+        "ON_ERROR_STOP=1",
+        "-A",
+        "-t",
+        "-U",
+        config.username,
+        "-d",
+        database,
+    ]
+    try:
+        process = subprocess.Popen(
+            command,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+    except OSError as exc:
+        raise MigrationLiveCheckError("无法启动临时 PostgreSQL 锁持有进程") from exc
+    assert process.stdin is not None
+    process.stdin.write(
+        "BEGIN; LOCK TABLE agent_in_app_notifications IN ACCESS SHARE MODE; "
+        f"SELECT pg_sleep({config.lock_hold_seconds}); COMMIT;\n"
+    )
+    process.stdin.close()
+    return process
+
+
+def _wait_for_lock(config: CheckConfig, database: str, process: subprocess.Popen[str]) -> None:
+    """轮询 pg_locks，确保迁移开始前读锁已经实际生效，避免测试竞态。"""
+
+    deadline = time.monotonic() + min(config.timeout_seconds, 30)
+    while time.monotonic() < deadline:
+        if process.poll() is not None:
+            detail = process.stderr.read().strip() if process.stderr is not None else ""
+            raise MigrationLiveCheckError(f"锁持有进程提前退出：{detail[-300:]}")
+        raw = _psql(
+            config,
+            database,
+            """
+            SELECT COUNT(*)
+            FROM pg_locks AS lock_info
+            JOIN pg_class AS table_info ON table_info.oid = lock_info.relation
+            WHERE table_info.relname = 'agent_in_app_notifications'
+              AND lock_info.mode = 'AccessShareLock'
+              AND lock_info.granted
+            """,
+            label="确认临时读锁已生效",
+        ).strip()
+        if raw and int(raw) >= 1:
+            return
+        time.sleep(0.1)
+    raise MigrationLiveCheckError("未能在超时窗口内确认临时读锁已生效")
+
+
+def _finish_lock_holder(config: CheckConfig, process: subprocess.Popen[str]) -> None:
+    """等待锁持有进程提交事务，并在异常时终止它，避免锁泄漏到后续验收。"""
+
+    try:
+        process.wait(timeout=config.timeout_seconds)
+    except subprocess.TimeoutExpired as exc:
+        process.terminate()
+        try:
+            process.wait(timeout=5)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait()
+        raise MigrationLiveCheckError("临时锁持有进程未能按时释放") from exc
+    stderr = process.stderr.read().strip() if process.stderr is not None else ""
+    if process.returncode != 0:
+        raise MigrationLiveCheckError(f"临时锁持有进程失败：{stderr[-300:]}")
+
+
+def _run_lock_check(config: CheckConfig, database: str) -> None:
+    """验证 0035 DDL 会等待正在读取通知表的长事务，并在释放后完成。"""
+
+    baseline_seconds = _run_alembic(
+        config,
+        database,
+        "upgrade",
+        "20260824_0034",
+        label="升级到锁等待验收基线版本",
+    )
+    lock_holder = _start_lock_holder(config, database)
+    try:
+        _wait_for_lock(config, database, lock_holder)
+        migration_seconds = _run_alembic(
+            config,
+            database,
+            "upgrade",
+            "head",
+            label="执行持锁状态下的通知约束迁移",
+        )
+        _finish_lock_holder(config, lock_holder)
+        version = _psql(
+            config,
+            database,
+            "SELECT version_num FROM alembic_version",
+            label="读取锁等待迁移后的版本",
+        ).strip()
+        if version != "20260824_0035":
+            raise MigrationLiveCheckError(f"锁等待迁移后的版本异常：{version}")
+        if migration_seconds < config.lock_hold_seconds * 0.8:
+            raise MigrationLiveCheckError(
+                f"迁移没有体现预期锁等待：耗时 {migration_seconds:.2f}s，持锁 {config.lock_hold_seconds:.2f}s"
+            )
+        _run_alembic(config, database, "downgrade", "base", label="回滚锁等待验收数据库")
+        print(
+            f"PostgreSQL 锁等待真实验收通过：baseline={baseline_seconds:.2f}s "
+            f"migration_wait={migration_seconds:.2f}s lock_hold={config.lock_hold_seconds:.2f}s"
+        )
+    except Exception:
+        if lock_holder.poll() is None:
+            lock_holder.terminate()
+            try:
+                lock_holder.wait(timeout=5)
+            except subprocess.TimeoutExpired:
+                lock_holder.kill()
+                lock_holder.wait()
+        raise
+
+
 def _preflight(config: CheckConfig) -> None:
     """检查 PostgreSQL 和 Alembic 工具可用，但不执行任何迁移。"""
 
@@ -252,6 +405,9 @@ def run(config: CheckConfig) -> int:
     legacy_notification_id = f"migration-check-legacy-{uuid.uuid4().hex}"
     new_notification_id = f"migration-check-new-{uuid.uuid4().hex}"
     try:
+        if config.lock_check:
+            _run_lock_check(config, database)
+            return 0
         baseline_seconds = _run_alembic(
             config,
             database,

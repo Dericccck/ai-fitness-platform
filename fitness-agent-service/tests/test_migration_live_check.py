@@ -20,6 +20,8 @@ def _args(**overrides: object) -> argparse.Namespace:
         "password": "secret/password",
         "timeout_seconds": 180,
         "execute": False,
+        "lock_check": False,
+        "lock_hold_seconds": 3.0,
     }
     values.update(overrides)
     return argparse.Namespace(**values)
@@ -52,3 +54,8 @@ def test_build_config_accepts_read_only_default() -> None:
 
     assert config.execute is False
     assert config.timeout_seconds == 180
+
+
+def test_build_config_requires_execute_for_lock_check() -> None:
+    with pytest.raises(MigrationLiveCheckError, match="--lock-check"):
+        build_config(_args(lock_check=True))
