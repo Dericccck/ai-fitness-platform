@@ -132,8 +132,43 @@ def validate_parse_response(payload: Any) -> tuple[int, float, float]:
     return len(blocks), min(confidences), max(confidences)
 
 
-def run_live_check(args: argparse.Namespace) -> None:
-    """执行健康检查和一次真实 PDF 解析契约检查。"""
+def _run_live_check(args: argparse.Namespace, client: httpx.Client) -> None:
+    """使用已创建的 HTTP 客户端执行检查，便于测试完整 HTTP 编排。"""
+
+    root = _service_root(args.endpoint)
+    headers = {"Authorization": f"Bearer {args.api_key}"} if args.api_key else {}
+    try:
+        for name in ("live", "ready"):
+            response = client.get(f"{root}/health/{name}")
+            payload = response.json()
+            detail = validate_health_response(name, response.status_code, payload)
+            print(f"[通过] health-{name}: {detail}")
+        sample_path = Path(args.sample_pdf)
+        with sample_path.open("rb") as stream:
+            response = client.post(
+                args.endpoint,
+                headers=headers,
+                files={"file": (sample_path.name, stream, "application/pdf")},
+            )
+        if response.status_code >= 400:
+            raise OcrLiveCheckError(f"parse 请求失败：HTTP {response.status_code}")
+        blocks, minimum, maximum = validate_parse_response(response.json())
+    except OcrLiveCheckError:
+        raise
+    except (httpx.HTTPError, OSError, ValueError) as exc:
+        raise OcrLiveCheckError("OCR 服务联调请求失败") from exc
+    print(f"[通过] parse-contract: blocks={blocks}, confidence_range={minimum:.4f}-{maximum:.4f}")
+
+
+def run_live_check(
+    args: argparse.Namespace,
+    client: httpx.Client | None = None,
+) -> None:
+    """执行健康检查和一次真实 PDF 解析契约检查。
+
+    正式命令使用函数内部创建的客户端；测试可以注入 MockTransport，验证完整 HTTP
+    编排、鉴权请求头和 multipart 文件上传，而不会访问真实 OCR 服务。
+    """
 
     if args.timeout_seconds <= 0:
         raise OcrLiveCheckError("--timeout-seconds 必须大于 0")
@@ -144,29 +179,11 @@ def run_live_check(args: argparse.Namespace) -> None:
     sample_path = Path(args.sample_pdf)
     if not sample_path.is_file():
         raise OcrLiveCheckError("sample PDF 不存在或不是文件")
-    root = _service_root(args.endpoint)
-    headers = {"Authorization": f"Bearer {args.api_key}"} if args.api_key else {}
-    try:
-        with httpx.Client(timeout=args.timeout_seconds) as client:
-            for name in ("live", "ready"):
-                response = client.get(f"{root}/health/{name}")
-                payload = response.json()
-                detail = validate_health_response(name, response.status_code, payload)
-                print(f"[通过] health-{name}: {detail}")
-            with sample_path.open("rb") as stream:
-                response = client.post(
-                    args.endpoint,
-                    headers=headers,
-                    files={"file": (sample_path.name, stream, "application/pdf")},
-                )
-            if response.status_code >= 400:
-                raise OcrLiveCheckError(f"parse 请求失败：HTTP {response.status_code}")
-            blocks, minimum, maximum = validate_parse_response(response.json())
-    except OcrLiveCheckError:
-        raise
-    except (httpx.HTTPError, OSError, ValueError) as exc:
-        raise OcrLiveCheckError("OCR 服务联调请求失败") from exc
-    print(f"[通过] parse-contract: blocks={blocks}, confidence_range={minimum:.4f}-{maximum:.4f}")
+    if client is not None:
+        _run_live_check(args, client)
+        return
+    with httpx.Client(timeout=args.timeout_seconds) as owned_client:
+        _run_live_check(args, owned_client)
 
 
 def main() -> int:
