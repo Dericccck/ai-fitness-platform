@@ -100,6 +100,22 @@
 
 ## 5. 最终多 Agent 形态
 
+当前最终形态明确为“一个 Supervisor + 多个 LangGraph 领域子图”，而不是多个彼此独立、
+各自重复实现会话和权限逻辑的 Agent 服务：
+
+```text
+Supervisor Router
+├── Fitness LangGraph 领域子图
+├── Booking LangGraph 领域子图
+├── Operations LangGraph 领域子图
+└── Customer Service LangGraph 领域子图
+```
+
+Supervisor 负责统一身份上下文校验、意图路由、会话恢复和子图调度；每个领域子图负责
+自己的 Prompt、工具白名单、领域流程和确认节点。四个子图共享父图的 PostgreSQL Checkpoint
+和安全基础设施，但不共享彼此的模型可见工具。Proactive Agent 是由 Outbox/RabbitMQ
+或定时任务触发的旁路 Worker，不属于一次同步对话中的领域子图。
+
 ### 5.1 Supervisor Agent
 
 统一接收用户请求，识别当前用户身份、组织范围、意图和风险等级，决定调用哪个专业 Agent。它负责流程编排，不直接绕过专业 Agent 执行业务写操作。
@@ -111,7 +127,7 @@
 - Agent 路由、结果聚合和失败恢复；只有确有依赖关系且权限边界一致时才允许并行查询。
 - 写操作确认和 Checkpoint 恢复；本项目不建设人工转接流程。
 
-### 5.2 Booking Agent
+### 5.2 Booking LangGraph 领域子图
 
 服务管理员、教练和学员的课程预约场景。
 
@@ -123,7 +139,7 @@
 - 在操作前解释冲突原因、费用或课时影响。
 - 所有写操作必须确认、幂等并由 Java 后端事务执行。
 
-### 5.3 Fitness Agent
+### 5.3 Fitness LangGraph 领域子图
 
 负责训练专业业务，是项目区别于普通预约系统的核心 Agent。
 
@@ -140,7 +156,7 @@
 实际重量、次数、RPE、疼痛或疲劳。执行备注只用于普通完成情况说明，不能被 Agent 解析成诊断或自动
 调参依据。
 
-### 5.4 Operations Agent
+### 5.4 Operations LangGraph 领域子图
 
 只面向具备组织经营权限的管理员，不向普通教练和学员开放经营数据。
 
@@ -151,7 +167,7 @@
 - 生成日报、周报、月报和异常解释。
 - 使用固定指标目录和受控聚合查询，不让模型生成或执行自由 SQL。
 
-### 5.5 Customer Service Agent
+### 5.5 Customer Service LangGraph 领域子图
 
 负责健身规则、合同规则、预约规则、常见问题和结构化客服工单。
 
@@ -185,10 +201,10 @@ flowchart LR
     Java --> Context["签名 AgentContext"]
     Context --> Agent["Python Agent Service"]
     Agent --> Supervisor["Supervisor Agent"]
-    Supervisor --> Booking["Booking Agent"]
-    Supervisor --> Fitness["Fitness Agent"]
-    Supervisor --> Operations["Operations Agent"]
-    Supervisor --> Customer["Customer Service Agent"]
+    Supervisor --> Booking["Booking LangGraph 子图"]
+    Supervisor --> Fitness["Fitness LangGraph 子图"]
+    Supervisor --> Operations["Operations LangGraph 子图"]
+    Supervisor --> Customer["Customer Service LangGraph 子图"]
     Events["Outbox + RabbitMQ"] --> Proactive["Proactive Agent"]
     Proactive --> Agent
     Booking --> Tools["Java Tool Gateway"]
