@@ -1455,6 +1455,12 @@ Booking 和 Fitness 的真实 dry-run、Agent 层角色矩阵、训练服务最�
 5. 评测、压测、故障恢复、备份恢复、监控告警、灰度发布和回滚。
 6. 最后处理复杂 PDF、OCR、表格、图片动作标注和知识库重建；语音能力作为可选扩展，不阻塞核心项目交付。
 
+生产配置收尾补充：模板门禁通过后，部署平台还必须使用仓库外部的实际配置文件执行
+`PRODUCTION_ENV_DIR=/secure/release-config make production-runtime-config-check`。该门禁只输出
+配置键名和结果，不输出 Secret，并额外校验生产必填值、固定开关和 Agent/Gateway/Booking/Training/
+Customer Service 之间的共享 Token 一致性。真实 JWKS 地址、Secret Manager 注入和生产数据库账号仍属于
+外部环境交付，不能用本地占位值代替。
+
 本阶段继续遵守以下范围约束：忽略赛事、作品和活动运营遗留模块；不建设身体测量、疼痛/疲劳量表、阶段性
 自动调参等暂不需要的复杂训练业务；不把任意 Text-to-SQL、短信、Push 或语音作为当前阶段的完成条件。
 

@@ -43,3 +43,13 @@ Java 服务的生产配置契约也集中在本目录：
 这些模板只用于部署参数审计，不能直接作为生产凭证文件。生产发布前必须完成 Secret 注入、
 数据库账号最小权限核对、服务间 Token 对应关系核对，以及所有 `*_SCHEMA_INIT_ENABLED=false`
 对应的独立迁移 Job 验证。
+
+部署平台完成 Secret 注入后，可将五份实际配置以 `agent.env`、`gateway.env`、`booking.env`、
+`training.env` 和 `customer-service.env` 放入仓库外部目录，并执行：
+
+```bash
+PRODUCTION_ENV_DIR=/secure/release-config make production-runtime-config-check
+```
+
+该检查会验证必填运行时值、生产固定开关、本地地址、开发凭证和 Agent/Gateway/下游服务
+共享 Token 一致性；不会打印 Secret。`/secure/release-config` 不应位于 Git 工作区内。
