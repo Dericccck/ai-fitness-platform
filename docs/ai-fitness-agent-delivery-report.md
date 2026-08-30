@@ -131,7 +131,8 @@ flowchart LR
 - OCR、Gateway、Training、Booking、Customer Service：构建和测试通过；
 - RAG、Operations、会话摘要评测：全部达到阈值；
 - ClamAV：正常文件通过，EICAR 测试串拒绝；
-- PostgreSQL 迁移、备份恢复、RabbitMQ 恢复和容量基线：通过；
+- PostgreSQL 迁移、备份恢复、RabbitMQ 恢复和容量基线：通过；本地 PostgreSQL 最近一次备份恢复基线为 29 张 public 表、1733 行，
+  恢复加逐表校验 RTO 3.71 秒；该结果不替代生产 WAL/PITR 和跨可用区灾备证据；
 - Prometheus：7 条告警规则加载成功；
 - Alertmanager：配置检查、`firing`、`resolved` 和 critical 抑制 warning 通过；
 - OCR 契约检查：版本、媒体类型、页码、置信度、区域坐标和 fail-closed 规则通过；

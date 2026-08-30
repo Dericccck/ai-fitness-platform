@@ -1825,6 +1825,26 @@ OCR/动作标注仍按约定放到项目最后，不影响当前健身 Agent 业
 - 本脚本的 RPO 只能表示逻辑备份的一致性时间点，不能测出 WAL/PITR 的时间点恢复能力；生产仍需对象存储、加密、跨可用区副本、
   WAL/PITR、明确 RTO/RPO 和定期灾备演练。下一步执行本地真实备份恢复，记录当前 PostgreSQL 数据规模与耗时基线。
 
+本轮完成本地 PostgreSQL 备份恢复真实验收：
+
+- 执行 `make agent-postgres-backup-restore-check ARGS="--execute --rto-target-seconds 60"`，从当前
+  `fitness-agent-postgres` 生成 Custom Format 逻辑备份，恢复到脚本创建的唯一临时数据库，并在 `finally` 中完成清理。
+- 本次基线为 `29` 张 public 表、`1733` 行，备份大小 `2712457` 字节；恢复库与源库逐表记录数一致，备份耗时 `0.44s`、恢复耗时
+  `0.90s`、逐表校验耗时 `2.81s`，恢复 RTO `3.71s`，通过 `60s` 门槛。
+- 输出了备份 SHA-256 和逻辑备份一致性时间点，便于后续对比；本次没有修改源库，也没有删除任何持久化业务数据。
+- 当前仍不能据此宣称生产灾备完成：对象存储加密、跨可用区副本、WAL/PITR、正式 RPO/RTO、预发布全量数据和定期恢复演练仍属于
+  外部生产化工作。下一步转向本地隔离依赖恢复与容量/限流验收。
+
+本轮完成本地依赖恢复、限流和 HTTP 基线复核：
+
+- 执行 `make agent-recovery-check`，确认 Agent/Gateway、PostgreSQL、Checkpoint、Redis 和 RabbitMQ 均可用；Checkpoint
+  当前为 `173` 行，Inbox 与通知 Outbox 的超时 `PROCESSING` 均为 `0`。Redis 临时键已按 TTL 清理，脚本没有主动重启服务。
+- 执行 `make agent-rate-limit-load-check ARGS="--execute --requests 40 --limit 10 --window-seconds 30"`，40 个并发请求中准确放行
+  `10` 个、拒绝 `30` 个，TTL 为 `30` 秒，耗时 `25.5ms`；验证 Lua 原子计数没有超发，临时 Key 已清理。
+- 执行 `make agent-capacity-check ARGS="--execute --path /health/live --requests 100 --concurrency 20"`，100 次健康请求全部 HTTP 200，
+  P50 `24.0ms`、P95 `92.9ms`、最大 `184.3ms`。这只是当前开发机健康接口基线，不是包含 LLM/RAG/数据库/Gateway 的生产压测。
+- 本地可执行的恢复、限流和健康接口基线已收口；下一步只剩需要外部环境或发布权限的正式生产化证据，以及最后的文档/清单闭环。
+
 本轮开始补充可观测性规则加载门禁：
 
 - 新增 `scripts/observability_contract_check.py`、`make observability-check` 和 `make observability-live-check`。静态门禁检查
