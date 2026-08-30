@@ -25,6 +25,10 @@ Prometheus 负责抓取 Metrics；两条链路职责不同，不用 Trace 代替
 固定低基数标签和说明，以及 Prometheus 是否配置 Agent/Worker 抓取任务。启动本地 Prometheus 后，可运行
 `make observability-live-check`，只读调用 Prometheus API 验证规则已经加载。
 
+告警表达式的触发和恢复可运行 `make observability-rule-test`。该命令使用 Prometheus `promtool` 的合成时间序列，验证
+Agent 宕机告警在持续异常后触发、恢复后解除，以及 Operations 审计失败告警的计数器窗口逻辑；不会停止本地服务、写入业务
+数据库或发送外部通知。
+
 告警标签只使用 `severity`、`service` 等固定值，不包含机构 ID、用户 ID、工单 ID、确认单 ID 或
 `request_id`。具体请求必须通过告警时间窗口、结构化日志和 Trace 关联，避免把业务标识直接放进
 Prometheus 时间序列。

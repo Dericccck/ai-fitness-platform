@@ -1820,3 +1820,10 @@ OCR/动作标注仍按约定放到项目最后，不影响当前健身 Agent 业
 - 运行时模式只读调用 Prometheus API，确认规则已经被加载；不停止服务、不制造故障、不发送短信/Push，也不修改健身业务数据。
 - GitHub Actions 已接入静态可观测性门禁。当前只完成 Prometheus 规则加载与配置契约，外部 Alertmanager 收件人路由、故障触发、
   抑制、恢复和升级策略仍需在隔离环境继续演练。
+
+本轮补充 Prometheus 告警表达式触发/恢复规则测试：
+
+- 新增 `deployment/observability/tests/fitness-agent-alerts.test.yml`，使用 `promtool` 合成时间序列验证 Agent 宕机告警的
+  `for: 2m` 延迟、恢复后的自动解除，以及 Operations 审计失败告警的 `increase()` 窗口逻辑。
+- 新增 `make observability-rule-test` 并接入 GitHub Actions；测试不停止服务、不访问 DeepSeek、不写 PostgreSQL/MySQL/Redis/RabbitMQ。
+- 这一步验证的是 PromQL 规则语义，不等同于真实容器故障、Alertmanager 路由、值班升级或告警抑制演练；这些仍保留在隔离环境阶段。

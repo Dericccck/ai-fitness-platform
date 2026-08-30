@@ -1,0 +1,71 @@
+# Prometheus 官方 promtool 规则单元测试。
+# 这些输入是合成时间序列，不会写入 Agent、数据库或消息队列。
+rule_files:
+  - /etc/prometheus/fitness-agent-alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  # up 连续为 0 两分钟后，FitnessAgentDown 应触发；恢复为 1 后应解除。
+  - interval: 30s
+    input_series:
+      - series: 'up{job="fitness-agent"}'
+        values: '1 1 0 0 0 0 0 0 0 0 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: FitnessAgentDown
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: FitnessAgentDown
+        exp_alerts:
+          - exp_labels:
+              job: fitness-agent
+              severity: critical
+              service: fitness-agent
+            exp_annotations:
+              summary: "健身 Agent 服务不可用"
+              description: "Prometheus 连续 2 分钟无法抓取 Agent Metrics；请先检查进程、端口和容器网络。"
+      - eval_time: 3m30s
+        alertname: FitnessAgentDown
+        exp_alerts:
+          - exp_labels:
+              job: fitness-agent
+              severity: critical
+              service: fitness-agent
+            exp_annotations:
+              summary: "健身 Agent 服务不可用"
+              description: "Prometheus 连续 2 分钟无法抓取 Agent Metrics；请先检查进程、端口和容器网络。"
+      - eval_time: 4m
+        alertname: FitnessAgentDown
+        exp_alerts:
+          - exp_labels:
+              job: fitness-agent
+              severity: critical
+              service: fitness-agent
+            exp_annotations:
+              summary: "健身 Agent 服务不可用"
+              description: "Prometheus 连续 2 分钟无法抓取 Agent Metrics；请先检查进程、端口和容器网络。"
+      - eval_time: 5m
+        alertname: FitnessAgentDown
+        exp_alerts: []
+
+  # 审计失败是即时告警：计数器在窗口内增加后应触发，验证 PromQL 的 increase 语义。
+  - interval: 1m
+    input_series:
+      - series: 'fitness_agent_operations_query_events_total{job="fitness-agent",event="AUDIT_FAILED"}'
+        values: '0 0 1 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: FitnessAgentOperationsAuditFailed
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: FitnessAgentOperationsAuditFailed
+        exp_alerts:
+          - exp_labels:
+              event: AUDIT_FAILED
+              job: fitness-agent
+              severity: critical
+              service: fitness-agent
+            exp_annotations:
+              summary: "经营查询审计写入失败"
+              description: "Operations 查询出现审计失败；系统应保持 fail-closed，需检查 PostgreSQL 和审计表。"
