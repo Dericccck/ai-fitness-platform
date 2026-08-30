@@ -1848,3 +1848,11 @@ OCR/动作标注仍按约定放到项目最后，不影响当前健身 Agent 业
   Prometheus 真实产生 `firing`；切换为 200 后收到 `resolved`；同时注入同服务 critical/warning，确认 warning 被抑制。
 - 本地已将现有 Prometheus reload 到 `agent-alertmanager:9093`，运行时 `activeAlertmanagers` 正常；端到端验收、观测规则检查和
   `make release-check` 全部通过。该验收仍使用本地 webhook，不等同于生产值班系统、HTTPS 认证和升级策略。
+
+本轮完成最终项目交付整理：
+
+- 新增 `docs/ai-fitness-agent-delivery-report.md`，汇总健身项目范围、管理员/教练/学员业务、Supervisor 与各业务 Agent 能力、
+  RAG/Memory、安全可靠性、可观测性验收结果、本地运行命令和生产差距。
+- 根目录 `README.md` 增加交付报告入口，后续交接和面试讲解以该报告和本路线图为准；赛事、作品、活动运营、短信、Push、人工
+  转接和复杂训练管理继续不纳入项目范围。
+- 当前本地核心验收已闭环，后续只保留真实生产环境准备和约定的 PDF 深度解析优化，不再为了扩展功能引入新的业务风险。

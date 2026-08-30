@@ -3,6 +3,8 @@
 本仓库基于原有健身管理后端建设企业级多 Agent 平台。开发范围、架构边界、实施顺序和
 协作规则统一以
 [AI 健身多 Agent 平台开发路线与项目规则](docs/ai-fitness-agent-development-roadmap.md) 为准。
+最终交付范围、角色业务、架构、验收结果和生产差距见
+[AI 健身多 Agent 平台交付报告](docs/ai-fitness-agent-delivery-report.md)。
 
 赛事与活动运营属于历史遗留代码，默认不纳入当前健身项目的分析、开发和简历描述。
 
