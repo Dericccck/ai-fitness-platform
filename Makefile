@@ -412,7 +412,7 @@ customer-service-run:
 # 发布门禁只组合确定性测试、离线评测和静态安全检查，不启动服务、不调用 DeepSeek，
 # 也不会执行预约、训练计划、客服工单等任何真实业务写入。真实 HTTP 验收仍必须
 # 使用各业务专用的、显式授权的 live-check 命令，避免把发布检查误当成生产演练。
-release-check: agent-check observability-check agent-migration-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check ocr-check gateway-check training-check booking-check customer-service-check
+release-check: production-config-check agent-check observability-check agent-migration-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check ocr-check gateway-check training-check booking-check customer-service-check
 
 agent-customer-service-preflight:
 	@test -n "$$AGENT_LIVE_AGENT_CONTEXT" || (echo "请先设置 AGENT_LIVE_AGENT_CONTEXT（认证服务签发的业务用户 Token）"; exit 1)

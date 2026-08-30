@@ -1910,3 +1910,25 @@ PDF 深度解析的剩余收尾顺序固定为：
 
 本阶段的代码与规则以 `docs/pdf-parser-quality-20260812.md` 的本轮记录为准。后续每次解析策略升级必须带真实资料
 前后报告、测试结果和版本说明，不能只凭数据库中“有很多 chunks”判断解析质量。
+
+## 生产化收尾阶段：真实 MySQL 联调与配置契约（2026-08-30）
+
+本轮开始执行核心业务完成后的生产化收尾，明确不重新开发已排除的 OCR、短信、人工转接、图片动作标注和复杂训练扩展。
+
+- 已确认并复用本地 Docker `fitness-mysql`：MySQL 8、宿主机端口 `3307`、数据库 `fitness`。Gateway 真实只读集成测试
+  已验证机构/课程查询和全部固定经营指标查询，`41` 个测试全部通过，无写入；新增根目录 `make gateway-it` 作为统一入口，
+  显式要求集成测试开关、数据库连接和真实机构 ID，避免 Maven 模块路径误用。
+- Booking 真实 MySQL 集成测试已通过，`9` 个测试全部通过；验证中文临时数据、事务、课时扣减/恢复、创建/改约/取消、
+  幂等、MySQL 命名锁、确认 JTI 重放回滚和 Outbox，测试夹具已在 `finally` 中精确清理。
+- 新增 `make production-config-check` 和生产配置契约测试，覆盖 Agent、Gateway、Booking、Training、Customer Service 五个
+  服务模板，拒绝本地地址、开发凭证、重复配置键和错误生产开关；该检查已接入 GitHub Actions。
+- 当前约定范围不包含 OCR，因此 `agent.production.env.example` 使用 `AGENT_RAG_OCR_BACKEND=disabled`，避免在没有 Linux/GPU
+  推理服务时生成“配置存在但服务无法就绪”的假生产配置；未来启用 OCR 时必须单独提供真实推理环境和验收证据。
+
+生产化收尾的下一步固定为：
+
+1. 为 Gateway、Booking、Training、Customer Service 分别准备数据库最小权限账号，并在隔离库验证 `SELECT`/写入权限边界；
+2. 补齐生产发布前的备份加密、对象存储、WAL/PITR、RTO/RPO、恢复窗口和迁移锁监控材料；
+3. 补齐企业 Alertmanager HTTPS 值班路由、升级策略和灰度/回滚演练；
+4. 在独立预发布环境执行包含 Agent、LLM、RAG、Gateway 和数据库的容量压测；
+5. 以上证据齐全后再更新“生产就绪”结论。当前只能描述为“本地企业化验收完成”，不能描述为生产上线。
