@@ -28,11 +28,16 @@ class HttpPdfOcrProvider:
         {
           "media_type": "application/pdf",
           "warnings": [],
-          "blocks": [{"kind": "TEXT", "content": "...", "source_page": 1}]
+          "blocks": [{
+            "kind": "TEXT", "content": "...", "source_page": 1,
+            "confidence": 0.96,
+            "source_region": {"x": 0.1, "y": 0.2, "width": 0.7, "height": 0.3}
+          }]
         }
 
     OCR 服务有意独立于 Agent 进程。它可以使用托管 OCR 厂商或内部 GPU 部署，
-    而不需要修改入库、父子分块、权限和引用代码。
+    而不需要修改入库、父子分块、权限和引用代码。置信度和归一化来源区域是必填字段，
+    因为没有这两项证据时不能解除 OCR 阻断，也不能准确回溯引用位置。
     """
 
     def __init__(
@@ -81,10 +86,14 @@ class HttpPdfOcrProvider:
         finally:
             if close_client:
                 client.close()
-        return _parsed_document_from_payload(payload)
+        return _parsed_document_from_payload(payload, requested_pages=tuple(pages))
 
 
-def _parsed_document_from_payload(payload: Any) -> ParsedDocument:
+def _parsed_document_from_payload(
+    payload: Any,
+    *,
+    requested_pages: Sequence[int] = (),
+) -> ParsedDocument:
     """在服务商输出进入分块和 Embedding 前进行校验。"""
 
     if not isinstance(payload, dict) or not isinstance(payload.get("blocks"), list):
@@ -105,18 +114,25 @@ def _parsed_document_from_payload(payload: Any) -> ParsedDocument:
         metadata = raw_block.get("metadata", {})
         if not isinstance(metadata, dict):
             raise DocumentParseError("OCR metadata must be an object")
+        source_page = _required_positive_int(raw_block.get("source_page"))
+        if requested_pages and source_page not in set(requested_pages):
+            raise DocumentParseError("OCR block source_page is outside requested pages")
+        confidence_basis_points = _confidence_basis_points(raw_block.get("confidence"))
+        region_metadata = _source_region_metadata(raw_block.get("source_region"))
         blocks.append(
             ParsedBlock(
                 kind=kind,
                 content=content,
                 heading_path=tuple(heading_path),
-                source_page=_optional_int(raw_block.get("source_page")),
+                source_page=source_page,
                 source_sheet=_optional_text(raw_block.get("source_sheet")),
                 table_index=_optional_int(raw_block.get("table_index")),
                 row_start=_optional_int(raw_block.get("row_start")),
                 row_end=_optional_int(raw_block.get("row_end")),
                 metadata={
-                    str(key): value for key, value in metadata.items() if _safe_metadata(value)
+                    **{str(key): value for key, value in metadata.items() if _safe_metadata(value)},
+                    "ocr_confidence_basis_points": confidence_basis_points,
+                    **region_metadata,
                 },
             )
         )
@@ -179,6 +195,35 @@ def _bounded_ratio(value: Any) -> float:
     if not 0 <= ratio <= 1:
         raise DocumentParseError("OCR page profile ratio must be between 0 and 1")
     return ratio
+
+
+def _confidence_basis_points(value: Any) -> int:
+    """将 OCR 服务的小数置信度转换为稳定的整数基点，避免浮点进入元数据。"""
+
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise DocumentParseError("OCR block confidence must be a number")
+    confidence = float(value)
+    if not 0 <= confidence <= 1:
+        raise DocumentParseError("OCR block confidence must be between 0 and 1")
+    return round(confidence * 10_000)
+
+
+def _source_region_metadata(value: Any) -> dict[str, int]:
+    """校验页面归一化区域，并转换成 0-10000 基点保存。"""
+
+    if not isinstance(value, dict):
+        raise DocumentParseError("OCR block source_region must be an object")
+    coordinates = {key: _bounded_ratio(value.get(key)) for key in ("x", "y", "width", "height")}
+    if coordinates["width"] <= 0 or coordinates["height"] <= 0:
+        raise DocumentParseError("OCR block source_region must have positive size")
+    if coordinates["x"] + coordinates["width"] > 1:
+        raise DocumentParseError("OCR block source_region exceeds page width")
+    if coordinates["y"] + coordinates["height"] > 1:
+        raise DocumentParseError("OCR block source_region exceeds page height")
+    return {
+        f"ocr_source_region_{key}_basis_points": round(number * 10_000)
+        for key, number in coordinates.items()
+    }
 
 
 def _required_positive_int(value: Any) -> int:

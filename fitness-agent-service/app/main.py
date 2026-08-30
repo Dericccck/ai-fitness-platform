@@ -115,6 +115,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             max_image_page_text_chars=settings.rag_pdf_max_image_page_text_chars,
             max_image_page_text_area_ratio=settings.rag_pdf_max_image_page_text_area_ratio,
             min_ocr_text_chars=settings.rag_pdf_min_ocr_text_chars,
+            min_ocr_confidence=settings.rag_pdf_min_ocr_confidence,
         ),
     )
     app.state.rag_service = RagService(

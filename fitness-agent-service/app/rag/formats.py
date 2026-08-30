@@ -122,6 +122,9 @@ class PdfPageRoutingPolicy:
     max_image_page_text_chars: int = 600
     max_image_page_text_area_ratio: float = 0.25
     min_ocr_text_chars: int = 12
+    # OCR 只在置信度达到部署门槛时解除“待 OCR”状态；低置信度结果仍可留在审核
+    # 证据中，但绝不能进入可发布的知识版本。
+    min_ocr_confidence: float = 0.75
 
     def __post_init__(self) -> None:
         if not 0 <= self.min_image_area_ratio <= 1:
@@ -132,6 +135,8 @@ class PdfPageRoutingPolicy:
             raise ValueError("max_image_page_text_area_ratio must be between 0 and 1")
         if self.min_ocr_text_chars < 0:
             raise ValueError("min_ocr_text_chars must not be negative")
+        if not 0 <= self.min_ocr_confidence <= 1:
+            raise ValueError("min_ocr_confidence must be between 0 and 1")
 
 
 class DocumentParser(Protocol):
@@ -366,13 +371,15 @@ class PdfParser:
                 file_name=file_name,
                 pages=tuple(missing_pages),
             )
-            blocks.extend(ocr_document.blocks)
+            accepted_ocr_blocks, resolved_pages, ocr_warnings = _merge_pdf_ocr_blocks(
+                native_blocks=blocks,
+                ocr_blocks=ocr_document.blocks,
+                requested_pages=missing_pages,
+                min_ocr_confidence=self.routing_policy.min_ocr_confidence,
+            )
+            blocks.extend(accepted_ocr_blocks)
             warnings.extend(ocr_document.warnings)
-            resolved_pages = {
-                block.source_page
-                for block in ocr_document.blocks
-                if block.source_page is not None and block.content.strip()
-            }
+            warnings.extend(ocr_warnings)
             # OCR 必须逐页返回来源页码；只有确实返回了可用内容的页面才解除阻断。
             # 未返回、返回空块或缺少页码的页面继续保持 OCR_REQUIRED，防止静默漏页。
             resolved_profiles: list[PdfPageProfile] = []
@@ -1341,6 +1348,91 @@ def _table_header_key(rows: Sequence[Sequence[str | None]]) -> str:
 
     normalized = _table_rows_for_metadata(rows)
     return normalized[0][0].casefold() if normalized and normalized[0] else ""
+
+
+def _normalize_ocr_text(content: str) -> str:
+    """生成用于 OCR/原生文本去重的稳定文本，不改变最终展示内容。"""
+
+    return re.sub(r"\s+", "", content).casefold()
+
+
+def _ocr_block_duplicates_native(
+    content: str,
+    native_blocks: Sequence[ParsedBlock],
+    *,
+    source_page: int,
+) -> bool:
+    """判断 OCR 块是否只是同页原生文字层的重复副本。"""
+
+    normalized_ocr = _normalize_ocr_text(content)
+    if len(normalized_ocr) < 20:
+        return False
+    native_text = _normalize_ocr_text(
+        "\n".join(
+            block.content
+            for block in native_blocks
+            if block.source_page == source_page and block.kind == "TEXT"
+        )
+    )
+    if len(native_text) < 20:
+        return False
+    # OCR 有时只是把同一页拆成不同块，因此包含关系比整段相等更可靠；短文本不走
+    # 这个规则，避免把“深蹲”“3 组”之类正常重复术语错误删除。
+    return normalized_ocr in native_text or native_text in normalized_ocr
+
+
+def _merge_pdf_ocr_blocks(
+    *,
+    native_blocks: Sequence[ParsedBlock],
+    ocr_blocks: Sequence[ParsedBlock],
+    requested_pages: Sequence[int],
+    min_ocr_confidence: float,
+) -> tuple[list[ParsedBlock], set[int], list[str]]:
+    """合并 OCR 结果并返回可解除 OCR 阻断的页面集合。
+
+    OCR 服务返回的内容仍然保留为独立块，避免把两个不同文本层强行拼成不可回溯的
+    长文本。这里做的是页面级安全合并：校验来源页和置信度，跳过同页原生文字的
+    重复副本，并把低置信度/重复/越界情况写成可审计警告。只有至少一个高置信度、
+    有来源区域的 OCR 块，页面才允许从 OCR_REQUIRED 进入下一阶段。
+    """
+
+    requested = set(requested_pages)
+    accepted: list[ParsedBlock] = []
+    resolved_pages: set[int] = set()
+    warnings: list[str] = []
+    threshold_basis_points = round(min_ocr_confidence * 10_000)
+    for block in ocr_blocks:
+        page = block.source_page
+        metadata = dict(block.metadata or {})
+        if page is None or page not in requested:
+            warnings.append("OCR block 缺少请求页码或页码越界，未解除任何页面阻断")
+            continue
+        confidence = metadata.get("ocr_confidence_basis_points")
+        if not isinstance(confidence, int) or isinstance(confidence, bool):
+            warnings.append(f"OCR 第 {page} 页缺少置信度，继续阻断")
+            accepted.append(replace(block, metadata={**metadata, "ocr_low_confidence": True}))
+            continue
+        if confidence < threshold_basis_points:
+            warnings.append(f"OCR 第 {page} 页置信度 {confidence / 100:.2f}% 低于门槛，继续阻断")
+            accepted.append(replace(block, metadata={**metadata, "ocr_low_confidence": True}))
+            continue
+        region_keys = (
+            "ocr_source_region_x_basis_points",
+            "ocr_source_region_y_basis_points",
+            "ocr_source_region_width_basis_points",
+            "ocr_source_region_height_basis_points",
+        )
+        if not all(isinstance(metadata.get(key), int) for key in region_keys):
+            warnings.append(f"OCR 第 {page} 页缺少来源区域，继续阻断")
+            accepted.append(replace(block, metadata={**metadata, "ocr_region_missing": True}))
+            continue
+        if _ocr_block_duplicates_native(block.content, native_blocks, source_page=page):
+            warnings.append(f"OCR 第 {page} 页结果与原生文字重复，已去重")
+            resolved_pages.add(page)
+            continue
+        accepted.append(replace(block, metadata={**metadata, "ocr_low_confidence": False}))
+        resolved_pages.add(page)
+    return accepted, resolved_pages, warnings
 
 
 def _annotate_pdf_table_continuations(blocks: Sequence[ParsedBlock]) -> list[ParsedBlock]:

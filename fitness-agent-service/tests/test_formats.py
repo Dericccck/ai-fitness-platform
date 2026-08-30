@@ -12,6 +12,7 @@ from app.rag.formats import (
     _clean_pdf_lines,
     _is_pdf_layout_noise_table,
     _join_pdf_lines,
+    _merge_pdf_ocr_blocks,
     _pdf_text_blocks_with_context,
     _profile_pdf_page,
     _rectangle_union_area,
@@ -394,3 +395,61 @@ def test_pdf_rectangle_union_does_not_double_count_overlapping_images() -> None:
     area = _rectangle_union_area([(0, 0, 80, 80), (20, 20, 100, 100)])
 
     assert area == pytest.approx(9_200)
+
+
+def test_pdf_ocr_merge_drops_same_page_native_duplicate() -> None:
+    native = ParsedBlock(
+        kind="TEXT",
+        content="本页介绍训练前热身动作、训练顺序和安全注意事项，请先完成充分热身。",
+        source_page=1,
+    )
+    ocr = ParsedBlock(
+        kind="TEXT",
+        content="本页介绍训练前热身动作、训练顺序和安全注意事项，请先完成充分热身。",
+        source_page=1,
+        metadata={
+            "ocr_confidence_basis_points": 9600,
+            "ocr_source_region_x_basis_points": 0,
+            "ocr_source_region_y_basis_points": 0,
+            "ocr_source_region_width_basis_points": 10000,
+            "ocr_source_region_height_basis_points": 10000,
+        },
+    )
+
+    accepted, resolved_pages, warnings = _merge_pdf_ocr_blocks(
+        native_blocks=(native,),
+        ocr_blocks=(ocr,),
+        requested_pages=(1,),
+        min_ocr_confidence=0.75,
+    )
+
+    assert accepted == []
+    assert resolved_pages == {1}
+    assert warnings == ["OCR 第 1 页结果与原生文字重复，已去重"]
+
+
+def test_pdf_ocr_merge_keeps_low_confidence_evidence_but_does_not_resolve_page() -> None:
+    ocr = ParsedBlock(
+        kind="TEXT",
+        content="疑似 OCR 结果",
+        source_page=2,
+        metadata={
+            "ocr_confidence_basis_points": 7000,
+            "ocr_source_region_x_basis_points": 0,
+            "ocr_source_region_y_basis_points": 0,
+            "ocr_source_region_width_basis_points": 10000,
+            "ocr_source_region_height_basis_points": 10000,
+        },
+    )
+
+    accepted, resolved_pages, warnings = _merge_pdf_ocr_blocks(
+        native_blocks=(),
+        ocr_blocks=(ocr,),
+        requested_pages=(2,),
+        min_ocr_confidence=0.75,
+    )
+
+    assert len(accepted) == 1
+    assert accepted[0].metadata["ocr_low_confidence"] is True
+    assert resolved_pages == set()
+    assert "低于门槛" in warnings[0]

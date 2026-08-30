@@ -252,6 +252,7 @@ class Settings(BaseSettings):
     rag_pdf_max_image_page_text_chars: int = Field(default=600, ge=0, le=20_000)
     rag_pdf_max_image_page_text_area_ratio: float = Field(default=0.25, ge=0, le=1)
     rag_pdf_min_ocr_text_chars: int = Field(default=12, ge=0, le=1_000)
+    rag_pdf_min_ocr_confidence: float = Field(default=0.75, ge=0, le=1)
     # 离线评测和线上上传审核必须使用同一类指标。生产值应由真实健身资料回归后
     # 固化到部署配置，不能让 API 请求或 LLM 临时放宽门禁。
     rag_quality_max_noise_rate: float = Field(default=0.0, ge=0, le=1)
