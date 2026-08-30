@@ -1839,3 +1839,12 @@ OCR/动作标注仍按约定放到项目最后，不影响当前健身 Agent 业
   抑制演练仍需在本地隔离环境继续验证。
 - 本地实际结果：`amtool check-config` 通过，隔离路由成功收到 `firing` 和 `resolved` 回调；Agent 全量回归为 `419 passed`、
   `8 skipped`，无失败。
+
+本轮完成 Prometheus→Alertmanager 端到端告警验收：
+
+- Prometheus 配置增加 Alertmanager 下游，Compose 新增可选的 `agent-alertmanager` 服务和持久化数据卷；`make observability-up`
+  会同时启动 Prometheus、Alertmanager 和 OTel Collector。
+- 新增 `scripts/observability_e2e_check.py` 和 `make observability-e2e-check`。隔离环境中的模拟 Metrics 服务先返回 503，验证
+  Prometheus 真实产生 `firing`；切换为 200 后收到 `resolved`；同时注入同服务 critical/warning，确认 warning 被抑制。
+- 本地已将现有 Prometheus reload 到 `agent-alertmanager:9093`，运行时 `activeAlertmanagers` 正常；端到端验收、观测规则检查和
+  `make release-check` 全部通过。该验收仍使用本地 webhook，不等同于生产值班系统、HTTPS 认证和升级策略。

@@ -68,6 +68,23 @@ services:
     ports:
       - "9090:9090"
 
+  agent-alertmanager:
+    # 本地告警路由组件；生产环境必须固定镜像 digest，并把 webhook 替换为企业内网 HTTPS 值班入口。
+    image: prom/alertmanager:v0.27.0
+    container_name: fitness-agent-alertmanager
+    restart: unless-stopped
+    profiles: ["observability"]
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    command:
+      - "--config.file=/etc/alertmanager/alertmanager.yml"
+      - "--storage.path=/alertmanager"
+    volumes:
+      - ./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+      - fitness-agent-alertmanager-data:/alertmanager
+    ports:
+      - "9093:9093"
+
   agent-minio:
     image: minio/minio:RELEASE.2025-02-18T16-25-55Z
     container_name: fitness-agent-minio
@@ -131,3 +148,4 @@ volumes:
   fitness-agent-ocr-models:
   fitness-agent-rabbitmq-data:
   fitness-agent-prometheus-data:
+  fitness-agent-alertmanager-data:

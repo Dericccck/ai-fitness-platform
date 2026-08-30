@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: observability-check observability-live-check observability-rule-test observability-alertmanager-check
+.PHONY: observability-check observability-live-check observability-rule-test observability-alertmanager-check observability-e2e-check
 
 .PHONY: agent-jwks-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-release-manifest-check agent-migration-check agent-migration-live-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check
 
@@ -21,6 +21,8 @@ help:
 	@echo "  observability-up Start the local OpenTelemetry Collector"
 	@echo "  observability-check Check Prometheus and Agent alert/metric contracts without network access"
 	@echo "  observability-live-check Check that a running Prometheus has loaded the alert rules"
+	@echo "  observability-alertmanager-check Check Alertmanager firing/resolved routing in an isolated container"
+	@echo "  observability-e2e-check Check Prometheus to Alertmanager firing/recovery and inhibition end to end"
 	@echo "  agent-lock   Resolve and update the Python dependency lock file"
 	@echo "  agent-sync   Install exact locked Python dependencies"
 	@echo "  agent-migrate Apply Agent PostgreSQL migrations"
@@ -104,7 +106,7 @@ infra-down:
 	docker compose -f $(COMPOSE_FILE) down
 
 observability-up:
-	docker compose -f $(COMPOSE_FILE) --profile observability up -d agent-prometheus agent-otel-collector
+	docker compose -f $(COMPOSE_FILE) --profile observability up -d agent-prometheus agent-alertmanager agent-otel-collector
 
 observability-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/observability_contract_check.py
@@ -117,6 +119,9 @@ observability-rule-test:
 
 observability-alertmanager-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/alertmanager_route_check.py
+
+observability-e2e-check:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/observability_e2e_check.py
 
 agent-lock:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv lock --python 3.11
@@ -381,7 +386,7 @@ customer-service-run:
 # 发布门禁只组合确定性测试、离线评测和静态安全检查，不启动服务、不调用 DeepSeek，
 # 也不会执行预约、训练计划、客服工单等任何真实业务写入。真实 HTTP 验收仍必须
 # 使用各业务专用的、显式授权的 live-check 命令，避免把发布检查误当成生产演练。
-release-check: agent-check agent-migration-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check ocr-check gateway-check training-check booking-check customer-service-check
+release-check: agent-check observability-check agent-migration-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check ocr-check gateway-check training-check booking-check customer-service-check
 
 agent-customer-service-preflight:
 	@test -n "$$AGENT_LIVE_AGENT_CONTEXT" || (echo "请先设置 AGENT_LIVE_AGENT_CONTEXT（认证服务签发的业务用户 Token）"; exit 1)

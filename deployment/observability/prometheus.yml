@@ -7,6 +7,12 @@ global:
 rule_files:
   - /etc/prometheus/rules/fitness-agent-alerts.yml
 
+alerting:
+  # 本地 Compose 中的 Alertmanager 服务名；生产环境应使用服务发现和受控网络地址。
+  alertmanagers:
+    - static_configs:
+        - targets: ["agent-alertmanager:9093"]
+
 scrape_configs:
   - job_name: fitness-agent
     metrics_path: /metrics
