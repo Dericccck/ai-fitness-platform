@@ -1930,6 +1930,9 @@ PDF 深度解析的剩余收尾顺序固定为：
 - 已确认并复用本地 Docker `fitness-mysql`：MySQL 8、宿主机端口 `3307`、数据库 `fitness`。Gateway 真实只读集成测试
   已验证机构/课程查询和全部固定经营指标查询，`41` 个测试全部通过，无写入；新增根目录 `make gateway-it` 作为统一入口，
   显式要求集成测试开关、数据库连接和真实机构 ID，避免 Maven 模块路径误用。
+- 已补充 `deployment/mysql/gateway-readonly-verify.sql.example`，用于 DBA 脱敏保存 Gateway 只读账号的
+  `SHOW GRANTS`、information_schema 和抽样查询结果；`INSERT`/`UPDATE`/`DELETE`/`ALTER`/`DROP` 拒绝只在隔离克隆库验证，
+  不对生产业务表执行危险探测。
 - Booking 真实 MySQL 集成测试已通过，`9` 个测试全部通过；验证中文临时数据、事务、课时扣减/恢复、创建/改约/取消、
   幂等、MySQL 命名锁、确认 JTI 重放回滚和 Outbox，测试夹具已在 `finally` 中精确清理。
 - 新增 `make production-config-check` 和生产配置契约测试，覆盖 Agent、Gateway、Booking、Training、Customer Service 五个

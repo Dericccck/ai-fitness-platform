@@ -1,0 +1,63 @@
+-- Gateway 只读账号权限验收查询
+--
+-- 说明：请使用 DBA 审计会话或以 fitness_gateway_ro 登录执行本脚本。
+-- 本脚本只查询 information_schema 和业务表，不修改任何业务数据。
+-- 生产账号的 host 可能不是 '%'，如有变化请同步替换 grantee 条件。
+
+-- 1. 确认当前连接身份。预期为 fitness_gateway_ro@...
+SELECT CURRENT_USER() AS current_principal;
+
+-- 2. 查看完整授权结果。结果中不应出现 ALL PRIVILEGES、INSERT、UPDATE、DELETE、ALTER、DROP。
+SHOW GRANTS FOR 'fitness_gateway_ro'@'%';
+
+-- 3. 检查全局级权限。预期结果为空。
+SELECT privilege_type
+FROM information_schema.user_privileges
+WHERE grantee = '''fitness_gateway_ro''@''%'''
+  AND privilege_type NOT IN ('USAGE');
+
+-- 4. 检查表级权限。预期只出现下面九张表的 SELECT。
+SELECT table_schema, table_name, privilege_type
+FROM information_schema.table_privileges
+WHERE grantee = '''fitness_gateway_ro''@''%'''
+ORDER BY table_schema, table_name, privilege_type;
+
+-- 5. 确认九张表均拥有 SELECT；缺失项应返回 0 行。
+SELECT expected.table_name
+FROM (
+    SELECT 'login_user' AS table_name
+    UNION ALL SELECT 'login_user_authority'
+    UNION ALL SELECT 'organization'
+    UNION ALL SELECT 'user_and_coach'
+    UNION ALL SELECT 'course'
+    UNION ALL SELECT 'contract'
+    UNION ALL SELECT 'appointment'
+    UNION ALL SELECT 'system_settings'
+    UNION ALL SELECT 'vacation_record'
+) AS expected
+LEFT JOIN information_schema.table_privileges privilege_row
+    ON privilege_row.grantee = '''fitness_gateway_ro''@''%'''
+   AND privilege_row.table_schema = 'fitness'
+   AND privilege_row.table_name = expected.table_name
+   AND privilege_row.privilege_type = 'SELECT'
+WHERE privilege_row.table_name IS NULL;
+
+-- 6. 检查是否存在非 SELECT 表权限；预期结果为空。
+SELECT table_schema, table_name, privilege_type
+FROM information_schema.table_privileges
+WHERE grantee = '''fitness_gateway_ro''@''%'''
+  AND privilege_type <> 'SELECT';
+
+-- 7. 最小读链路抽样。预期可以成功，且只返回数量/聚合结果。
+SELECT COUNT(*) AS organization_count FROM fitness.organization;
+SELECT COUNT(*) AS course_count FROM fitness.course;
+SELECT COUNT(*) AS appointment_count FROM fitness.appointment;
+
+-- 8. INSERT/UPDATE/DELETE/ALTER/DROP 的拒绝测试不能在生产业务表上直接执行。
+--    请在隔离 MySQL 克隆库中使用同一账号执行这些语句，并保存报错码作为证据：
+--    INSERT INTO fitness_gateway_permission_probe ...;
+--    UPDATE fitness_gateway_permission_probe SET ...;
+--    DELETE FROM fitness_gateway_permission_probe ...;
+--    ALTER TABLE fitness_gateway_permission_probe ...;
+--    DROP TABLE fitness_gateway_permission_probe;
+--    如果这些语句意外成功，立即撤销账号并停止发布。

@@ -23,6 +23,8 @@
 
 - [ ] DBA 已执行 `deployment/mysql/gateway-readonly-grants.sql.example` 的等价生产脚本，
       Gateway 账号只拥有所需健身表的 `SELECT`。
+- [ ] DBA 已执行 `deployment/mysql/gateway-readonly-verify.sql.example`，保存脱敏的
+      `SHOW GRANTS`、information_schema 和只读抽样结果；写入权限拒绝只在隔离克隆库验证。
 - [ ] Booking、Training、Customer Service 使用不同的写账号，不能复用 Gateway 只读账号或彼此账号。
 - [ ] 使用 `SHOW GRANTS` 保存脱敏权限证据，确认没有 `ALL PRIVILEGES`、`DROP`、`ALTER` 或跨库权限。
 - [ ] 使用独立预发布库执行 `make gateway-it`，确认真实机构、课程和全部固定经营指标查询通过。
