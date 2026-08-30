@@ -55,10 +55,15 @@ class PdfOcrService:
                         if result_index < len(selected_pages)
                         else result_index + 1
                     )
+                    source_pdf_page = reader.pages[source_page - 1]
+                    page_width = float(source_pdf_page.mediabox.width)
+                    page_height = float(source_pdf_page.mediabox.height)
                     page_blocks, table_index = blocks_from_page_result(
                         result,
                         source_page=source_page,
                         table_index_start=table_index,
+                        page_width=page_width,
+                        page_height=page_height,
                     )
                     if not page_blocks:
                         warnings.append(f"page {source_page} produced no indexable OCR blocks")

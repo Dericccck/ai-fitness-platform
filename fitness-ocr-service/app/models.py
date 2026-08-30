@@ -2,7 +2,30 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class OcrSourceRegion(BaseModel):
+    """页面内的归一化来源区域，四个值都在 0 到 1 之间。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    width: float = Field(gt=0, le=1)
+    height: float = Field(gt=0, le=1)
+
+    @property
+    def within_page(self) -> bool:
+        """判断区域右下角是否仍在页面范围内。"""
+
+        return self.x + self.width <= 1 and self.y + self.height <= 1
+
+    @model_validator(mode="after")
+    def validate_page_bounds(self) -> "OcrSourceRegion":
+        if not self.within_page:
+            raise ValueError("source_region must stay within the page")
+        return self
 
 
 class OcrBlock(BaseModel):
@@ -14,6 +37,9 @@ class OcrBlock(BaseModel):
     content: str = Field(min_length=1)
     heading_path: list[str] = Field(default_factory=list)
     source_page: int = Field(ge=1)
+    # 置信度和归一化区域是 Agent 解除 OCR 阻断、生成可回溯引用的必要证据。
+    confidence: float = Field(ge=0, le=1)
+    source_region: OcrSourceRegion
     table_index: int | None = Field(default=None, ge=0)
     row_start: int | None = Field(default=None, ge=1)
     row_end: int | None = Field(default=None, ge=1)
