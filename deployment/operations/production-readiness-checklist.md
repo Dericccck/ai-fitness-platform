@@ -57,6 +57,9 @@ Gateway 的真实只读联调和 Booking 的本地受控写入已完成；正式
 - [ ] 在隔离 MySQL 实例恢复备份，核对核心健身表、Agent 扩展表、中文数据和关键索引。
 - [ ] 记录 MySQL 备份 RPO、恢复 RTO、数据校验结果和失败回滚步骤。
 
+具体执行命令、字符集核对、隔离目标保护和证据模板见
+`deployment/operations/mysql-backup-restore-runbook.md`。
+
 任何恢复演练都不得直接对生产源库执行 `DROP DATABASE` 或 `docker compose down -v`；
 恢复目标必须是唯一的隔离实例或临时数据库。
 

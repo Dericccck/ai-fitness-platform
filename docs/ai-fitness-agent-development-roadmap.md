@@ -1950,3 +1950,7 @@ PDF 深度解析的剩余收尾顺序固定为：
 
 具体执行顺序、通过标准和证据留存格式统一见 `deployment/operations/production-readiness-checklist.md`；
 该清单只覆盖生产化工作，不重新引入已明确排除的 OCR、短信、人工转接和复杂训练扩展。
+
+本轮继续补充 MySQL 灾备材料：新增 `deployment/operations/mysql-backup-restore-runbook.md`，固化
+备份参数、隔离恢复目标、utf8mb4/中文数据校验、健身核心表与 Agent 扩展表核对、RTO/RPO 记录和失败回滚边界。
+由于当前只有本地 Docker MySQL，尚未把本地演练结果写成生产级跨区域备份或 PITR 证据。
