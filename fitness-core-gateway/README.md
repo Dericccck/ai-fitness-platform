@@ -76,8 +76,14 @@ GATEWAY_IT_DB_URL='jdbc:mysql://127.0.0.1:3307/fitness' \
 GATEWAY_IT_DB_USERNAME='fitness_readonly' \
 GATEWAY_IT_DB_PASSWORD='通过 Secret Manager 注入' \
 GATEWAY_IT_ORGANIZATION_ID='真实测试机构 ID' \
-./mvnw --batch-mode -f fitness-core-gateway/pom.xml test
+make gateway-it
 ```
+
+`make gateway-it` 必须从仓库根目录执行；它会运行两个真实 MySQL 只读测试，分别验证核心健身
+表查询和全部固定经营指标查询。测试不会插入、更新或删除业务数据。若当前只是本地复用已有
+`fitness-mysql`，可以使用已有的 `fitness` 账号；该账号仅用于本地验证，不代表生产权限设计。
+生产部署时应由 DBA 创建独立的 Gateway 只读账号，并仅授予本服务所需健身表的 `SELECT` 权限，
+不要复用 Booking、Training 或客服服务的写账号。
 
 测试库必须使用最小权限账号，禁止把生产数据库凭证用于本地或 CI 集成测试。
 

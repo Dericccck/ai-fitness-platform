@@ -2,7 +2,7 @@ SHELL := /bin/sh
 
 .PHONY: observability-check observability-live-check observability-rule-test observability-alertmanager-check observability-e2e-check
 
-.PHONY: agent-jwks-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-release-manifest-check agent-migration-check agent-migration-live-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check
+.PHONY: agent-jwks-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-release-manifest-check agent-migration-check agent-migration-live-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check gateway-it
 
 AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
@@ -73,6 +73,7 @@ help:
 	@echo "  knowledge-validate-ocr  Validate sources through the real OCR endpoint"
 	@echo "  ocr-live-check  Check OCR health and a real PDF response contract"
 	@echo "  gateway-check Build and test the independent fitness core Gateway"
+	@echo "  gateway-it    Run Gateway read-only integration tests against an explicitly configured MySQL"
 	@echo "  gateway-run  Start the fitness core Gateway locally"
 	@echo "  gateway-training-role-live-check  Check Gateway-to-Training role visibility without writes"
 	@echo "  gateway-training-write-live-check  Verify Gateway training confirmation write, idempotency and JTI replay"
@@ -305,6 +306,14 @@ knowledge-retire-reference:
 
 gateway-check:
 	./mvnw --batch-mode -f fitness-core-gateway/pom.xml clean test
+
+gateway-it:
+	@test "true" = "$(GATEWAY_IT_ENABLED)" || (echo "请设置 GATEWAY_IT_ENABLED=true；该命令会连接真实 MySQL"; exit 1)
+	@test -n "$(GATEWAY_IT_DB_URL)" || (echo "请设置 GATEWAY_IT_DB_URL"; exit 1)
+	@test -n "$(GATEWAY_IT_DB_USERNAME)" || (echo "请设置 GATEWAY_IT_DB_USERNAME"; exit 1)
+	@test -n "$(GATEWAY_IT_DB_PASSWORD)" || (echo "请设置 GATEWAY_IT_DB_PASSWORD"; exit 1)
+	@test -n "$(GATEWAY_IT_ORGANIZATION_ID)" || (echo "请设置 GATEWAY_IT_ORGANIZATION_ID"; exit 1)
+	./mvnw --batch-mode -f fitness-core-gateway/pom.xml -Dtest=JdbcFitnessReadRepositoryIntegrationTest,JdbcOperationsReadRepositoryIntegrationTest test
 
 gateway-run:
 	./mvnw --batch-mode -f fitness-core-gateway/pom.xml spring-boot:run
