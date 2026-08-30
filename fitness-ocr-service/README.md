@@ -40,6 +40,17 @@ OCR_DEVICE=gpu
 `TEXT`/`TABLE` block，响应带有 `ocr-service-v1` 契约版本，表格会统一转成带表头的 Markdown，并保留原始页码、置信度和页面区域。完整契约见
 `../docs/contracts/ocr-service-v1.md`。
 
+Linux/GPU 环境启动后，可以使用 Agent 侧联调检查验证真实响应，而不直接写入知识库：
+
+`bash
+OCR_LIVE_ENDPOINT=http://127.0.0.1:8091/v1/parse \\
+OCR_LIVE_SAMPLE_PDF=data/knowledge/raw/<sample>.pdf \\
+make ocr-live-check
+`
+
+该检查会访问 `/health/live`、`/health/ready`，再解析一份真实 PDF，并校验契约版本、页码、
+置信度、区域坐标和 block 结构；不会输出 OCR 正文。
+
 ## 运行时约束
 
 - 默认单并发，避免多个 PDF 同时争抢 GPU/模型内存；按压测结果调大 `OCR_MAX_CONCURRENCY`。

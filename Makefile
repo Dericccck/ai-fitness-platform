@@ -7,8 +7,9 @@ SHELL := /bin/sh
 AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
+OCR_LIVE_TIMEOUT_SECONDS ?= 300
 
-.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run gateway-training-role-live-check gateway-training-write-live-check gateway-training-workflow-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check training-check training-run training-role-live-check training-role-visibility-live-check booking-check booking-it booking-run customer-service-check customer-service-run legacy-java-diagnostic release-check check
+.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-live-check ocr-run ocr-image gateway-check gateway-run gateway-training-role-live-check gateway-training-write-live-check gateway-training-workflow-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check training-check training-run training-role-live-check training-role-visibility-live-check booking-check booking-it booking-run customer-service-check customer-service-run legacy-java-diagnostic release-check check
 
 .PHONY: pdf-visual-audit
 
@@ -70,6 +71,7 @@ help:
 	@echo "  knowledge-quality-gate  Check parsed documents and parent/child quality thresholds"
 	@echo "  pdf-visual-audit  Render and audit representative PDF pages"
 	@echo "  knowledge-validate-ocr  Validate sources through the real OCR endpoint"
+	@echo "  ocr-live-check  Check OCR health and a real PDF response contract"
 	@echo "  gateway-check Build and test the independent fitness core Gateway"
 	@echo "  gateway-run  Start the fitness core Gateway locally"
 	@echo "  gateway-training-role-live-check  Check Gateway-to-Training role visibility without writes"
@@ -180,6 +182,11 @@ ocr-check:
 	cd fitness-ocr-service && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run ruff format --check .
 	cd fitness-ocr-service && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run mypy app
 	cd fitness-ocr-service && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run pytest
+
+ocr-live-check:
+	@test -n "$(OCR_LIVE_ENDPOINT)" || (echo "请先设置 OCR_LIVE_ENDPOINT，例如 http://127.0.0.1:8091/v1/parse"; exit 1)
+	@test -n "$(OCR_LIVE_SAMPLE_PDF)" || (echo "请先设置 OCR_LIVE_SAMPLE_PDF，例如 data/knowledge/raw/xxx.pdf"; exit 1)
+	cd $(AGENT_DIR) && OCR_LIVE_ENDPOINT=$(OCR_LIVE_ENDPOINT) OCR_LIVE_API_KEY=$(OCR_LIVE_API_KEY) OCR_LIVE_SAMPLE_PDF=$(OCR_LIVE_SAMPLE_PDF) OCR_LIVE_TIMEOUT_SECONDS=$(OCR_LIVE_TIMEOUT_SECONDS) UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/ocr_live_check.py
 
 ocr-run:
 	cd fitness-ocr-service && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run uvicorn app.main:app --reload --host 0.0.0.0 --port 8091
