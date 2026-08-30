@@ -2054,3 +2054,16 @@ DeepSeek、Agent、Gateway 和本地业务数据联调，Booking 返回真实课
 执行 Fitness、Booking、Operations、Customer Service 四个领域查询，校验 Checkpoint 会话
 ID 一致、每轮路由正确、真实只读工具调用、`COMPLETED` 状态和无确认单。它专门覆盖独立
 smoke 无法发现的“跨领域多轮上下文或子图权限串域”问题，不执行任何业务写入。
+
+本轮已完成“同一会话跨四领域子图真实只读验收”（2026-08-31）：
+
+- Agent、Gateway、独立 Customer Service 均在本机启动并通过存活/就绪检查；客服服务使用正确的未转义 JDBC URL 连接本地 `fitness-mysql`。
+- 使用一个一次性 `conversation_id` 连续执行 Fitness、Booking、Operations、Customer Service 四轮请求，四轮均正确路由到对应
+  LangGraph 子图，均完成真实只读工具调用并返回 `COMPLETED`。
+- 四轮返回的会话 ID 保持一致，未生成确认单，也没有创建预约、训练草案、Memory 或客服工单；该结果证明 Checkpoint 跨领域切换没有
+  发生会话串域或工具权限串域。
+- 联调期间发现的本地启动问题是手工从 IntelliJ XML 提取环境变量时把 `&amp;` 当成了 JDBC URL 的真实字符，已通过启动时传入正确
+  的 JDBC URL 修复；这不是业务代码或数据库数据问题。IDEA 直接运行 XML 配置时应由 IDE 自己完成 XML 解码，命令行脚本不能直接复制属性值。
+
+本阶段第一项“同会话跨领域真实联调”已完成。后续按生产化收尾顺序进入数据库最小权限账号、隔离备份恢复和 RTO/RPO 证据，不能因为本地
+只读联调通过就直接宣称生产就绪。

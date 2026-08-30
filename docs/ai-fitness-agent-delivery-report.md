@@ -171,6 +171,16 @@ make release-check
 
 真实业务写入验收仍必须使用对应的显式授权命令，并使用本地测试机构、用户和可清理数据；不能把离线质量门禁当成真实业务写入。
 
+### 8.1 同会话跨四领域真实只读验收（2026-08-31）
+
+已在本机启动 Agent、Java Gateway 和 Customer Service，并通过全部存活/就绪探针。随后使用同一个一次性会话连续执行 Fitness、
+Booking、Operations、Customer Service 四个领域的只读请求：四轮均正确路由、完成真实工具调用、返回 `COMPLETED`，会话 ID 始终一致，
+且没有确认单和任何业务写入。该验收覆盖了独立单轮 smoke 无法发现的 Checkpoint 跨领域串域风险。
+
+本次启动时还排除了一个本地命令行问题：从 IntelliJ 的 XML 运行配置手工提取环境变量时，`&amp;` 不能原样作为 JDBC URL 传入；否则
+Gateway/客服服务会因 JDBC URL 解析失败返回 500，Agent 最终表现为 503。直接使用 IDEA 运行配置或命令行传入已解码的 JDBC URL 即可，
+不需要修改数据库数据，也不应把包含密码和 Token 的 IDEA 配置提交到 Git。
+
 ## 9. 生产环境差距
 
 以下项目是生产部署准备，不影响当前本地项目交付结论：
