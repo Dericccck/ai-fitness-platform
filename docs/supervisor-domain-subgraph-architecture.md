@@ -109,3 +109,15 @@ make agent-domain-subgraphs-live-check
 该命令依次查询当前用户、机构课程、固定营收指标和本人预约记录，要求四条响应路由正确、
 状态为 `COMPLETED`、至少执行一个真实只读工具、没有确认单且回答不是“还需要继续查询”的
 空壳说明。它不会创建预约、训练草案、Memory 或客服工单，也不会打印 AgentContext。
+
+四个独立会话通过后，还可以使用同会话验收命令验证 Checkpoint 和跨领域切换：
+
+```bash
+export AGENT_LIVE_AGENT_CONTEXT="$(make agent-dev-context)"
+make agent-domain-subgraphs-session-live-check
+```
+
+该命令固定复用一个一次性 `conversation_id`，依次执行 Fitness、Booking、Operations 和
+Customer Service 只读查询，并校验每轮返回的会话 ID 一致、路由正确、至少执行一个真实
+只读工具、状态为 `COMPLETED` 且没有确认单。它用于发现“单轮都能工作，但多轮 Checkpoint
+串域”的问题，不会把业务写入验收混入只读 smoke。

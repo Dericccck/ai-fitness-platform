@@ -98,6 +98,14 @@ export AGENT_LIVE_AGENT_CONTEXT="$(make agent-dev-context)"
 make agent-domain-subgraphs-live-check
 ```
 
+如果还要验证 PostgreSQL Checkpoint 支持同一个会话连续切换领域，可执行：
+
+```bash
+make agent-domain-subgraphs-session-live-check
+```
+
+该命令仍然只读，并会在四轮请求中复用一个一次性会话 ID。
+
 生产切换前应额外验收确认凭证验证公钥，避免只验证 AgentContext 而漏掉 Gateway 的第二套认证边界：
 
 ```bash

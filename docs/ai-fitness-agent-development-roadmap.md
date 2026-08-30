@@ -2032,3 +2032,9 @@ Registry 根据唯一签名机构确定性绑定，多机构上下文继续 fail
 DeepSeek、Agent、Gateway 和本地业务数据联调，Booking 返回真实课程列表，Operations 返回固定
 聚合结果，客服完成预约查询。最终 `make release-check` 通过，Agent 为 `474 passed, 8 skipped`，
 其余 Gateway、Training、Booking、Customer Service、OCR 契约和评测全部通过。
+
+下一阶段补充同一会话跨领域只读验收：新增
+`make agent-domain-subgraphs-session-live-check`，复用一个一次性 `conversation_id`，连续
+执行 Fitness、Booking、Operations、Customer Service 四个领域查询，校验 Checkpoint 会话
+ID 一致、每轮路由正确、真实只读工具调用、`COMPLETED` 状态和无确认单。它专门覆盖独立
+smoke 无法发现的“跨领域多轮上下文或子图权限串域”问题，不执行任何业务写入。
