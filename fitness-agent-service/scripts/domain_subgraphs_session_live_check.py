@@ -115,9 +115,27 @@ def validate_cases(cases: tuple[SessionCase, ...]) -> None:
         normalized = "".join(case.message.split())
         if not normalized:
             raise SessionSubgraphsLiveCheckError(f"{case.name} 的问题不能为空")
-        # 允许“不要创建/改约/取消”这种否定保护语句，但拒绝明确肯定写操作。
-        if any(marker in normalized for marker in write_markers) and "不要" not in normalized:
+        if any(_has_affirmative_intent(normalized, marker) for marker in write_markers):
             raise SessionSubgraphsLiveCheckError(f"{case.name} 的问题包含主动写入意图")
+
+
+def _has_affirmative_intent(text: str, keyword: str) -> bool:
+    """判断单个写动作是否出现在肯定分句，而不是保护性的否定分句中。
+
+    不能使用“整句是否包含不要”作为判断，因为“不要查询，但帮我创建预约”同时包含
+    否定和肯定意图，必须拒绝。这里与 Supervisor 的中文分句安全判断保持同样规则。
+    """
+
+    negations = ("不要", "别", "无需", "不用", "不需要", "禁止", "不想", "不是要", "并非要")
+    boundaries = "，。；！？\n"
+    start = 0
+    while (index := text.find(keyword, start)) >= 0:
+        boundary = max(text.rfind(marker, 0, index) for marker in boundaries)
+        clause_prefix = text[boundary + 1 : index]
+        if not any(negation in clause_prefix for negation in negations):
+            return True
+        start = index + len(keyword)
+    return False
 
 
 def validate_response(case: SessionCase, payload: Any) -> tuple[str, int, str]:

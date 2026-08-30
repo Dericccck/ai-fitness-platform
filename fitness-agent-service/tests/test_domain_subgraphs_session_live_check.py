@@ -61,6 +61,20 @@ def test_cases_reject_active_write_request() -> None:
         validate_cases(cases)
 
 
+def test_cases_reject_active_write_after_a_negated_clause() -> None:
+    cases = (
+        *DEFAULT_CASES[:-1],
+        DEFAULT_CASES[-1].__class__(
+            name="customer-service",
+            route="CUSTOMER_SERVICE",
+            message="不要查询，帮我提交客服工单",
+        ),
+    )
+
+    with pytest.raises(SessionSubgraphsLiveCheckError, match="主动写入意图"):
+        validate_cases(cases)
+
+
 @pytest.mark.parametrize(
     "payload",
     (
