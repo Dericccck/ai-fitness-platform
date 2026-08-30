@@ -240,7 +240,7 @@ def _preflight(config: CheckConfig) -> None:
 
 
 def run(config: CheckConfig) -> int:
-    """执行前置检查或临时库升级/回滚，并保证临时数据库最终清理。"""
+    """执行前置检查或带数据临时库升级/回滚，并保证临时数据库最终清理。"""
 
     _preflight(config)
     if not config.execute:
@@ -249,13 +249,38 @@ def run(config: CheckConfig) -> int:
 
     database = f"fitness_agent_migration_{uuid.uuid4().hex[:12]}"
     _create_database(config, database)
+    legacy_notification_id = f"migration-check-legacy-{uuid.uuid4().hex}"
+    new_notification_id = f"migration-check-new-{uuid.uuid4().hex}"
     try:
+        baseline_seconds = _run_alembic(
+            config,
+            database,
+            "upgrade",
+            "20260824_0034",
+            label="升级到带数据验收基线版本",
+        )
+        _psql(
+            config,
+            database,
+            f"""
+            INSERT INTO agent_in_app_notifications (
+                id, notification_type, subject_user_id, organization_id,
+                aggregate_type, aggregate_id, dedupe_key
+            ) VALUES (
+                '{legacy_notification_id}', 'MEMORY_CANDIDATE_PENDING',
+                'migration-check-subject', 'migration-check-org',
+                'MEMORY_CANDIDATE', 'migration-check-aggregate',
+                '{legacy_notification_id}'
+            )
+            """,
+            label="写入迁移前已有通知数据",
+        )
         upgrade_seconds = _run_alembic(
             config,
             database,
             "upgrade",
             "head",
-            label="升级到 Alembic head",
+            label="带已有数据升级到 Alembic head",
         )
         version = _psql(
             config,
@@ -265,6 +290,38 @@ def run(config: CheckConfig) -> int:
         ).strip()
         if not version:
             raise MigrationLiveCheckError("升级完成后 alembic_version 没有版本记录")
+        preserved_count = _psql(
+            config,
+            database,
+            f"SELECT COUNT(*) FROM agent_in_app_notifications WHERE id = '{legacy_notification_id}'",
+            label="检查旧通知数据是否保留",
+        ).strip()
+        if preserved_count != "1":
+            raise MigrationLiveCheckError(
+                f"升级后旧通知数据数量异常，期望 1，实际 {preserved_count}"
+            )
+        _psql(
+            config,
+            database,
+            f"""
+            INSERT INTO agent_in_app_notifications (
+                id, notification_type, subject_user_id, organization_id,
+                aggregate_type, aggregate_id, dedupe_key
+            ) VALUES (
+                '{new_notification_id}', 'TRAINING_PLAN_PUBLISHED',
+                'migration-check-subject', 'migration-check-org',
+                'TRAINING_PLAN', 'migration-check-training',
+                '{new_notification_id}'
+            )
+            """,
+            label="验证新通知类型约束",
+        )
+        _psql(
+            config,
+            database,
+            f"DELETE FROM agent_in_app_notifications WHERE id IN ('{legacy_notification_id}', '{new_notification_id}')",
+            label="清理迁移数据夹具",
+        )
         downgrade_seconds = _run_alembic(
             config,
             database,
@@ -286,8 +343,9 @@ def run(config: CheckConfig) -> int:
         if remaining_tables != "0":
             raise MigrationLiveCheckError(f"回滚到 base 后仍有 {remaining_tables} 张 public 业务表")
         print(
-            f"PostgreSQL 迁移真实验收通过：head={version} "
-            f"upgrade={upgrade_seconds:.2f}s downgrade={downgrade_seconds:.2f}s"
+            f"PostgreSQL 带数据迁移真实验收通过：head={version} "
+            f"baseline={baseline_seconds:.2f}s upgrade={upgrade_seconds:.2f}s "
+            f"downgrade={downgrade_seconds:.2f}s preserved_rows=1"
         )
         return 0
     finally:
