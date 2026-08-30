@@ -2,7 +2,7 @@ SHELL := /bin/sh
 
 .PHONY: observability-check observability-live-check observability-rule-test observability-alertmanager-check observability-e2e-check
 
-.PHONY: agent-jwks-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-release-manifest-check agent-migration-check agent-migration-live-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check gateway-it
+.PHONY: agent-jwks-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-release-manifest-check agent-migration-check agent-migration-live-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check gateway-it production-config-check
 
 AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
@@ -62,6 +62,7 @@ help:
 	@echo "  agent-capacity-check Verify Agent HTTP capacity baseline without business writes"
 	@echo "  agent-release-rollback-check Verify Agent version, liveness and readiness after release/rollback"
 	@echo "  agent-release-manifest-check Generate or verify an immutable image and configuration contract"
+	@echo "  production-config-check Validate all production environment templates and safety switches"
 	@echo "  agent-migration-check Verify Alembic migration chain and bidirectional contract"
 	@echo "  agent-migration-live-check Verify real PostgreSQL migration upgrade and rollback"
 	@echo "  agent-proactive-live-check Verify Booking -> RabbitMQ -> Agent Inbox -> IN_APP chain"
@@ -264,6 +265,9 @@ agent-release-rollback-check:
 
 agent-release-manifest-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/release_manifest_check.py $(ARGS)
+
+production-config-check:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/production_config_contract_check.py
 
 agent-migration-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/migration_contract_check.py

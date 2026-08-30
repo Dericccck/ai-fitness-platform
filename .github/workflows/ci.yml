@@ -56,6 +56,9 @@ jobs:
       - name: Observability contract
         run: uv run python scripts/observability_contract_check.py
 
+      - name: Production configuration contract
+        run: uv run python scripts/production_config_contract_check.py
+
       - name: Prometheus alert rule tests
         run: |
           docker run --rm \
