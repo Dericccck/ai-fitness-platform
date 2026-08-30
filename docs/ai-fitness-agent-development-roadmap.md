@@ -1447,6 +1447,8 @@ Booking 和 Fitness 的真实 dry-run、Agent 层角色矩阵、训练服务最�
    已先补齐 Agent 的 `/api/v1/agent/capabilities` 能力目录：目录由 Tool Registry 自动生成，按签名角色过滤，
    返回业务分组、中文能力说明、只读/写入属性和是否需要确认；带角色范围的版本号和私有 ETag，避免前端硬编码
    菜单或复用其他角色的缓存。该接口只提供展示元数据，不替代 Tool Registry、Java Gateway 和确认凭证校验。
+   当前仓库没有独立前端源码，本轮已补充 `docs/frontend-integration-contract.md`，明确三种角色的页面、公共
+   Agent API、确认卡片、状态映射、RAG 引用展示和联调验收清单；这不把“后端接口已具备”表述成“前端页面已完成”。
 4. 精简 Customer Service Agent 第一切片：增加客服路由、健身规则 RAG 问答、预约/课程/合同/课时/训练计划
    的只读业务查询，以及医疗、退款、争议问题的确定性安全边界；工单只允许用户明确请求后经确认创建，
    不建设自动人工转接流程，也不提供 Agent 自动改派/关闭工单。
