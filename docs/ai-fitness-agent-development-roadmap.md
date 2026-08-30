@@ -2067,3 +2067,10 @@ smoke 无法发现的“跨领域多轮上下文或子图权限串域”问题�
 
 本阶段第一项“同会话跨领域真实联调”已完成。后续按生产化收尾顺序进入数据库最小权限账号、隔离备份恢复和 RTO/RPO 证据，不能因为本地
 只读联调通过就直接宣称生产就绪。
+
+本轮开始执行数据库最小权限准备：只读盘点确认本地 `fitness-mysql` 的开发账号 `fitness@%` 拥有
+`fitness.*` 的 `ALL PRIVILEGES`，因此它只能用于本地联调，不能作为生产权限证据。新增
+`deployment/mysql/service-runtime-grants.sql.example` 和对应的 `service-runtime-grants-verify.sql.example`，
+分别为 Booking、Training、Customer Service 定义当前运行时所需的表级 DML 权限，并明确应用运行账号不拥有
+`CREATE`、`ALTER`、`DROP`、`GRANT OPTION`。本轮未修改本地账号或数据库权限；下一步应在隔离克隆库用 DBA 权限
+创建独立账号，执行脱敏 `SHOW GRANTS` 和服务回归，再将证据带入预发布环境。

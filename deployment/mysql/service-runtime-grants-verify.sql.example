@@ -1,0 +1,29 @@
+-- 服务运行账号最小权限验收查询（只读）。
+-- 请在目标环境将 host 从 % 替换为实际账号 host，并保存脱敏输出。
+-- 写入拒绝测试只能在隔离克隆库执行，不要对生产业务表发送 INSERT/UPDATE/DELETE。
+
+SELECT CURRENT_USER(), DATABASE(), @@character_set_connection, @@character_set_results;
+
+SHOW GRANTS FOR 'fitness_booking_rw'@'%';
+SHOW GRANTS FOR 'fitness_training_rw'@'%';
+SHOW GRANTS FOR 'fitness_customer_service_rw'@'%';
+
+SELECT GRANTEE, TABLE_SCHEMA, TABLE_NAME, PRIVILEGE_TYPE
+FROM information_schema.TABLE_PRIVILEGES
+WHERE TABLE_SCHEMA = 'fitness'
+  AND GRANTEE IN (
+      '''fitness_booking_rw''@''%''',
+      '''fitness_training_rw''@''%''',
+      '''fitness_customer_service_rw''@''%'''
+  )
+ORDER BY GRANTEE, TABLE_NAME, PRIVILEGE_TYPE;
+
+-- 以下结果必须为空：运行账号不能拥有全局权限、GRANT OPTION 或 DDL 权限。
+SELECT GRANTEE, PRIVILEGE_TYPE
+FROM information_schema.USER_PRIVILEGES
+WHERE GRANTEE IN (
+      '''fitness_booking_rw''@''%''',
+      '''fitness_training_rw''@''%''',
+      '''fitness_customer_service_rw''@''%'''
+  )
+  AND PRIVILEGE_TYPE NOT IN ('USAGE');

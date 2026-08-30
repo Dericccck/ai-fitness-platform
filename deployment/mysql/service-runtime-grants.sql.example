@@ -1,0 +1,58 @@
+-- 健身平台各服务运行账号的最小权限模板。
+--
+-- 重要：本文件只授予运行时 DML 权限，不包含 CREATE/ALTER/DROP，也不包含 GRANT
+-- OPTION。请由 DBA 在目标环境逐条审核后执行，并把 % 替换成服务所在网络允许的
+-- 固定来源主机或网段。密码只能通过 Secret Manager 或受控终端设置，不能写入仓库。
+--
+-- Gateway 的只读账号单独见 gateway-readonly-grants.sql.example；本文件不重复授予。
+-- 生产环境必须关闭各服务的 schema-init-enabled，由独立迁移 Job 使用另一套迁移账号。
+
+-- 账号初始化：密码占位符只允许由 DBA 在受控会话中替换，三个服务必须使用不同密码。
+CREATE USER IF NOT EXISTS 'fitness_booking_rw'@'%' IDENTIFIED BY '<booking-strong-password>';
+ALTER USER 'fitness_booking_rw'@'%' IDENTIFIED BY '<booking-strong-password>';
+CREATE USER IF NOT EXISTS 'fitness_training_rw'@'%' IDENTIFIED BY '<training-strong-password>';
+ALTER USER 'fitness_training_rw'@'%' IDENTIFIED BY '<training-strong-password>';
+CREATE USER IF NOT EXISTS 'fitness_customer_service_rw'@'%' IDENTIFIED BY '<customer-service-strong-password>';
+ALTER USER 'fitness_customer_service_rw'@'%' IDENTIFIED BY '<customer-service-strong-password>';
+
+-- Booking：预约、改约、取消及预约 Outbox。
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'fitness_booking_rw'@'%';
+GRANT SELECT ON `fitness`.`login_user_authority` TO 'fitness_booking_rw'@'%';
+GRANT SELECT ON `fitness`.`user_and_coach` TO 'fitness_booking_rw'@'%';
+GRANT SELECT ON `fitness`.`course` TO 'fitness_booking_rw'@'%';
+GRANT SELECT, UPDATE ON `fitness`.`contract` TO 'fitness_booking_rw'@'%';
+GRANT SELECT, INSERT, UPDATE ON `fitness`.`appointment` TO 'fitness_booking_rw'@'%';
+GRANT SELECT ON `fitness`.`system_settings` TO 'fitness_booking_rw'@'%';
+GRANT SELECT ON `fitness`.`vacation_record` TO 'fitness_booking_rw'@'%';
+GRANT SELECT, INSERT ON `fitness`.`agent_booking_operation` TO 'fitness_booking_rw'@'%';
+GRANT SELECT, INSERT ON `fitness`.`agent_booking_reschedule_operation` TO 'fitness_booking_rw'@'%';
+GRANT SELECT, INSERT ON `fitness`.`agent_booking_cancel_operation` TO 'fitness_booking_rw'@'%';
+GRANT SELECT, INSERT ON `fitness`.`agent_booking_confirmation_consumption` TO 'fitness_booking_rw'@'%';
+GRANT SELECT, INSERT ON `fitness`.`agent_booking_audit` TO 'fitness_booking_rw'@'%';
+GRANT SELECT, INSERT, UPDATE ON `fitness`.`agent_booking_outbox` TO 'fitness_booking_rw'@'%';
+
+-- Training：训练计划、审核发布、训练日执行及训练 Outbox。
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'fitness_training_rw'@'%';
+GRANT SELECT ON `fitness`.`user_and_coach` TO 'fitness_training_rw'@'%';
+GRANT SELECT, INSERT, UPDATE ON `fitness`.`training_plan` TO 'fitness_training_rw'@'%';
+GRANT SELECT, INSERT ON `fitness`.`training_plan_day` TO 'fitness_training_rw'@'%';
+GRANT SELECT, INSERT ON `fitness`.`training_plan_item` TO 'fitness_training_rw'@'%';
+GRANT SELECT, INSERT ON `fitness`.`training_plan_audit` TO 'fitness_training_rw'@'%';
+GRANT SELECT, INSERT ON `fitness`.`training_schema_version` TO 'fitness_training_rw'@'%';
+GRANT SELECT, INSERT ON `fitness`.`training_confirmation_consumption` TO 'fitness_training_rw'@'%';
+GRANT SELECT, INSERT, UPDATE ON `fitness`.`training_day_execution` TO 'fitness_training_rw'@'%';
+GRANT SELECT, INSERT ON `fitness`.`training_day_execution_audit` TO 'fitness_training_rw'@'%';
+GRANT SELECT, INSERT, UPDATE ON `fitness`.`agent_training_outbox` TO 'fitness_training_rw'@'%';
+
+-- Customer Service：客服工单创建、确认消费和不可变审计。
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'fitness_customer_service_rw'@'%';
+GRANT SELECT, INSERT ON `fitness`.`agent_customer_service_ticket` TO 'fitness_customer_service_rw'@'%';
+GRANT SELECT, INSERT ON `fitness`.`agent_customer_service_confirmation_consumption` TO 'fitness_customer_service_rw'@'%';
+GRANT SELECT, INSERT ON `fitness`.`agent_customer_service_ticket_audit` TO 'fitness_customer_service_rw'@'%';
+GRANT SELECT ON `fitness`.`customer_service_schema_version` TO 'fitness_customer_service_rw'@'%';
+
+-- 不要在生产应用账号上执行以下高权限操作：
+--   CREATE USER / ALTER USER / CREATE / ALTER / DROP / INDEX / REFERENCES
+-- 迁移 Job 应使用独立的、短时有效的迁移账号，并在迁移完成后回收或禁用。
+
+FLUSH PRIVILEGES;
