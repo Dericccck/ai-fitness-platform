@@ -68,6 +68,21 @@ jobs:
       - name: Build production container image
         run: docker build --file Dockerfile --tag fitness-agent-service:${{ github.sha }} .
 
+      # 用本次构建得到的不可变镜像 ID 生成发布制品；后续环境只提升同一制品，不重新构建。
+      - name: Validate immutable release manifest
+        env:
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          IMAGE_DIGEST="$(docker image inspect fitness-agent-service:${SOURCE_COMMIT} --format '{{.Id}}')"
+          uv run python scripts/release_manifest_check.py \
+            --build \
+            --manifest "$RUNNER_TEMP/agent-release.manifest.json" \
+            --config-contract ../deployment/environments/agent.staging.env.example \
+            --environment staging \
+            --source-commit "$SOURCE_COMMIT" \
+            --image "fitness-agent-service@${IMAGE_DIGEST}" \
+            --expected-environment staging
+
   fitness-core-gateway:
     name: Fitness Core Tool Gateway
     runs-on: ubuntu-latest

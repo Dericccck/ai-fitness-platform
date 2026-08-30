@@ -1794,3 +1794,13 @@ OCR/动作标注仍按约定放到项目最后，不影响当前健身 Agent 业
   回滚到 `base` 并清理临时数据库，残留数据库数量为 `0`。
 - 这证明当前 DDL 遇到长事务访问时会等待并在锁释放后恢复，不会绕过锁直接破坏数据；它仍不是完整生产零停机验收，正式发布前
   还需要预发布全量历史数据、锁等待监控、迁移窗口、RTO/RPO 和灰度回滚演练。
+
+本轮完成 Agent 不可变发布产物与配置契约清单：
+
+- 新增 `scripts/release_manifest_check.py` 和 `make agent-release-manifest-check`。清单绑定服务名、环境、40 位 Git Commit SHA、
+  服务版本和镜像 digest；预发布/生产拒绝 `latest` 等可变镜像标签，并要求 `service_version == source_commit`。
+- 清单只保存环境模板中的配置键名及其 SHA-256 契约摘要，不读取或保存等号右侧的密码、Token、API Key 和私钥；配置模板
+  新增 `AGENT_SERVICE_VERSION`，发布时由流水线注入本次构建的 Commit SHA。
+- GitHub Actions 在构建 Agent 镜像后读取镜像 ID，生成并校验 staging 发布清单；后续环境应提升同一 digest，不在环境之间重复构建。
+- 本地使用当前 Commit 和模拟 digest 生成清单验证通过；Agent 完整回归为 `405 passed`、`9 skipped`，无失败。该清单校验解决
+  版本与配置可追溯问题，但不替代镜像仓库签名、SBOM、漏洞扫描、部署平台 Secret 注入和正式灰度切换。

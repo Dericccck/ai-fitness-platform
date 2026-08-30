@@ -27,6 +27,8 @@ Agent 服务使用同一份镜像在不同环境运行，环境差异只能通�
 3. 生产默认关闭 Swagger/ReDoc，Metrics 只允许监控网络访问。
 4. Trace 必须发送到受控 OpenTelemetry Collector，不允许业务服务直接写入多个厂商后端。
 5. 环境模板只能包含非敏感默认值或占位符，真实凭证不得进入 Git。
+6. Agent 发布必须生成不可变清单：`service_version` 绑定 Git Commit SHA，staging/production 镜像使用 `@sha256` digest，
+   配置契约只保存键名摘要，不保存 Secret；由 `make agent-release-manifest-check` 校验后再交给部署平台。
 
 各环境的非敏感覆盖示例位于当前目录。完整变量说明以
 `fitness-agent-service/.env.example` 为准。
