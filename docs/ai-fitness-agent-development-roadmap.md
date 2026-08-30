@@ -1812,3 +1812,11 @@ OCR/动作标注仍按约定放到项目最后，不影响当前健身 Agent 业
 - 校验仍逐表比较 public schema 的记录数，并输出总行数和备份 SHA-256；测试覆盖 RTO 参数边界和行数基线计算。
 - 本脚本的 RPO 只能表示逻辑备份的一致性时间点，不能测出 WAL/PITR 的时间点恢复能力；生产仍需对象存储、加密、跨可用区副本、
   WAL/PITR、明确 RTO/RPO 和定期灾备演练。下一步执行本地真实备份恢复，记录当前 PostgreSQL 数据规模与耗时基线。
+
+本轮开始补充可观测性规则加载门禁：
+
+- 新增 `scripts/observability_contract_check.py`、`make observability-check` 和 `make observability-live-check`。静态门禁检查
+  告警名称集合、PromQL 指标引用、固定低基数标签、告警说明，以及 Prometheus 的 Agent/Worker 抓取任务。
+- 运行时模式只读调用 Prometheus API，确认规则已经被加载；不停止服务、不制造故障、不发送短信/Push，也不修改健身业务数据。
+- GitHub Actions 已接入静态可观测性门禁。当前只完成 Prometheus 规则加载与配置契约，外部 Alertmanager 收件人路由、故障触发、
+  抑制、恢复和升级策略仍需在隔离环境继续演练。

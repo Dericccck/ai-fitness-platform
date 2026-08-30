@@ -1,5 +1,7 @@
 SHELL := /bin/sh
 
+.PHONY: observability-check observability-live-check
+
 .PHONY: agent-jwks-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-release-manifest-check agent-migration-check agent-migration-live-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check
 
 AGENT_DIR := fitness-agent-service
@@ -17,6 +19,8 @@ help:
 	@echo "  infra-up-messaging Start local RabbitMQ for cross-service Outbox events"
 	@echo "  infra-down   Stop local Agent infrastructure without deleting data"
 	@echo "  observability-up Start the local OpenTelemetry Collector"
+	@echo "  observability-check Check Prometheus and Agent alert/metric contracts without network access"
+	@echo "  observability-live-check Check that a running Prometheus has loaded the alert rules"
 	@echo "  agent-lock   Resolve and update the Python dependency lock file"
 	@echo "  agent-sync   Install exact locked Python dependencies"
 	@echo "  agent-migrate Apply Agent PostgreSQL migrations"
@@ -100,7 +104,13 @@ infra-down:
 	docker compose -f $(COMPOSE_FILE) down
 
 observability-up:
-	docker compose -f $(COMPOSE_FILE) --profile observability up -d agent-otel-collector
+	docker compose -f $(COMPOSE_FILE) --profile observability up -d agent-prometheus agent-otel-collector
+
+observability-check:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/observability_contract_check.py
+
+observability-live-check:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/observability_contract_check.py --execute $(ARGS)
 
 agent-lock:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv lock --python 3.11

@@ -21,6 +21,10 @@ Prometheus 负责抓取 Metrics；两条链路职责不同，不用 Trace 代替
 - Memory、会话摘要、通知等后台维护批次失败；
 - 站内通知投递失败。
 
+提交前可运行 `make observability-check`，它会检查告警名称集合、PromQL 中引用的指标是否在 Agent 中定义、告警是否具备
+固定低基数标签和说明，以及 Prometheus 是否配置 Agent/Worker 抓取任务。启动本地 Prometheus 后，可运行
+`make observability-live-check`，只读调用 Prometheus API 验证规则已经加载。
+
 告警标签只使用 `severity`、`service` 等固定值，不包含机构 ID、用户 ID、工单 ID、确认单 ID 或
 `request_id`。具体请求必须通过告警时间窗口、结构化日志和 Trace 关联，避免把业务标识直接放进
 Prometheus 时间序列。
@@ -34,5 +38,8 @@ Prometheus 时间序列。
 3. 将 Prometheus 告警转发到企业 Alertmanager/值班系统，并为 `critical` 和 `warning` 配置不同升级策略；
 4. 将告警与既有 OTLP Trace、结构化日志、数据库和 RabbitMQ 监控关联；
 5. 对告警规则做值班演练，确认 Agent 宕机、审计失败和通知失败都能在预期时间内发现。
+
+当前运行时验收只验证 Prometheus 规则加载，不自动制造故障、不停止服务，也不验证外部 Alertmanager 的收件人路由。
+生产接入 Alertmanager 后，还需要在隔离窗口演练告警触发、抑制、恢复和升级策略。
 
 本配置不会自动发送短信、Push 或外部通知，也不会改变健身业务的写入确认流程。
