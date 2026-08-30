@@ -1,0 +1,38 @@
+# 本地隔离演练使用的 Alertmanager 配置。
+# webhook 指向宿主机上的临时验收接收器，只用于验证 firing/resolved 生命周期，
+# 不会发送到短信、Push、邮件或任何外部值班系统。生产环境必须替换为企业内网
+# HTTPS 接收器，并通过 Secret 管理认证信息，不能直接复用本文件。
+global:
+  resolve_timeout: 1m
+
+route:
+  # 按告警名称和服务聚合，避免同一服务的一批相同故障形成通知风暴。
+  group_by: [alertname, service]
+  group_wait: 0s
+  group_interval: 1s
+  repeat_interval: 1h
+  receiver: fitness-agent-local-webhook
+
+  routes:
+    # 严重故障单独走 critical 路由，生产环境可以映射到更高优先级的值班策略。
+    - matchers:
+        - severity="critical"
+      receiver: fitness-agent-local-webhook
+    # warning/info 仍保留独立匹配边界，便于生产替换为低优先级通知渠道。
+    - matchers:
+        - severity=~"warning|info"
+      receiver: fitness-agent-local-webhook
+
+inhibit_rules:
+  # 同一服务已经有 critical 故障时，抑制同服务的 warning，避免重复打扰值班人员。
+  - source_matchers:
+      - severity="critical"
+    target_matchers:
+      - severity="warning"
+    equal: [service]
+
+receivers:
+  - name: fitness-agent-local-webhook
+    webhook_configs:
+      - url: http://host.docker.internal:18080/alerts
+        send_resolved: true

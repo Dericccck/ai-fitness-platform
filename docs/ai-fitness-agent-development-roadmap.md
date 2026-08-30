@@ -1827,3 +1827,15 @@ OCR/动作标注仍按约定放到项目最后，不影响当前健身 Agent 业
   `for: 2m` 延迟、恢复后的自动解除，以及 Operations 审计失败告警的 `increase()` 窗口逻辑。
 - 新增 `make observability-rule-test` 并接入 GitHub Actions；测试不停止服务、不访问 DeepSeek、不写 PostgreSQL/MySQL/Redis/RabbitMQ。
 - 这一步验证的是 PromQL 规则语义，不等同于真实容器故障、Alertmanager 路由、值班升级或告警抑制演练；这些仍保留在隔离环境阶段。
+
+本轮补充 Alertmanager 隔离路由验收基线：
+
+- 新增 `deployment/observability/alertmanager.yml`，定义 critical/warning 路由、同服务 critical 对 warning 的抑制规则，以及
+  `send_resolved` 恢复通知；当前接收器是仅用于本地验收的宿主机临时 webhook，不代表已经接入企业值班系统。
+- 新增 `scripts/alertmanager_route_check.py` 和 `make observability-alertmanager-check`。脚本启动唯一临时 Alertmanager 容器，
+  注入合成告警并验证 `firing`、`resolved` 回调，结束时只清理自己创建的容器和临时 HTTP Server，不停止 Agent、RabbitMQ 或
+  Prometheus，也不写业务数据库。
+- GitHub Actions 增加 `amtool check-config` 配置语法门禁；真实 Prometheus→Alertmanager 联动、生产 HTTPS/认证、值班升级和
+  抑制演练仍需在本地隔离环境继续验证。
+- 本地实际结果：`amtool check-config` 通过，隔离路由成功收到 `firing` 和 `resolved` 回调；Agent 全量回归为 `419 passed`、
+  `8 skipped`，无失败。

@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: observability-check observability-live-check observability-rule-test
+.PHONY: observability-check observability-live-check observability-rule-test observability-alertmanager-check
 
 .PHONY: agent-jwks-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-release-manifest-check agent-migration-check agent-migration-live-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check
 
@@ -114,6 +114,9 @@ observability-live-check:
 
 observability-rule-test:
 	docker run --rm --entrypoint promtool -v "$(CURDIR)/deployment/observability:/etc/prometheus:ro" prom/prometheus:v2.54.1 test rules /etc/prometheus/tests/fitness-agent-alerts.test.yml
+
+observability-alertmanager-check:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/alertmanager_route_check.py
 
 agent-lock:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv lock --python 3.11

@@ -64,6 +64,14 @@ jobs:
             prom/prometheus:v2.54.1 \
             test rules /etc/prometheus/tests/fitness-agent-alerts.test.yml
 
+      - name: Alertmanager configuration contract
+        run: |
+          docker run --rm \
+            --entrypoint amtool \
+            -v "$GITHUB_WORKSPACE/deployment/observability:/etc/alertmanager:ro" \
+            prom/alertmanager:v0.27.0 \
+            check-config /etc/alertmanager/alertmanager.yml
+
       - name: RAG evaluation quality gate
         run: uv run python -m app.rag.evaluation_cli --cases evals/rag_smoke.json --thresholds evals/rag_thresholds.json
 

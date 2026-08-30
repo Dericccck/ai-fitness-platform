@@ -29,6 +29,10 @@ Prometheus 负责抓取 Metrics；两条链路职责不同，不用 Trace 代替
 Agent 宕机告警在持续异常后触发、恢复后解除，以及 Operations 审计失败告警的计数器窗口逻辑；不会停止本地服务、写入业务
 数据库或发送外部通知。
 
+Alertmanager 路由和恢复通知可运行 `make observability-alertmanager-check`。该命令启动唯一临时 Alertmanager 容器和宿主机临时
+webhook，向 Alertmanager 注入一条合成 critical 告警，验证 `firing` 和 `resolved` 两次回调后清理容器。通知只在本机验收端口
+流转，不发送短信、Push、邮件或外部值班通知；生产环境必须替换为带认证的企业内网 HTTPS 接收器。
+
 告警标签只使用 `severity`、`service` 等固定值，不包含机构 ID、用户 ID、工单 ID、确认单 ID 或
 `request_id`。具体请求必须通过告警时间窗口、结构化日志和 Trace 关联，避免把业务标识直接放进
 Prometheus 时间序列。
