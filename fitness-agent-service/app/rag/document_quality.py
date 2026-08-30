@@ -449,9 +449,7 @@ def measure_document_quality(
         dehyphenated_line_break_count=sum(
             profile.dehyphenated_line_breaks for profile in page_profiles
         ),
-        layout_reordered_page_count=sum(
-            profile.detected_columns > 1 for profile in page_profiles
-        ),
+        layout_reordered_page_count=sum(profile.detected_columns > 1 for profile in page_profiles),
         table_continuation_count=sum(
             (block.metadata or {}).get("table_continuation_status")
             in {"CONTINUATION_START", "CONTINUATION"}
@@ -462,8 +460,7 @@ def measure_document_quality(
             for block in tables
         ),
         table_shape_mismatch_count=sum(
-            (block.metadata or {}).get("table_continuation_status")
-            == "SHAPE_MISMATCH_REVIEW"
+            (block.metadata or {}).get("table_continuation_status") == "SHAPE_MISMATCH_REVIEW"
             for block in tables
         ),
     )
@@ -547,7 +544,10 @@ def _compact(content: str) -> str:
 def _is_standalone_complete_parent_block(block: ParsedBlock) -> bool:
     """识别标题自身就是完整父节点的结构块，避免把它误计为正文碎片。"""
 
-    return bool(block.parent_content) and _compact(block.content) == _compact(block.parent_content)
+    parent_content = block.parent_content
+    if not parent_content:
+        return False
+    return _compact(block.content) == _compact(parent_content)
 
 
 def _draft_has_complete_parent(draft: ChunkDraft) -> bool:

@@ -257,9 +257,10 @@ def test_pdf_table_metadata_links_confirmed_cross_page_continuation() -> None:
 
     assert blocks[0].metadata["table_continuation_status"] == "CONTINUATION_START"
     assert blocks[1].metadata["table_continuation_status"] == "CONTINUATION"
-    assert blocks[0].metadata["table_continuation_group"] == blocks[1].metadata[
-        "table_continuation_group"
-    ]
+    assert (
+        blocks[0].metadata["table_continuation_group"]
+        == blocks[1].metadata["table_continuation_group"]
+    )
 
 
 def test_pdf_table_metadata_marks_ambiguous_same_header_pages_for_review() -> None:
@@ -302,8 +303,7 @@ def test_pdf_table_metadata_marks_ambiguous_same_header_pages_for_review() -> No
     )
 
     assert all(
-        block.metadata["table_continuation_status"] == "AMBIGUOUS_REVIEW"
-        for block in blocks
+        block.metadata["table_continuation_status"] == "AMBIGUOUS_REVIEW" for block in blocks
     )
 
 

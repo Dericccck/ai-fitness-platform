@@ -637,6 +637,17 @@ def _number(value: object) -> float | None:
     return float(value)
 
 
+def _pdf_word_coordinate(word: dict[str, object], key: str) -> float:
+    """读取已通过预筛选的 PDF word 坐标，并让类型检查器看到数值边界。"""
+
+    value = _number(word.get(key))
+    if value is None:
+        # 调用方只传入了 _group_pdf_words_into_lines 的有效 word；这里的异常表示
+        # 第三方解析库返回了不符合契约的数据，宁可跳过当前解析也不猜坐标。
+        raise ValueError(f"PDF word coordinate {key} is not numeric")
+    return value
+
+
 def _positive_number(value: object) -> float:
     number = _number(value)
     return number if number is not None and number > 0 else 0.0
@@ -994,7 +1005,9 @@ def _extract_pdf_text_lines(
         if isinstance(word, dict) and not _pdf_word_inside_boxes(word, table_boxes)
     ]
     coordinate_lines = _group_pdf_words_into_lines(filtered_words)
-    column_count = _detect_pdf_column_count(coordinate_lines, _positive_number(getattr(page, "width", 0.0)))
+    column_count = _detect_pdf_column_count(
+        coordinate_lines, _positive_number(getattr(page, "width", 0.0))
+    )
     # 坐标重排是高风险操作：普通双栏正文通常已经被 pdfplumber 正确还原，而图解
     # 页面才经常把多个独立文本框交叉拼接。因此默认只对图片占比很高、且同时有
     # 三个以上横向区域的页面启用，避免把正常指南正文“优化”坏。
@@ -1038,14 +1051,18 @@ def _pdf_table_boxes(
     boxes: list[tuple[float, float, float, float]] = []
     for table in table_objects:
         bbox = getattr(table, "bbox", None)
-        if isinstance(bbox, (tuple, list)) and len(bbox) == 4 and all(
-            isinstance(value, (int, float)) for value in bbox
+        if (
+            isinstance(bbox, (tuple, list))
+            and len(bbox) == 4
+            and all(isinstance(value, (int, float)) for value in bbox)
         ):
             boxes.append(tuple(float(value) for value in bbox))  # type: ignore[arg-type]
     return boxes
 
 
-def _pdf_word_inside_boxes(word: dict[str, object], boxes: Sequence[tuple[float, float, float, float]]) -> bool:
+def _pdf_word_inside_boxes(
+    word: dict[str, object], boxes: Sequence[tuple[float, float, float, float]]
+) -> bool:
     """按文字中心点排除表格区域，避免误删跨越表格边界的正文。"""
 
     x0, x1 = _number(word.get("x0")), _number(word.get("x1"))
@@ -1054,7 +1071,10 @@ def _pdf_word_inside_boxes(word: dict[str, object], boxes: Sequence[tuple[float,
         return False
     assert x0 is not None and x1 is not None and top is not None and bottom is not None
     center_x, center_y = (x0 + x1) / 2, (top + bottom) / 2
-    return any(left <= center_x <= right and upper <= center_y <= lower for left, upper, right, lower in boxes)
+    return any(
+        left <= center_x <= right and upper <= center_y <= lower
+        for left, upper, right, lower in boxes
+    )
 
 
 def _group_pdf_words_into_lines(words: Sequence[object]) -> list[_PdfTextLine]:
@@ -1073,20 +1093,29 @@ def _group_pdf_words_into_lines(words: Sequence[object]) -> list[_PdfTextLine]:
     if not valid_words:
         return []
     heights = [
-        max(0.1, float(word["bottom"]) - float(word["top"]))
+        max(
+            0.1,
+            _pdf_word_coordinate(word, "bottom") - _pdf_word_coordinate(word, "top"),
+        )
         for word in valid_words
         if isinstance(word["top"], (int, float)) and isinstance(word["bottom"], (int, float))
     ]
     line_tolerance = max(2.0, (sum(heights) / len(heights)) * 0.35)
-    page_width = max(float(word["x1"]) for word in valid_words)
+    page_width = max(_pdf_word_coordinate(word, "x1") for word in valid_words)
     rows: list[list[dict[str, object]]] = []
-    for word in sorted(valid_words, key=lambda item: (float(item["top"]), float(item["x0"]))):
+    for word in sorted(
+        valid_words,
+        key=lambda item: (
+            _pdf_word_coordinate(item, "top"),
+            _pdf_word_coordinate(item, "x0"),
+        ),
+    ):
         target: list[dict[str, object]] | None = None
         for candidate in reversed(rows):
-            candidate_top = float(candidate[0]["top"])
-            if float(word["top"]) - candidate_top > line_tolerance:
+            candidate_top = _pdf_word_coordinate(candidate[0], "top")
+            if _pdf_word_coordinate(word, "top") - candidate_top > line_tolerance:
                 break
-            if abs(float(word["top"]) - candidate_top) <= line_tolerance:
+            if abs(_pdf_word_coordinate(word, "top") - candidate_top) <= line_tolerance:
                 target = candidate
                 break
         if target is None:
@@ -1096,11 +1125,13 @@ def _group_pdf_words_into_lines(words: Sequence[object]) -> list[_PdfTextLine]:
 
     result: list[_PdfTextLine] = []
     for row in rows:
-        row.sort(key=lambda item: float(item["x0"]))
+        row.sort(key=lambda item: _pdf_word_coordinate(item, "x0"))
         segments: list[list[dict[str, object]]] = [[]]
         for word in row:
             if segments[-1]:
-                gap = float(word["x0"]) - float(segments[-1][-1]["x1"])
+                gap = _pdf_word_coordinate(word, "x0") - _pdf_word_coordinate(
+                    segments[-1][-1], "x1"
+                )
                 # 同一文本框中的词间距通常远小于字号；明显的大间隙通常意味着
                 # 两个独立栏目/图解节点，必须拆开，否则排序前就已被拼坏。
                 if gap > max(20.0, page_width * 0.08):
@@ -1112,10 +1143,10 @@ def _group_pdf_words_into_lines(words: Sequence[object]) -> list[_PdfTextLine]:
                 result.append(
                     _PdfTextLine(
                         text=text,
-                        x0=float(segment[0]["x0"]),
-                        x1=float(segment[-1]["x1"]),
-                        top=min(float(item["top"]) for item in segment),
-                        bottom=max(float(item["bottom"]) for item in segment),
+                        x0=_pdf_word_coordinate(segment[0], "x0"),
+                        x1=_pdf_word_coordinate(segment[-1], "x1"),
+                        top=min(_pdf_word_coordinate(item, "top") for item in segment),
+                        bottom=max(_pdf_word_coordinate(item, "bottom") for item in segment),
                     )
                 )
     return result
@@ -1131,13 +1162,15 @@ def _join_pdf_word_text(words: Sequence[dict[str, object]]) -> str:
         if not result:
             result = text
         else:
-            gap = float(word["x0"]) - (previous_x1 or float(word["x0"]))
+            gap = _pdf_word_coordinate(word, "x0") - (
+                previous_x1 or _pdf_word_coordinate(word, "x0")
+            )
             previous = result[-1:]
             first = text[:1]
             if gap > 1.5 and not (_CJK.search(previous) and _CJK.search(first)):
                 result += " "
             result += text
-        previous_x1 = float(word["x1"])
+        previous_x1 = _pdf_word_coordinate(word, "x1")
     return result.strip()
 
 
@@ -1150,7 +1183,9 @@ def _detect_pdf_column_count(lines: Sequence[_PdfTextLine], page_width: float) -
     return len(clusters) if len(clusters) >= 3 else 1
 
 
-def _order_pdf_layout_lines(lines: Sequence[_PdfTextLine], *, page_width: float) -> list[_PdfTextLine]:
+def _order_pdf_layout_lines(
+    lines: Sequence[_PdfTextLine], *, page_width: float
+) -> list[_PdfTextLine]:
     """恢复复杂页面的阅读顺序，并把跨栏标题/页脚放回页面首尾。"""
 
     if not lines:
@@ -1162,8 +1197,13 @@ def _order_pdf_layout_lines(lines: Sequence[_PdfTextLine], *, page_width: float)
     # 跨栏标题一般位于正文前，来源署名/页脚位于正文后；两者不能被塞进某一列中间。
     first_body_top = min(line.top for line in body)
     last_body_bottom = max(line.bottom for line in body)
-    prefix = sorted([line for line in full_width if line.bottom <= first_body_top + 3], key=lambda line: line.top)
-    suffix = sorted([line for line in full_width if line.top >= last_body_bottom - 3], key=lambda line: line.top)
+    prefix = sorted(
+        [line for line in full_width if line.bottom <= first_body_top + 3],
+        key=lambda line: line.top,
+    )
+    suffix = sorted(
+        [line for line in full_width if line.top >= last_body_bottom - 3], key=lambda line: line.top
+    )
     middle = [line for line in full_width if line not in prefix and line not in suffix]
     ordered_body: list[_PdfTextLine] = []
     columns = _cluster_pdf_line_starts(body, page_width=page_width)
@@ -1270,8 +1310,7 @@ def _table_rows_for_metadata(
     """按与 Markdown 渲染相同的规则规范化表格行，供续表判断使用。"""
 
     cleaned = [
-        ["" if cell is None else _normalize_pdf_line(str(cell)) for cell in row]
-        for row in rows
+        ["" if cell is None else _normalize_pdf_line(str(cell)) for cell in row] for row in rows
     ]
     return [row for row in cleaned if any(cell.strip() for cell in row)]
 

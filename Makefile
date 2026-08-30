@@ -10,6 +10,8 @@ COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 
 .PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-run ocr-image gateway-check gateway-run gateway-training-role-live-check gateway-training-write-live-check gateway-training-workflow-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check training-check training-run training-role-live-check training-role-visibility-live-check booking-check booking-it booking-run customer-service-check customer-service-run legacy-java-diagnostic release-check check
 
+.PHONY: pdf-visual-audit
+
 help:
 	@echo "Available targets:"
 	@echo "  infra-up     Start PostgreSQL/pgvector and Redis"
@@ -66,6 +68,7 @@ help:
 	@echo "  knowledge-manifest  Generate the local source and SHA-256 manifest"
 	@echo "  knowledge-validate  Validate PDF/DOCX parsing and report warnings"
 	@echo "  knowledge-quality-gate  Check parsed documents and parent/child quality thresholds"
+	@echo "  pdf-visual-audit  Render and audit representative PDF pages"
 	@echo "  knowledge-validate-ocr  Validate sources through the real OCR endpoint"
 	@echo "  gateway-check Build and test the independent fitness core Gateway"
 	@echo "  gateway-run  Start the fitness core Gateway locally"
@@ -275,6 +278,9 @@ knowledge-validate:
 
 knowledge-quality-gate:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/validate_document_quality.py
+
+pdf-visual-audit:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/pdf_visual_audit.py $(ARGS)
 
 knowledge-validate-ocr:
 	@test -n "$(KNOWLEDGE_OCR_ENDPOINT)" || (echo "请先设置 KNOWLEDGE_OCR_ENDPOINT，例如 http://127.0.0.1:8091/v1/parse"; exit 1)
