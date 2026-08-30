@@ -8,6 +8,7 @@ from collections import Counter
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from io import BytesIO
+from itertools import pairwise
 from pathlib import PurePosixPath
 from typing import Literal, Protocol
 
@@ -48,6 +49,9 @@ class ParsedBlock:
     row_start: int | None = None
     row_end: int | None = None
     metadata: dict[str, str | int | bool] | None = None
+    # PDF 页面可能把一个章节拆成多个文本块。保留章节级父上下文后，后续子块可以
+    # 共享完整标题和邻近正文，避免检索命中一句孤立文本时失去“这是哪个动作/原则”的语义。
+    parent_content: str | None = None
 
 
 @dataclass(frozen=True)
@@ -68,6 +72,12 @@ class PdfPageProfile:
     caption_count: int
     route: PdfPageRoute
     reasons: tuple[str, ...] = ()
+    # 下面这些字段是版面解析的证据，不参与权限判断。它们让人工审核和离线质量
+    # 报告能够回答“为什么这一页被这样处理”，也避免把排版猜测伪装成正文内容。
+    detected_columns: int = 1
+    removed_repeated_edge_lines: int = 0
+    toc_detected: bool = False
+    dehyphenated_line_breaks: int = 0
 
     def as_dict(self) -> dict[str, object]:
         """输出稳定审计结构，供离线报告和后续审核 API 复用。"""
@@ -82,6 +92,10 @@ class PdfPageProfile:
             "caption_count": self.caption_count,
             "route": self.route,
             "reasons": list(self.reasons),
+            "detected_columns": self.detected_columns,
+            "removed_repeated_edge_lines": self.removed_repeated_edge_lines,
+            "toc_detected": self.toc_detected,
+            "dehyphenated_line_breaks": self.dehyphenated_line_breaks,
         }
 
 
@@ -125,6 +139,28 @@ class DocumentParser(Protocol):
 
     def parse(self, content: bytes, *, file_name: str) -> ParsedDocument:
         """解析字节内容，不将不可信上传文件写入本地路径。"""
+
+
+@dataclass(frozen=True)
+class _PdfTextLine:
+    """PDF 原生文字层的一行及其版面坐标。
+
+    ``pdfplumber.extract_text`` 只返回字符串，会丢掉列位置；这也是演示文稿和双栏
+    指南出现“左列一句、右列一句交叉拼接”的根因。内部先保留坐标，确认页面确实是
+    多区域版式后才启用坐标排序，普通单栏页面继续使用 pdfplumber 的成熟文本流。
+    """
+
+    text: str
+    x0: float
+    x1: float
+    top: float
+    bottom: float
+
+    @property
+    def width(self) -> float:
+        """返回文字行的横向跨度。"""
+
+        return max(0.0, self.x1 - self.x0)
 
 
 class PdfOcrProvider(Protocol):
@@ -241,8 +277,8 @@ class PdfParser:
             ] = []
             for page_number, page in enumerate(document.pages, start=1):
                 tables = _extract_pdf_tables(page)
-                raw_text = _extract_pdf_text_outside_tables(page, tables)
-                raw_lines = [line for line in raw_text.splitlines() if line.strip()]
+                raw_lines, detected_columns = _extract_pdf_text_lines(page, tables)
+                raw_text = "\n".join(raw_lines)
                 profile = _profile_pdf_page(
                     page,
                     page_number=page_number,
@@ -250,14 +286,29 @@ class PdfParser:
                     tables=tables,
                     policy=self.routing_policy,
                 )
+                profile = replace(profile, detected_columns=detected_columns)
                 page_records.append((page_number, raw_lines, tables, profile))
                 page_profiles.append(profile)
 
             repeated_lines = _repeated_pdf_lines([raw_lines for _, raw_lines, _, _ in page_records])
             for page_number, raw_lines, tables, profile in page_records:
                 cleaned_lines = _clean_pdf_lines(raw_lines, repeated_lines=repeated_lines)
-                if _is_pdf_toc_page(cleaned_lines):
+                toc_detected = _is_pdf_toc_page(cleaned_lines)
+                if toc_detected:
                     cleaned_lines = []
+                removed_repeated_edge_lines = sum(
+                    _normalize_pdf_line(line) in repeated_lines for line in raw_lines
+                )
+                profile = replace(
+                    profile,
+                    removed_repeated_edge_lines=removed_repeated_edge_lines,
+                    toc_detected=toc_detected,
+                    # 断词修复发生在“行合并”阶段，先统计证据，再把统计值写入每个
+                    # 页面画像。这里不把普通连字符替换成空格，避免损坏 compound
+                    # words、编号和 URL。
+                    dehyphenated_line_breaks=_count_pdf_dehyphenations(cleaned_lines),
+                )
+                page_profiles[page_number - 1] = profile
                 page_metadata: dict[str, str | int | bool] = {
                     "parser": "pdfplumber",
                     "cleaned": True,
@@ -267,14 +318,22 @@ class PdfParser:
                     "native_text_chars": profile.native_text_chars,
                     "text_area_basis_points": round(profile.text_area_ratio * 10_000),
                     "caption_count": profile.caption_count,
+                    "detected_columns": profile.detected_columns,
+                    "removed_repeated_edge_lines": profile.removed_repeated_edge_lines,
+                    "toc_detected": profile.toc_detected,
+                    "dehyphenated_line_breaks": profile.dehyphenated_line_breaks,
                 }
-                for text_block in _split_pdf_text_blocks(cleaned_lines):
+                for text_block, heading_path, parent_content in _pdf_text_blocks_with_context(
+                    cleaned_lines
+                ):
                     blocks.append(
                         ParsedBlock(
                             kind="TEXT",
                             content=text_block,
+                            heading_path=heading_path,
                             source_page=page_number,
                             metadata=page_metadata,
+                            parent_content=parent_content,
                         )
                     )
                 for table_index, table in enumerate(tables):
@@ -368,16 +427,46 @@ _PDF_TEMPLATE_PATTERNS = (
     re.compile(r"(?:版权所有|网站标识码|ICP备|公安网安备|通讯地址|邮政编码|信访电话)"),
     re.compile(r"^联系电话[:：]|^字体[:：]\s*[大中小]+$|^发布时间[:：]"),
     re.compile(r"^(?:accessibility|site navigation|copyright)\b", re.IGNORECASE),
+    # HHS 演示文稿每页都会重复这段来源声明；它是页脚，不是可检索知识。
+    re.compile(
+        r"^information adapted from the physical activity guidelines for americans,?\s*"
+        r"2nd edition\.?(?:\s+available at .*)?$",
+        re.IGNORECASE,
+    ),
+    # 正式指南的页脚会随着页码变化，不能只依赖“跨页完全相同”识别。
+    re.compile(
+        r"^(?:\d+\s+)?physical activity guidelines for americans(?:\s*\|.*)?$",
+        re.IGNORECASE,
+    ),
+    re.compile(r"^physical activity guidelines for americans\s*\|\s*summary\s+\d+$", re.IGNORECASE),
 )
 _PDF_SENTENCE_END = frozenset("。！？.!?；;：:")
 _CJK = re.compile(r"[\u3400-\u9fff]")
 _PDF_ENGLISH_HEADING_WORDS = frozenset(
     ["and", "or", "the", "of", "for", "to", "in", "on", "with", "from", "among"]
 )
+_PDF_COMMON_COMPOUNDS = frozenset(
+    {
+        "activity-related",
+        "bone-strengthening",
+        "care-provider",
+        "cardiorespiratory-fitness",
+        "disease-specific",
+        "evidence-based",
+        "fall-related",
+        "health-care",
+        "health-related",
+        "long-term",
+        "moderate-to-vigorous",
+        "muscle-strengthening",
+        "self-reported",
+    }
+)
 _PDF_CAPTION = re.compile(
     r"^(?:图\s*\d+(?:[-–.]\d+)*|figure\s*\d+(?:[-–.]\d+)*|fig\.\s*\d+)",
     re.IGNORECASE,
 )
+_PDF_FULL_WIDTH_RATIO = 0.60
 
 
 def _profile_pdf_page(
@@ -564,6 +653,9 @@ def _normalize_pdf_line(line: str) -> str:
     """
 
     normalized = unicodedata.normalize("NFKC", line).replace("\u00a0", " ")
+    # 某些 HHS PDF 把项目符号映射为 C1 控制区字符 U+0083。保留为标准项目符号，
+    # 让后续父子切分知道这是列表项，同时避免质量报告把它当作不可见脏字符。
+    normalized = normalized.replace("\x83", "•")
     normalized = re.sub(r"\s+", " ", normalized).strip()
     return _repair_pdf_duplicate_glyphs(normalized)
 
@@ -716,7 +808,30 @@ def _is_pdf_structural_line(line: str) -> bool:
     words = re.findall(r"[A-Za-z][A-Za-z'-]*", line)
     if not words or len(line) > 64 or len(words) > 8:
         return False
+    # 正式指南和 WHO 文档大量使用全大写章节标题，例如“MESSAGE FROM THE
+    # SECRETARY”。这类行通常是结构边界，不应按短正文碎片统计；限制在 8 个词以内，
+    # 避免把整段大写正文或长表格误当成标题。
+    if len(words) >= 2 and all(word.isupper() for word in words):
+        return True
     return all(word[0].isupper() or word.lower() in _PDF_ENGLISH_HEADING_WORDS for word in words)
+
+
+def _is_pdf_section_heading(line: str) -> bool:
+    """判断一行是否是段落边界标题，而不是需要继续拼接的列表项。"""
+
+    # 列表项本身要开启新块，但它的下一行可能是同一个项目的续行，不能因为上一行
+    # 是结构行就立即 flush；否则英文断词和中文长列表会被切成大量碎片。
+    if line.startswith(("•", "▪", "- ", "* ")):
+        return False
+    if re.match(r"^(?:[一二三四五六七八九十]+、|（[一二三四五六七八九十]+）)", line):
+        return True
+    # 中文资料常用“1、心肺功能”表示章节小标题，而动作步骤更常用“1. 两脚
+    # 分开”。只把前者视为标题，避免把健身动作步骤错误升级成章节层级。
+    if re.match(r"^\d+、", line):
+        return len(line) <= 32 and not any(mark in line for mark in "，,；;：:")
+    if re.match(r"^\d+[.)]", line):
+        return False
+    return _is_pdf_structural_line(line)
 
 
 def _join_pdf_lines(lines: Sequence[str]) -> str:
@@ -730,7 +845,22 @@ def _join_pdf_lines(lines: Sequence[str]) -> str:
         previous = result[-1:]
         first = line[:1]
         if previous == "-" and first.isascii() and first.isalpha():
-            result = result[:-1] + line
+            # 断词修复不能把真实复合词改成不存在的单词，例如
+            # ``fall-`` + ``related`` 必须保留为 ``fall-related``；而
+            # ``physical-`` + ``activity`` 通常是排版换行，应合并为
+            # ``physicalactivity``。正式项目中可再接领域词典，这里先对白名单复合词
+            # 保守保留连字符，其他情况按“行尾连字符是排版符号”处理。
+            previous_word = re.search(r"([A-Za-z][A-Za-z-]*)-$", result)
+            next_word = re.match(r"([A-Za-z]+)", line)
+            compound = (
+                f"{previous_word.group(1)}-{next_word.group(1)}".lower()
+                if previous_word and next_word
+                else ""
+            )
+            if compound not in _PDF_COMMON_COMPOUNDS:
+                result = result[:-1] + line
+            else:
+                result += line
         elif (
             (_CJK.search(previous) and _CJK.search(first))
             or (previous in "。！？；：，," and _CJK.search(first))
@@ -760,7 +890,7 @@ def _split_pdf_text_blocks(lines: Sequence[str], *, max_block_chars: int = 900) 
         current_length = 0
 
     for line in lines:
-        if current and (_is_pdf_structural_line(current[-1]) or _is_pdf_structural_line(line)):
+        if current and (_is_pdf_section_heading(current[-1]) or _is_pdf_structural_line(line)):
             flush()
         current.append(line)
         current_length += len(line)
@@ -770,6 +900,305 @@ def _split_pdf_text_blocks(lines: Sequence[str], *, max_block_chars: int = 900) 
             flush()
     flush()
     return blocks
+
+
+def _pdf_text_blocks_with_context(
+    lines: Sequence[str],
+) -> list[tuple[str, tuple[str, ...], str]]:
+    """按 PDF 标题边界生成正文块，并为同一章节建立共享父上下文。
+
+    PDF 没有 Markdown 的标题语法，不能直接复用 ``chunk_markdown``。这里使用已经
+    通过页面清洗的标题/编号启发式：标题进入 ``heading_path``，后续正文按章节聚合，
+    最终由子块切分器控制 Embedding 大小。父上下文保留整段章节（而不是只保留当前
+    900 字块），这样检索命中后仍能恢复动作名称、适用人群和安全前提。
+    """
+
+    result: list[tuple[str, tuple[str, ...], str]] = []
+    heading_path: list[str] = []
+    section_lines: list[str] = []
+
+    def flush_section() -> None:
+        if not section_lines:
+            return
+        parent_body = _join_pdf_lines(section_lines)
+        parent_prefix = " / ".join(heading_path)
+        parent_content = f"{parent_prefix}\n{parent_body}" if parent_prefix else parent_body
+        for content in _split_pdf_text_blocks(section_lines):
+            if content:
+                result.append((content, tuple(heading_path), parent_content))
+        section_lines.clear()
+
+    for line in lines:
+        if _is_pdf_section_heading(line):
+            flush_section()
+            level = _pdf_heading_level(line)
+            heading_path[:] = heading_path[: level - 1]
+            heading_path.append(line)
+            # 标题本身也要保留。标题块不再把自己放入 heading_path，否则分块器会把
+            # 标题前缀和标题正文复制一遍；后续正文块才继承完整的章节路径。
+            result.append((line, (), line))
+            continue
+        section_lines.append(line)
+    flush_section()
+    return result
+
+
+def _pdf_heading_level(line: str) -> int:
+    """把常见中文/英文章节编号映射到有限的父节点层级。"""
+
+    if re.match(r"^(?:第\s*\S+章|Chapter\s+\d+|Appendix\s+\d+)", line, re.IGNORECASE):
+        return 1
+    if re.match(r"^[一二三四五六七八九十]+、", line):
+        return 1
+    if re.match(r"^（[一二三四五六七八九十]+）", line):
+        return 2
+    if re.match(r"^\d+[、.)]", line):
+        return 3
+    return 1
+
+
+def _extract_pdf_text_lines(
+    page: object,
+    tables: Sequence[Sequence[Sequence[str | None]]],
+) -> tuple[list[str], int]:
+    """提取页面文字，并在确有多区域版式时按坐标恢复阅读顺序。
+
+    处理策略是“默认不猜，证据充分才重排”：
+
+    * 普通单栏正文沿用 pdfplumber 的原生文本流，降低误重排正文的风险；
+    * 只有检测到至少三个同时存在的横向区域，才将文字按区域从左到右、区域内从
+      上到下排序，主要解决 PPT 流程图、健身动作图解和复杂双栏页面；
+    * 表格区域中的文字已经单独转成 Markdown，不再混入正文，避免同一内容重复两次；
+    * 坐标提取失败时安全回退到原有实现，不能因为版面增强导致整份文档不可用。
+    """
+
+    default_text = _extract_pdf_text_outside_tables(page, tables)
+    default_lines = [line for line in default_text.splitlines() if line.strip()]
+    try:
+        words = page.extract_words()  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001 - 坐标不是所有 PDF 都可靠，回退到原生文本流
+        return default_lines, 1
+    if not isinstance(words, Sequence):
+        return default_lines, 1
+
+    table_boxes = _pdf_table_boxes(page, tables)
+    filtered_words = [
+        word
+        for word in words
+        if isinstance(word, dict) and not _pdf_word_inside_boxes(word, table_boxes)
+    ]
+    coordinate_lines = _group_pdf_words_into_lines(filtered_words)
+    column_count = _detect_pdf_column_count(coordinate_lines, _positive_number(getattr(page, "width", 0.0)))
+    # 坐标重排是高风险操作：普通双栏正文通常已经被 pdfplumber 正确还原，而图解
+    # 页面才经常把多个独立文本框交叉拼接。因此默认只对图片占比很高、且同时有
+    # 三个以上横向区域的页面启用，避免把正常指南正文“优化”坏。
+    image_area_ratio = _area_ratio(
+        _rectangle_union_area(
+            _pdf_object_rectangles(
+                getattr(page, "images", ()),
+                _positive_number(getattr(page, "width", 0.0)),
+                _positive_number(getattr(page, "height", 0.0)),
+            )
+        ),
+        _positive_number(getattr(page, "width", 0.0))
+        * _positive_number(getattr(page, "height", 0.0)),
+    )
+    if (
+        image_area_ratio < 0.45
+        or column_count < 3
+        or len(coordinate_lines) < max(3, len(default_lines) // 2)
+    ):
+        return default_lines, 1
+
+    ordered = _order_pdf_layout_lines(
+        coordinate_lines,
+        page_width=_positive_number(getattr(page, "width", 0.0)),
+    )
+    return [line.text for line in ordered if line.text.strip()], column_count
+
+
+def _pdf_table_boxes(
+    page: object,
+    tables: Sequence[Sequence[Sequence[str | None]]],
+) -> list[tuple[float, float, float, float]]:
+    """取得带坐标表格的区域；回退表格没有坐标时返回空列表。"""
+
+    if not tables:
+        return []
+    try:
+        table_objects = page.find_tables()  # type: ignore[attr-defined]
+    except Exception:  # noqa: BLE001
+        return []
+    boxes: list[tuple[float, float, float, float]] = []
+    for table in table_objects:
+        bbox = getattr(table, "bbox", None)
+        if isinstance(bbox, (tuple, list)) and len(bbox) == 4 and all(
+            isinstance(value, (int, float)) for value in bbox
+        ):
+            boxes.append(tuple(float(value) for value in bbox))  # type: ignore[arg-type]
+    return boxes
+
+
+def _pdf_word_inside_boxes(word: dict[str, object], boxes: Sequence[tuple[float, float, float, float]]) -> bool:
+    """按文字中心点排除表格区域，避免误删跨越表格边界的正文。"""
+
+    x0, x1 = _number(word.get("x0")), _number(word.get("x1"))
+    top, bottom = _number(word.get("top")), _number(word.get("bottom"))
+    if None in (x0, x1, top, bottom):
+        return False
+    assert x0 is not None and x1 is not None and top is not None and bottom is not None
+    center_x, center_y = (x0 + x1) / 2, (top + bottom) / 2
+    return any(left <= center_x <= right and upper <= center_y <= lower for left, upper, right, lower in boxes)
+
+
+def _group_pdf_words_into_lines(words: Sequence[object]) -> list[_PdfTextLine]:
+    """按纵向基线和横向大间隙把 pdfplumber words 聚合成可排序文字行。"""
+
+    valid_words = [
+        word
+        for word in words
+        if isinstance(word, dict)
+        and isinstance(word.get("text"), str)
+        and _number(word.get("x0")) is not None
+        and _number(word.get("x1")) is not None
+        and _number(word.get("top")) is not None
+        and _number(word.get("bottom")) is not None
+    ]
+    if not valid_words:
+        return []
+    heights = [
+        max(0.1, float(word["bottom"]) - float(word["top"]))
+        for word in valid_words
+        if isinstance(word["top"], (int, float)) and isinstance(word["bottom"], (int, float))
+    ]
+    line_tolerance = max(2.0, (sum(heights) / len(heights)) * 0.35)
+    page_width = max(float(word["x1"]) for word in valid_words)
+    rows: list[list[dict[str, object]]] = []
+    for word in sorted(valid_words, key=lambda item: (float(item["top"]), float(item["x0"]))):
+        target: list[dict[str, object]] | None = None
+        for candidate in reversed(rows):
+            candidate_top = float(candidate[0]["top"])
+            if float(word["top"]) - candidate_top > line_tolerance:
+                break
+            if abs(float(word["top"]) - candidate_top) <= line_tolerance:
+                target = candidate
+                break
+        if target is None:
+            rows.append([word])
+        else:
+            target.append(word)
+
+    result: list[_PdfTextLine] = []
+    for row in rows:
+        row.sort(key=lambda item: float(item["x0"]))
+        segments: list[list[dict[str, object]]] = [[]]
+        for word in row:
+            if segments[-1]:
+                gap = float(word["x0"]) - float(segments[-1][-1]["x1"])
+                # 同一文本框中的词间距通常远小于字号；明显的大间隙通常意味着
+                # 两个独立栏目/图解节点，必须拆开，否则排序前就已被拼坏。
+                if gap > max(20.0, page_width * 0.08):
+                    segments.append([])
+            segments[-1].append(word)
+        for segment in segments:
+            text = _join_pdf_word_text(segment)
+            if text:
+                result.append(
+                    _PdfTextLine(
+                        text=text,
+                        x0=float(segment[0]["x0"]),
+                        x1=float(segment[-1]["x1"]),
+                        top=min(float(item["top"]) for item in segment),
+                        bottom=max(float(item["bottom"]) for item in segment),
+                    )
+                )
+    return result
+
+
+def _join_pdf_word_text(words: Sequence[dict[str, object]]) -> str:
+    """按相邻文字的语言边界拼接 words，避免中文词之间出现无意义空格。"""
+
+    result = ""
+    previous_x1: float | None = None
+    for word in words:
+        text = str(word["text"])
+        if not result:
+            result = text
+        else:
+            gap = float(word["x0"]) - (previous_x1 or float(word["x0"]))
+            previous = result[-1:]
+            first = text[:1]
+            if gap > 1.5 and not (_CJK.search(previous) and _CJK.search(first)):
+                result += " "
+            result += text
+        previous_x1 = float(word["x1"])
+    return result.strip()
+
+
+def _detect_pdf_column_count(lines: Sequence[_PdfTextLine], page_width: float) -> int:
+    """估计页面同时存在的横向区域数量，只用于触发保守重排。"""
+
+    if page_width <= 0 or len(lines) < 6:
+        return 1
+    clusters = _cluster_pdf_line_starts(lines, page_width=page_width)
+    return len(clusters) if len(clusters) >= 3 else 1
+
+
+def _order_pdf_layout_lines(lines: Sequence[_PdfTextLine], *, page_width: float) -> list[_PdfTextLine]:
+    """恢复复杂页面的阅读顺序，并把跨栏标题/页脚放回页面首尾。"""
+
+    if not lines:
+        return []
+    full_width = [line for line in lines if line.width >= page_width * _PDF_FULL_WIDTH_RATIO]
+    body = [line for line in lines if line.width < page_width * _PDF_FULL_WIDTH_RATIO]
+    if not body:
+        return sorted(lines, key=lambda line: (line.top, line.x0))
+    # 跨栏标题一般位于正文前，来源署名/页脚位于正文后；两者不能被塞进某一列中间。
+    first_body_top = min(line.top for line in body)
+    last_body_bottom = max(line.bottom for line in body)
+    prefix = sorted([line for line in full_width if line.bottom <= first_body_top + 3], key=lambda line: line.top)
+    suffix = sorted([line for line in full_width if line.top >= last_body_bottom - 3], key=lambda line: line.top)
+    middle = [line for line in full_width if line not in prefix and line not in suffix]
+    ordered_body: list[_PdfTextLine] = []
+    columns = _cluster_pdf_line_starts(body, page_width=page_width)
+    centers = [sum(column) / len(column) for column in columns]
+    for column_start in centers:
+        column_lines = [
+            line
+            for line in body
+            if min(abs(line.x0 - center) for center in centers) == abs(line.x0 - column_start)
+        ]
+        ordered_body.extend(sorted(column_lines, key=lambda line: (line.top, line.x0)))
+    return [*prefix, *ordered_body, *sorted(middle, key=lambda line: (line.top, line.x0)), *suffix]
+
+
+def _cluster_pdf_line_starts(
+    lines: Sequence[_PdfTextLine], *, page_width: float
+) -> list[list[float]]:
+    """把有缩进差异的行首聚成版面区域，而不是把每个缩进当作新栏目。"""
+
+    starts = sorted(
+        {round(line.x0, 1) for line in lines if line.width < page_width * _PDF_FULL_WIDTH_RATIO}
+    )
+    if not starts:
+        return []
+    gap_threshold = max(30.0, page_width * 0.08)
+    clusters: list[list[float]] = [[starts[0]]]
+    for start in starts[1:]:
+        if start - clusters[-1][-1] > gap_threshold:
+            clusters.append([])
+        clusters[-1].append(start)
+    return clusters
+
+
+def _count_pdf_dehyphenations(lines: Sequence[str]) -> int:
+    """统计将要在行合并阶段修复的英文断词数量。"""
+
+    return sum(
+        1
+        for previous, current in pairwise(lines)
+        if previous.endswith("-") and current[:1].isascii() and current[:1].isalpha()
+    )
 
 
 def _extract_pdf_tables(page: object) -> list[list[list[str | None]]]:

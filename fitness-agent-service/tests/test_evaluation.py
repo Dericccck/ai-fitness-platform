@@ -88,7 +88,17 @@ def test_document_quality_reports_ocr_and_visual_review_pages() -> None:
     blocks = [ParsedBlock(kind="TEXT", content="动作说明。", source_page=2)]
     profiles = [
         PdfPageProfile(1, 1, 1.0, 0, 0.0, 0, 0, "OCR_REQUIRED"),
-        PdfPageProfile(2, 1, 0.7, 20, 0.05, 0, 1, "VISUAL_REVIEW_REQUIRED"),
+        PdfPageProfile(
+            2,
+            1,
+            0.7,
+            20,
+            0.05,
+            0,
+            1,
+            "VISUAL_REVIEW_REQUIRED",
+            detected_columns=3,
+        ),
     ]
 
     metrics = measure_document_quality(
@@ -101,7 +111,96 @@ def test_document_quality_reports_ocr_and_visual_review_pages() -> None:
     assert metrics.ocr_required_pages == (1,)
     assert metrics.visual_review_required_pages == (2,)
     assert metrics.max_image_area_ratio == 1.0
+    assert metrics.toc_page_count == 0
+    assert metrics.repeated_edge_line_count == 0
+    assert metrics.layout_reordered_page_count == 1
     assert "ocr_required_pages" in " ".join(DocumentQualityThresholds().validate(metrics))
+
+
+def test_document_quality_does_not_call_intentionally_removed_toc_page_missing() -> None:
+    from app.rag.document_quality import measure_document_quality
+    from app.rag.formats import ParsedBlock, PdfPageProfile
+
+    metrics = measure_document_quality(
+        [ParsedBlock(kind="TEXT", content="正文内容。", source_page=2)],
+        [],
+        total_pages=2,
+        page_profiles=[
+            PdfPageProfile(
+                1,
+                0,
+                0.0,
+                100,
+                0.1,
+                0,
+                0,
+                "NORMAL",
+                toc_detected=True,
+            ),
+        ],
+    )
+
+    assert metrics.excluded_pages == (1,)
+    assert metrics.missing_pages == ()
+    assert metrics.page_coverage == 1.0
+
+
+def test_document_quality_allows_system_injected_heading_prefix_in_child() -> None:
+    from app.rag.document_quality import measure_document_quality
+    from app.rag.formats import ParsedBlock
+    from app.rag.ingestion import ChunkDraft
+
+    metrics = measure_document_quality(
+        [
+            ParsedBlock(
+                kind="TEXT",
+                content="正文内容。",
+                heading_path=("训练安全",),
+                parent_content="训练安全\n前置说明。正文内容。",
+            )
+        ],
+        [ChunkDraft("训练安全\n正文内容。", ("训练安全",), "训练安全\n前置说明。正文内容。")],
+    )
+
+    assert metrics.parent_integrity == 1.0
+
+
+def test_document_quality_allows_same_tokens_when_pdf_column_order_differs() -> None:
+    from app.rag.document_quality import measure_document_quality
+    from app.rag.formats import ParsedBlock
+    from app.rag.ingestion import ChunkDraft
+
+    metrics = measure_document_quality(
+        [
+            ParsedBlock(
+                kind="TEXT",
+                content="列一内容 列二内容",
+                heading_path=("复杂章节",),
+                parent_content="复杂章节\n列二内容 列一内容",
+            )
+        ],
+        [ChunkDraft("复杂章节\n列一内容 列二内容", ("复杂章节",), "复杂章节\n列二内容 列一内容")],
+    )
+
+    assert metrics.parent_integrity == 1.0
+
+
+def test_document_quality_does_not_count_complete_heading_parent_as_fragment() -> None:
+    from app.rag.document_quality import measure_document_quality
+    from app.rag.formats import ParsedBlock
+
+    metrics = measure_document_quality(
+        [
+            ParsedBlock(
+                kind="TEXT",
+                content="MESSAGE FROM THE SECRETARY",
+                parent_content="MESSAGE FROM THE SECRETARY",
+            )
+        ],
+        [],
+    )
+
+    assert metrics.fragment_block_count == 0
 
 
 def test_quality_report_comparison_requires_same_source_and_marks_directions() -> None:

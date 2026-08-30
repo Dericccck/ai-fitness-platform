@@ -10,6 +10,7 @@ from app.rag.formats import (
     _clean_pdf_lines,
     _is_pdf_layout_noise_table,
     _join_pdf_lines,
+    _pdf_text_blocks_with_context,
     _profile_pdf_page,
     _rectangle_union_area,
     _repeated_pdf_lines,
@@ -173,6 +174,8 @@ def test_pdf_text_blocks_bound_parent_context_and_preserve_chinese_spacing() -> 
         "有氧运动可提升心肺功能，优化肌肉摄氧效率。可以通过慢跑、游泳、骑自行车等运动来实现。",
     ]
     assert _join_pdf_lines(["Physical Activity", "Guidelines"]) == "Physical Activity Guidelines"
+    assert _join_pdf_lines(["fall-", "related injuries"]) == "fall-related injuries"
+    assert _join_pdf_lines(["physical-", "activity"]) == "physicalactivity"
 
 
 def test_pdf_text_blocks_do_not_split_chinese_sentence_fragments_by_length() -> None:
@@ -190,6 +193,32 @@ def test_pdf_text_blocks_do_not_split_chinese_sentence_fragments_by_length() -> 
         "第二段标题",
         "第二段正文。",
     ]
+
+
+def test_pdf_sections_share_heading_context_without_treating_action_steps_as_headings() -> None:
+    blocks = _pdf_text_blocks_with_context(
+        [
+            "一、热身原则",
+            "训练前应完成充分热身。",
+            "二、动作示例",
+            "1. 两脚分开略宽于肩。",
+        ]
+    )
+
+    assert blocks[1][1] == ("一、热身原则",)
+    assert blocks[1][2].startswith("一、热身原则\n")
+    assert blocks[3][1] == ("二、动作示例",)
+    assert blocks[3][0].startswith("1. 两脚")
+
+
+def test_pdf_structural_detection_accepts_short_all_caps_headings_only() -> None:
+    from app.rag.formats import _is_pdf_structural_line
+
+    assert _is_pdf_structural_line("MESSAGE FROM THE SECRETARY")
+    assert _is_pdf_structural_line("ABBREVIATIONS AND ACRONYMS")
+    assert not _is_pdf_structural_line(
+        "DO NOT increase intensity rapidly when pain or dizziness occurs during exercise."
+    )
 
 
 class FakePdfPage:

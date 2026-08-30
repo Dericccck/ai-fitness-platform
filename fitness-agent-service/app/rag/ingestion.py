@@ -149,6 +149,10 @@ class DocumentIngestionService:
                     "row_start": block.row_start,
                     "row_end": block.row_end,
                     "metadata": block.metadata,
+                    # 父节点上下文也是索引内容的一部分。PDF 解析策略调整后，即使
+                    # 子块正文不变，只要章节级父上下文变化，也必须生成新校验和，
+                    # 这样增量入库才不会错误地复用旧的父节点。
+                    "parent_content": block.parent_content,
                 },
                 ensure_ascii=False,
                 sort_keys=True,
@@ -286,7 +290,9 @@ def chunk_parsed_blocks(
                 ChunkDraft(
                     content=draft.content,
                     heading_path=draft.heading_path,
-                    parent_content=draft.parent_content,
+                    # PDF 解析器会额外提供章节级父上下文；Markdown/DOCX/XLSX 没有
+                    # 提供时仍使用当前块内容，保持原有格式的兼容行为。
+                    parent_content=block.parent_content or draft.parent_content,
                     table_index=draft.table_index,
                     row_start=draft.row_start,
                     row_end=draft.row_end,

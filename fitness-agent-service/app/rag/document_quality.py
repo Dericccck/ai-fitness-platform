@@ -67,9 +67,16 @@ class DocumentQualityMetrics:
     total_pages: int | None
     extracted_pages: int
     missing_pages: tuple[int, ...]
+    excluded_pages: tuple[int, ...] = ()
     ocr_required_pages: tuple[int, ...] = ()
     visual_review_required_pages: tuple[int, ...] = ()
     max_image_area_ratio: float = 0.0
+    # 版面清洗证据只用于诊断和回归比较，不直接代表“越多越好/越少越好”。例如目录
+    # 页数增加可能意味着识别能力变好，而断词修复次数增加也可能只是资料换了版本。
+    toc_page_count: int = 0
+    repeated_edge_line_count: int = 0
+    dehyphenated_line_break_count: int = 0
+    layout_reordered_page_count: int = 0
 
     @property
     def noise_rate(self) -> float:
@@ -108,7 +115,9 @@ class DocumentQualityMetrics:
 
         if self.total_pages is None:
             return None
-        return _ratio(self.extracted_pages, self.total_pages)
+        # 目录页是有意排除的版式内容，不应被误报为“漏页”；真正的漏页是既没有
+        # 正文/表格块、也没有明确排除原因的页面。
+        return _ratio(self.extracted_pages + len(self.excluded_pages), self.total_pages)
 
     def as_dict(self) -> dict[str, Any]:
         """转换为稳定 JSON 结构，供 CLI、CI 和后续审核看板复用。"""
@@ -130,11 +139,16 @@ class DocumentQualityMetrics:
             "table_integrity": round(self.table_integrity, 6),
             "total_pages": self.total_pages,
             "extracted_pages": self.extracted_pages,
+            "excluded_pages": list(self.excluded_pages),
             "missing_pages": list(self.missing_pages),
             "page_coverage": None if self.page_coverage is None else round(self.page_coverage, 6),
             "ocr_required_pages": list(self.ocr_required_pages),
             "visual_review_required_pages": list(self.visual_review_required_pages),
             "max_image_area_ratio": round(self.max_image_area_ratio, 6),
+            "toc_page_count": self.toc_page_count,
+            "repeated_edge_line_count": self.repeated_edge_line_count,
+            "dehyphenated_line_break_count": self.dehyphenated_line_break_count,
+            "layout_reordered_page_count": self.layout_reordered_page_count,
         }
 
 
@@ -360,6 +374,7 @@ def measure_document_quality(
     noise_count = sum(_contains_noise(block.content) for block in blocks)
     fragment_count = sum(
         _is_fragment(block.content, block.heading_path, short_block_chars)
+        and not _is_standalone_complete_parent_block(block)
         for block in blocks
         if block.kind == "TEXT"
     )
@@ -369,12 +384,16 @@ def measure_document_quality(
     parent_complete_count = sum(_draft_has_complete_parent(draft) for draft in drafts)
     tables = [block for block in blocks if block.kind == "TABLE"]
     valid_table_count = sum(_is_valid_markdown_table(block.content) for block in tables)
-    extracted_pages = len({block.source_page for block in blocks if block.source_page is not None})
+    extracted_page_set = {block.source_page for block in blocks if block.source_page is not None}
+    excluded_pages = tuple(
+        sorted(profile.page_number for profile in page_profiles if profile.toc_detected)
+    )
+    extracted_pages = len(extracted_page_set)
     missing_pages = (
         tuple(
             page
             for page in range(1, total_pages + 1)
-            if page not in {block.source_page for block in blocks if block.source_page is not None}
+            if page not in extracted_page_set and page not in excluded_pages
         )
         if total_pages is not None
         else ()
@@ -406,9 +425,20 @@ def measure_document_quality(
         total_pages=total_pages,
         extracted_pages=extracted_pages,
         missing_pages=missing_pages,
+        excluded_pages=excluded_pages,
         ocr_required_pages=ocr_required_pages,
         visual_review_required_pages=visual_review_required_pages,
         max_image_area_ratio=max_image_area_ratio,
+        toc_page_count=sum(profile.toc_detected for profile in page_profiles),
+        repeated_edge_line_count=sum(
+            profile.removed_repeated_edge_lines for profile in page_profiles
+        ),
+        dehyphenated_line_break_count=sum(
+            profile.dehyphenated_line_breaks for profile in page_profiles
+        ),
+        layout_reordered_page_count=sum(
+            profile.detected_columns > 1 for profile in page_profiles
+        ),
     )
 
 
@@ -487,6 +517,12 @@ def _compact(content: str) -> str:
     return re.sub(r"\s+", "", content)
 
 
+def _is_standalone_complete_parent_block(block: ParsedBlock) -> bool:
+    """识别标题自身就是完整父节点的结构块，避免把它误计为正文碎片。"""
+
+    return bool(block.parent_content) and _compact(block.content) == _compact(block.parent_content)
+
+
 def _draft_has_complete_parent(draft: ChunkDraft) -> bool:
     if not draft.content.strip() or not draft.parent_content.strip():
         return False
@@ -495,7 +531,30 @@ def _draft_has_complete_parent(draft: ChunkDraft) -> bool:
         child_lines = [line.strip() for line in draft.content.splitlines() if line.strip()]
         parent = _compact(draft.parent_content)
         return len(child_lines) >= 2 and _compact(child_lines[0]) in parent
-    return _compact(draft.content) in _compact(draft.parent_content)
+    child = _compact(draft.content)
+    parent = _compact(draft.parent_content)
+    if draft.heading_path:
+        # 分块器会把章节路径注入子节点正文，方便独立检索；父节点只把章节路径
+        # 作为一处前缀保存，所以不能要求“带前缀的整段子节点”在父节点中连续出现。
+        # 去掉这个系统注入的前缀后再验证正文可回溯，避免把正常的父子结构误判为损坏。
+        heading_prefix = _compact(" / ".join(draft.heading_path))
+        child = child.removeprefix(heading_prefix)
+    if not child:
+        return False
+    if child in parent:
+        return True
+    # 复杂双栏 PDF 的父文本和子文本可能来自同一批文字，但列流顺序不同，导致
+    # 字符串不再连续。此时只接受“子块中的每个有意义词项都能在父节点找到”的
+    # 保守回退，不能用模糊相似度直接放行缺字或幻觉内容。
+    token_source = draft.content.casefold()
+    if draft.heading_path:
+        token_source = token_source.removeprefix(" / ".join(draft.heading_path).casefold())
+    child_tokens = re.findall(r"[A-Za-z0-9\u3400-\u9fff]{2,}", token_source)
+    parent_normalized = draft.parent_content.casefold()
+    if not child_tokens:
+        return False
+    token_coverage = sum(token in parent_normalized for token in child_tokens) / len(child_tokens)
+    return token_coverage >= 0.98
 
 
 def _is_valid_markdown_table(content: str) -> bool:
