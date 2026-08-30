@@ -18,6 +18,8 @@ def _args(**overrides: object) -> argparse.Namespace:
         "database": "fitness",
         "username": "fitness",
         "password": "secret",
+        "restore_username": "root",
+        "restore_password": "restore-secret",
         "timeout_seconds": 180,
         "execute": False,
         "rto_target_seconds": 60.0,
@@ -46,6 +48,16 @@ def test_build_config_rejects_unsafe_identifiers(field: str, value: str) -> None
 def test_build_config_rejects_invalid_rto() -> None:
     with pytest.raises(MysqlBackupRestoreCheckError):
         build_config(_args(rto_target_seconds=181.0))
+
+
+def test_build_config_requires_separate_restore_admin_for_execute() -> None:
+    with pytest.raises(MysqlBackupRestoreCheckError, match="恢复必须提供"):
+        build_config(_args(execute=True, restore_username="", restore_password=""))
+
+
+def test_build_config_rejects_unsafe_restore_admin() -> None:
+    with pytest.raises(MysqlBackupRestoreCheckError):
+        build_config(_args(restore_username="root;DROP"))
 
 
 def test_identifier_quote_and_row_baseline() -> None:

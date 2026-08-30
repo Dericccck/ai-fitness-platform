@@ -6,7 +6,9 @@
 
 仓库提供本地受控验收入口：`make gateway-mysql-backup-restore-check` 默认只做前置检查；显式增加
 `ARGS="--execute --rto-target-seconds 60"` 后，会在 `fitness-mysql` 中创建唯一临时库、恢复并逐表校验，结束时自动清理。
-它只适用于当前本地测试容器，不替代生产备份平台。
+执行完整演练还必须提供独立的 `GATEWAY_MYSQL_RESTORE_USERNAME` 和
+`GATEWAY_MYSQL_RESTORE_PASSWORD`；源库业务账号只负责备份和读取，不能创建/删除恢复库。它只适用于当前本地测试容器，
+不替代生产备份平台。
 
 ## 1. 安全边界
 
@@ -53,7 +55,9 @@ docker exec -e MYSQL_PWD="$MYSQL_BACKUP_PASSWORD" fitness-mysql \
 shasum -a 256 "$MYSQL_BACKUP_FILE"
 ```
 
-本地开发账号 `fitness` 只用于既有联调，不能因为它可以连接就把它当成生产备份账号。备份完成后应清理临时密码环境变量和备份文件；生产环境应直接写入加密对象存储，不要长期落到宿主机 `/tmp`。
+本地开发账号 `fitness` 只用于既有联调，不能因为它可以连接就把它当成生产备份账号。恢复目标管理员也必须是单独账号，不能给
+`fitness` 追加全局 `CREATE` 或 `DROP` 权限。备份完成后应清理临时密码环境变量和备份文件；生产环境应直接写入加密对象存储，
+不要长期落到宿主机 `/tmp`。
 
 ## 4. 恢复到隔离目标
 

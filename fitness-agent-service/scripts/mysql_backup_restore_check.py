@@ -30,12 +30,14 @@ class MysqlBackupRestoreCheckError(RuntimeError):
 
 @dataclass(frozen=True)
 class CheckConfig:
-    """本地 MySQL 验收参数；密码仅通过 Docker exec 的临时环境传递。"""
+    """本地 MySQL 验收参数；源库和恢复目标凭证分离，密码只临时传给 Docker。"""
 
     container: str
     database: str
     username: str
     password: str
+    restore_username: str
+    restore_password: str
     timeout_seconds: int
     execute: bool
     rto_target_seconds: float
@@ -64,6 +66,16 @@ def build_parser() -> argparse.ArgumentParser:
         "--password",
         default=os.getenv("GATEWAY_DB_PASSWORD", ""),
         help="数据库密码，必须通过 GATEWAY_DB_PASSWORD 或 --password 注入",
+    )
+    parser.add_argument(
+        "--restore-username",
+        default=os.getenv("GATEWAY_MYSQL_RESTORE_USERNAME", ""),
+        help="隔离恢复目标管理员账号，必须通过 GATEWAY_MYSQL_RESTORE_USERNAME 注入",
+    )
+    parser.add_argument(
+        "--restore-password",
+        default=os.getenv("GATEWAY_MYSQL_RESTORE_PASSWORD", ""),
+        help="隔离恢复目标管理员密码，必须通过 GATEWAY_MYSQL_RESTORE_PASSWORD 注入",
     )
     parser.add_argument(
         "--timeout-seconds",
@@ -117,11 +129,25 @@ def build_config(args: argparse.Namespace) -> CheckConfig:
     password = str(args.password)
     if not password:
         raise MysqlBackupRestoreCheckError("数据库密码不能为空")
+    restore_username = str(args.restore_username).strip()
+    restore_password = str(args.restore_password)
+    if bool(args.execute) and not restore_username:
+        raise MysqlBackupRestoreCheckError(
+            "执行隔离恢复必须提供 GATEWAY_MYSQL_RESTORE_USERNAME；不要让业务账号创建恢复库"
+        )
+    if bool(args.execute) and not restore_password:
+        raise MysqlBackupRestoreCheckError(
+            "执行隔离恢复必须提供 GATEWAY_MYSQL_RESTORE_PASSWORD；密码只能临时注入"
+        )
+    if restore_username and not re.fullmatch(r"[A-Za-z0-9_]+", restore_username):
+        raise MysqlBackupRestoreCheckError("恢复管理员账号只允许字母、数字和下划线")
     return CheckConfig(
         container=container,
         database=database,
         username=username,
         password=password,
+        restore_username=restore_username,
+        restore_password=restore_password,
         timeout_seconds=timeout_seconds,
         execute=bool(args.execute),
         rto_target_seconds=rto_target_seconds,
@@ -129,9 +155,15 @@ def build_config(args: argparse.Namespace) -> CheckConfig:
 
 
 def _docker_exec(
-    config: CheckConfig, *command: str, label: str, input_data: bytes | None = None
+    config: CheckConfig,
+    *command: str,
+    label: str,
+    input_data: bytes | None = None,
+    password: str | None = None,
 ) -> bytes:
-    """执行容器内命令；失败时只输出最后一行诊断，不回显密码或完整 SQL。"""
+    """执行容器内命令；可显式切换到恢复管理员，且不回显密码或完整 SQL。"""
+
+    effective_password = config.password if password is None else password
 
     try:
         result = subprocess.run(
@@ -140,7 +172,7 @@ def _docker_exec(
                 "exec",
                 "-i",
                 "-e",
-                "MYSQL_PWD=" + config.password,
+                "MYSQL_PWD=" + effective_password,
                 config.container,
                 *command,
             ],
@@ -176,6 +208,25 @@ def _mysql(config: CheckConfig, database: str, sql: str, *, label: str) -> bytes
     )
 
 
+def _restore_mysql(config: CheckConfig, database: str, sql: str, *, label: str) -> bytes:
+    """使用独立恢复管理员执行临时库 DDL 或恢复目标查询。"""
+
+    return _docker_exec(
+        config,
+        "mysql",
+        "--batch",
+        "--skip-column-names",
+        "--default-character-set=utf8mb4",
+        "-u",
+        config.restore_username,
+        database,
+        "-e",
+        sql,
+        label=label,
+        password=config.restore_password,
+    )
+
+
 def _preflight(config: CheckConfig) -> None:
     """确认容器、源库和 mysqldump 工具可用。"""
 
@@ -187,7 +238,8 @@ def _preflight(config: CheckConfig) -> None:
 def _list_tables(config: CheckConfig, database: str) -> list[str]:
     """读取源库或恢复库中的非系统表。"""
 
-    raw = _mysql(
+    mysql_query = _restore_mysql if database.startswith("fitness_restore_") else _mysql
+    raw = mysql_query(
         config,
         "information_schema",
         "SELECT TABLE_NAME FROM TABLES "
@@ -202,8 +254,9 @@ def _table_counts(config: CheckConfig, database: str) -> dict[str, int]:
     """逐表统计记录数，验证恢复后业务数据规模一致。"""
 
     counts: dict[str, int] = {}
+    mysql_query = _restore_mysql if database.startswith("fitness_restore_") else _mysql
     for table_name in _list_tables(config, database):
-        raw = _mysql(
+        raw = mysql_query(
             config,
             database,
             f"SELECT COUNT(*) FROM {_quote_identifier(table_name)}",
@@ -221,7 +274,8 @@ def _table_counts(config: CheckConfig, database: str) -> dict[str, int]:
 def _database_charset(config: CheckConfig, database: str) -> tuple[str, str]:
     """读取数据库默认字符集和排序规则，防止恢复目标退化为 latin1。"""
 
-    raw = _mysql(
+    mysql_query = _restore_mysql if database.startswith("fitness_restore_") else _mysql
+    raw = mysql_query(
         config,
         "information_schema",
         "SELECT DEFAULT_CHARACTER_SET_NAME, DEFAULT_COLLATION_NAME "
@@ -237,7 +291,7 @@ def _database_charset(config: CheckConfig, database: str) -> tuple[str, str]:
 def _create_database(config: CheckConfig, database: str) -> None:
     """只创建本轮唯一的临时数据库。"""
 
-    _mysql(
+    _restore_mysql(
         config,
         "information_schema",
         f"CREATE DATABASE {_quote_identifier(database)} CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci",
@@ -273,10 +327,11 @@ def _restore_database(config: CheckConfig, database: str, backup: bytes) -> None
         "mysql",
         "--default-character-set=utf8mb4",
         "-u",
-        config.username,
+        config.restore_username,
         database,
         label="恢复 MySQL 临时数据库",
         input_data=backup,
+        password=config.restore_password,
     )
 
 
@@ -286,7 +341,7 @@ def _drop_database(config: CheckConfig, database: str) -> None:
     if not database.startswith("fitness_restore_"):
         raise MysqlBackupRestoreCheckError("拒绝删除非本脚本命名空间的数据库")
     try:
-        _mysql(
+        _restore_mysql(
             config,
             "information_schema",
             f"DROP DATABASE IF EXISTS {_quote_identifier(database)}",

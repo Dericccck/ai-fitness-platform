@@ -58,14 +58,15 @@ Gateway 的真实只读联调和 Booking 的本地受控写入已完成；正式
 
 ### MySQL
 
-- [ ] 使用 Secret Manager 注入备份账号，不把密码写进 shell 历史、脚本或日志。
+- [ ] 使用 Secret Manager 注入备份账号和独立恢复管理员账号，不把密码写进 shell 历史、脚本或日志；业务运行账号不得创建/删除恢复库。
 - [ ] 使用 `--single-transaction`、`--routines`、`--events`、`--triggers` 和明确字符集生成一致性备份。
 - [ ] 将备份加密后上传对象存储，并验证对象版本、生命周期、恢复权限和删除保护。
 - [ ] 在隔离 MySQL 实例恢复备份，核对核心健身表、Agent 扩展表、中文数据和关键索引。
 - [ ] 记录 MySQL 备份 RPO、恢复 RTO、数据校验结果和失败回滚步骤。
 
-本地验收入口：`make gateway-mysql-backup-restore-check ARGS="--execute --rto-target-seconds 60"`；该命令只使用本地
-`fitness-mysql` 的测试账号，临时恢复库命名空间固定为 `fitness_restore_`，完成后自动删除，不能替代生产备份账号和隔离实例。
+本地验收入口：先设置 `GATEWAY_MYSQL_RESTORE_USERNAME`、`GATEWAY_MYSQL_RESTORE_PASSWORD`，再执行
+`make gateway-mysql-backup-restore-check ARGS="--execute --rto-target-seconds 60"`；临时恢复库命名空间固定为
+`fitness_restore_`，完成后自动删除，不能替代生产备份账号和隔离实例。
 
 具体执行命令、字符集核对、隔离目标保护和证据模板见
 `deployment/operations/mysql-backup-restore-runbook.md`。
