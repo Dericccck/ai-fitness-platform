@@ -32,3 +32,14 @@ Agent 服务使用同一份镜像在不同环境运行，环境差异只能通�
 
 各环境的非敏感覆盖示例位于当前目录。完整变量说明以
 `fitness-agent-service/.env.example` 为准。
+
+Java 服务的生产配置契约也集中在本目录：
+
+- `gateway.production.env.example`：Gateway 数据库只读账号、认证 JWKS、下游服务地址和内部 Token；
+- `booking.production.env.example`：预约数据库写账号、RabbitMQ 和 Outbox 发布器；
+- `training.production.env.example`：训练数据库写账号、RabbitMQ 和 Outbox 发布器；
+- `customer-service.production.env.example`：客服数据库写账号和 Gateway 内部 Token。
+
+这些模板只用于部署参数审计，不能直接作为生产凭证文件。生产发布前必须完成 Secret 注入、
+数据库账号最小权限核对、服务间 Token 对应关系核对，以及所有 `*_SCHEMA_INIT_ENABLED=false`
+对应的独立迁移 Job 验证。
