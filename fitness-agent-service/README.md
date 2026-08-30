@@ -466,8 +466,9 @@ RabbitMQ 重复投递同一个预约事件，验证 Inbox 只有一条记录、�
 PostgreSQL 备份恢复可使用 `make agent-postgres-backup-restore-check` 验收。该命令默认只检查容器、源库和
 `pg_dump`/`pg_restore` 是否可用；追加 `ARGS=--execute` 后，会生成 Custom Format 逻辑备份，在
 `fitness-agent-postgres` 中创建唯一临时数据库并恢复，再逐表比较 public schema 的记录数，最后自动删除临时库。
-它不会清空、覆盖或删除源数据库，也不修改 MySQL 业务库。该检查只证明本地备份可恢复，生产环境仍需补充对象存储
-生命周期、备份加密、跨可用区副本、WAL/PITR、恢复时间目标和定期灾备演练。
+它不会清空、覆盖或删除源数据库，也不修改 MySQL 业务库。执行模式会输出备份一致性时间点、备份/恢复/校验耗时和
+本地 RTO 门槛；可通过 `ARGS="--execute --rto-target-seconds 60"` 调整恢复加校验的目标。RPO 这里只能记录逻辑备份
+的一致性时间点，生产环境仍需补充对象存储生命周期、备份加密、跨可用区副本、WAL/PITR、正式 RTO/RPO 目标和定期灾备演练。
 
 服务或容器重启后可执行 `make agent-recovery-check`。该检查会以不信任系统代理的方式验证 Agent 存活/就绪、Gateway
 存活、PostgreSQL、LangGraph Checkpoint 表、Redis 临时键读写和 RabbitMQ Exchange，并统计超过租约时间仍处于

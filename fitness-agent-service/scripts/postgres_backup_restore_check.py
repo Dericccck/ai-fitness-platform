@@ -21,8 +21,10 @@ import os
 import re
 import subprocess
 import tempfile
+import time
 import uuid
 from dataclasses import dataclass
+from datetime import UTC, datetime
 
 
 class PostgresBackupRestoreCheckError(RuntimeError):
@@ -39,6 +41,7 @@ class CheckConfig:
     password: str
     timeout_seconds: int
     execute: bool
+    rto_target_seconds: float
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -77,6 +80,12 @@ def build_parser() -> argparse.ArgumentParser:
         default=os.getenv("AGENT_LIVE_EXECUTE_WRITES") == "1",
         help="生成备份并恢复到临时数据库；默认只做前置检查",
     )
+    parser.add_argument(
+        "--rto-target-seconds",
+        type=float,
+        default=float(os.getenv("AGENT_POSTGRES_RTO_TARGET_SECONDS", "60")),
+        help="恢复加校验的本地 RTO 门槛，默认 60 秒；只在 --execute 时生效",
+    )
     return parser
 
 
@@ -97,11 +106,16 @@ def build_config(args: argparse.Namespace) -> CheckConfig:
             raise PostgresBackupRestoreCheckError(f"{label} 包含不允许的字符")
     if args.timeout_seconds < 10 or args.timeout_seconds > 1800:
         raise PostgresBackupRestoreCheckError("timeout-seconds 必须在 10 到 1800 秒之间")
+    if args.rto_target_seconds <= 0 or args.rto_target_seconds > args.timeout_seconds:
+        raise PostgresBackupRestoreCheckError(
+            "rto-target-seconds 必须大于 0 且不超过 timeout-seconds"
+        )
     return CheckConfig(
         **values,
         password=str(args.password),
         timeout_seconds=int(args.timeout_seconds),
         execute=bool(args.execute),
+        rto_target_seconds=float(args.rto_target_seconds),
     )
 
 
@@ -325,6 +339,12 @@ def _drop_database(config: CheckConfig, database: str) -> None:
         print(f"警告：临时数据库 {database} 未能自动删除，请手工确认后清理")
 
 
+def _total_rows(counts: dict[str, int]) -> int:
+    """计算所有 public 表的总行数，作为恢复规模的可读基线。"""
+
+    return sum(counts.values())
+
+
 def run(config: CheckConfig) -> None:
     """运行只读前置检查，或执行完整的临时库备份恢复核对。"""
 
@@ -336,14 +356,22 @@ def run(config: CheckConfig) -> None:
 
     temporary_database = f"fitness_agent_restore_{uuid.uuid4().hex[:16]}"
     backup = b""
+    restore_started_at: float | None = None
     try:
         source_counts = _table_counts(config, config.database)
+        backup_started_at = datetime.now(UTC)
+        backup_started_clock = time.perf_counter()
         backup = _dump_database(config)
+        backup_seconds = time.perf_counter() - backup_started_clock
         if not backup:
             raise PostgresBackupRestoreCheckError("pg_dump 生成了空备份")
         _create_database(config, temporary_database)
+        restore_started_at = time.perf_counter()
         _restore_database(config, temporary_database, backup)
+        restore_seconds = time.perf_counter() - restore_started_at
+        verification_started_at = time.perf_counter()
         restored_counts = _table_counts(config, temporary_database)
+        verification_seconds = time.perf_counter() - verification_started_at
         if source_counts != restored_counts:
             missing = sorted(set(source_counts) - set(restored_counts))
             extra = sorted(set(restored_counts) - set(source_counts))
@@ -355,10 +383,28 @@ def run(config: CheckConfig) -> None:
             raise PostgresBackupRestoreCheckError(
                 f"恢复后表记录数不一致：missing={missing}, extra={extra}, changed={changed}"
             )
+        rto_seconds = restore_seconds + verification_seconds
+        if rto_seconds > config.rto_target_seconds:
+            raise PostgresBackupRestoreCheckError(
+                f"恢复 RTO 超过门槛：实际 {rto_seconds:.2f}s，目标 {config.rto_target_seconds:.2f}s"
+            )
         digest = hashlib.sha256(backup).hexdigest()
         print("PostgreSQL 备份恢复真实验收通过")
         print(f"backup_bytes={len(backup)}; backup_sha256={digest}")
-        print(f"public_tables={len(source_counts)}; row_counts=一致")
+        print(
+            f"public_tables={len(source_counts)}; total_rows={_total_rows(source_counts)}; "
+            "row_counts=一致"
+        )
+        print(
+            f"backup_consistency_at={backup_started_at.isoformat()}; "
+            f"backup_seconds={backup_seconds:.2f}; restore_seconds={restore_seconds:.2f}; "
+            f"verification_seconds={verification_seconds:.2f}; "
+            f"rto_seconds={rto_seconds:.2f}; rto_target_seconds={config.rto_target_seconds:.2f}"
+        )
+        print(
+            "rpo_measurement=logical_backup_consistency_point; "
+            "生产 RPO 仍需通过备份频率、WAL/PITR 和恢复演练确定"
+        )
     finally:
         if temporary_database:
             _drop_database(config, temporary_database)
