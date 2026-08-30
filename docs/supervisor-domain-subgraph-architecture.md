@@ -97,3 +97,15 @@ system Prompt、RAG 引用和未确认 Memory 候选属于本轮临时上下文�
 5. 写操作 `interrupt()`、批准和 `Command(resume=...)` 可在父子 Checkpoint 中恢复；
 6. 旧版敏感 Checkpoint 继续 fail-closed，旧版已暂停节点保留兼容入口；
 7. 全量 Agent、Gateway、训练、预约、客服和发布质量门禁无回归。
+
+本地或预发布环境在获得测试数据出站授权后，可使用统一只读命令验证真实 DeepSeek 和
+四个领域子图：
+
+```bash
+export AGENT_LIVE_AGENT_CONTEXT="$(make agent-dev-context)"
+make agent-domain-subgraphs-live-check
+```
+
+该命令依次查询当前用户、机构课程、固定营收指标和本人预约记录，要求四条响应路由正确、
+状态为 `COMPLETED`、至少执行一个真实只读工具、没有确认单且回答不是“还需要继续查询”的
+空壳说明。它不会创建预约、训练草案、Memory 或客服工单，也不会打印 AgentContext。

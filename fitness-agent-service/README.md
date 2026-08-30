@@ -90,6 +90,14 @@ make agent-jwks-check
 脚本会验证 JWKS 地址可访问、响应符合标准格式且包含指定 `kid`；未配置真实认证服务地址时，
 不要用本地测试 JWKS 结果替代生产验收。
 
+四个 LangGraph 领域子图的真实 DeepSeek 只读 smoke 使用统一命令。执行前必须确认本地测试
+用户、课程、经营聚合和预约结果允许发送给当前模型供应商；命令不会执行写操作：
+
+```bash
+export AGENT_LIVE_AGENT_CONTEXT="$(make agent-dev-context)"
+make agent-domain-subgraphs-live-check
+```
+
 生产切换前应额外验收确认凭证验证公钥，避免只验证 AgentContext 而漏掉 Gateway 的第二套认证边界：
 
 ```bash

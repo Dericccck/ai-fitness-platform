@@ -2,7 +2,7 @@ SHELL := /bin/sh
 
 .PHONY: observability-check observability-live-check observability-rule-test observability-alertmanager-check observability-e2e-check
 
-.PHONY: agent-jwks-check agent-jwks-dual-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-release-manifest-check agent-migration-check agent-migration-live-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check gateway-it production-config-check production-runtime-config-check
+.PHONY: agent-jwks-check agent-jwks-dual-check agent-domain-subgraphs-live-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-release-manifest-check agent-migration-check agent-migration-live-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check gateway-it production-config-check production-runtime-config-check
 
 AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
@@ -38,6 +38,7 @@ help:
 	@echo "  agent-operations-live-preflight Check Agent/Gateway readiness before real smoke test"
 	@echo "  agent-operations-live-check Run the opt-in real DeepSeek/Java Gateway Operations smoke check"
 	@echo "  agent-business-live-preflight Check Agent/Gateway readiness before Booking/Fitness live checks"
+	@echo "  agent-domain-subgraphs-live-check Run read-only DeepSeek smoke checks for all four domain subgraphs"
 	@echo "  agent-booking-live-check Check Booking confirmation flow; --execute enables real appointment write"
 	@echo "  agent-fitness-live-check Check Fitness draft confirmation flow; --execute enables real draft write"
 	@echo "  agent-customer-service-preflight Check Agent/Gateway/Customer Service readiness without writes"
@@ -221,6 +222,9 @@ agent-operations-live-preflight:
 
 agent-operations-live-check: agent-operations-live-preflight
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/operations_live_check.py
+
+agent-domain-subgraphs-live-check: agent-operations-live-preflight
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/domain_subgraphs_live_check.py
 
 agent-business-live-preflight:
 	@test -n "$$AGENT_LIVE_AGENT_CONTEXT" || (echo "请先设置 AGENT_LIVE_AGENT_CONTEXT（认证服务签发的业务用户 Token）"; exit 1)

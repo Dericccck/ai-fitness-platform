@@ -129,7 +129,7 @@ flowchart LR
 
 截至 2026-08-30，最近一次最终质量门禁结果：
 
-- Agent：`465 passed, 8 skipped`；跳过项是明确依赖外部生产环境或真实业务写入的检查，不代表测试失败；
+- Agent：`474 passed, 8 skipped`；跳过项是明确依赖外部生产环境或真实业务写入的检查，不代表测试失败；
 - OCR、Gateway、Training、Booking、Customer Service：构建和测试通过；
 - RAG、Operations、会话摘要评测：全部达到阈值；
 - ClamAV：正常文件通过，EICAR 测试串拒绝；
@@ -163,6 +163,7 @@ make observability-up
 
 ```bash
 make agent-check
+make agent-domain-subgraphs-live-check
 make observability-live-check
 make observability-e2e-check
 make release-check

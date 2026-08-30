@@ -2018,3 +2018,17 @@ Checkpoint 的兼容入口。签名 AgentContext、确认 Token 和明文参数�
 本轮 `make release-check` 通过：Agent 为 `465 passed, 8 skipped`，mypy/ruff、RAG 和经营评测、
 ClamAV、OCR 契约、Gateway、Training、Booking、Customer Service 全部通过。详细设计和后续扩展
 要求见 `docs/supervisor-domain-subgraph-architecture.md`。
+
+本轮继续完成四领域子图真实 DeepSeek 只读验收：新增
+`make agent-domain-subgraphs-live-check`，使用一次性会话分别验证 Fitness 当前用户查询、Booking
+机构课程查询、Operations 固定营收指标查询和 Customer Service 本人预约查询。脚本要求路由、完成
+状态、真实工具步数、无确认单和非空业务结果全部满足，并拒绝“还需要继续查询”的假通过回答；
+整个过程不创建预约、训练草案、Memory 或客服工单。
+
+首轮真实验收发现两个值得修复的问题：否定句“不要改约或取消预约”仍被关键词识别为写意图，
+以及模型工具 Schema 错误地要求 DeepSeek 填写应由签名上下文决定的 `organization_id`。当前已按
+中文分句识别肯定/否定动作，避免否定句触发确认；同时从模型可见 Schema 移除机构字段，由 Tool
+Registry 根据唯一签名机构确定性绑定，多机构上下文继续 fail-closed。修复后四个子图均通过真实
+DeepSeek、Agent、Gateway 和本地业务数据联调，Booking 返回真实课程列表，Operations 返回固定
+聚合结果，客服完成预约查询。最终 `make release-check` 通过，Agent 为 `474 passed, 8 skipped`，
+其余 Gateway、Training、Booking、Customer Service、OCR 契约和评测全部通过。

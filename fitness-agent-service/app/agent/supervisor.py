@@ -1184,9 +1184,9 @@ def _looks_like_customer_service_write_request(user_message: str) -> bool:
     """识别高置信度的客服工单提交意图，避免被业务查询关键词覆盖。"""
 
     text = user_message.replace(" ", "")
-    return any(
-        keyword in text
-        for keyword in (
+    return _has_affirmative_intent(
+        text,
+        (
             "提交工单",
             "创建工单",
             "提交客服工单",
@@ -1194,7 +1194,7 @@ def _looks_like_customer_service_write_request(user_message: str) -> bool:
             "帮我提交",
             "帮我反馈问题",
             "联系健身客服",
-        )
+        ),
     )
 
 
@@ -1214,13 +1214,13 @@ def _forced_write_tool_name(route: SupervisorRoute, user_message: str) -> str | 
     if route != "BOOKING":
         return None
     text = user_message.replace(" ", "")
-    if any(keyword in text for keyword in ("改约", "修改预约", "调整预约")):
+    if _has_affirmative_intent(text, ("改约", "修改预约", "调整预约")):
         return "fitness_booking_reschedule_v1"
-    if any(keyword in text for keyword in ("取消预约", "取消我的预约", "撤销预约")):
+    if _has_affirmative_intent(text, ("取消预约", "取消我的预约", "撤销预约")):
         return "fitness_booking_cancel_v1"
-    if any(
-        keyword in text
-        for keyword in ("创建预约", "创建一次预约", "预约一次", "帮我预约", "预订课程", "预定课程")
+    if _has_affirmative_intent(
+        text,
+        ("创建预约", "创建一次预约", "预约一次", "帮我预约", "预订课程", "预定课程"),
     ):
         return "fitness_booking_create_v1"
     return None
@@ -1233,7 +1233,31 @@ def _is_explicit_training_plan_creation_request(user_message: str | None) -> boo
         return False
     text = "".join(user_message.split())
     creation_verbs = ("创建", "制定", "生成", "安排", "设计", "制作")
-    return "训练计划" in text and any(verb in text for verb in creation_verbs)
+    return "训练计划" in text and _has_affirmative_intent(text, creation_verbs)
+
+
+def _has_affirmative_intent(text: str, keywords: tuple[str, ...]) -> bool:
+    """判断动作关键词是否处于肯定命令中，而不是“不要/无需”等否定句中。
+
+    写工具的确定性强制选择只能响应明确肯定意图。这里按中文主句标点切分，只检查
+    关键词所在分句中、关键词之前是否出现否定词。例如“不要改约或取消预约”不会
+    触发写工具；“不要查询，帮我取消预约”第二个分句仍会被识别为肯定取消请求。
+
+    该函数只是减少误触发确认单，不降低最终安全边界：即使未强制工具，模型主动
+    提出写调用仍然必须经过参数校验、确认单、interrupt 和 Java Gateway 授权。
+    """
+
+    negations = ("不要", "别", "无需", "不用", "不需要", "禁止", "不想", "不是要", "并非要")
+    clause_boundaries = "，。；！？\n"
+    for keyword in keywords:
+        start = 0
+        while (index := text.find(keyword, start)) >= 0:
+            boundary = max(text.rfind(marker, 0, index) for marker in clause_boundaries)
+            clause_prefix = text[boundary + 1 : index]
+            if not any(negation in clause_prefix for negation in negations):
+                return True
+            start = index + len(keyword)
+    return False
 
 
 def _generated_draft_payload(result: Any) -> dict[str, Any]:
@@ -1267,21 +1291,41 @@ def _model_tools(registry: ToolRegistry, route: SupervisorRoute) -> list[dict[st
                 "description": spec["description"],
                 # Operations 参数全部由服务端根据用户原问题和签名身份生成。模型只
                 # 决定是否调用固定指标工具，不接触内部机构 ID、日期或指标参数。
-                "parameters": (
-                    {
-                        "type": "object",
-                        "properties": {},
-                        "additionalProperties": False,
-                    }
-                    if route == "OPERATIONS"
-                    and spec["name"] == "fitness.operations.metric.query.v1"
-                    else spec["input_schema"]
-                ),
+                "parameters": _model_tool_parameters(spec, route),
             },
         }
         for spec in registry.public_specs()
         if spec["name"] in allowed_tool_ids
     ]
+
+
+def _model_tool_parameters(spec: dict[str, Any], route: SupervisorRoute) -> dict[str, Any]:
+    """生成模型可见 Schema，移除只能由签名上下文决定的机构字段。
+
+    Tool Registry 会在参数校验和调用 Gateway 前，把唯一机构 ID 绑定为已验签
+    ``AgentIdentity.organization_ids``。如果仍把 ``organization_id`` 作为模型必填字段，
+    模型会先猜机构或反复查询机构，既增加 Token 和工具步数，也违背“模型不决定租户”的
+    权限设计。这里仅改变模型可见 Schema，Registry 内部 Pydantic Schema 和 Java Gateway
+    契约保持不变；多机构上下文仍由绑定层 fail-closed，不能由模型自行选择。
+    """
+
+    if route == "OPERATIONS" and spec["name"] == "fitness.operations.metric.query.v1":
+        return {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": False,
+        }
+    parameters = dict(spec["input_schema"])
+    properties = dict(parameters.get("properties", {}))
+    properties.pop("organization_id", None)
+    properties.pop("organizationId", None)
+    parameters["properties"] = properties
+    required = parameters.get("required")
+    if isinstance(required, list):
+        parameters["required"] = [
+            field for field in required if field not in {"organization_id", "organizationId"}
+        ]
+    return parameters
 
 
 def _optional_int(value: int | None) -> int | None:

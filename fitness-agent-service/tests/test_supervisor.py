@@ -12,6 +12,8 @@ from app.agent.supervisor import (
     SupervisorRuntimeError,
     UnsupportedLegacyRequest,
     _forced_write_tool_name,
+    _is_explicit_training_plan_creation_request,
+    _model_tools,
     _system_prompt,
     classify_route,
 )
@@ -170,6 +172,10 @@ async def test_supervisor_forces_booking_create_tool_for_explicit_create_request
         == "fitness_booking_create_v1"
     )
     assert _forced_write_tool_name("BOOKING", "查询明天可约时间") is None
+    assert _forced_write_tool_name("BOOKING", "不要创建、改约或取消预约，只查询课程") is None
+    assert (
+        _forced_write_tool_name("BOOKING", "不要查询，帮我取消预约") == "fitness_booking_cancel_v1"
+    )
 
 
 def test_supervisor_forces_customer_service_ticket_for_explicit_submit_request() -> None:
@@ -178,6 +184,44 @@ def test_supervisor_forces_customer_service_ticket_for_explicit_submit_request()
         == "fitness_support_ticket_create_v1"
     )
     assert _forced_write_tool_name("CUSTOMER_SERVICE", "查询我的客服工单") is None
+    assert _forced_write_tool_name("CUSTOMER_SERVICE", "不要提交客服工单，只查询记录") is None
+
+
+def test_training_plan_creation_requires_affirmative_intent() -> None:
+    assert _is_explicit_training_plan_creation_request("请帮我生成训练计划") is True
+    assert _is_explicit_training_plan_creation_request("不要生成训练计划，只给普通建议") is False
+
+
+def test_model_tool_schema_hides_context_bound_organization_id() -> None:
+    class OrganizationQueryInput(BaseModel):
+        model_config = ConfigDict(extra="forbid")
+
+        organization_id: str
+        limit: int = 20
+
+    registry = ToolRegistry()
+
+    async def handler(_: BaseModel, __: ToolContext) -> dict[str, str]:
+        return {"status": "ok"}
+
+    registry.register(
+        ToolDefinition(
+            tool_id="fitness.course.list.v1",
+            description="查询机构课程",
+            input_model=OrganizationQueryInput,
+            handler=handler,
+            allowed_roles=frozenset({"ORGANIZATION_ADMIN"}),
+            read_only=True,
+            requires_confirmation=False,
+        )
+    )
+
+    schemas = _model_tools(registry, "BOOKING")
+
+    parameters = schemas[0]["function"]["parameters"]
+    assert "organization_id" not in parameters["properties"]
+    assert "organization_id" not in parameters.get("required", [])
+    assert "limit" in parameters["properties"]
 
 
 async def test_supervisor_uses_session_summary_after_checkpoint_compaction() -> None:
