@@ -108,8 +108,8 @@
 
 - 多轮意图识别和任务拆解。
 - 身份、角色、组织和上下文注入。
-- Agent 路由、并行查询和结果聚合。
-- 写操作确认、失败恢复和人工转接。
+- Agent 路由、结果聚合和失败恢复；只有确有依赖关系且权限边界一致时才允许并行查询。
+- 写操作确认和 Checkpoint 恢复；本项目不建设人工转接流程。
 
 ### 5.2 Booking Agent
 
@@ -149,7 +149,7 @@
 - 营收、新客、完课、课时、课程利用率和教练表现分析。
 - 会员活跃度、流失风险和续费机会分析。
 - 生成日报、周报、月报和异常解释。
-- 在受控只读视图上执行 Text-to-SQL。
+- 使用固定指标目录和受控聚合查询，不让模型生成或执行自由 SQL。
 
 ### 5.5 Customer Service Agent
 
@@ -643,7 +643,7 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 
 ### 阶段 3：Agent Runtime 与 Supervisor
 
-状态：已完成统一非流式对话接口、LangGraph Supervisor 基础图、模型 Tool Calling 协议、工具步数预算、
+状态：已完成统一非流式对话接口、顶层 Supervisor Router 与四个 LangGraph 领域子图、模型 Tool Calling 协议、工具步数预算、
 旧业务范围护栏、PostgreSQL/Redis 会话持久化基础和训练计划写操作的服务端确认恢复；写工具已经具备
 确认单、`interrupt()` 暂停、确认查询/决定、`Command(resume=...)` 恢复、短时凭证注入和真实 Gateway
 执行。SSE 流式响应、断线/重启故障演练、角色意图评测和 Prompt 版本管理待继续建设。
@@ -651,7 +651,13 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 工作内容：
 
 - 已建立统一非流式对话 API 和会话请求协议，要求透传已签名 AgentContext。
-- 已使用 LangGraph 构建 Supervisor 状态图，支持模型回合、工具回合和最终回答回合。
+- 已使用 LangGraph 构建顶层 Supervisor Router，并挂载 Fitness、Booking、Operations、Customer Service
+  四个独立编译的领域子图；每个子图包含 enter、model、tools、confirmation 节点和独立工具白名单。
+- 顶层只负责路由，不执行领域工具；模型输出跨领域工具时在模型回合后和执行前双重 fail-closed。
+- 父图和子图共享 PostgreSQL Checkpointer；写操作在子图内 `interrupt()`，仍由父图
+  `Command(resume=...)` 恢复。新状态使用 `graph_version=2`，旧节点暂时保留用于恢复升级前已暂停确认。
+- 同一会话切换领域时保留 user/assistant/tool 历史，但每轮重建 system、RAG 和 Memory 候选上下文，
+  防止旧领域提示和临时证据串入新子图。
 - 已建立 DeepSeek OpenAI-compatible Tool Calling 响应规范化、工具步数预算和未配置模型的明确失败语义；配置沿用 `learning-langchain-CN` 的 `DEEPSEEK_*` 变量。
 - 已增加赛事、作品和活动运营范围护栏；这些遗留业务不进入当前健身 Agent 路由。
 - 已接入 PostgreSQL LangGraph Checkpoint、启动期官方表迁移、Redis 会话锁和按签名身份隔离的匿名 thread_id。
@@ -668,6 +674,9 @@ Java 业务事务通过 Outbox Pattern 写入事件表，再由消息系统发�
 完成标准：管理员、教练和学员请求能稳定路由；会话可恢复且旧敏感状态 fail-closed；凭证和签名上下文
 不进入 Checkpoint；待确认动作、确认决定和恢复能力完成后，工具失败或确认拒绝不会被描述成成功；
 模型请求和确认决定可追踪。
+
+领域子图的拓扑、工具矩阵、Checkpoint namespace 和扩展规则统一见
+[`docs/supervisor-domain-subgraph-architecture.md`](supervisor-domain-subgraph-architecture.md)。
 
 ### 阶段 4：企业级 RAG
 
@@ -1988,3 +1997,24 @@ PDF 深度解析的剩余收尾顺序固定为：
 - 当前仓库可本地完成的 Agent 业务、RAG、权限、确认、幂等、Memory、主动提醒、Operations、Booking、Fitness、客服和质量门禁已收口。
   剩余事项不是继续堆功能，而是把外部环境证据补齐：真实 MySQL 隔离恢复（脚本已完成但本轮被 Docker socket 权限阻塞）、真实认证服务
   JWKS、生产最小权限账号、对象存储/WAL/PITR、企业值班路由、预发布联合压测和灰度回滚。
+
+## Supervisor + LangGraph 领域子图重构（2026-08-30）
+
+本轮将原先集中在一个状态图中的领域执行逻辑拆为顶层 Supervisor Router 和四个真正编译的
+LangGraph 领域子图：Fitness、Booking、Operations、Customer Service。顶层只验证并分派路由；
+每个子图拥有独立 namespace、领域 Prompt 和不可变工具白名单，并统一复用 enter、model、tools、
+confirmation 安全骨架。模型返回跨领域工具时会在模型回合后和实际执行前两次 fail-closed。
+
+父图继续统一持有 PostgreSQL Checkpointer。领域子图不创建第二套持久化，因此子图内
+`interrupt()`、父图 `Command(resume=...)`、服务重启恢复和确认单事实保持一个来源。新状态写入
+`graph_version=2` 和 `active_domain`；旧 `model/tools/confirmation` 节点暂时仅作为升级前已暂停
+Checkpoint 的兼容入口。签名 AgentContext、确认 Token 和明文参数仍只存在于 Runtime Context
+或加密确认单，不进入 LangGraph State。
+
+同一 thread 跨领域切换时，系统会保留 user/assistant/tool 对话历史，但移除上一轮 system、RAG
+和未确认 Memory 候选，再按新领域重新注入，避免提示和临时证据串域。新增测试覆盖四个真实子图
+拓扑、工具可见性、恶意跨域调用拒绝、领域能力矩阵、跨领域会话以及子图 interrupt 嵌套状态。
+
+本轮 `make release-check` 通过：Agent 为 `465 passed, 8 skipped`，mypy/ruff、RAG 和经营评测、
+ClamAV、OCR 契约、Gateway、Training、Booking、Customer Service 全部通过。详细设计和后续扩展
+要求见 `docs/supervisor-domain-subgraph-architecture.md`。

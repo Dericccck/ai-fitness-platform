@@ -15,11 +15,11 @@ flowchart LR
     Client["小程序 / 管理端 / 教练端"] --> Java["Java Spring Boot 业务后端"]
     Java --> Context["签名 AgentContext"]
     Context --> Agent["Python Agent Service"]
-    Agent --> Supervisor["Supervisor Agent"]
-    Supervisor --> Booking["Booking Agent"]
-    Supervisor --> Fitness["Fitness Agent"]
-    Supervisor --> Operations["Operations Agent"]
-    Supervisor --> Customer["Customer Service Agent"]
+    Agent --> Supervisor["Supervisor Router"]
+    Supervisor --> Booking["Booking LangGraph 子图"]
+    Supervisor --> Fitness["Fitness LangGraph 子图"]
+    Supervisor --> Operations["Operations LangGraph 子图"]
+    Supervisor --> Customer["Customer Service LangGraph 子图"]
     Events["Outbox + RabbitMQ"] --> Proactive["Proactive Agent"]
     Proactive --> Agent
     Booking --> Tools["Java Tool Gateway"]
@@ -35,7 +35,7 @@ flowchart LR
     Prometheus --> Alertmanager["Alertmanager"]
 ```
 
-核心边界是：模型负责理解、规划和生成草案；Java Gateway 负责权限、业务事实、幂等和写入审计；业务数据库是最终事实来源；Agent 数据和知识索引由 PostgreSQL 管理；LangGraph 会话状态由 PostgreSQL Checkpoint 和 Redis 协同保存。
+核心边界是：顶层 Supervisor 只负责路由，四个领域能力由真正编译的 LangGraph 子图承载；模型负责理解、规划和生成草案；Java Gateway 负责权限、业务事实、幂等和写入审计；业务数据库是最终事实来源；Agent 数据和知识索引由 PostgreSQL 管理；LangGraph 会话状态由 PostgreSQL Checkpoint 和 Redis 协同保存。子图拓扑、工具隔离和确认恢复细节见[领域子图架构](supervisor-domain-subgraph-architecture.md)。
 
 ## 3. 角色与业务
 
@@ -52,7 +52,9 @@ flowchart LR
 ### 4.1 Supervisor Agent
 
 - 识别用户意图并路由到 Booking、Fitness、Operations 或 Customer Service Agent；
+- 四个领域 Agent 均为独立编译的 LangGraph 子图，拥有独立 namespace、领域提示和工具白名单；
 - 限制工具数量、工具输入 Schema 和业务范围；
+- 顶层 Supervisor 不执行领域工具；模型跨领域请求会在模型回合后和工具执行前两次被拒绝；
 - 将真实工具结果回填给模型，禁止模型自行编造业务事实；
 - 对不支持的问题返回受控结果，不调用无关旧赛事业务。
 
@@ -127,7 +129,7 @@ flowchart LR
 
 截至 2026-08-30，最近一次最终质量门禁结果：
 
-- Agent：`457 passed, 8 skipped`；跳过项是明确依赖外部生产环境或真实业务写入的检查，不代表测试失败；
+- Agent：`465 passed, 8 skipped`；跳过项是明确依赖外部生产环境或真实业务写入的检查，不代表测试失败；
 - OCR、Gateway、Training、Booking、Customer Service：构建和测试通过；
 - RAG、Operations、会话摘要评测：全部达到阈值；
 - ClamAV：正常文件通过，EICAR 测试串拒绝；

@@ -301,11 +301,19 @@ async def test_write_tool_creates_confirmation_interrupt_without_gateway_executi
     assert response.confirmation_id == "confirmation-1"
     assert confirmation_service.prepared
     assert gateway.current_user_calls == 0
-    state = await supervisor._graph.aget_state({"configurable": {"thread_id": "thread-1"}})
-    messages = state.values["messages"]
+    state = await supervisor._graph.aget_state(
+        {"configurable": {"thread_id": "thread-1"}}, subgraphs=True
+    )
+    # 领域子图暂停时，父图只保存调度状态，真正的 model/confirmation 状态位于
+    # 子图 namespace。递归读取它可以同时验证中断可恢复，以及精确参数没有泄漏到
+    # 父图或子图的 PostgreSQL Checkpoint。
+    nested_states = [task.state for task in state.tasks if hasattr(task.state, "values")]
+    assert len(nested_states) == 1
+    nested_state = nested_states[0]
+    messages = nested_state.values["messages"]
     assert messages[-1]["tool_calls"][0]["function"]["arguments"] == "{}"
-    assert state.values["pending_confirmation_id"] == "confirmation-1"
-    assert "深蹲" not in str(state.values)
+    assert nested_state.values["pending_confirmation_id"] == "confirmation-1"
+    assert "深蹲" not in str(state)
 
 
 async def test_generated_preview_flows_into_confirmation_before_draft_creation() -> None:

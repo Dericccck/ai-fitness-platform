@@ -9,6 +9,7 @@ Supervisor 负责维护一次对话的状态、让模型选择已注册工具、
 from __future__ import annotations
 
 import json
+from collections.abc import Hashable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Literal, TypedDict
 
@@ -49,6 +50,12 @@ from app.session_summary import (
     build_compacted_messages,
 )
 
+from .domain_subgraphs import (
+    SupervisorRoute,
+    build_domain_subgraph,
+    domain_agent_spec,
+    executable_domain_specs,
+)
 from .operations_tools import (
     OperationsQueryPreparationError,
     build_authorized_operations_tool_input,
@@ -56,43 +63,8 @@ from .operations_tools import (
 )
 from .tool_registry import ToolContext, ToolRegistry, ToolRegistryError
 
-# SupervisorRoute 是意图路由，不是业务执行状态：FITNESS_COACHING 健身指导；BOOKING 预约；
-# OPERATIONS 经营分析；CUSTOMER_SERVICE 客服问答/业务查询；UNSUPPORTED_LEGACY 只保留
-# 历史代码的范围护栏，不属于当前健身客服功能。
-SupervisorRoute = Literal[
-    "FITNESS_COACHING",
-    "BOOKING",
-    "OPERATIONS",
-    "CUSTOMER_SERVICE",
-    "UNSUPPORTED_LEGACY",
-]
 SupervisorRunStatus = Literal["COMPLETED", "CONFIRMATION_REQUIRED"]
 _logger = structlog.get_logger("agent.supervisor")
-
-# 路由级工具白名单是模型可见能力边界，不替代 ToolRegistry 和 Java Gateway 的最终
-# 权限校验。尤其是 Operations 只允许固定经营指标工具，避免模型先调用用户资料、
-# 课程或预约工具，把无关的资源不存在错误带入经营分析链路。
-_ROUTE_TOOL_ALLOWLIST: dict[SupervisorRoute, frozenset[str]] = {
-    "OPERATIONS": frozenset({"fitness.operations.metric.query.v1"}),
-    # Customer Service 第一切片只允许查询当前用户有权限访问的事实。预约写入、训练
-    # 计划生成/审核/发布和 Memory 写入都不属于客服路由，避免客服对话绕过对应领域
-    # Agent 的确认和状态机。Tool Registry/Gateway 仍会进行第二次角色与资源校验。
-    "CUSTOMER_SERVICE": frozenset(
-        {
-            "fitness.user.get_current.v1",
-            "fitness.organization.get.v1",
-            "fitness.course.list.v1",
-            "fitness.contract.list.v1",
-            "fitness.appointment.list.v1",
-            "fitness.booking.availability.check.v1",
-            "fitness.training.plan.get.v1",
-            "fitness.training.day.executions.list.v1",
-            "fitness.support.ticket.list.v1",
-            "fitness.support.ticket.get.v1",
-            "fitness.support.ticket.create.v1",
-        }
-    ),
-}
 
 
 class SupervisorRuntimeError(RuntimeError):
@@ -161,6 +133,10 @@ class SupervisorResponse:
 
 
 class SupervisorState(TypedDict, total=False):
+    # graph_version=2 表示请求由顶层 Supervisor 路由到领域子图。旧 Checkpoint 没有
+    # 该字段，仍可通过父图保留的 legacy 节点完成已经暂停的确认，不会在升级时丢单。
+    graph_version: int
+    active_domain: str
     messages: list[dict[str, Any]]
     route: SupervisorRoute
     tool_steps: int
@@ -202,7 +178,14 @@ class Supervisor:
         self.memory_candidate_service = memory_candidate_service
         self.session_summary_service = session_summary_service
         self.memory_candidate_extractor = memory_candidate_extractor
+        self._domain_graphs: dict[SupervisorRoute, Any] = {}
         self._graph = self._build_graph()
+
+    @property
+    def domain_graphs(self) -> Mapping[SupervisorRoute, Any]:
+        """返回只读领域子图目录，供能力检查、测试和运行时诊断使用。"""
+
+        return dict(self._domain_graphs)
 
     async def invoke(self, request: SupervisorRequest) -> SupervisorResponse:
         """执行一次可恢复的 Supervisor 状态图。"""
@@ -210,6 +193,7 @@ class Supervisor:
         route = classify_route(request.user_message)
         if route == "UNSUPPORTED_LEGACY":
             raise UnsupportedLegacyRequest("赛事、作品和活动运营不属于当前健身 Agent 的业务范围")
+        domain_spec = domain_agent_spec(route)
 
         restricted_answer = _customer_service_restricted_answer(request.user_message)
         if route == "CUSTOMER_SERVICE" and restricted_answer is not None:
@@ -229,12 +213,10 @@ class Supervisor:
 
         knowledge_context = ""
         if (
-            (
-                route == "FITNESS_COACHING"
-                or (
-                    route == "CUSTOMER_SERVICE"
-                    and _looks_like_customer_service_knowledge_question(request.user_message)
-                )
+            domain_spec.uses_rag
+            and (
+                route != "CUSTOMER_SERVICE"
+                or _looks_like_customer_service_knowledge_question(request.user_message)
             )
             and self.rag_service is not None
             and request.identity
@@ -255,7 +237,7 @@ class Supervisor:
 
         memory_candidate_context = ""
         if (
-            route == "FITNESS_COACHING"
+            domain_spec.uses_memory_candidates
             and request.identity is not None
             and (
                 self.memory_candidate_service is not None
@@ -315,6 +297,8 @@ class Supervisor:
             initial_messages.append(candidate_message)
         initial_messages.append({"role": "user", "content": request.user_message})
         initial: SupervisorState = {
+            "graph_version": 2,
+            "active_domain": domain_spec.node_name,
             "route": route,
             "messages": initial_messages,
             "tool_steps": 0,
@@ -362,18 +346,38 @@ class Supervisor:
                             "session_summary_load_failed",
                             request_id=request.gateway_context.request_id,
                         )
+                # system、RAG 引用和 Memory 候选都是“本轮临时上下文”，不能沿用上一轮
+                # 的领域提示。尤其同一会话从 Fitness 切换到 Booking 时，如果保留旧
+                # system 消息，即使工具白名单已经切换，模型仍可能受旧领域规则影响。
+                # 因此先移除历史 system 消息，再由本轮重新构建领域提示、可选短期摘要
+                # 和候选上下文；user/assistant/tool 历史继续保留，保证多轮语义连续。
+                conversation_messages = [
+                    message for message in previous_messages if message.get("role") != "system"
+                ]
                 current_messages = (
                     build_compacted_messages(
                         system_prompt=system_prompt,
                         summary=session_summary,
-                        previous_messages=previous_messages,
+                        previous_messages=conversation_messages,
                         keep_recent_messages=self.session_summary_service.keep_recent_messages,
                     )
                     if session_summary and self.session_summary_service is not None
-                    else list(previous_messages)
+                    else [
+                        {"role": "system", "content": system_prompt},
+                        *conversation_messages,
+                    ]
                 )
                 if candidate_message is not None:
-                    current_messages.append(candidate_message)
+                    # 短期摘要也是本轮系统上下文，Memory 候选放在所有 system 消息之后。
+                    insertion_index = next(
+                        (
+                            index
+                            for index, message in enumerate(current_messages)
+                            if message.get("role") != "system"
+                        ),
+                        len(current_messages),
+                    )
+                    current_messages.insert(insertion_index, candidate_message)
                 current_messages.append({"role": "user", "content": request.user_message})
                 initial["messages"] = current_messages
                 initial["input_tokens"] = previous_values.get("input_tokens", 0)
@@ -575,7 +579,14 @@ class Supervisor:
             await self._graph.aupdate_state(
                 config,
                 {"messages": compacted},
-                as_node="model",
+                # v2 的最后一个父图节点是领域 Agent 子图；旧图则仍以 model 作为
+                # 完成节点。按图版本选择写入来源，避免压缩摘要后把新会话错误地
+                # 送回仅用于兼容旧 Checkpoint 的 model 分支。
+                as_node=(
+                    domain_agent_spec(final_state["route"]).node_name
+                    if final_state.get("graph_version") == 2
+                    else "model"
+                ),
             )
         except (SessionSummaryError, ModelConfigurationError, ModelResponseError):
             _logger.warning("session_summary_generation_failed", thread_id=thread_id)
@@ -599,11 +610,51 @@ class Supervisor:
         )
 
     def _build_graph(self) -> Any:
+        """构建顶层 Supervisor 图并挂载四个领域 Agent 子图。
+
+        父图只持有一个 Checkpointer。四个子图作为节点嵌入父图，共享同一 State 和
+        Runtime Context；因此确认中断可以在 PostgreSQL 中保存完整的父子 namespace，
+        服务重启后仍通过父图 ``Command(resume=...)`` 恢复。
+
+        顶层保留 model/tools/confirmation 三个旧节点，仅用于恢复 v1 已暂停 Checkpoint。
+        新请求带 ``graph_version=2``，一定经过 supervisor_router 进入领域子图。
+        """
+
         graph = StateGraph(SupervisorState, context_schema=SupervisorRuntimeContext)
+
+        # 新版顶层路由和四个真正独立编译的 LangGraph 子图。
+        graph.add_node("supervisor_router", self._supervisor_router_node)
+        domain_nodes: list[str] = []
+        route_map: dict[Hashable, str] = {"legacy_model": "model"}
+        for spec in executable_domain_specs():
+            domain_graph = build_domain_subgraph(
+                spec,
+                state_schema=SupervisorState,
+                context_schema=SupervisorRuntimeContext,
+                model_node=self._model_node,
+                tool_node=self._tool_node,
+                confirmation_node=self._confirmation_node,
+                after_model=self._after_model,
+            )
+            self._domain_graphs[spec.route] = domain_graph
+            graph.add_node(spec.node_name, domain_graph)
+            domain_nodes.append(spec.node_name)
+            route_map[spec.node_name] = spec.node_name
+
+        graph.add_edge(START, "supervisor_router")
+        graph.add_conditional_edges(
+            "supervisor_router",
+            self._after_supervisor_router,
+            route_map,
+        )
+        for node_name in domain_nodes:
+            graph.add_edge(node_name, END)
+
+        # 旧拓扑兼容分支：不会承接 v2 新请求，但节点名必须保留，才能恢复升级前
+        # 已经停在 confirmation interrupt 的 Checkpoint。
         graph.add_node("model", self._model_node)
         graph.add_node("tools", self._tool_node)
         graph.add_node("confirmation", self._confirmation_node)
-        graph.add_edge(START, "model")
         graph.add_conditional_edges(
             "model",
             self._after_model,
@@ -613,9 +664,31 @@ class Supervisor:
         graph.add_edge("confirmation", END)
         return graph.compile(checkpointer=self._checkpointer)
 
+    @staticmethod
+    def _supervisor_router_node(state: SupervisorState) -> dict[str, Any]:
+        """验证顶层路由并记录当前领域 Agent，不执行任何业务工具。"""
+
+        route = state.get("route")
+        if route is None or route == "UNSUPPORTED_LEGACY":
+            raise SupervisorRuntimeError("supervisor route is not executable")
+        spec = domain_agent_spec(route)
+        return {"active_domain": spec.node_name}
+
+    @staticmethod
+    def _after_supervisor_router(state: SupervisorState) -> str:
+        """把 v2 请求分派到领域子图；兼容无版本的历史 Checkpoint。"""
+
+        if state.get("graph_version") != 2:
+            return "legacy_model"
+        route = state.get("route")
+        if route is None:
+            raise SupervisorRuntimeError("supervisor route is missing")
+        return domain_agent_spec(route).node_name
+
     async def _model_node(
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
     ) -> dict[str, Any]:
+        spec = domain_agent_spec(state["route"])
         # 中断恢复会从该节点重新执行。只要 State 已有待确认 ID，就不能再次调用 LLM，
         # 否则模型可能重新生成一套与原确认单不同的参数。
         if state.get("pending_confirmation_id"):
@@ -643,10 +716,14 @@ class Supervisor:
         training_plan_budget = getattr(
             getattr(self.models, "settings", None), "training_plan_max_output_tokens", None
         )
-        if state["route"] == "FITNESS_COACHING" and training_plan_budget:
+        if spec.supports_generated_training_draft and training_plan_budget:
             model_kwargs["max_output_tokens"] = training_plan_budget
         turn = await self.models.chat_with_tools(state["messages"], **model_kwargs)
         tool_calls = list(turn.tool_calls)
+        for call in tool_calls:
+            definition = self.tools.get(call.name)
+            if definition.tool_id not in spec.allowed_tool_ids:
+                raise SupervisorRuntimeError("domain agent requested a tool outside its allowlist")
         if any(not self.tools.get(call.name).read_only for call in tool_calls):
             if len(tool_calls) != 1:
                 raise SupervisorRuntimeError(
@@ -664,6 +741,7 @@ class Supervisor:
                 definition.tool_id,
                 call.arguments,
                 runtime,
+                route=state["route"],
             )
             # Checkpoint 只保存空参数占位和确认 ID；精确参数已在确认单中加密保存。
             assistant_message: dict[str, Any] = {
@@ -722,6 +800,8 @@ class Supervisor:
         record = await self.confirmation_service.get_for_subject(
             confirmation_id, runtime.context.identity
         )
+        if record.tool_id not in domain_agent_spec(state["route"]).allowed_tool_ids:
+            raise ConfirmationStateError("confirmation tool is outside the active domain")
         if record.authorization_status == "PENDING":
             # 首次进入节点只展示脱敏摘要并暂停；resume 的内容不会被当作批准事实。
             resume_value = interrupt(
@@ -806,11 +886,14 @@ class Supervisor:
         )
         tool_messages: list[dict[str, Any]] = []
         calls = state.get("model_tool_calls", [])
+        spec = domain_agent_spec(state["route"])
         for call in calls:
             definition = self.tools.get(call.name)
+            if definition.tool_id not in spec.allowed_tool_ids:
+                raise SupervisorRuntimeError("tool execution is outside the active domain")
             raw_input = call.arguments
             if (
-                state["route"] == "OPERATIONS"
+                spec.deterministic_operations_input
                 and definition.tool_id == "fitness.operations.metric.query.v1"
             ):
                 if runtime.context.identity is None:
@@ -850,7 +933,8 @@ class Supervisor:
                 }
             )
             if (
-                definition.tool_id == "fitness.training.plan.generate_draft.v1"
+                spec.supports_generated_training_draft
+                and definition.tool_id == "fitness.training.plan.generate_draft.v1"
                 and _is_explicit_training_plan_creation_request(runtime.context.user_message)
             ):
                 # 生成服务已经完成 RAG、结构化 Schema 和语义校验。用户明确要求“创建”时，
@@ -861,6 +945,7 @@ class Supervisor:
                     "fitness.training.plan.create_draft.v1",
                     generated_payload,
                     runtime,
+                    route=state["route"],
                 )
                 return {
                     "messages": [*state["messages"], *tool_messages],
@@ -879,6 +964,8 @@ class Supervisor:
         tool_id: str,
         raw_input: dict[str, Any],
         runtime: Runtime[SupervisorRuntimeContext],
+        *,
+        route: SupervisorRoute,
     ) -> Any:
         """统一创建写操作确认单，确保模型直写和生成后直写使用同一安全边界。"""
 
@@ -887,6 +974,8 @@ class Supervisor:
         if self.confirmation_service is None:
             raise SupervisorRuntimeError("confirmation service is not configured")
         definition = self.tools.get(tool_id)
+        if definition.tool_id not in domain_agent_spec(route).allowed_tool_ids:
+            raise SupervisorRuntimeError("write confirmation is outside the active domain")
         bound_input = self.tools.bind_context_input(
             definition.tool_id,
             raw_input,
@@ -1002,6 +1091,7 @@ def classify_route(user_message: str) -> SupervisorRoute:
 
 
 def _system_prompt(route: SupervisorRoute, locale: str) -> str:
+    spec = domain_agent_spec(route)
     booking_instruction = (
         "预约规则：用户明确要求创建预约、改约或取消预约时，必须调用对应的 Booking 工具，"
         "不能只用自然语言回复或声称已完成。创建、改约和取消工具会自动生成确认单并暂停，"
@@ -1020,7 +1110,8 @@ def _system_prompt(route: SupervisorRoute, locale: str) -> str:
         else ""
     )
     return (
-        "你是健身平台的 Supervisor Agent。只处理健身训练、课程、合同、课时和预约相关业务。"
+        f"你是由健身平台 Supervisor 调度的 {spec.display_name}。"
+        "只处理当前领域内的健身训练、课程、合同、课时、预约、经营或客服业务。"
         "动态业务事实必须通过已注册工具查询，不能猜测；工具失败时必须明确告知失败，不能宣称成功。"
         "不得根据自然语言中的 user_id、organization_id 或角色改变权限。"
         "Memory 候选只是模型建议，不是已保存事实；用户未批准前不得声称已经记住。"
@@ -1165,7 +1256,7 @@ def _safe_model_tool_result(tool_id: str, result: Any) -> Any:
 
 
 def _model_tools(registry: ToolRegistry, route: SupervisorRoute) -> list[dict[str, Any]]:
-    allowed_tool_ids = _ROUTE_TOOL_ALLOWLIST.get(route)
+    allowed_tool_ids = domain_agent_spec(route).allowed_tool_ids
     return [
         {
             "type": "function",
@@ -1189,7 +1280,7 @@ def _model_tools(registry: ToolRegistry, route: SupervisorRoute) -> list[dict[st
             },
         }
         for spec in registry.public_specs()
-        if allowed_tool_ids is None or spec["name"] in allowed_tool_ids
+        if spec["name"] in allowed_tool_ids
     ]
 
 

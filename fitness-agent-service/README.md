@@ -22,7 +22,9 @@
 - Tool Registry：版本化注册首批健身只读工具，校验输入 Schema、限制未知工具，并记录不含原始参数的调用审计。
 - Operations 管理审计：管理员可通过 `/api/v1/admin/operations/query-audits` 按机构、固定指标、时间桶、比较周期、状态和创建时间分页查询经营查询审计；响应同时附带固定指标口径元数据，组织管理员只能查看签名机构范围，接口不返回 SQL、Prompt 或业务明细；指标、时间桶和比较周期的组合会按固定目录校验，不支持的组合返回 `422`。当前固定指标支持上一等长周期环比和上一自然年同期同比，日期边界与除零处理由程序确定；新增 `COMPLETED_CLASS_COUNT`，按已完成/核销成功预约统计完课量；新增 `NEW_CUSTOMER_COUNT`，按有效合同的新客标记统计去重学员数；新增 `REVENUE_AMOUNT`，按合同创建口径统计扣除退款后的净营收。`/api/v1/admin/operations/metric-catalog` 提供不含业务数据的指标能力目录，带有内容版本、ETag 和私有缓存语义，供前端动态生成筛选器和报表配置。
 - Operations Agent 端到端联调：经营问题经过 Supervisor 路由、固定指标工具、Tool Registry 角色/参数校验、Java Gateway 和审计后，才由模型基于真实聚合结果生成摘要；集成测试同时验证管理员成功查询和学员越权请求在到达 Gateway 前被阻断。
-- Supervisor Runtime：基于 LangGraph 执行模型 Tool Calling、工具预算、真实结果回填和业务范围护栏。
+- Supervisor Runtime：顶层 Supervisor Router 挂载 Fitness、Booking、Operations、Customer Service
+  四个真正编译的 LangGraph 领域子图；子图使用独立 namespace、领域提示和工具白名单，统一执行
+  Tool Calling、工具预算、真实结果回填、跨领域 fail-closed 和写操作确认恢复。
 - 会话持久化：PostgreSQL 保存 LangGraph Checkpoint，Redis 负责会话互斥锁和短期状态。
 - RAG 基础：Alembic 管理版本化知识文档、切片、租户/角色权限字段和 pgvector HNSW 索引；
   检索顺序固定为服务端权限过滤 → 向量/关键词混合候选召回 → RRF 融合 → 真实 Reranker
