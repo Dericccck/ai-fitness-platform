@@ -125,16 +125,22 @@ flowchart LR
 
 ## 7. 本地验收结果
 
-最近一次最终质量门禁结果：
+截至 2026-08-30，最近一次最终质量门禁结果：
 
-- Agent：`421 passed, 8 skipped`；
+- Agent：`442 passed, 8 skipped`；跳过项是明确依赖外部生产环境或真实业务写入的检查，不代表测试失败；
 - OCR、Gateway、Training、Booking、Customer Service：构建和测试通过；
 - RAG、Operations、会话摘要评测：全部达到阈值；
 - ClamAV：正常文件通过，EICAR 测试串拒绝；
 - PostgreSQL 迁移、备份恢复、RabbitMQ 恢复和容量基线：通过；
 - Prometheus：7 条告警规则加载成功；
 - Alertmanager：配置检查、`firing`、`resolved` 和 critical 抑制 warning 通过；
+- OCR 契约检查：版本、媒体类型、页码、置信度、区域坐标和 fail-closed 规则通过；
+- 生产 staging 清单：使用当前 Git 提交和镜像摘要完成结构校验；
 - `make release-check`：通过。
+
+需要特别区分两类结果：当前已完成的是 OCR 服务契约、解析结果安全校验、OCR 联调检查器和本地可用的解析链路；由于本机没有 Linux amd64/GPU 推理环境，真实 PaddleOCR/PP-StructureV3 生产推理尚未完成。图片密集页在没有可信 OCR 结果时会被安全地阻断或转入审核边界，不会把低质量识别结果直接写入知识库。
+
+本次发布收口后，项目状态为“本地企业化验收完成、具备进入预发布准备条件”，不等同于已经完成生产上线。
 
 ## 8. 本地运行入口
 
@@ -172,6 +178,8 @@ make release-check
 5. 在独立预发布环境完成包含 LLM、RAG、数据库和 Gateway 的容量压测及灰度回滚；
 6. 在 Linux amd64/GPU 或独立推理节点完成 OCR 服务生产部署；
 7. 最后再升级 PDF 深度解析和图片动作结构化能力。
+
+其中第 6 项是当前明确的环境阻塞项：需要在 Linux amd64/GPU 或独立推理节点部署并验收真实 OCR 服务；在该环境具备前，只能完成契约级和 Mock/替身链路验收，不能宣称已完成真实 OCR 生产验收。
 
 ## 10. 简历表述边界
 
