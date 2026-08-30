@@ -24,6 +24,7 @@ def test_http_ocr_provider_validates_structure_and_preserves_coordinates() -> No
         return httpx.Response(
             200,
             json={
+                "contract_version": "ocr-service-v1",
                 "media_type": "application/pdf",
                 "blocks": [
                     {
@@ -68,12 +69,33 @@ def test_http_ocr_provider_rejects_malformed_response() -> None:
         provider.parse(blank_pdf(), file_name="scan.pdf")
 
 
+def test_http_ocr_provider_rejects_unknown_contract_version() -> None:
+    client = httpx.Client(
+        transport=httpx.MockTransport(
+            lambda request: httpx.Response(
+                200,
+                json={
+                    "contract_version": "ocr-service-v2",
+                    "blocks": [{"kind": "TEXT", "content": "OCR text", "source_page": 1}],
+                },
+            )
+        )
+    )
+    provider = HttpPdfOcrProvider("https://ocr.internal/v1/parse", client=client)
+
+    with pytest.raises(DocumentParseError, match="contract_version"):
+        provider.parse(blank_pdf(), file_name="scan.pdf")
+
+
 def test_http_ocr_provider_rejects_missing_confidence_or_region() -> None:
     client = httpx.Client(
         transport=httpx.MockTransport(
             lambda request: httpx.Response(
                 200,
-                json={"blocks": [{"kind": "TEXT", "content": "OCR text", "source_page": 1}]},
+                json={
+                    "contract_version": "ocr-service-v1",
+                    "blocks": [{"kind": "TEXT", "content": "OCR text", "source_page": 1}],
+                },
             )
         )
     )

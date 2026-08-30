@@ -51,6 +51,9 @@ class OcrResponse(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
+    # 契约版本必须跟着响应一起返回。这样 Agent 可以在进入分块、Embedding
+    # 和知识库写入前拒绝未知版本，避免 OCR 服务升级后出现静默字段漂移。
+    contract_version: Literal["ocr-service-v1"] = "ocr-service-v1"
     media_type: Literal["application/pdf"] = "application/pdf"
     warnings: list[str] = Field(default_factory=list)
     blocks: list[OcrBlock] = Field(min_length=1)

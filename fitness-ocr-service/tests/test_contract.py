@@ -67,6 +67,7 @@ def test_parse_preserves_contract_and_table_header() -> None:
         )
     assert response.status_code == 200
     payload = response.json()
+    assert payload["contract_version"] == "ocr-service-v1"
     assert payload["blocks"][0]["source_page"] == 2
     assert payload["blocks"][0]["heading_path"] == ["训练计划"]
     assert payload["blocks"][0]["confidence"] == 0.98
@@ -116,3 +117,45 @@ def test_parse_rejects_engine_output_without_confidence_or_region() -> None:
     )
 
     assert response.status_code == 503
+
+
+def test_parse_accepts_array_like_scores_and_bounding_boxes() -> None:
+    class ArrayLike:
+        def __init__(self, values: list[float]) -> None:
+            self.values = values
+
+        def tolist(self) -> list[float]:
+            return list(self.values)
+
+    class NestedArrayLike:
+        def tolist(self) -> list[list[float]]:
+            return [[10, 10], [90, 10], [90, 30], [10, 30]]
+
+    class ArrayEngine(FakeEngine):
+        def predict(self, input_path: str):
+            del input_path
+            return [
+                {
+                    "overall_ocr_res": {"rec_scores": ArrayLike([0.91, 0.95])},
+                    "parsing_res_list": [
+                        {
+                            "block_label": "text",
+                            "block_content": "数组型结果",
+                            "block_bbox": NestedArrayLike(),
+                        }
+                    ],
+                }
+            ]
+
+    with TestClient(
+        create_app(settings=Settings(auth_required=False), engine=ArrayEngine())
+    ) as client:
+        response = client.post(
+            "/v1/parse",
+            files={"file": ("plan.pdf", _pdf_bytes(1), "application/pdf")},
+        )
+
+    assert response.status_code == 200
+    block = response.json()["blocks"][0]
+    assert block["confidence"] == 0.9299999999999999
+    assert block["source_region"]["width"] == 0.8

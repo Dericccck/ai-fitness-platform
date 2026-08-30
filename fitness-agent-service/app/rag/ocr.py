@@ -15,6 +15,8 @@ from .formats import (
     PdfPageRoute,
 )
 
+OCR_CONTRACT_VERSION = "ocr-service-v1"
+
 
 class OcrServiceUnavailable(DocumentParseError):
     """已配置的 OCR 服务没有提供有效响应。"""
@@ -26,6 +28,7 @@ class HttpPdfOcrProvider:
     期望的响应结构：
 
         {
+          "contract_version": "ocr-service-v1",
           "media_type": "application/pdf",
           "warnings": [],
           "blocks": [{
@@ -98,6 +101,8 @@ def _parsed_document_from_payload(
 
     if not isinstance(payload, dict) or not isinstance(payload.get("blocks"), list):
         raise DocumentParseError("OCR response must contain a blocks array")
+    if payload.get("contract_version") != OCR_CONTRACT_VERSION:
+        raise DocumentParseError("OCR response has unsupported contract_version")
     blocks: list[ParsedBlock] = []
     for raw_block in payload["blocks"]:
         if not isinstance(raw_block, dict):

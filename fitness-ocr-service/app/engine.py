@@ -189,15 +189,11 @@ def _page_confidence(payload: Mapping[str, Any]) -> float | None:
             return float(value)
     overall = payload.get("overall_ocr_res")
     if isinstance(overall, Mapping):
-        scores = overall.get("rec_scores") or overall.get("scores")
-        if isinstance(scores, list):
-            valid = [
-                float(score)
-                for score in scores
-                if isinstance(score, (int, float))
-                and not isinstance(score, bool)
-                and 0 <= score <= 1
-            ]
+        scores = _as_sequence(overall.get("rec_scores"))
+        if scores is None:
+            scores = _as_sequence(overall.get("scores"))
+        if scores is not None:
+            valid = [score for score in _numeric_values(scores) if 0 <= score <= 1]
             if valid:
                 return sum(valid) / len(valid)
     return None
@@ -233,13 +229,10 @@ def _block_source_region(
         ),
         None,
     )
-    if not isinstance(raw_box, (list, tuple)) or len(raw_box) < 4:
+    raw_coordinates = _as_sequence(raw_box)
+    if raw_coordinates is None or len(raw_coordinates) < 4:
         raise OcrEngineError("OCR block has no source bounding box")
-    coordinates = [
-        value
-        for value in raw_box
-        if isinstance(value, (int, float)) and not isinstance(value, bool)
-    ]
+    coordinates = _numeric_values(raw_coordinates)
     if len(coordinates) < 4:
         raise OcrEngineError("OCR block source bounding box is invalid")
     if len(coordinates) >= 8:
@@ -255,6 +248,40 @@ def _block_source_region(
         width=round(min(1.0, x1 / page_width) - max(0.0, x0 / page_width), 6),
         height=round(min(1.0, y1 / page_height) - max(0.0, y0 / page_height), 6),
     )
+
+
+def _as_sequence(value: Any) -> list[Any] | None:
+    """把 Paddle/NumPy 的数组型结果安全转换为普通列表。
+
+    PaddleOCR 的不同版本和不同推理后端可能把识别分数、四边形坐标返回为
+    ``list``、``tuple`` 或带 ``tolist()`` 方法的 NumPy 数组。这里仅接受一维
+    可枚举结果，不直接导入 NumPy，避免让 OCR 服务的契约转换层绑定某个运行时。
+    """
+
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    tolist = getattr(value, "tolist", None)
+    if callable(tolist):
+        try:
+            converted = tolist()
+        except Exception:  # noqa: BLE001 - 第三方数组对象可能在转换时抛出任意异常。
+            return None
+        if isinstance(converted, list):
+            return converted
+    return None
+
+
+def _numeric_values(value: Any) -> list[float]:
+    """递归展开一维或二维数组中的数值，兼容四边形坐标的嵌套形式。"""
+
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return [float(value)]
+    if isinstance(value, (list, tuple)):
+        flattened: list[float] = []
+        for item in value:
+            flattened.extend(_numeric_values(item))
+        return flattened
+    return []
 
 
 def _safe_text(value: Any, default: str) -> str:

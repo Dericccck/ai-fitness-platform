@@ -25,6 +25,7 @@ Authorization: Bearer <service-secret>
 
 ```json
 {
+  "contract_version": "ocr-service-v1",
   "media_type": "application/pdf",
   "warnings": [],
   "blocks": [
@@ -40,6 +41,9 @@ Authorization: Bearer <service-secret>
   ]
 }
 ```
+
+`contract_version` 必须是 `ocr-service-v1`。Agent 会在处理 block 前校验版本；未知版本不会被
+当作兼容响应继续写入知识库，服务升级必须同步更新契约和回归测试。
 
 `kind` 只能是 `TEXT` 或 `TABLE`，`content` 不能为空。`confidence` 必须是 `0~1` 的模型置信度；
 `source_region` 使用页面左上角为原点的归一化坐标，且右下角不能超出页面。表格还可以提供 `table_index`、

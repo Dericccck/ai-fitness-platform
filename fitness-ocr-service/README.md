@@ -37,7 +37,7 @@ OCR_DEVICE=gpu
 ```
 
 当前服务使用 `/v1/parse` multipart 请求，`pages` 是可选的 1-based 页码列表。返回结果只包含
-`TEXT`/`TABLE` block，表格会统一转成带表头的 Markdown，并保留原始页码、置信度和页面区域。完整契约见
+`TEXT`/`TABLE` block，响应带有 `ocr-service-v1` 契约版本，表格会统一转成带表头的 Markdown，并保留原始页码、置信度和页面区域。完整契约见
 `../docs/contracts/ocr-service-v1.md`。
 
 ## 运行时约束
