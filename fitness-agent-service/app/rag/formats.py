@@ -350,6 +350,11 @@ class PdfParser:
                                 metadata={
                                     **page_metadata,
                                     "table_header_repeated": True,
+                                    "table_column_count": _table_column_count(table),
+                                    "table_row_count": _table_row_count(table),
+                                    "table_header_signature": _table_header_signature(table),
+                                    "table_header_key": _table_header_key(table),
+                                    "table_continuation_status": "SINGLE_PAGE",
                                 },
                             )
                         )
@@ -408,6 +413,7 @@ class PdfParser:
                 warnings.append(
                     f"page {profile.page_number} requires OCR and professional visual review"
                 )
+        blocks = _annotate_pdf_table_continuations(blocks)
         return ParsedDocument(
             tuple(blocks),
             "application/pdf",
@@ -1256,6 +1262,148 @@ def _extract_pdf_text_outside_tables(
         return filtered_page.extract_text(layout=False) or ""
     except Exception:  # noqa: BLE001 - 坐标过滤失败时保留原文本，不丢正文
         return page.extract_text(layout=False) or ""  # type: ignore[attr-defined]
+
+
+def _table_rows_for_metadata(
+    rows: Sequence[Sequence[str | None]],
+) -> list[list[str]]:
+    """按与 Markdown 渲染相同的规则规范化表格行，供续表判断使用。"""
+
+    cleaned = [
+        ["" if cell is None else _normalize_pdf_line(str(cell)) for cell in row]
+        for row in rows
+    ]
+    return [row for row in cleaned if any(cell.strip() for cell in row)]
+
+
+def _table_column_count(rows: Sequence[Sequence[str | None]]) -> int:
+    """返回规范化表格的最大列数。"""
+
+    return max((len(row) for row in _table_rows_for_metadata(rows)), default=0)
+
+
+def _table_row_count(rows: Sequence[Sequence[str | None]]) -> int:
+    """返回规范化表格的非空行数，包含表头。"""
+
+    return len(_table_rows_for_metadata(rows))
+
+
+def _table_header_signature(rows: Sequence[Sequence[str | None]]) -> str:
+    """返回去空白、大小写无关的完整表头签名。"""
+
+    normalized = _table_rows_for_metadata(rows)
+    if not normalized:
+        return ""
+    return "|".join(cell.casefold() for cell in normalized[0])
+
+
+def _table_header_key(rows: Sequence[Sequence[str | None]]) -> str:
+    """返回第一列表头，用于发现疑似续表但列形状不一致的情况。"""
+
+    normalized = _table_rows_for_metadata(rows)
+    return normalized[0][0].casefold() if normalized and normalized[0] else ""
+
+
+def _annotate_pdf_table_continuations(blocks: Sequence[ParsedBlock]) -> list[ParsedBlock]:
+    """为相邻页面的表格建立保守续接关系，不直接拼接不确定的表格。"""
+
+    table_positions = [
+        index
+        for index, block in enumerate(blocks)
+        if block.kind == "TABLE" and block.source_page is not None
+    ]
+    if not table_positions:
+        return list(blocks)
+
+    tables_by_page: dict[int, list[int]] = {}
+    for position in table_positions:
+        page = blocks[position].source_page
+        assert page is not None
+        tables_by_page.setdefault(page, []).append(position)
+
+    annotated = list(blocks)
+    # 先为每张表设置稳定的单页组标识；只有满足强证据时才共享组标识。
+    for position in table_positions:
+        block = annotated[position]
+        metadata = dict(block.metadata or {})
+        page = block.source_page
+        table_index = block.table_index
+        metadata.setdefault(
+            "table_continuation_group",
+            f"page-{page}-table-{table_index if table_index is not None else position}",
+        )
+        metadata.setdefault("table_continuation_status", "SINGLE_PAGE")
+        annotated[position] = replace(block, metadata=metadata)
+
+    for page in sorted(tables_by_page):
+        next_page = page + 1
+        if next_page not in tables_by_page:
+            continue
+        previous_positions = tables_by_page[page]
+        next_positions = tables_by_page[next_page]
+        for previous_position in previous_positions:
+            previous = annotated[previous_position]
+            previous_metadata = previous.metadata or {}
+            for next_position in next_positions:
+                current = annotated[next_position]
+                current_metadata = current.metadata or {}
+                same_header = bool(
+                    previous_metadata.get("table_header_signature")
+                    and previous_metadata.get("table_header_signature")
+                    == current_metadata.get("table_header_signature")
+                )
+                same_columns = previous_metadata.get("table_column_count") == current_metadata.get(
+                    "table_column_count"
+                )
+                same_first_header = bool(
+                    previous_metadata.get("table_header_key")
+                    and previous_metadata.get("table_header_key")
+                    == current_metadata.get("table_header_key")
+                )
+                if same_header and same_columns:
+                    if len(previous_positions) == len(next_positions) == 1:
+                        group_id = str(previous_metadata["table_continuation_group"])
+                        previous_metadata = {
+                            **previous_metadata,
+                            "table_continuation_group": group_id,
+                            "table_continuation_status": "CONTINUATION_START",
+                        }
+                        current_metadata = {
+                            **current_metadata,
+                            "table_continuation_group": group_id,
+                            "table_continuation_status": "CONTINUATION",
+                        }
+                        annotated[previous_position] = replace(
+                            previous,
+                            metadata=previous_metadata,
+                        )
+                        annotated[next_position] = replace(current, metadata=current_metadata)
+                    else:
+                        # 多表页面即使表头相同，也无法仅凭页码确认对应关系，必须人工复核。
+                        for candidate_position in (previous_position, next_position):
+                            candidate = annotated[candidate_position]
+                            candidate_metadata = {
+                                **(candidate.metadata or {}),
+                                "table_continuation_status": "AMBIGUOUS_REVIEW",
+                            }
+                            annotated[candidate_position] = replace(
+                                candidate,
+                                metadata=candidate_metadata,
+                            )
+                elif same_first_header and not same_columns:
+                    # 第一列表头相同但列数变化，可能是续表被截断，也可能是相邻的另一张表。
+                    # 不拼接，统一显式标记形状不一致，交给质量门禁/人工复核。
+                    for candidate_position in (previous_position, next_position):
+                        candidate = annotated[candidate_position]
+                        candidate_metadata = {
+                            **(candidate.metadata or {}),
+                            "table_continuation_status": "SHAPE_MISMATCH_REVIEW",
+                        }
+                        annotated[candidate_position] = replace(
+                            candidate,
+                            metadata=candidate_metadata,
+                        )
+    return annotated
 
 
 class DocxParser:

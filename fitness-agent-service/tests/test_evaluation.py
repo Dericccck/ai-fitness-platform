@@ -203,6 +203,26 @@ def test_document_quality_does_not_count_complete_heading_parent_as_fragment() -
     assert metrics.fragment_block_count == 0
 
 
+def test_document_quality_blocks_ambiguous_table_continuation() -> None:
+    from app.rag.document_quality import DocumentQualityThresholds, measure_document_quality
+    from app.rag.formats import ParsedBlock
+
+    metrics = measure_document_quality(
+        [
+            ParsedBlock(
+                kind="TABLE",
+                content="| 指标 | 数值 |\n| --- | --- |\n| A | 1 |",
+                metadata={"table_continuation_status": "AMBIGUOUS_REVIEW"},
+            )
+        ],
+        [],
+    )
+
+    assert metrics.table_integrity == 0.0
+    assert metrics.table_ambiguous_continuation_count == 1
+    assert "table_integrity" in " ".join(DocumentQualityThresholds().validate(metrics))
+
+
 def test_quality_report_comparison_requires_same_source_and_marks_directions() -> None:
     from app.rag.document_quality import compare_quality_reports
 

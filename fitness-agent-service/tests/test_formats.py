@@ -5,8 +5,10 @@ import pytest
 from app.rag.formats import (
     DocumentParseError,
     DocumentParserRegistry,
+    ParsedBlock,
     PdfPageRoutingPolicy,
     UnsupportedDocumentFormatError,
+    _annotate_pdf_table_continuations,
     _clean_pdf_lines,
     _is_pdf_layout_noise_table,
     _join_pdf_lines,
@@ -218,6 +220,90 @@ def test_pdf_structural_detection_accepts_short_all_caps_headings_only() -> None
     assert _is_pdf_structural_line("ABBREVIATIONS AND ACRONYMS")
     assert not _is_pdf_structural_line(
         "DO NOT increase intensity rapidly when pain or dizziness occurs during exercise."
+    )
+
+
+def test_pdf_table_metadata_links_confirmed_cross_page_continuation() -> None:
+    blocks = _annotate_pdf_table_continuations(
+        [
+            ParsedBlock(
+                kind="TABLE",
+                content="| 动作 | 组数 |\n| --- | --- |\n| 深蹲 | 4 |",
+                source_page=51,
+                table_index=0,
+                metadata={
+                    "table_header_signature": "动作|组数",
+                    "table_header_key": "动作",
+                    "table_column_count": 2,
+                    "table_row_count": 2,
+                    "table_continuation_status": "SINGLE_PAGE",
+                },
+            ),
+            ParsedBlock(
+                kind="TABLE",
+                content="| 动作 | 组数 |\n| --- | --- |\n| 硬拉 | 3 |",
+                source_page=52,
+                table_index=0,
+                metadata={
+                    "table_header_signature": "动作|组数",
+                    "table_header_key": "动作",
+                    "table_column_count": 2,
+                    "table_row_count": 2,
+                    "table_continuation_status": "SINGLE_PAGE",
+                },
+            ),
+        ]
+    )
+
+    assert blocks[0].metadata["table_continuation_status"] == "CONTINUATION_START"
+    assert blocks[1].metadata["table_continuation_status"] == "CONTINUATION"
+    assert blocks[0].metadata["table_continuation_group"] == blocks[1].metadata[
+        "table_continuation_group"
+    ]
+
+
+def test_pdf_table_metadata_marks_ambiguous_same_header_pages_for_review() -> None:
+    blocks = _annotate_pdf_table_continuations(
+        [
+            ParsedBlock(
+                kind="TABLE",
+                content="| 指标 | 数值 |\n| --- | --- |\n| A | 1 |",
+                source_page=1,
+                table_index=0,
+                metadata={
+                    "table_header_signature": "指标|数值",
+                    "table_header_key": "指标",
+                    "table_column_count": 2,
+                },
+            ),
+            ParsedBlock(
+                kind="TABLE",
+                content="| 指标 | 数值 |\n| --- | --- |\n| B | 2 |",
+                source_page=1,
+                table_index=1,
+                metadata={
+                    "table_header_signature": "指标|数值",
+                    "table_header_key": "指标",
+                    "table_column_count": 2,
+                },
+            ),
+            ParsedBlock(
+                kind="TABLE",
+                content="| 指标 | 数值 |\n| --- | --- |\n| C | 3 |",
+                source_page=2,
+                table_index=0,
+                metadata={
+                    "table_header_signature": "指标|数值",
+                    "table_header_key": "指标",
+                    "table_column_count": 2,
+                },
+            ),
+        ]
+    )
+
+    assert all(
+        block.metadata["table_continuation_status"] == "AMBIGUOUS_REVIEW"
+        for block in blocks
     )
 
 

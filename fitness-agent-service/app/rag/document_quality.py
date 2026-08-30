@@ -36,6 +36,8 @@ _COMPARISON_METRICS = (
     "page_coverage",
     "missing_pages",
     "ocr_required_pages",
+    "table_ambiguous_continuation_count",
+    "table_shape_mismatch_count",
 )
 _LOWER_IS_BETTER = frozenset(
     {
@@ -45,6 +47,8 @@ _LOWER_IS_BETTER = frozenset(
         "duplicate_glyph_block_count",
         "missing_pages",
         "ocr_required_pages",
+        "table_ambiguous_continuation_count",
+        "table_shape_mismatch_count",
     }
 )
 _HIGHER_IS_BETTER = frozenset({"parent_integrity", "table_integrity", "page_coverage"})
@@ -77,6 +81,9 @@ class DocumentQualityMetrics:
     repeated_edge_line_count: int = 0
     dehyphenated_line_break_count: int = 0
     layout_reordered_page_count: int = 0
+    table_continuation_count: int = 0
+    table_ambiguous_continuation_count: int = 0
+    table_shape_mismatch_count: int = 0
 
     @property
     def noise_rate(self) -> float:
@@ -149,6 +156,9 @@ class DocumentQualityMetrics:
             "repeated_edge_line_count": self.repeated_edge_line_count,
             "dehyphenated_line_break_count": self.dehyphenated_line_break_count,
             "layout_reordered_page_count": self.layout_reordered_page_count,
+            "table_continuation_count": self.table_continuation_count,
+            "table_ambiguous_continuation_count": self.table_ambiguous_continuation_count,
+            "table_shape_mismatch_count": self.table_shape_mismatch_count,
         }
 
 
@@ -383,7 +393,10 @@ def measure_document_quality(
     parent_count = len(drafts)
     parent_complete_count = sum(_draft_has_complete_parent(draft) for draft in drafts)
     tables = [block for block in blocks if block.kind == "TABLE"]
-    valid_table_count = sum(_is_valid_markdown_table(block.content) for block in tables)
+    valid_table_count = sum(
+        _is_valid_markdown_table(block.content) and not _table_has_continuation_issue(block)
+        for block in tables
+    )
     extracted_page_set = {block.source_page for block in blocks if block.source_page is not None}
     excluded_pages = tuple(
         sorted(profile.page_number for profile in page_profiles if profile.toc_detected)
@@ -438,6 +451,20 @@ def measure_document_quality(
         ),
         layout_reordered_page_count=sum(
             profile.detected_columns > 1 for profile in page_profiles
+        ),
+        table_continuation_count=sum(
+            (block.metadata or {}).get("table_continuation_status")
+            in {"CONTINUATION_START", "CONTINUATION"}
+            for block in tables
+        ),
+        table_ambiguous_continuation_count=sum(
+            (block.metadata or {}).get("table_continuation_status") == "AMBIGUOUS_REVIEW"
+            for block in tables
+        ),
+        table_shape_mismatch_count=sum(
+            (block.metadata or {}).get("table_continuation_status")
+            == "SHAPE_MISMATCH_REVIEW"
+            for block in tables
         ),
     )
 
@@ -555,6 +582,15 @@ def _draft_has_complete_parent(draft: ChunkDraft) -> bool:
         return False
     token_coverage = sum(token in parent_normalized for token in child_tokens) / len(child_tokens)
     return token_coverage >= 0.98
+
+
+def _table_has_continuation_issue(block: ParsedBlock) -> bool:
+    """判断表格是否存在无法自动确认的跨页续接风险。"""
+
+    return (block.metadata or {}).get("table_continuation_status") in {
+        "AMBIGUOUS_REVIEW",
+        "SHAPE_MISMATCH_REVIEW",
+    }
 
 
 def _is_valid_markdown_table(content: str) -> bool:
