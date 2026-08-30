@@ -1978,3 +1978,13 @@ PDF 深度解析的剩余收尾顺序固定为：
 本轮真实 MySQL 恢复因当前 Codex 沙箱无法访问 Docker socket，未执行成功；不能把它写成实测通过。应在本机终端 Docker 权限正常时执行
 `make gateway-mysql-backup-restore-check ARGS="--execute --rto-target-seconds 60"`，再把实际备份大小、数据规模和 RTO 写入验收记录。
 即使本地演练通过，也不能替代生产级跨区域备份、加密对象存储或 PITR 证据。
+
+本轮完成最终本地质量门禁复核：
+
+- `make release-check` 通过：Agent 质量检查与评测通过，Agent 测试为 `457 passed`、`8 skipped`，OCR 契约、ClamAV、Gateway、
+  Training、Booking、Customer Service、迁移契约和可观测性检查均通过；8 个跳过项是外部认证、真实业务写入或生产环境依赖。
+- 本轮未把当前开发机上的 IDEA 配置文件纳入提交；`fitness-core-gateway/.idea/runConfigurations/FitnessCoreGatewayApplication.xml`
+  仍属于本地未提交配置。
+- 当前仓库可本地完成的 Agent 业务、RAG、权限、确认、幂等、Memory、主动提醒、Operations、Booking、Fitness、客服和质量门禁已收口。
+  剩余事项不是继续堆功能，而是把外部环境证据补齐：真实 MySQL 隔离恢复（脚本已完成但本轮被 Docker socket 权限阻塞）、真实认证服务
+  JWKS、生产最小权限账号、对象存储/WAL/PITR、企业值班路由、预发布联合压测和灰度回滚。

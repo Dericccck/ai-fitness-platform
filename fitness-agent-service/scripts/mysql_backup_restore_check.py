@@ -113,9 +113,7 @@ def build_config(args: argparse.Namespace) -> CheckConfig:
     if timeout_seconds < 10 or timeout_seconds > 1800:
         raise MysqlBackupRestoreCheckError("timeout-seconds 必须在 10 到 1800 秒之间")
     if rto_target_seconds <= 0 or rto_target_seconds > timeout_seconds:
-        raise MysqlBackupRestoreCheckError(
-            "rto-target-seconds 必须大于 0 且不超过 timeout-seconds"
-        )
+        raise MysqlBackupRestoreCheckError("rto-target-seconds 必须大于 0 且不超过 timeout-seconds")
     password = str(args.password)
     if not password:
         raise MysqlBackupRestoreCheckError("数据库密码不能为空")
@@ -130,12 +128,22 @@ def build_config(args: argparse.Namespace) -> CheckConfig:
     )
 
 
-def _docker_exec(config: CheckConfig, *command: str, label: str, input_data: bytes | None = None) -> bytes:
+def _docker_exec(
+    config: CheckConfig, *command: str, label: str, input_data: bytes | None = None
+) -> bytes:
     """执行容器内命令；失败时只输出最后一行诊断，不回显密码或完整 SQL。"""
 
     try:
         result = subprocess.run(
-            ["docker", "exec", "-i", "-e", "MYSQL_PWD=" + config.password, config.container, *command],
+            [
+                "docker",
+                "exec",
+                "-i",
+                "-e",
+                "MYSQL_PWD=" + config.password,
+                config.container,
+                *command,
+            ],
             input=input_data,
             capture_output=True,
             check=False,
@@ -357,7 +365,9 @@ def run(config: CheckConfig) -> None:
             f"verification_seconds={verification_seconds:.2f}; "
             f"rto_seconds={rto_seconds:.2f}; rto_target_seconds={config.rto_target_seconds:.2f}"
         )
-        print("rpo_measurement=logical_backup_consistency_point; 生产 RPO 仍需通过 binlog/PITR 确定")
+        print(
+            "rpo_measurement=logical_backup_consistency_point; 生产 RPO 仍需通过 binlog/PITR 确定"
+        )
     finally:
         if created:
             _drop_database(config, temporary_database)

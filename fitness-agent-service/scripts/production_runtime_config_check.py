@@ -164,9 +164,7 @@ def validate_runtime_directory(env_dir: Path) -> None:
         values = _parse_runtime_file(env_dir / filename)
         missing = sorted(RUNTIME_REQUIRED_KEYS[service] - values.keys())
         if missing:
-            raise ProductionRuntimeConfigError(
-                f"{service} 缺少运行时配置键：{', '.join(missing)}"
-            )
+            raise ProductionRuntimeConfigError(f"{service} 缺少运行时配置键：{', '.join(missing)}")
         for key in RUNTIME_REQUIRED_KEYS[service]:
             _check_value(service, key, values[key])
         for (fixed_service, key), expected in FIXED_VALUES.items():
@@ -183,13 +181,16 @@ def validate_runtime_directory(env_dir: Path) -> None:
         (agent, "AGENT_GATEWAY_INTERNAL_SERVICE_TOKEN", gateway, "GATEWAY_INTERNAL_SERVICE_TOKEN"),
         (gateway, "GATEWAY_TRAINING_SERVICE_TOKEN", training, "TRAINING_INTERNAL_SERVICE_TOKEN"),
         (gateway, "GATEWAY_BOOKING_SERVICE_TOKEN", booking, "BOOKING_INTERNAL_SERVICE_TOKEN"),
-        (gateway, "GATEWAY_CUSTOMER_SERVICE_TOKEN", customer_service, "CUSTOMER_SERVICE_INTERNAL_SERVICE_TOKEN"),
+        (
+            gateway,
+            "GATEWAY_CUSTOMER_SERVICE_TOKEN",
+            customer_service,
+            "CUSTOMER_SERVICE_INTERNAL_SERVICE_TOKEN",
+        ),
     )
     for left, left_key, right, right_key in pairs:
         if left[left_key] != right[right_key]:
-            raise ProductionRuntimeConfigError(
-                f"跨服务 Token 不一致：{left_key} 与 {right_key}"
-            )
+            raise ProductionRuntimeConfigError(f"跨服务 Token 不一致：{left_key} 与 {right_key}")
 
     if agent["AGENT_RAG_OCR_BACKEND"] != "disabled":
         raise ProductionRuntimeConfigError("当前项目范围要求 AGENT_RAG_OCR_BACKEND=disabled")

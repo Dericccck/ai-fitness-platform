@@ -17,8 +17,7 @@ def _write_runtime_files(directory: Path) -> None:
     values_by_service: dict[str, dict[str, str]] = {}
     for service in SERVICE_FILES:
         values = {
-            key: "runtime-value"
-            for key in REQUIRED_KEYS[service] | RUNTIME_REQUIRED_KEYS[service]
+            key: "runtime-value" for key in REQUIRED_KEYS[service] | RUNTIME_REQUIRED_KEYS[service]
         }
         values.update(
             {
