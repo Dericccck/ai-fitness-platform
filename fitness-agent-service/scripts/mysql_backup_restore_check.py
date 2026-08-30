@@ -62,8 +62,8 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--password",
-        default=os.getenv("GATEWAY_DB_PASSWORD", "fitness_dev_2026"),
-        help="数据库密码，默认读取 GATEWAY_DB_PASSWORD",
+        default=os.getenv("GATEWAY_DB_PASSWORD", ""),
+        help="数据库密码，必须通过 GATEWAY_DB_PASSWORD 或 --password 注入",
     )
     parser.add_argument(
         "--timeout-seconds",
