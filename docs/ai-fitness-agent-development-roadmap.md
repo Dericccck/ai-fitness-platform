@@ -1461,6 +1461,10 @@ Booking 和 Fitness 的真实 dry-run、Agent 层角色矩阵、训练服务最�
 Customer Service 之间的共享 Token 一致性。真实 JWKS 地址、Secret Manager 注入和生产数据库账号仍属于
 外部环境交付，不能用本地占位值代替。
 
+JWKS 验收现在分为单套兼容检查和双套生产检查：`make agent-jwks-check` 保留 AgentContext 的
+兼容入口；生产切换使用 `make agent-jwks-dual-check`，同时验证 AgentContext 和确认凭证验证
+JWKS 的地址、RSA `kid` 和格式。两套公钥都必须来自真实认证服务，不能把本地测试 JWKS 作为生产验收证据。
+
 本阶段继续遵守以下范围约束：忽略赛事、作品和活动运营遗留模块；不建设身体测量、疼痛/疲劳量表、阶段性
 自动调参等暂不需要的复杂训练业务；不把任意 Text-to-SQL、短信、Push 或语音作为当前阶段的完成条件。
 

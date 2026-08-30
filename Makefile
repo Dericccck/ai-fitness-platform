@@ -2,7 +2,7 @@ SHELL := /bin/sh
 
 .PHONY: observability-check observability-live-check observability-rule-test observability-alertmanager-check observability-e2e-check
 
-.PHONY: agent-jwks-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-release-manifest-check agent-migration-check agent-migration-live-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check gateway-it production-config-check production-runtime-config-check
+.PHONY: agent-jwks-check agent-jwks-dual-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-release-manifest-check agent-migration-check agent-migration-live-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check gateway-it production-config-check production-runtime-config-check
 
 AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
@@ -47,6 +47,7 @@ help:
 	@echo "  agent-dev-context Sign a 5-minute local-only organization admin AgentContext"
 	@echo "  agent-session-summary-eval Run deterministic session summary security gates"
 	@echo "  agent-jwks-check Verify a real authentication service JWKS URL and kid"
+	@echo "  agent-jwks-dual-check Verify both AgentContext and confirmation credential JWKS sets"
 	@echo "  agent-run    Start the Agent API locally"
 	@echo "  agent-reindex-worker Start the knowledge index rebuild worker locally"
 	@echo "  agent-memory-expiry-worker Start the Memory candidate expiry worker locally"
@@ -176,6 +177,13 @@ agent-jwks-check:
 	@test -n "$$JWKS_URL" || (echo "请先设置 JWKS_URL（认证服务标准 JWKS 地址）"; exit 1)
 	@test -n "$$JWKS_KID" || (echo "请先设置 JWKS_KID（当前认证签名 kid）"; exit 1)
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/jwks_live_check.py
+
+agent-jwks-dual-check:
+	@test -n "$$JWKS_URL" || (echo "请先设置 JWKS_URL（AgentContext JWKS 地址）"; exit 1)
+	@test -n "$$JWKS_KID" || (echo "请先设置 JWKS_KID（AgentContext 当前 kid）"; exit 1)
+	@test -n "$$CONFIRMATION_JWKS_URL" || (echo "请先设置 CONFIRMATION_JWKS_URL（确认凭证 JWKS 地址）"; exit 1)
+	@test -n "$$CONFIRMATION_JWKS_KID" || (echo "请先设置 CONFIRMATION_JWKS_KID（确认凭证当前 kid）"; exit 1)
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/jwks_live_check.py --confirmation-jwks-url "$$CONFIRMATION_JWKS_URL" --confirmation-key-id "$$CONFIRMATION_JWKS_KID"
 
 ocr-sync:
 	cd fitness-ocr-service && UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --extra dev

@@ -88,6 +88,19 @@ make agent-jwks-check
 脚本会验证 JWKS 地址可访问、响应符合标准格式且包含指定 `kid`；未配置真实认证服务地址时，
 不要用本地测试 JWKS 结果替代生产验收。
 
+生产切换前应额外验收确认凭证验证公钥，避免只验证 AgentContext 而漏掉 Gateway 的第二套认证边界：
+
+```bash
+export JWKS_URL='https://认证服务.example.com/.well-known/jwks.json'
+export JWKS_KID='auth-context-v1'
+export CONFIRMATION_JWKS_URL='https://认证服务.example.com/.well-known/confirmation-jwks.json'
+export CONFIRMATION_JWKS_KID='fitness-confirmation-v1'
+make agent-jwks-dual-check
+```
+
+双 JWKS 检查只验证两套地址可访问、文档格式正确并包含预期 RSA `kid`；不签发 Token、不修改数据库、
+不输出公钥正文。地址和 `kid` 仍必须由真实认证服务提供，不能用本地测试值替代。
+
 ## 本地启动
 
 以下命令均在仓库根目录执行；本地环境模板会启用 ClamAV，模型密钥仍需按个人环境补充。
