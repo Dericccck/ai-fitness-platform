@@ -1,0 +1,27 @@
+-- Gateway 生产只读账号初始化模板
+--
+-- 使用方式：由 DBA 或数据库管理员在目标数据库执行，并将 <strong-password>
+-- 替换为 Secret Manager 中生成的强随机密码。不要把替换后的文件提交到 Git。
+-- 本脚本只创建/更新账号权限，不修改 fitness 业务表数据。
+
+CREATE USER IF NOT EXISTS 'fitness_gateway_ro'@'%' IDENTIFIED BY '<strong-password>';
+ALTER USER 'fitness_gateway_ro'@'%' IDENTIFIED BY '<strong-password>';
+
+REVOKE ALL PRIVILEGES, GRANT OPTION FROM 'fitness_gateway_ro'@'%';
+
+GRANT SELECT ON `fitness`.`login_user` TO 'fitness_gateway_ro'@'%';
+GRANT SELECT ON `fitness`.`login_user_authority` TO 'fitness_gateway_ro'@'%';
+GRANT SELECT ON `fitness`.`organization` TO 'fitness_gateway_ro'@'%';
+GRANT SELECT ON `fitness`.`user_and_coach` TO 'fitness_gateway_ro'@'%';
+GRANT SELECT ON `fitness`.`course` TO 'fitness_gateway_ro'@'%';
+GRANT SELECT ON `fitness`.`contract` TO 'fitness_gateway_ro'@'%';
+GRANT SELECT ON `fitness`.`appointment` TO 'fitness_gateway_ro'@'%';
+GRANT SELECT ON `fitness`.`system_settings` TO 'fitness_gateway_ro'@'%';
+GRANT SELECT ON `fitness`.`vacation_record` TO 'fitness_gateway_ro'@'%';
+
+FLUSH PRIVILEGES;
+
+-- 由 DBA 在不输出密码的会话中验证：
+-- SHOW GRANTS FOR 'fitness_gateway_ro'@'%';
+-- SELECT CURRENT_USER();
+-- 预期只有上述表的 SELECT，不应出现 INSERT/UPDATE/DELETE/ALTER/DROP 或 fitness.* 的 ALL PRIVILEGES。
