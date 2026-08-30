@@ -4,6 +4,10 @@
 
 当前项目明确不纳入赛事、作品和活动运营数据；恢复校验只关注机构、用户、教练、课程、合同、预约、训练、客服和 Agent 事件相关表。
 
+仓库提供本地受控验收入口：`make gateway-mysql-backup-restore-check` 默认只做前置检查；显式增加
+`ARGS="--execute --rto-target-seconds 60"` 后，会在 `fitness-mysql` 中创建唯一临时库、恢复并逐表校验，结束时自动清理。
+它只适用于当前本地测试容器，不替代生产备份平台。
+
 ## 1. 安全边界
 
 - 备份账号、数据库密码和对象存储密钥只能来自 Secret Manager 或临时受控终端，不能写进 Shell 历史、Git、脚本或日志。

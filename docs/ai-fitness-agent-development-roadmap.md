@@ -1973,4 +1973,8 @@ PDF 深度解析的剩余收尾顺序固定为：
 
 本轮继续补充 MySQL 灾备材料：新增 `deployment/operations/mysql-backup-restore-runbook.md`，固化
 备份参数、隔离恢复目标、utf8mb4/中文数据校验、健身核心表与 Agent 扩展表核对、RTO/RPO 记录和失败回滚边界。
-由于当前只有本地 Docker MySQL，尚未把本地演练结果写成生产级跨区域备份或 PITR 证据。
+新增 `scripts/mysql_backup_restore_check.py`、`make gateway-mysql-backup-restore-check` 和对应单元测试，自动执行
+本地 `fitness-mysql` 的前置检查、utf8mb4 逻辑备份、唯一临时库恢复、逐表行数核对和自动清理；静态检查和 6 个单元测试已通过。
+本轮真实 MySQL 恢复因当前 Codex 沙箱无法访问 Docker socket，未执行成功；不能把它写成实测通过。应在本机终端 Docker 权限正常时执行
+`make gateway-mysql-backup-restore-check ARGS="--execute --rto-target-seconds 60"`，再把实际备份大小、数据规模和 RTO 写入验收记录。
+即使本地演练通过，也不能替代生产级跨区域备份、加密对象存储或 PITR 证据。

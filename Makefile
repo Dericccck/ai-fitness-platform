@@ -58,6 +58,7 @@ help:
 	@echo "  agent-proactive-reliability-check Verify proactive message deduplication, retry and recovery boundaries"
 	@echo "  agent-proactive-reliability-live-check Verify real RabbitMQ duplicate delivery and Worker restart recovery"
 	@echo "  agent-postgres-backup-restore-check Verify Agent PostgreSQL logical backup and temporary database restore"
+	@echo "  gateway-mysql-backup-restore-check Verify MySQL logical backup, isolated restore and utf8mb4 data"
 	@echo "  agent-recovery-check Check Agent, Redis, Checkpoint and messaging recovery after restart"
 	@echo "  agent-rate-limit-load-check Verify concurrent Redis rate limiting without business writes"
 	@echo "  agent-capacity-check Verify Agent HTTP capacity baseline without business writes"
@@ -259,6 +260,9 @@ agent-proactive-reliability-live-check:
 
 agent-postgres-backup-restore-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/postgres_backup_restore_check.py $(ARGS)
+
+gateway-mysql-backup-restore-check:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/mysql_backup_restore_check.py $(ARGS)
 
 agent-recovery-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/service_recovery_check.py $(ARGS)

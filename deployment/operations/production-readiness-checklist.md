@@ -60,6 +60,9 @@ Gateway 的真实只读联调和 Booking 的本地受控写入已完成；正式
 - [ ] 在隔离 MySQL 实例恢复备份，核对核心健身表、Agent 扩展表、中文数据和关键索引。
 - [ ] 记录 MySQL 备份 RPO、恢复 RTO、数据校验结果和失败回滚步骤。
 
+本地验收入口：`make gateway-mysql-backup-restore-check ARGS="--execute --rto-target-seconds 60"`；该命令只使用本地
+`fitness-mysql` 的测试账号，临时恢复库命名空间固定为 `fitness_restore_`，完成后自动删除，不能替代生产备份账号和隔离实例。
+
 具体执行命令、字符集核对、隔离目标保护和证据模板见
 `deployment/operations/mysql-backup-restore-runbook.md`。
 
