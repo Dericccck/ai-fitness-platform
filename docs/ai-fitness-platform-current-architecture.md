@@ -170,6 +170,122 @@ flowchart LR
 
 随后 `conversation_thread_id()` 将 subject、机构、角色和 conversation id 做 SHA-256，得到形如 `fitness:<hash>` 的 LangGraph thread id，避免把原始用户 ID 直接放进 Checkpoint key。
 
+### 3.1.1 调用点和实现点要分开看
+
+阅读这段源码时容易产生一个误解：看到文档写了 `AgentContextVerifier.verify()`，就去 `app/api/routes/agent.py` 里寻找 `class AgentContextVerifier` 或完整的 `verify()` 实现。实际上这里采用的是“路由调用基础设施组件”的分层结构：
+
+```text
+app/api/routes/agent.py
+  ├─ 接收 HTTP Header: X-Agent-Context
+  ├─ 检查 Header 是否存在
+  ├─ 调用 request.app.state.context_verifier.verify(...)
+  ├─ 调用 conversation_thread_id(...)
+  ├─ 构造 SupervisorRequest
+  └─ 调用 Supervisor.invoke()
+
+app/main.py
+  └─ 在 lifespan() 启动阶段创建 AgentContextVerifier
+       app.state.context_verifier = AgentContextVerifier(...)
+
+app/infrastructure/agent_context.py
+  ├─ 定义 AgentIdentity
+  ├─ 定义 AgentContextVerifier
+  ├─ 实现 verify()
+  └─ 实现 conversation_thread_id()
+```
+
+对应真实源码调用点：
+
+| 位置 | 代码职责 |
+|---|---|
+| `fitness-agent-service/app/api/routes/agent.py:62` | `chat()` HTTP 路由函数开始 |
+| `fitness-agent-service/app/api/routes/agent.py:65` | 接收 `x_agent_context`，对应请求头 `X-Agent-Context` |
+| `fitness-agent-service/app/api/routes/agent.py:72-76` | Header 缺失时直接返回 `401 Unauthorized` |
+| `fitness-agent-service/app/api/routes/agent.py:78-84` | 调用 `request.app.state.context_verifier.verify(x_agent_context)`，验签失败转成 401 |
+| `fitness-agent-service/app/api/routes/agent.py:90-103` | 用验签后的 `identity` 构造 `SupervisorRequest` 并调用 `Supervisor.invoke()` |
+| `fitness-agent-service/app/main.py:96` 附近 | 启动时将 `AgentContextVerifier` 放入 `app.state`，供路由取用 |
+| `fitness-agent-service/app/infrastructure/agent_context.py:43` | `AgentContextVerifier` 类定义 |
+| `fitness-agent-service/app/infrastructure/agent_context.py:73` | `verify()` 方法具体实现 |
+| `fitness-agent-service/app/infrastructure/agent_context.py:159` | `conversation_thread_id()` 具体实现 |
+
+因此，最准确的源码调用链是：
+
+```text
+HTTP 请求
+  → app/api/routes/agent.py:chat()
+  → request.app.state.context_verifier
+  → AgentContextVerifier.verify()
+      实现位于 app/infrastructure/agent_context.py
+  → AgentIdentity
+  → conversation_thread_id()
+      实现也位于 app/infrastructure/agent_context.py
+  → SupervisorRequest
+  → Supervisor.invoke()
+```
+
+`verify()` 内部不是简单的 Base64 解码，而是：
+
+```text
+token.split(".")
+  → Base64URL 解码 payload 和 signature
+  → 读取 alg / kid
+  → HS256：本地 secret 或 signing_key_ring + HMAC 比较
+  → RS256：verification_public_key_ring 或 JWKS 获取公钥并验签
+  → 读取 sub / orgs / roles / capabilities / qualifications
+  → 读取 iat / exp / nonce
+  → 检查 exp > iat、TTL 不超过 max_ttl、没有过期、iat 没有超前太多
+  → 返回 AgentIdentity
+```
+
+例如，`agent.py` 不会自己写下面这些逻辑：
+
+```python
+expected = hmac.new(secret, payload, hashlib.sha256).digest()
+if not hmac.compare_digest(expected, signature):
+    ...
+```
+
+这段签名比较在 `app/infrastructure/agent_context.py:93-105` 的 `verify()` 中完成。`agent.py` 只负责捕获 `AgentContextVerificationError`，并把它转换成对外稳定的 HTTP 401，而不把密钥、签名细节或内部异常返回给用户。
+
+### 3.1.2 一次请求中的两次身份校验
+
+还要区分 Agent API 入口验签和 Java Gateway 验签。它们不是重复写错了，而是两个不同的安全边界：
+
+```text
+第一次：Agent API
+  → agent.py:chat()
+  → AgentContextVerifier.verify()
+  → 得到 AgentIdentity
+  → 用于 thread 隔离、路由上下文和 SupervisorRequest
+
+第二次：Java Gateway
+  → Agent 发起 GatewayClient HTTP 请求
+  → X-Agent-Context 随请求继续传递
+  → AgentContextInterceptor.preHandle()
+  → AgentContextVerifier 再次验证
+  → AgentContextArgumentResolver 注入 AgentContext
+  → FitnessToolService / OperationsToolService 做最终业务授权
+```
+
+例如查询合同时：
+
+```text
+agent.py:chat()
+  → AgentContextVerifier.verify()
+  → Supervisor.invoke()
+  → ToolRegistry.invoke(fitness.contract.list.v1)
+  → GatewayClient.list_contracts()
+  → HTTP GET /internal/agent-tools/v1/contracts
+  → Java AgentContextInterceptor
+  → Java AgentContextVerifier
+  → FitnessToolService.listContracts()
+  → 机构范围、角色、主体关系校验
+  → JdbcFitnessReadRepository
+  → MySQL
+```
+
+第一次校验主要保证 Agent 自己不会用无效身份创建会话或继续编排；第二次校验保证即使 Agent 内部代码、网络重试或调用链被错误使用，Java 业务边界仍然不会接受无效或越权的上下文。最终业务权限不能只依赖 Python 路由层，也不能只依赖模型 Prompt。
+
 ### 3.2 Supervisor 顶层图
 
 `Supervisor._build_graph()` 编译一个父图：
