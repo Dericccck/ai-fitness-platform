@@ -286,6 +286,323 @@ agent.py:chat()
 
 第一次校验主要保证 Agent 自己不会用无效身份创建会话或继续编排；第二次校验保证即使 Agent 内部代码、网络重试或调用链被错误使用，Java 业务边界仍然不会接受无效或越权的上下文。最终业务权限不能只依赖 Python 路由层，也不能只依赖模型 Prompt。
 
+### 3.1.3 从进程启动到业务完成的完整链路
+
+前面“请求进入 Agent”的代码块只覆盖了 HTTP 请求从 `agent.py:chat()` 进入 Supervisor 的第一段。完整链路应分成五个阶段：
+
+```text
+阶段 1：Python 进程导入和 FastAPI 应用注册
+阶段 2：ASGI lifespan startup，创建进程级依赖
+阶段 3：用户 HTTP 请求，执行一次 Agent 编排
+阶段 4：如果是写操作，用户确认后第二次 HTTP 请求恢复执行
+阶段 5：业务事务提交后的异步事件、Inbox 和通知链路
+```
+
+#### 阶段 1：进程导入和应用注册（进程启动时）
+
+以 Uvicorn 启动为例：
+
+```text
+uvicorn app.main:app
+  → Python import app.main
+  → import Agent / Gateway / RAG / Memory / Notification 等模块
+  → get_settings()
+  → configure_logging()
+  → HttpMetrics.create()
+  → 创建 FastAPI(..., lifespan=lifespan)
+  → configure_tracing()
+  → add middleware
+  → include_router(agent_router)
+  → include_router(confirmations_router)
+  → include_router(memories_router)
+  → include_router(notifications_router)
+  → include admin / RAG / health routers
+  → 得到 app 对象
+```
+
+这个阶段只是“加载模块并注册路由”。虽然代码中已经出现 `FastAPI(lifespan=lifespan)`，但此时 `lifespan()` 函数体还没有按请求执行；它只是被注册给 ASGI Server。
+
+源码位置：
+
+- 配置和指标初始化：`fitness-agent-service/app/main.py:68-74`
+- `lifespan()` 定义：`fitness-agent-service/app/main.py:77`
+- 创建 FastAPI 并注册 lifespan：`fitness-agent-service/app/main.py:318-340`
+
+#### 阶段 2：ASGI startup 和 `lifespan()`（请求到达前）
+
+Uvicorn/ASGI Server 加载 `app` 后，会发送生命周期 startup 事件。FastAPI 随后进入：
+
+```text
+await lifespan(app)
+  → 创建 TruLensTelemetry
+  → app.state.settings
+  → app.state.database = Database(settings)
+  → app.state.cache = Cache(redis_url)
+  → app.state.checkpoint_store = CheckpointStore(settings)
+  → app.state.context_verifier = AgentContextVerifier(...)
+  → app.state.models = ModelGateway(...)
+  → app.state.reranker = RerankerClient(...)
+  → app.state.knowledge_repository
+  → app.state.rag_service
+  → app.state.gateway = GatewayClient(settings)
+  → app.state.memory_service
+  → app.state.notification_outbox
+  → app.state.training_plan_generator
+  → app.state.tool_registry = build_fitness_tool_registry(...)
+  → app.state.confirmation_cipher
+  → app.state.memory_candidate_service
+  → app.state.confirmation_token_issuer
+  → app.state.confirmation_service
+  → app.state.session_summary_service
+  → app.state.session_lock
+  → await checkpoint_store.start()
+  → app.state.supervisor = Supervisor(...)
+  → yield
+```
+
+`yield` 是一个非常重要的分界：
+
+```text
+yield 之前：应用启动初始化
+yield 之后：应用已经 ready，可以接收 HTTP 请求
+finally：服务关闭，释放模型、Gateway、Checkpoint、Redis、数据库和 Trace 资源
+```
+
+如果 `checkpoint_store.start()`、确认加密密钥加载或生产环境配置校验失败，通常会在 `yield` 之前失败，应用不应该进入可接收请求状态。这是为了避免服务看似存活，但实际无法持久化会话或执行安全写操作。
+
+#### 阶段 3：一次只读用户请求的完整链路
+
+以用户询问“我还有多少课时？”为例，这是一条可以在一次 HTTP 请求内完成的链路：
+
+```mermaid
+sequenceDiagram
+    participant U as 用户/前端
+    participant API as FastAPI
+    participant Route as agent.py:chat()
+    participant V as AgentContextVerifier
+    participant S as Supervisor
+    participant G as ModelGateway
+    participant TR as ToolRegistry
+    participant GC as GatewayClient
+    participant GW as Java Gateway
+    participant DB as 核心 MySQL
+
+    U->>API: POST /api/v1/agent/chat
+    API->>Route: 路由匹配 + middleware
+    Route->>V: verify(X-Agent-Context)
+    V-->>Route: AgentIdentity
+    Route->>S: Supervisor.invoke(SupervisorRequest)
+    S->>S: classify_route() = CUSTOMER_SERVICE
+    S->>S: 构造 thread_id / 获取 session lock
+    S->>G: chat_with_tools()
+    G-->>S: fitness_contract_list_v1
+    S->>TR: invoke(fitness.contract.list.v1)
+    TR->>GC: list_contracts()
+    GC->>GW: GET /internal/agent-tools/v1/contracts
+    GW->>GW: AgentContextInterceptor + role/org 校验
+    GW->>DB: JdbcFitnessReadRepository 固定 SQL
+    DB-->>GW: 合同和剩余课时
+    GW-->>GC: ToolView
+    GC-->>TR: Pydantic 结果
+    TR-->>S: tool message
+    S->>G: 基于真实工具结果生成回答
+    G-->>S: 中文回答
+    S-->>Route: SupervisorResponse
+    Route-->>U: 200 + answer + route + tool_steps
+```
+
+把这张图还原成源码调用顺序就是：
+
+```text
+POST /api/v1/agent/chat
+  → app/api/routes/agent.py:chat()
+  → AgentContextVerifier.verify()
+  → conversation_thread_id()
+  → Supervisor.invoke()
+  → Supervisor._invoke()
+  → classify_route()
+  → customer_service_agent 子图
+  → _model_node()
+  → ModelGateway.chat_with_tools()
+  → _tool_node()
+  → ToolRegistry.invoke("fitness.contract.list.v1")
+  → fitness_tools.list_contracts()
+  → GatewayClient.list_contracts()
+  → Java AgentToolController
+  → FitnessToolService
+  → JdbcFitnessReadRepository
+  → 核心 MySQL
+  → 结果回到 ToolRegistry / Supervisor
+  → ModelGateway 生成最终回答
+  → SupervisorResponse
+  → AgentChatResponse
+  → HTTP 200
+```
+
+这里的 `lifespan()` 不会在 `chat()` 内部再次执行；`chat()` 直接读取启动阶段已经放入 `request.app.state` 的 `context_verifier`、`supervisor` 和其他依赖。
+
+#### 阶段 4：一次写操作的完整链路其实跨两次 HTTP 请求
+
+以“帮我预约明天 15:00 的王教练私教”为例，不能把它误写成一个请求直接完成，因为用户确认是一个真实的人机交互边界。
+
+第一次请求：生成确认单并暂停。
+
+```text
+用户输入
+  → POST /api/v1/agent/chat
+  → agent.py:chat()
+  → AgentContextVerifier.verify()
+  → Supervisor.invoke()
+  → classify_route() = BOOKING
+  → booking_agent:model
+  → contract.list / course.list / appointment.list（按模型需要）
+  → booking.availability.check
+  → booking_agent:model 产生 booking.create tool call
+  → Supervisor._model_node()
+  → ToolRegistry 检查 write tool + confirmation policy
+  → ConfirmationService.prepare()
+  → AES-GCM 加密精确预约参数
+  → Agent PostgreSQL confirmation 表
+  → _confirmation_node()
+  → interrupt()
+  → 返回 200：status=CONFIRMATION_REQUIRED
+```
+
+此时状态是：
+
+```text
+LangGraph：暂停在 confirmation node
+Confirmation：PENDING / NOT_STARTED
+Booking MySQL：没有新增预约
+合同课时：尚未扣减
+```
+
+第二次请求：用户确认并恢复执行。
+
+```text
+用户点击确认
+  → POST /api/v1/agent/confirmations/{confirmation_id}/decisions
+  → confirmations.py:decide_confirmation()
+  → AgentContextVerifier.verify(新的 X-Agent-Context)
+  → ConfirmationService.decide(APPROVE)
+  → Confirmation：PENDING → APPROVED
+  → Supervisor.resume_confirmation()
+  → Command(resume={"confirmation_id": id})
+  → 使用原 thread_id 恢复 LangGraph
+  → confirmation node 重新读取 PostgreSQL confirmation
+  → 校验当前 subject / org / route / tool
+  → 解密 payload
+  → ConfirmationTokenIssuer.issue()
+  → ToolRegistry.invoke(fitness.booking.create.v1)
+  → GatewayClient.create_booking()
+  → Java Gateway AgentToolController
+  → ConfirmationTokenVerifier
+  → BookingServiceClient
+  → BookingController
+  → BookingSecurityInterceptor
+  → BookingService.create() @Transactional
+  → BookingRepository
+  → 锁合同、检查课时、检查冲突、插入预约、扣课时、消费 JTI、写审计和 Outbox
+  → COMMIT
+  → 返回 BookingCreatedView
+  → ConfirmationService.finish_execution(SUCCEEDED)
+  → HTTP 返回最终确认状态
+```
+
+所以写操作的“完整链路”应该画成：
+
+```text
+请求 1：Chat
+  → 查询/预检
+  → 生成确认单
+  → interrupt
+  → 返回给用户确认
+
+请求 2：Confirmation Decision
+  → APPROVE
+  → Command(resume)
+  → 解密确认参数
+  → 签发 Confirmation Token
+  → Gateway
+  → Booking/Training/Customer Service
+  → MySQL 事务
+  → 返回最终事实
+```
+
+浏览器不会提交：
+
+```text
+原始精确业务 payload
+LangGraph thread_id
+confirmation token
+模型生成的第二份参数
+```
+
+它只提交 `confirmation_id`、`decision` 和 `decision_request_id`，其余内容由服务端根据确认单和新鲜签名身份恢复。
+
+#### 阶段 5：业务提交后的异步链路
+
+如果上面的预约事务成功，HTTP 响应返回并不代表通知已经同步写完。通知是另一条独立链路：
+
+```text
+BookingService.create() 事务提交
+  → appointment + contract + audit + Outbox 同时提交
+  → BookingOutboxPublisher claim
+  → RabbitBookingMessagePublisher
+  → RabbitMQ fitness.domain.events
+  → routing key appointment.created
+  → Agent proactive_worker_main.py
+  → ProactiveRabbitConsumer
+  → ProactiveEventMessage.from_json()
+  → ProactiveEventRepository.accept()
+  → Agent PostgreSQL agent_proactive_event_inbox
+  → RabbitMQ ACK
+  → ProactiveEventWorker.claim_batch()
+  → notification_targets()
+  → NotificationOutboxRepository.enqueue_on_connection()
+  → Agent PostgreSQL agent_notification_outbox
+  → NotificationOutboxWorker.claim_batch()
+  → NotificationPreferenceRepository.evaluate()
+  → NotificationTemplateRepository.get_published()
+  → InAppNotificationChannelAdapter.deliver()
+  → Agent PostgreSQL agent_in_app_notifications
+  → 前端后续 GET /api/v1/agent/notifications
+```
+
+这条异步链可能发生在原始 HTTP 请求返回之后，也可能因为 Worker 轮询间隔、RabbitMQ 重连、通知静默时间或重试策略而延迟。因此要把“预约 HTTP 请求完成”和“站内通知最终可见”当成两个不同的完成时点。
+
+#### 阶段 6：服务关闭
+
+收到停止信号后，ASGI Server 退出 `lifespan` 的 `yield`，进入 `finally`：
+
+```text
+停止接收新请求
+  → lifespan finally
+  → ModelGateway.close()
+  → GatewayClient.close()
+  → CheckpointStore.close()
+  → Redis Cache.close()
+  → Agent Database.close()
+  → Trace provider flush/shutdown
+  → Python 进程退出
+```
+
+#### API 进程和 Worker 进程的区别
+
+API 进程由 Uvicorn/ASGI Server 自动触发 lifespan；独立 Worker 则在自己的入口中显式使用同一个生命周期函数：
+
+```text
+proactive_worker_main.py
+  → async with lifespan(app):
+      RabbitMQ Consumer + ProactiveEventWorker
+
+notification_worker_main.py
+  → async with lifespan(app):
+      NotificationOutboxWorker
+```
+
+这说明 `lifespan()` 是“进程级资源初始化/释放协议”，不是“每一条用户请求的业务处理函数”。而 `agent.py:chat()` 是 API 进程已经完成 startup 之后，针对每次聊天请求执行的业务入口。
+
 ### 3.2 Supervisor 顶层图
 
 `Supervisor._build_graph()` 编译一个父图：
