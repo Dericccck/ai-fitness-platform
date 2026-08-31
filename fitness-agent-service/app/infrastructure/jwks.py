@@ -99,11 +99,11 @@ class JwksPublicKeyProvider:
 
 def _parse_jwks(payload: Any) -> dict[str, RSAPublicKey]:
     if not isinstance(payload, dict) or not isinstance(payload.get("keys"), list):
-            raise JwksUnavailableError("AgentContext JWKS 无效")
+        raise JwksUnavailableError("AgentContext JWKS 无效")
     if len(payload["keys"]) > 50:
-            raise JwksUnavailableError("AgentContext JWKS 包含过多密钥")
+        raise JwksUnavailableError("AgentContext JWKS 包含过多密钥")
     if not payload["keys"]:
-            raise JwksUnavailableError("AgentContext JWKS 不包含密钥")
+        raise JwksUnavailableError("AgentContext JWKS 不包含密钥")
 
     result: dict[str, RSAPublicKey] = {}
     for item in payload["keys"]:
@@ -132,7 +132,7 @@ def _parse_jwks(payload: Any) -> dict[str, RSAPublicKey]:
 def _required_text(item: dict[str, Any], field: str) -> str:
     value = item.get(field)
     if not isinstance(value, str) or not value.strip():
-            raise JwksUnavailableError(f"AgentContext JWKS 字段无效：{field}")
+        raise JwksUnavailableError(f"AgentContext JWKS 字段无效：{field}")
     return value
 
 
@@ -142,4 +142,4 @@ def _decode_base64url(value: str) -> bytes:
     try:
         return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
     except ValueError as exc:
-            raise JwksUnavailableError("AgentContext JWKS 编码无效") from exc
+        raise JwksUnavailableError("AgentContext JWKS 编码无效") from exc

@@ -232,7 +232,7 @@ Python 版本固定为 3.11，`uv.lock` 是依赖事实源；CI 和本地均使�
 
 ### TruLens 评测
 
-TruLens 是独立的离线/受控评测能力，不在在线请求中同步调用 Judge。安装评测依赖并执行确定性
+TruLens 同时支持在线 OTEL 追踪和离线/受控评测；在线请求不会同步调用 Judge。安装评测依赖并执行确定性
 契约评测：
 
 ```bash
@@ -249,15 +249,26 @@ PostgreSQL 库和只允许评测服务访问的账号。
 开发/预发布如需查看 TruLens Dashboard，先安装 dashboard extra，再执行
 `make agent-trulens-dashboard`。Dashboard 只读评测库，不应暴露到公网。
 
+预发布或生产若要把真实 Trace 直接落到 TruLens 的 `events` 表，需要同时配置
+`AGENT_TRULENS_ENABLED=true`、`AGENT_TRULENS_CAPTURE_MODE=metadata`（或受控评测环境的
+`evaluation`）、`AGENT_TRULENS_ONLINE_EXPORT_ENABLED=true` 和独立的
+`TRULENS_DATABASE_URL`。服务会使用官方 TruLens OTEL exporter 接收本进程中带有
+`record_root`/`retrieval`/`generation`/`tool` 标识的 Span；初始化失败会阻止启动，不会静默丢数据。
+`scripts/trulens_retention.py` 按 `AGENT_TRULENS_RETENTION_DAYS` 清理过期事件和记录，必须使用
+仅允许评测服务访问的数据库账号执行。真实 OTLP/TruLens Trace 可通过
+`app.evaluation.trulens_cli --traces <脱敏Trace.json>` 转换成评测 Record。
+
 运行模式约束如下：
 
 - `AGENT_TRULENS_ENABLED=false` 或 `AGENT_TRULENS_CAPTURE_MODE=disabled`：完全不产生 TruLens 业务 Span。
-- `AGENT_TRULENS_CAPTURE_MODE=metadata`：只产生路由、状态、工具 ID、耗时和 Token 等低基数元数据，适合生产。
+- `AGENT_TRULENS_CAPTURE_MODE=metadata`：只产生路由、状态、工具 ID、耗时、Token 和版本等低基数元数据，适合生产。
 - `AGENT_TRULENS_CAPTURE_MODE=evaluation`：额外产生脱敏、限长的问题、答案和检索上下文，只适合受控评测环境。
 
 TruLens 不能替代既有的 RAG Recall/MRR、经营策略、角色权限、确认凭证和会话安全评测；
 它补充回答相关性、上下文相关性和 groundedness 等语义指标。评测样例位于
-`evals/trulens_smoke.json`，阈值位于 `evals/trulens_thresholds.json`。
+`evals/trulens_smoke.json`，确定性阈值位于 `evals/trulens_thresholds.json`，Judge 阈值位于
+`evals/trulens_judge_thresholds.json`。阈值校验要求每个案例都返回每个配置指标，缺失或空分数
+会直接使门禁失败，不再被跳过。
 
 环境分层和 Secret 管理规则见 `deployment/environments/README.md`。
 

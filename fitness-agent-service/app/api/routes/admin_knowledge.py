@@ -489,9 +489,7 @@ async def _read_upload(file: UploadFile, max_bytes: int) -> bytes:
 def _parse_roles(raw_roles: str) -> tuple[str, ...]:
     roles = tuple(sorted({item.strip().upper() for item in raw_roles.split(",") if item.strip()}))
     if len(roles) > 20 or any(len(role) > 64 for role in roles):
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="角色数量过多"
-        )
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="角色数量过多")
     return roles
 
 

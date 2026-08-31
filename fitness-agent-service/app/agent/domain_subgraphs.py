@@ -167,9 +167,7 @@ def build_domain_subgraph(
     def enter_domain(state: Any) -> dict[str, Any]:
         route = state.get("route")
         if route != spec.route:
-            raise ValueError(
-                f"领域子图路由不匹配：期望={spec.route}，实际={route}"
-            )
+            raise ValueError(f"领域子图路由不匹配：期望={spec.route}，实际={route}")
         return {"active_domain": spec.node_name}
 
     graph.add_node("enter", enter_domain)

@@ -99,9 +99,7 @@ async def list_memories(
             identity=identity, organization_id=organization_id
         )
     except MemoryValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该机构"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该机构") from exc
     return [_to_response(memory) for memory in memories]
 
 
@@ -133,9 +131,7 @@ async def correct_memory(
             request_id=request_id,
         )
     except MemoryNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="未找到 Memory"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到 Memory") from exc
     except MemoryVersionConflictError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -177,9 +173,7 @@ async def revoke_memory(
             request_id=request_id,
         )
     except MemoryNotFoundError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="未找到 Memory"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到 Memory") from exc
     except MemoryVersionConflictError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -207,9 +201,7 @@ async def list_memory_events(
             identity=identity, memory_id=memory_id, limit=limit
         )
     except (MemoryNotFoundError, MemoryValidationError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="未找到 Memory"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到 Memory") from exc
     return [_to_event_response(event) for event in events]
 
 

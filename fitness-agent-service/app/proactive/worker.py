@@ -126,7 +126,7 @@ class ProactiveEventWorker:
                 worker_id=self.worker_id,
             )
             if not processed:
-                        raise RuntimeError("处理主动事件时丢失了主动事件锁")
+                raise RuntimeError("处理主动事件时丢失了主动事件锁")
 
 
 def _event_from_record(record: ProactiveEventRecord) -> ProactiveEventMessage:

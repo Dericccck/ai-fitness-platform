@@ -217,9 +217,7 @@ class ToolRegistry:
             and definition.requires_confirmation
             and definition.confirmation_policy is None
         ):
-            raise InvalidToolDefinitionError(
-                "需要确认的写工具必须声明确认策略"
-            )
+            raise InvalidToolDefinitionError("需要确认的写工具必须声明确认策略")
         if definition.tool_id in self._definitions:
             raise DuplicateToolError(f"工具已注册：{definition.tool_id}")
         if any(item.model_name == definition.model_name for item in self._definitions.values()):
@@ -426,9 +424,7 @@ class ToolRegistry:
             self._record_failure(
                 definition.tool_id, request_id, trace_id, "CONFIRMATION_REQUIRED", started_at
             )
-            raise ToolConfirmationRequiredError(
-                f"工具需要确认：{definition.tool_id}"
-            )
+            raise ToolConfirmationRequiredError(f"工具需要确认：{definition.tool_id}")
 
         try:
             bound_input = self.bind_context_input(tool_id, raw_input, context.identity)

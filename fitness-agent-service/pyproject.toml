@@ -40,6 +40,8 @@ dependencies = [
     "sqlalchemy[asyncio]>=2.0,<3.0",
     "structlog>=24.4,<26.0",
     "tenacity>=9.0,<10.0",
+    # 在线 OTEL 评测导出器在服务进程中运行；仅离线 Judge/仪表盘仍放在可选额外依赖。
+    "trulens-core==2.10.0",
     "uvicorn[standard]>=0.32,<1.0",
 ]
 
@@ -53,7 +55,6 @@ dev = [
 ]
 eval = [
     "jsonschema>=4.23,<5.0",
-    "trulens-core==2.10.0",
     "trulens-feedback==2.10.0",
     "trulens-providers-openai==2.10.0",
 ]

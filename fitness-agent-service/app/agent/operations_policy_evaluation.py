@@ -61,9 +61,9 @@ def evaluate_case(case: OperationsPolicyEvalCase) -> OperationsPolicyEvalResult:
 
     failures: list[str] = []
     if decision.allowed != case.expected_allowed:
-            failures.append(f"allowed {decision.allowed} != {case.expected_allowed}")
+        failures.append(f"allowed {decision.allowed} != {case.expected_allowed}")
     if decision.reason_code != case.expected_reason_code:
-            failures.append(f"原因码 reason_code {decision.reason_code} != {case.expected_reason_code}")
+        failures.append(f"原因码 reason_code {decision.reason_code} != {case.expected_reason_code}")
     return OperationsPolicyEvalResult(case.case_id, not failures, tuple(failures))
 
 
@@ -123,11 +123,15 @@ def main(argv: list[str] | None = None) -> int:
     max_failed_cases = int(threshold_data.get("max_failed_cases", 0))
     max_invalid_cases = int(threshold_data.get("max_invalid_cases", 0))
     if metrics["pass_rate"] < min_pass_rate:
-            failures.append(f"通过率 pass_rate {metrics['pass_rate']:.4f} < {min_pass_rate:.4f}")
+        failures.append(f"通过率 pass_rate {metrics['pass_rate']:.4f} < {min_pass_rate:.4f}")
     if metrics["failed_cases"] > max_failed_cases:
-            failures.append(f"失败案例数 failed_cases {int(metrics['failed_cases'])} > {max_failed_cases}")
+        failures.append(
+            f"失败案例数 failed_cases {int(metrics['failed_cases'])} > {max_failed_cases}"
+        )
     if metrics["invalid_cases"] > max_invalid_cases:
-            failures.append(f"无效案例数 invalid_cases {int(metrics['invalid_cases'])} > {max_invalid_cases}")
+        failures.append(
+            f"无效案例数 invalid_cases {int(metrics['invalid_cases'])} > {max_invalid_cases}"
+        )
     output = {
         "metrics": metrics,
         "thresholds": threshold_data,

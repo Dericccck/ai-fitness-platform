@@ -204,9 +204,7 @@ def _preference_repository(request: Request) -> NotificationPreferenceRepository
 
 def _require_organization(identity: AgentIdentity, organization_id: str) -> None:
     if organization_id not in identity.organization_ids:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该机构"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该机构")
 
 
 def _verify_identity(request: Request, token: str | None) -> AgentIdentity:

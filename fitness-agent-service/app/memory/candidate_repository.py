@@ -475,9 +475,7 @@ class MemoryCandidateRepository:
     def _record_from_row(self, row: Any) -> MemoryCandidateRecord:
         try:
             if str(row["payload_key_version"]) != self._cipher.key_version:
-                raise ConfirmationPayloadCipherError(
-                    "候选加密密钥版本不可用"
-                )
+                raise ConfirmationPayloadCipherError("候选加密密钥版本不可用")
             plaintext = self._cipher.decrypt(
                 bytes(row["payload_ciphertext"]), associated_data=str(row["payload_hash"])
             )

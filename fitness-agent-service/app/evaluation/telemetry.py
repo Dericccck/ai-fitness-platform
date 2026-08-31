@@ -7,13 +7,17 @@
 from __future__ import annotations
 
 import hashlib
+import hmac
 import re
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
+from contextvars import ContextVar
 from typing import Any
 
 from opentelemetry import trace
 from opentelemetry.trace import Span
+from trulens.otel.semconv.trace import ResourceAttributes as TruLensResourceAttributes
+from trulens.otel.semconv.trace import SpanAttributes as TruLensSpanAttributes
 
 from app.core.config import Settings
 
@@ -26,22 +30,50 @@ _UUID = re.compile(
 )
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
 _LONG_NUMBER = re.compile(r"(?<!\d)\d{6,}(?!\d)")
+_BEARER = re.compile(r"(?i)\bBearer\s+[A-Za-z0-9._~+/=-]{12,}")
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)(\b(?:api[_-]?key|token|secret|password|authorization)\s*[=:]\s*)[^\s,;]+"
+)
 
-# TruLens 语义约定。保留字符串回退值，使精简 API 镜像未安装可选评估额外依赖时，
-# 核心 API 仍可运行；启用额外依赖后，发出的属性仍可被正常消费。
+# TruLens 官方 OTEL 语义约定。直接使用官方常量，避免导出器升级后字符串漂移。
 RECORD_INPUT = "ai.observability.record_root.input"
 RECORD_OUTPUT = "ai.observability.record_root.output"
 RETRIEVAL_QUERY = "ai.observability.retrieval.query_text"
 RETRIEVAL_CONTEXTS = "ai.observability.retrieval.retrieved_contexts"
 RETRIEVAL_COUNT = "ai.observability.retrieval.num_contexts"
+TRULENS_APP_ID = TruLensResourceAttributes.APP_ID
+TRULENS_APP_NAME = TruLensResourceAttributes.APP_NAME
+TRULENS_APP_VERSION = TruLensResourceAttributes.APP_VERSION
+TRULENS_SPAN_TYPE = TruLensSpanAttributes.SPAN_TYPE
+TRULENS_RECORD_ID = TruLensSpanAttributes.RECORD_ID
+TRULENS_CONVERSATION_ID = TruLensSpanAttributes.CONVERSATION_ID
+
+_CURRENT_RECORD_ID: ContextVar[str | None] = ContextVar(
+    "fitness_agent_trulens_record_id", default=None
+)
 
 
-def hash_identifier(value: str | None) -> str | None:
+def _span_type_for_name(name: str) -> str:
+    """把内部 Span 名称映射为 TruLens 可识别的语义类型。"""
+
+    return {
+        "fitness.agent.request": "record_root",
+        "fitness.agent.retrieval": "retrieval",
+        "fitness.agent.generation": "generation",
+        "fitness.agent.tool": "tool",
+        "fitness.agent.reranker": "reranking",
+    }.get(name, "agent")
+
+
+def hash_identifier(value: str | None, *, secret: str = "") -> str | None:
     """返回用于追踪关联的稳定不可逆标识符。"""
 
     if not value:
         return None
-    return hashlib.sha256(value.encode("utf-8")).hexdigest()[:24]
+    raw = value.encode("utf-8")
+    if secret:
+        return hmac.new(secret.encode("utf-8"), raw, hashlib.sha256).hexdigest()[:24]
+    return hashlib.sha256(raw).hexdigest()[:24]
 
 
 def redact_text(value: str | None, *, max_chars: int = 2000) -> str:
@@ -52,6 +84,8 @@ def redact_text(value: str | None, *, max_chars: int = 2000) -> str:
     redacted = _EMAIL.sub("<EMAIL>", value)
     redacted = _PHONE.sub("<PHONE>", redacted)
     redacted = _JWT.sub("<TOKEN>", redacted)
+    redacted = _BEARER.sub("Bearer <TOKEN>", redacted)
+    redacted = _SECRET_ASSIGNMENT.sub(r"\1<SECRET>", redacted)
     redacted = _UUID.sub("<UUID>", redacted)
     redacted = _LONG_NUMBER.sub("<NUMBER>", redacted)
     redacted = " ".join(redacted.split())
@@ -68,6 +102,14 @@ class TruLensTelemetry:
         self.capture_content = settings.trulens_capture_mode == "evaluation"
         self.max_chars = settings.trulens_capture_max_chars
         self.tracer = trace.get_tracer(_TRACER_NAME, settings.service_version)
+        self.app_id = settings.service_name
+        self.app_name = settings.service_name
+        self.app_version = settings.source_commit or settings.service_version
+        self.code_version = settings.source_commit or settings.service_version
+        self.prompt_version = settings.prompt_version
+        self.knowledge_base_version = settings.knowledge_base_version
+        self.graph_version = settings.graph_version
+        self.identifier_hash_secret = settings.trulens_identifier_hash_secret
 
     @classmethod
     def disabled(cls) -> TruLensTelemetry:
@@ -78,6 +120,14 @@ class TruLensTelemetry:
         instance.capture_content = False
         instance.max_chars = 0
         instance.tracer = trace.get_tracer(_TRACER_NAME)
+        instance.app_id = "fitness-agent-service"
+        instance.app_name = "fitness-agent-service"
+        instance.app_version = "disabled"
+        instance.code_version = "disabled"
+        instance.prompt_version = "disabled"
+        instance.knowledge_base_version = "disabled"
+        instance.graph_version = "disabled"
+        instance.identifier_hash_secret = ""
         return instance
 
     @contextmanager
@@ -86,6 +136,7 @@ class TruLensTelemetry:
         name: str,
         *,
         attributes: Mapping[str, Any] | None = None,
+        span_type: str | None = None,
     ) -> Iterator[Span]:
         """创建子 span，并仅附加允许列表中的标量元数据。"""
 
@@ -93,6 +144,20 @@ class TruLensTelemetry:
             yield trace.get_current_span()
             return
         with self.tracer.start_as_current_span(name) as current:
+            self.set_attributes(
+                current,
+                {
+                    TRULENS_APP_ID: self.app_id,
+                    TRULENS_APP_NAME: self.app_name,
+                    TRULENS_APP_VERSION: self.app_version,
+                    TRULENS_SPAN_TYPE: span_type or _span_type_for_name(name),
+                    TRULENS_RECORD_ID: _CURRENT_RECORD_ID.get(),
+                    "fitness.agent.code_version": self.code_version,
+                    "fitness.agent.prompt_version": self.prompt_version,
+                    "fitness.agent.knowledge_base_version": self.knowledge_base_version,
+                    "fitness.agent.graph_version": self.graph_version,
+                },
+            )
             self.set_attributes(current, attributes or {})
             yield current
 
@@ -109,15 +174,32 @@ class TruLensTelemetry:
         """为一次 Supervisor 调用创建 TruLens 记录根 span。"""
 
         attributes: dict[str, Any] = {
-            "fitness.agent.request_id_hash": hash_identifier(request_id),
-            "fitness.agent.trace_id_hash": hash_identifier(trace_id),
-            "fitness.agent.conversation_id_hash": hash_identifier(conversation_id),
+            "fitness.agent.request_id_hash": hash_identifier(
+                request_id, secret=self.identifier_hash_secret
+            ),
+            "fitness.agent.trace_id_hash": hash_identifier(
+                trace_id, secret=self.identifier_hash_secret
+            ),
+            "fitness.agent.conversation_id_hash": hash_identifier(
+                conversation_id, secret=self.identifier_hash_secret
+            ),
             "fitness.agent.route": route,
         }
         if self.capture_content:
             attributes[RECORD_INPUT] = redact_text(user_message, max_chars=self.max_chars)
-        with self.span("fitness.agent.request", attributes=attributes) as current:
-            yield current
+        record_id = hash_identifier(
+            request_id or trace_id or conversation_id,
+            secret=self.identifier_hash_secret,
+        )
+        token = _CURRENT_RECORD_ID.set(record_id)
+        try:
+            with self.span(
+                "fitness.agent.request", attributes=attributes, span_type="record_root"
+            ) as current:
+                self.set_attributes(current, {TRULENS_RECORD_ID: record_id})
+                yield current
+        finally:
+            _CURRENT_RECORD_ID.reset(token)
 
     def set_text(self, span: Span, key: str, value: str | None) -> None:
         """仅在显式评估采集模式下设置文本。"""
@@ -145,7 +227,14 @@ class TruLensTelemetry:
         if answer:
             self.set_text(span, RECORD_OUTPUT, answer)
 
-    def finish_retrieval(self, span: Span, *, query: str, contexts: list[str]) -> None:
+    def finish_retrieval(
+        self,
+        span: Span,
+        *,
+        query: str,
+        contexts: list[str],
+        knowledge_versions: list[str] | None = None,
+    ) -> None:
         if not self.enabled:
             return
         span.set_attribute(RETRIEVAL_COUNT, len(contexts))
@@ -159,3 +248,8 @@ class TruLensTelemetry:
                 captured_contexts,
             )
             span.set_attribute("fitness.agent.contexts", captured_contexts)
+        if knowledge_versions:
+            span.set_attribute(
+                "fitness.agent.knowledge_versions",
+                sorted({str(version) for version in knowledge_versions})[:16],
+            )

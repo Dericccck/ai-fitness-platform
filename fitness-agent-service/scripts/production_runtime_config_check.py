@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+from urllib.parse import urlparse
 
 try:
     # 直接执行脚本时，工作目录是 fitness-agent-service。
@@ -45,6 +46,16 @@ RUNTIME_REQUIRED_KEYS = {
     "agent": {
         "AGENT_ENVIRONMENT",
         "AGENT_SERVICE_VERSION",
+        "AGENT_SOURCE_COMMIT",
+        "AGENT_PROMPT_VERSION",
+        "AGENT_KNOWLEDGE_BASE_VERSION",
+        "AGENT_GRAPH_VERSION",
+        "AGENT_TRULENS_ENABLED",
+        "AGENT_TRULENS_CAPTURE_MODE",
+        "AGENT_TRULENS_ONLINE_EXPORT_ENABLED",
+        "AGENT_TRULENS_RETENTION_DAYS",
+        "TRULENS_DATABASE_URL",
+        "TRULENS_IDENTIFIER_HASH_SECRET",
         "DEEPSEEK_BASE_URL",
         "DEEPSEEK_API_KEY",
         "AGENT_DATABASE_URL",
@@ -154,6 +165,18 @@ def _check_value(service: str, key: str, value: str) -> None:
         raise ProductionRuntimeConfigError(f"{service} 仍使用开发凭证：{key}")
 
 
+def _database_identity(value: str) -> tuple[str, str, str] | str:
+    """提取不含密码的数据库身份，用于阻止评测库复用业务库。"""
+
+    normalized = value.strip()
+    for driver in ("+asyncpg", "+psycopg"):
+        normalized = normalized.replace(f"postgresql{driver}://", "postgresql://", 1)
+    parsed = urlparse(normalized)
+    if parsed.scheme and parsed.hostname:
+        return (parsed.hostname.lower(), str(parsed.port or ""), parsed.path)
+    return normalized
+
+
 def validate_runtime_directory(env_dir: Path) -> None:
     """校验五个服务的实际配置和服务间共享 Token 一致性。"""
 
@@ -194,6 +217,22 @@ def validate_runtime_directory(env_dir: Path) -> None:
 
     if agent["AGENT_RAG_OCR_BACKEND"] != "disabled":
         raise ProductionRuntimeConfigError("当前项目范围要求 AGENT_RAG_OCR_BACKEND=disabled")
+    if agent["AGENT_TRULENS_ONLINE_EXPORT_ENABLED"].lower() == "true":
+        if agent["AGENT_TRULENS_CAPTURE_MODE"] == "disabled":
+            raise ProductionRuntimeConfigError(
+                "启用 TruLens 在线导出时 AGENT_TRULENS_CAPTURE_MODE 不能为 disabled"
+            )
+        evaluation_db = _database_identity(agent["TRULENS_DATABASE_URL"])
+        business_db = _database_identity(agent["AGENT_DATABASE_URL"])
+        checkpoint_db = agent["AGENT_CHECKPOINT_DATABASE_URL"].strip()
+        if (
+            evaluation_db == business_db
+            or checkpoint_db
+            and evaluation_db == _database_identity(checkpoint_db)
+        ):
+            raise ProductionRuntimeConfigError(
+                "TRULENS_DATABASE_URL 必须使用独立评测库，不能复用业务库或 Checkpoint 库"
+            )
 
 
 def build_parser() -> argparse.ArgumentParser:

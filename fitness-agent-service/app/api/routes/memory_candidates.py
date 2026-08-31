@@ -115,9 +115,7 @@ async def list_memory_candidates(
             limit=limit,
         )
     except MemoryValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该机构"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该机构") from exc
     return [_to_response(record) for record in records]
 
 
@@ -145,9 +143,7 @@ async def get_memory_candidate_inbox(
             limit=limit,
         )
     except MemoryValidationError as exc:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该机构"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该机构") from exc
 
     notification_repository = _notification_repository(request)
     async with request.app.state.database.engine.connect() as connection:

@@ -279,9 +279,7 @@ def _verify_platform_admin(request: Request, token: str | None) -> AgentIdentity
             status_code=status.HTTP_401_UNAUTHORIZED, detail="已签名的 AgentContext 无效"
         ) from exc
     if not {"SYSTEM_ADMIN", "ADMIN", "SUPER_ADMIN"}.intersection(identity.roles):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="需要平台管理员角色"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要平台管理员角色")
     return identity
 
 

@@ -269,7 +269,7 @@ def _ensure_identity_snapshot(record: ConfirmationRecord, identity: AgentIdentit
         sorted(identity.roles)
     ) or record.actor_organization_ids != tuple(sorted(identity.organization_ids)):
         # 对外按“不可见”处理，避免通过确认接口探测其他授权快照。
-            raise ConfirmationStateError("确认单身份范围已变更")
+        raise ConfirmationStateError("确认单身份范围已变更")
 
 
 def _organization_from_input(tool_id: str, raw_input: Mapping[str, Any]) -> str:
@@ -297,7 +297,7 @@ def _organization_from_input(tool_id: str, raw_input: Mapping[str, Any]) -> str:
 def _plan_id_from_input(raw_input: Mapping[str, Any]) -> str:
     value = raw_input.get("plan_id")
     if not isinstance(value, str) or not value.strip():
-            raise ValueError("训练计划确认单必须提供 plan_id")
+        raise ValueError("训练计划确认单必须提供 plan_id")
     return value
 
 

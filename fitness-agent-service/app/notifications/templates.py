@@ -97,9 +97,7 @@ class NotificationTemplateRepository:
             .first()
         )
         if row is None:
-            raise NotificationTemplateNotFound(
-                f"未找到已发布的通知模板：{template_key}/{channel}"
-            )
+            raise NotificationTemplateNotFound(f"未找到已发布的通知模板：{template_key}/{channel}")
         return _from_row(row)
 
     async def create_draft(
@@ -442,9 +440,7 @@ class NotificationTemplateRepository:
             or row["channel"] != channel
             or (version is not None and int(row["version"]) != version)
         ):
-            raise NotificationTemplateValidationError(
-                "operation_id 已用于其他模板操作"
-            )
+            raise NotificationTemplateValidationError("operation_id 已用于其他模板操作")
         template_row = (
             (
                 await connection.execute(
@@ -465,9 +461,7 @@ class NotificationTemplateRepository:
             .first()
         )
         if template_row is None:
-            raise NotificationTemplateValidationError(
-                "幂等操作对应的模板不存在"
-            )
+            raise NotificationTemplateValidationError("幂等操作对应的模板不存在")
         return _from_row(template_row)
 
     async def _insert_event(

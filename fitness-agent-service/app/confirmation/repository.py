@@ -144,7 +144,7 @@ class ConfirmationRepository:
         """在行锁事务中批准或拒绝，并追加不可变事件。"""
 
         if decision not in {"APPROVE", "REJECT"}:
-                raise ConfirmationStateError("决定值必须为 APPROVE 或 REJECT")
+            raise ConfirmationStateError("决定值必须为 APPROVE 或 REJECT")
         expired_record: ConfirmationRecord | None = None
         result: ConfirmationRecord | None = None
         async with self._database.engine.begin() as connection:
@@ -175,9 +175,7 @@ class ConfirmationRepository:
             elif record.decision_request_id == decision_request_id:
                 expected_status = "APPROVED" if decision == "APPROVE" else "REJECTED"
                 if record.authorization_status != expected_status:
-                    raise ConfirmationStateError(
-                        "decision_request_id 已被其他决定复用"
-                    )
+                    raise ConfirmationStateError("decision_request_id 已被其他决定复用")
                 result = record
             else:
                 decided = (
@@ -199,9 +197,9 @@ class ConfirmationRepository:
                 )
                 result = decided
         if expired_record is not None:
-                raise ConfirmationStateError("已过期的确认单不能作出决定")
+            raise ConfirmationStateError("已过期的确认单不能作出决定")
         if result is None:
-                raise AssertionError("确认决定没有产生结果")
+            raise AssertionError("确认决定没有产生结果")
         return result
 
     async def issue_credential_jti(

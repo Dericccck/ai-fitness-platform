@@ -209,9 +209,7 @@ class KnowledgeIngestionRepository:
                         )
                     ).first()
                     if rejected is None:
-                        raise KnowledgeJobTransitionError(
-                            "知识审查拒绝不适用于当前任务"
-                        )
+                        raise KnowledgeJobTransitionError("知识审查拒绝不适用于当前任务")
                     return KnowledgeReviewOutcome(restored, None)
 
                 rows = (
@@ -254,9 +252,7 @@ class KnowledgeIngestionRepository:
                     credential = _publication_credential_from_row(credential_row)
                 return KnowledgeReviewOutcome(restored, credential)
         except IntegrityError as exc:
-            raise KnowledgeJobTransitionError(
-                "该审查领域已经存在最终决定"
-            ) from exc
+            raise KnowledgeJobTransitionError("该审查领域已经存在最终决定") from exc
 
     async def get_publication_credential(
         self, job_id: str
@@ -484,9 +480,7 @@ class KnowledgeIngestionRepository:
         async with self._database.engine.begin() as connection:
             row = (await connection.execute(statement, params)).mappings().first()
         if row is None:
-            raise KnowledgeJobTransitionError(
-                "知识摄取任务状态转换被拒绝"
-            )
+            raise KnowledgeJobTransitionError("知识摄取任务状态转换被拒绝")
         return job_from_row(row)
 
 

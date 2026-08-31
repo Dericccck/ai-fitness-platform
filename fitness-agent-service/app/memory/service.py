@@ -219,9 +219,7 @@ def _normalize_memory_payload(
     normalized_key = _validate_text(memory_key, "memory_key", 64)
     normalized_value = _validate_text(value, "value", 500)
     if any(term in normalized_value for term in _FORBIDDEN_TERMS):
-        raise MemoryValidationError(
-            "v1 Memory 不保存健康诊断、疾病、药物和治疗事实"
-        )
+        raise MemoryValidationError("v1 Memory 不保存健康诊断、疾病、药物和治疗事实")
     normalized_unit = _validate_text(unit, "unit", 16) if unit is not None else None
     normalized_expiry = _as_utc(expires_at) if expires_at is not None else None
     if normalized_expiry is not None and normalized_expiry <= datetime.now(UTC):

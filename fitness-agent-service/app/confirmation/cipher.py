@@ -46,9 +46,7 @@ class AesGcmPayloadCipher:
         try:
             key = base64.urlsafe_b64decode(encoded_key.encode("ascii"))
         except (UnicodeEncodeError, binascii.Error, ValueError) as exc:
-            raise ConfirmationPayloadCipherError(
-                "确认加密密钥不是有效的 Base64"
-            ) from exc
+            raise ConfirmationPayloadCipherError("确认加密密钥不是有效的 Base64") from exc
         return cls(key=key, key_version=key_version)
 
     @classmethod

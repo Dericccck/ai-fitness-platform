@@ -42,9 +42,7 @@ def downgrade() -> None:
         )
     ).scalar_one()
     if yoy_count:
-        raise RuntimeError(
-            "无法回退经营同比迁移，因为仍存在同比审计记录"
-        )
+        raise RuntimeError("无法回退经营同比迁移，因为仍存在同比审计记录")
     op.drop_constraint(
         "ck_agent_operations_audit_comparison_role",
         "agent_operations_query_audits",

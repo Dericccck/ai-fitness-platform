@@ -210,7 +210,9 @@ class DocumentQualityThresholds:
 
         failures: list[str] = []
         if metrics.noise_rate > self.max_noise_rate:
-            failures.append(f"noise_rate 噪声率 {metrics.noise_rate:.4f} > {self.max_noise_rate:.4f}")
+            failures.append(
+                f"noise_rate 噪声率 {metrics.noise_rate:.4f} > {self.max_noise_rate:.4f}"
+            )
         if metrics.fragment_rate > self.max_fragment_rate:
             failures.append(
                 f"fragment_rate 碎片率 {metrics.fragment_rate:.4f} > {self.max_fragment_rate:.4f}"
@@ -255,9 +257,7 @@ def compare_quality_reports(before: Mapping[str, Any], after: Mapping[str, Any])
     if before_paths != after_paths:
         missing = sorted(before_paths - after_paths)
         added = sorted(after_paths - before_paths)
-        raise ValueError(
-            f"质量报告覆盖的来源不同：缺失={missing}，新增={added}"
-        )
+        raise ValueError(f"质量报告覆盖的来源不同：缺失={missing}，新增={added}")
 
     entries: list[dict[str, Any]] = []
     for relative_path in sorted(before_paths):

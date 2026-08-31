@@ -189,9 +189,7 @@ class DocumentIngestionService:
             if request.version < current.version or (
                 request.version == current.version and current.checksum != checksum
             ):
-                raise IngestionConflictError(
-                    f"文档版本 {request.version} 不高于 {current.version}"
-                )
+                raise IngestionConflictError(f"文档版本 {request.version} 不高于 {current.version}")
 
         if not drafts:
             raise RagSearchError("文档没有产生可索引的分块")

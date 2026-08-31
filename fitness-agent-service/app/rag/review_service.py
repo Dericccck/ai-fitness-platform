@@ -140,9 +140,7 @@ class KnowledgeReviewService:
             raise KnowledgeJobTransitionError("知识任务未等待专业审查")
         report = await self.jobs.get_latest_review_report(job_id)
         if report.status != "REVIEW_REQUIRED" or not report.is_current:
-            raise KnowledgeJobTransitionError(
-                "知识报告已阻断、已通过或需要重新分析"
-            )
+            raise KnowledgeJobTransitionError("知识报告已阻断、已通过或需要重新分析")
         if report.document_sha256 != job.content_sha256:
             raise KnowledgeJobTransitionError("审查报告未绑定到暂存文件哈希")
         requirements = review_requirements(report)
@@ -158,9 +156,7 @@ class KnowledgeReviewService:
     ) -> None:
         actual_sha256 = hashlib.sha256(content).hexdigest()
         if actual_sha256 != job.content_sha256 or actual_sha256 != report.document_sha256:
-            raise KnowledgeJobTransitionError(
-                "生成审查报告后暂存来源哈希发生了变化"
-            )
+            raise KnowledgeJobTransitionError("生成审查报告后暂存来源哈希发生了变化")
 
 
 def _can_review(

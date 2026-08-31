@@ -91,9 +91,7 @@ async def get_confirmation(
             confirmation_id, identity
         )
     except (ConfirmationNotFound, ConfirmationStateError) as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="未找到确认单"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到确认单") from exc
     return _to_response(record)
 
 
@@ -117,9 +115,7 @@ async def decide_confirmation(
             trace_id=x_trace_id,
         )
     except ConfirmationNotFound as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="未找到确认单"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到确认单") from exc
     except ConfirmationStateError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     if payload.decision == "REJECT":
@@ -148,9 +144,7 @@ async def decide_confirmation(
             thread_id=record.thread_id,
         )
     except SupervisorSessionBusy as exc:
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="会话正在处理中"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="会话正在处理中") from exc
     except SupervisorRuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
@@ -180,9 +174,7 @@ async def revoke_confirmation(
             trace_id=x_trace_id,
         )
     except ConfirmationNotFound as exc:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="未找到确认单"
-        ) from exc
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到确认单") from exc
     except (ConfirmationStateError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return _to_response(record)

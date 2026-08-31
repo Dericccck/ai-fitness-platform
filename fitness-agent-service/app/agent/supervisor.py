@@ -345,17 +345,13 @@ class Supervisor:
                 if raw_checkpoint is not None and "request" in raw_checkpoint.checkpoint.get(
                     "channel_values", {}
                 ):
-                    raise SupervisorCheckpointIncompatible(
-                        "Checkpoint 包含不兼容的敏感运行时状态"
-                    )
+                    raise SupervisorCheckpointIncompatible("Checkpoint 包含不兼容的敏感运行时状态")
                 previous = await self._graph.aget_state(config)
                 previous_values = previous.values if previous else {}
             if "request" in previous_values:
                 # 旧版本把签名上下文和潜在确认凭证放进 State。不能继续反序列化或
                 # 自动迁移这类状态，避免敏感对象在恢复链路中继续传播；调用方应重建会话。
-                raise SupervisorCheckpointIncompatible(
-                    "Checkpoint 包含不兼容的敏感运行时状态"
-                )
+                raise SupervisorCheckpointIncompatible("Checkpoint 包含不兼容的敏感运行时状态")
             previous_messages = previous_values.get("messages", [])
             if previous_messages:
                 session_summary = None
@@ -786,9 +782,7 @@ class Supervisor:
                 raise SupervisorRuntimeError("领域 Agent 请求了白名单之外的工具")
         if any(not self.tools.get(call.name).read_only for call in tool_calls):
             if len(tool_calls) != 1:
-                raise SupervisorRuntimeError(
-                    "每次写工具调用都必须单独确认"
-                )
+                raise SupervisorRuntimeError("每次写工具调用都必须单独确认")
             if runtime.context is None or runtime.context.identity is None:
                 raise SupervisorRuntimeError("写操作确认需要已签名身份")
             if self.confirmation_service is None:
@@ -959,9 +953,7 @@ class Supervisor:
                 if runtime.context.identity is None:
                     raise SupervisorRuntimeError("经营查询需要已签名身份")
                 if not runtime.context.user_message:
-                    raise SupervisorRuntimeError(
-                        "经营查询需要原始用户消息"
-                    )
+                    raise SupervisorRuntimeError("经营查询需要原始用户消息")
                 try:
                     # 经营查询的组织、指标和日期来自已验证身份及用户原问题。模型只
                     # 选择工具，不能通过参数猜测机构 ID、扩大时间范围或切换指标。
@@ -970,9 +962,7 @@ class Supervisor:
                         allowed_organization_ids=(runtime.context.identity.organization_ids),
                     )
                 except OperationsQueryPreparationError as exc:
-                    raise SupervisorRuntimeError(
-                        "无法安全准备经营查询"
-                    ) from exc
+                    raise SupervisorRuntimeError("无法安全准备经营查询") from exc
                 _logger.info(
                     "operations_tool_input_prepared",
                     request_id=runtime.context.gateway_context.request_id,

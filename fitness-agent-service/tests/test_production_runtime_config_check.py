@@ -35,6 +35,9 @@ def _write_runtime_files(directory: Path) -> None:
             "AGENT_CHECKPOINT_DATABASE_URL": "postgresql://agent@postgres.internal/agent",
             "AGENT_REDIS_URL": "redis://redis.internal:6379/0",
             "AGENT_GATEWAY_BASE_URL": "http://gateway.internal:8081",
+            "AGENT_TRULENS_CAPTURE_MODE": "metadata",
+            "AGENT_TRULENS_ONLINE_EXPORT_ENABLED": "true",
+            "TRULENS_DATABASE_URL": "postgresql+psycopg://eval@evaluation.internal/agent_eval",
             "GATEWAY_CONTEXT_VERIFICATION_JWKS_URL": "https://auth.internal/.well-known/jwks.json",
             "AGENT_RAG_S3_ENDPOINT_URL": "https://object.internal",
             "AGENT_GATEWAY_INTERNAL_SERVICE_TOKEN": "shared-gateway-token",
@@ -103,4 +106,20 @@ def test_runtime_config_rejects_mismatched_service_token(tmp_path: Path) -> None
     )
 
     with pytest.raises(ProductionRuntimeConfigError, match="跨服务 Token"):
+        validate_runtime_directory(runtime_dir)
+
+
+def test_runtime_config_rejects_shared_trulens_database(tmp_path: Path) -> None:
+    runtime_dir = tmp_path / "runtime"
+    _write_runtime_files(runtime_dir)
+    agent = runtime_dir / "agent.env"
+    agent.write_text(
+        agent.read_text(encoding="utf-8").replace(
+            "TRULENS_DATABASE_URL=postgresql+psycopg://eval@evaluation.internal/agent_eval",
+            "TRULENS_DATABASE_URL=postgresql+psycopg://eval@postgres.internal/agent",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ProductionRuntimeConfigError, match="独立评测库"):
         validate_runtime_directory(runtime_dir)

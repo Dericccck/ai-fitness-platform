@@ -595,9 +595,7 @@ class GatewayClient:
         try:
             return [model.model_validate(item) for item in response_json]
         except ValidationError as exc:
-            raise GatewayProtocolError(
-                "Gateway 列表响应不符合工具契约"
-            ) from exc
+            raise GatewayProtocolError("Gateway 列表响应不符合工具契约") from exc
 
     async def _request(
         self,
@@ -648,15 +646,11 @@ class GatewayClient:
             if response.status_code == 401:
                 raise GatewayAuthenticationError("Gateway 身份验证失败", status_code=401)
             if response.status_code == 403:
-                raise GatewayForbiddenError(
-                    "Gateway 拒绝了请求的健身资源", status_code=403
-                )
+                raise GatewayForbiddenError("Gateway 拒绝了请求的健身资源", status_code=403)
             if response.status_code == 404:
                 raise GatewayNotFoundError("未找到健身资源", status_code=404)
             if response.status_code == 409:
-                raise GatewayConflictError(
-                    "Gateway 检测到并发的健身计划变更", status_code=409
-                )
+                raise GatewayConflictError("Gateway 检测到并发的健身计划变更", status_code=409)
             if response.status_code >= 400:
                 raise GatewayBadRequestError(
                     "Gateway 拒绝了工具请求", status_code=response.status_code

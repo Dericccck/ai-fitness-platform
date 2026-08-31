@@ -1,0 +1,6 @@
+{
+  "answer_relevance": 0.6,
+  "groundedness": 0.6,
+  "context_relevance": 0.6,
+  "tool_selection_judge": 0.6
+}

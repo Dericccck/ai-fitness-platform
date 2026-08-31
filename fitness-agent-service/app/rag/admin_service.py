@@ -145,9 +145,7 @@ class KnowledgeAdminService:
         try:
             report = await self.jobs.get_latest_review_report(job_id)
         except KnowledgeReviewReportNotFound as exc:
-            raise KnowledgeJobTransitionError(
-                "缺少知识审查报告；需要重新分析"
-            ) from exc
+            raise KnowledgeJobTransitionError("缺少知识审查报告；需要重新分析") from exc
         credential = await self.jobs.get_publication_credential(job.id)
         professionally_approved = credential is not None and credential.validates(report, job)
         if not report.can_admin_approve and not professionally_approved:
@@ -158,9 +156,7 @@ class KnowledgeAdminService:
                 f"status={report.status}, required_domains={list(report.required_review_domains)}"
             )
         if report.document_sha256 != job.content_sha256:
-            raise KnowledgeJobTransitionError(
-                "知识审查报告未绑定到暂存文档哈希"
-            )
+            raise KnowledgeJobTransitionError("知识审查报告未绑定到暂存文档哈希")
         return await self.jobs.approve(job_id, reviewer_id=identity.subject, comment=comment)
 
     async def reject(
@@ -240,9 +236,7 @@ class KnowledgeAdminService:
             ):
                 # 审批到执行之间可能发生部署升级或对象篡改。Worker 必须再次校验
                 # 报告版本和内容身份，不能因为任务已经排队就默认信任旧决定。
-                raise KnowledgeJobTransitionError(
-                    "审查报告已过期或暂存文档哈希验证失败"
-                )
+                raise KnowledgeJobTransitionError("审查报告已过期或暂存文档哈希验证失败")
             ingestion_request = IngestionRequest(
                 source_uri=job.source_uri,
                 title=job.title,

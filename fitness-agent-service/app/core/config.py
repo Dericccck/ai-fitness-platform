@@ -30,6 +30,25 @@ class Settings(BaseSettings):
     port: int = 8090
     service_name: str = "fitness-agent-service"
     service_version: str = "0.1.0"
+    # 代码、Prompt、知识库和图编排版本必须随 Trace 一起记录，便于回溯一次回答实际
+    # 使用了哪一版实现。service_version 通常绑定 Git commit；source_commit 可在镜像
+    # 构建阶段单独注入，避免把发布标签和源码提交混为一谈。
+    source_commit: str = Field(
+        default="",
+        validation_alias=AliasChoices("SOURCE_COMMIT", "AGENT_SOURCE_COMMIT"),
+    )
+    prompt_version: str = Field(
+        default="prompt-v1",
+        validation_alias=AliasChoices("PROMPT_VERSION", "AGENT_PROMPT_VERSION"),
+    )
+    knowledge_base_version: str = Field(
+        default="knowledge-v1",
+        validation_alias=AliasChoices("KNOWLEDGE_BASE_VERSION", "AGENT_KNOWLEDGE_BASE_VERSION"),
+    )
+    graph_version: str = Field(
+        default="supervisor-domain-subgraphs-v1",
+        validation_alias=AliasChoices("GRAPH_VERSION", "AGENT_GRAPH_VERSION"),
+    )
     log_level: str = "INFO"
     api_docs_enabled: bool = True
 
@@ -44,6 +63,18 @@ class Settings(BaseSettings):
     trulens_enabled: bool = False
     trulens_capture_mode: Literal["disabled", "metadata", "evaluation"] = "disabled"
     trulens_capture_max_chars: int = Field(default=2000, ge=256, le=8000)
+    # 在线 OTEL 导出会把 TruLens 语义 Span 直接写入独立评测库。默认关闭，只有明确
+    # 配置独立数据库并打开 metadata/evaluation 采集时才启用，避免误写业务库。
+    trulens_online_export_enabled: bool = False
+    trulens_retention_days: int = Field(default=30, ge=1, le=3650)
+    # SHA-256 对低熵用户 ID 可能被枚举；提供密钥后使用 HMAC-SHA256 生成关联摘要。
+    # 本地为空时保留兼容行为，生产环境由 Secret Manager 注入并在契约检查中强制要求。
+    trulens_identifier_hash_secret: str = Field(
+        default="",
+        validation_alias=AliasChoices(
+            "TRULENS_IDENTIFIER_HASH_SECRET", "AGENT_TRULENS_IDENTIFIER_HASH_SECRET"
+        ),
+    )
     trulens_database_url: str = Field(
         default="sqlite:///./var/trulens/trulens.sqlite",
         validation_alias=AliasChoices("TRULENS_DATABASE_URL", "AGENT_TRULENS_DATABASE_URL"),
@@ -318,9 +349,7 @@ class Settings(BaseSettings):
         if self.proactive_rabbitmq_reconnect_max_seconds < (
             self.proactive_rabbitmq_reconnect_initial_seconds
         ):
-            raise ValueError(
-                "主动事件 RabbitMQ 最大重连延迟不能小于初始延迟"
-            )
+            raise ValueError("主动事件 RabbitMQ 最大重连延迟不能小于初始延迟")
         return self
 
     @model_validator(mode="after")
@@ -356,9 +385,7 @@ class Settings(BaseSettings):
         if not self.confirmation_signing_private_key_pem.strip():
             errors.append("必须提供 AGENT_CONFIRMATION_SIGNING_PRIVATE_KEY_PEM")
         if errors:
-            raise ValueError(
-                "生产身份验证契约不完整：" + "；".join(errors)
-            )
+            raise ValueError("生产身份验证契约不完整：" + "；".join(errors))
         return self
 
     @model_validator(mode="after")
@@ -380,17 +407,24 @@ class Settings(BaseSettings):
         if not self.metrics_enabled:
             errors.append("AGENT_METRICS_ENABLED 必须为 true")
         if not self.otel_configured:
-            errors.append(
-                "必须提供 AGENT_OTEL_ENABLED 和 AGENT_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
-            )
+            errors.append("必须提供 AGENT_OTEL_ENABLED 和 AGENT_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT")
         if self.trulens_capture_mode == "evaluation":
             errors.append("生产环境不允许 AGENT_TRULENS_CAPTURE_MODE=evaluation")
+        if self.trulens_online_export_enabled and self.trulens_capture_mode == "disabled":
+            errors.append("启用 TruLens 在线导出时 AGENT_TRULENS_CAPTURE_MODE 不能为 disabled")
+        if self.trulens_online_export_enabled and not self.trulens_database_url.strip():
+            errors.append("启用 TruLens 在线导出时必须提供 TRULENS_DATABASE_URL")
+        if self.trulens_online_export_enabled and not self.trulens_identifier_hash_secret.strip():
+            errors.append("生产环境启用 TruLens 在线导出时必须提供 TRULENS_IDENTIFIER_HASH_SECRET")
+        if self.trulens_online_export_enabled and self.trulens_database_url.strip() in {
+            self.database_url.strip(),
+            self.checkpoint_database_url.strip(),
+        }:
+            errors.append("TRULENS_DATABASE_URL 必须使用独立评测库，不能复用业务库或 Checkpoint 库")
         if not self.llm_configured:
             errors.append("必须提供 DEEPSEEK_API_KEY 和 DEEPSEEK_MODEL")
         if not self.gateway_configured:
-            errors.append(
-                "必须提供 AGENT_GATEWAY_BASE_URL 和 AGENT_GATEWAY_INTERNAL_SERVICE_TOKEN"
-            )
+            errors.append("必须提供 AGENT_GATEWAY_BASE_URL 和 AGENT_GATEWAY_INTERNAL_SERVICE_TOKEN")
         if not self.confirmation_encryption_key_base64.strip():
             errors.append("必须提供 AGENT_CONFIRMATION_ENCRYPTION_KEY_BASE64")
         if self.rag_storage_backend != "s3":

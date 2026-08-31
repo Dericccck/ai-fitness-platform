@@ -146,6 +146,7 @@ class RagService:
                 retrieval_span,
                 query=query,
                 contexts=[chunk.content for chunk in result.chunks],
+                knowledge_versions=[str(chunk.version) for chunk in result.chunks],
             )
             return result
 

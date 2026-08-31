@@ -911,6 +911,7 @@ dependencies = [
     { name = "tenacity" },
     { name = "torch" },
     { name = "transformers" },
+    { name = "trulens-core" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -927,7 +928,6 @@ dev = [
 ]
 eval = [
     { name = "jsonschema" },
-    { name = "trulens-core" },
     { name = "trulens-feedback" },
     { name = "trulens-providers-openai" },
 ]
@@ -970,7 +970,7 @@ requires-dist = [
     { name = "tenacity", specifier = ">=9.0,<10.0" },
     { name = "torch", specifier = "==2.3.1" },
     { name = "transformers", specifier = "==4.41.2" },
-    { name = "trulens-core", marker = "extra == 'eval'", specifier = "==2.10.0" },
+    { name = "trulens-core", specifier = "==2.10.0" },
     { name = "trulens-dashboard", marker = "extra == 'dashboard'", specifier = "==2.10.0" },
     { name = "trulens-feedback", marker = "extra == 'eval'", specifier = "==2.10.0" },
     { name = "trulens-providers-openai", marker = "extra == 'eval'", specifier = "==2.10.0" },

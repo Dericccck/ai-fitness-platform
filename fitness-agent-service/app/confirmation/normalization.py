@@ -215,9 +215,7 @@ def normalize_confirmation_action(
         raise ConfirmationNormalizationError("展示摘要中的操作不受策略控制")
     target_status = summary.get("target_status")
     if policy.target_status != "DYNAMIC" and target_status != policy.target_status:
-        raise ConfirmationNormalizationError(
-            "展示摘要目标状态不受策略控制"
-        )
+        raise ConfirmationNormalizationError("展示摘要目标状态不受策略控制")
     if not isinstance(target_status, str) or not target_status.strip():
         raise ConfirmationNormalizationError("必须提供展示摘要的目标状态")
 

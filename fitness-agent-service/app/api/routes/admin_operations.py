@@ -231,9 +231,7 @@ def _verify_operations_admin(request: Request, token: str | None) -> AgentIdenti
             status_code=status.HTTP_401_UNAUTHORIZED, detail="已签名的 AgentContext 无效"
         ) from exc
     if not _OPERATIONS_ADMIN_ROLES.intersection(identity.roles):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="需要经营管理员角色"
-        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="需要经营管理员角色")
     return identity
 
 

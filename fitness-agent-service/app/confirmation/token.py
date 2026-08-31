@@ -46,9 +46,7 @@ class ConfirmationTokenIssuer:
         if self.signing_algorithm == "RS256" and not self.signing_private_key_pem.strip():
             raise ConfirmationTokenError("必须配置确认 RSA 私钥")
         if self.ttl_seconds < 30 or self.ttl_seconds > 600:
-            raise ConfirmationTokenError(
-                "确认 Token TTL 必须在 30 到 600 秒之间"
-            )
+            raise ConfirmationTokenError("确认 Token TTL 必须在 30 到 600 秒之间")
 
     def issue(
         self,

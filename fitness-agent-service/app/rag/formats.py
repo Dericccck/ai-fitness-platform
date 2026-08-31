@@ -413,13 +413,9 @@ class PdfParser:
             if profile.route == "OCR_REQUIRED":
                 warnings.append(f"第 {profile.page_number} 页发布前需要 OCR")
             elif profile.route == "VISUAL_REVIEW_REQUIRED":
-                warnings.append(
-                    f"第 {profile.page_number} 页图片占比高，需要专业人工视觉审查"
-                )
+                warnings.append(f"第 {profile.page_number} 页图片占比高，需要专业人工视觉审查")
             elif profile.route == "OCR_AND_VISUAL_REVIEW_REQUIRED":
-                warnings.append(
-                    f"第 {profile.page_number} 页需要 OCR 和专业人工视觉审查"
-                )
+                warnings.append(f"第 {profile.page_number} 页需要 OCR 和专业人工视觉审查")
         blocks = _annotate_pdf_table_continuations(blocks)
         return ParsedDocument(
             tuple(blocks),

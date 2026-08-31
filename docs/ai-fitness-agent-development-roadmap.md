@@ -1062,6 +1062,12 @@ DeepSeek 返回的输入/输出 Token；Token 只用于成本看板，不把用�
 - 接入日志、Trace、Metrics、告警、Token 和成本看板。
 - 完成压测、故障注入、备份恢复、灰度、回滚和应急手册。
 - 对关键 Prompt、模型和知识库版本进行发布管理。
+- TruLens OTEL 追踪使用真实 `app_name/app_id/app_version/span_type/record_id` 标识，并可通过官方
+  exporter 写入独立评测库；真实 Trace 可转换为评测 Record。
+- 评测门禁对缺失指标、空分数和异常分数 fail-closed；四领域样例覆盖权限拒绝、确认边界、RAG
+  越权、工具误选恢复和模型失败。
+- Trace 关联代码提交、Prompt、模型、图编排和知识库版本；评测库使用 HMAC 关联 ID、保留期限清理、
+  独立账号和仅回环地址 Dashboard。
 
 完成标准：权限和租户隔离测试全部通过；核心写流程可审计和回滚；关键指标有告警；上线和恢复步骤经过演练。
 

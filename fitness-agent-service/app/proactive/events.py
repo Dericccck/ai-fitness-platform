@@ -66,13 +66,9 @@ class ProactiveEventMessage(BaseModel):
         except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as exc:
             raise ProactiveEventContractError("主动事件信封无效") from exc
         if message.event_type not in SUPPORTED_PROACTIVE_EVENT_TYPES:
-            raise ProactiveEventContractError(
-                f"不支持的主动事件类型：{message.event_type}"
-            )
+            raise ProactiveEventContractError(f"不支持的主动事件类型：{message.event_type}")
         if message.source not in SUPPORTED_PROACTIVE_EVENT_SOURCES:
-            raise ProactiveEventContractError(
-                f"不支持的主动事件来源：{message.source}"
-            )
+            raise ProactiveEventContractError(f"不支持的主动事件来源：{message.source}")
         return message
 
 

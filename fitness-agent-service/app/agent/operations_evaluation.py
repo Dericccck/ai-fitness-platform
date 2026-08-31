@@ -60,7 +60,9 @@ class OperationsTrendEvalThresholds:
 
         failures: list[str] = []
         if metrics["pass_rate"] < self.min_pass_rate:
-            failures.append(f"通过率 pass_rate {metrics['pass_rate']:.4f} < {self.min_pass_rate:.4f}")
+            failures.append(
+                f"通过率 pass_rate {metrics['pass_rate']:.4f} < {self.min_pass_rate:.4f}"
+            )
         if metrics["failed_cases"] > self.max_failed_cases:
             failures.append(
                 f"失败案例数 failed_cases {int(metrics['failed_cases'])} > {self.max_failed_cases}"

@@ -89,7 +89,7 @@ class AgentContextVerifier:
             algorithm = _optional_text(claims, "alg", "HS256")
             key_id = _optional_text(claims, "kid", "legacy")
             if algorithm not in {"HS256", "RS256"} or algorithm != self.signing_algorithm:
-                    raise ValueError("不支持的签名契约")
+                raise ValueError("不支持的签名契约")
             if algorithm == "HS256":
                 if not self.signing_key_id:
                     raise ValueError("缺少当前密钥 ID")
