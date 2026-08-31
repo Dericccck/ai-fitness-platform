@@ -121,9 +121,9 @@ class ConfirmationRecord:
         """生成批准后的内存快照；数据库更新由仓储在行锁事务中完成。"""
 
         if self.authorization_status != "PENDING":
-            raise ConfirmationStateError("only pending confirmations can be approved")
+            raise ConfirmationStateError("只有待确认的确认单才能批准")
         if self.is_expired(now):
-            raise ConfirmationStateError("expired confirmation cannot be approved")
+            raise ConfirmationStateError("已过期的确认单不能批准")
         return self._replace(
             authorization_status="APPROVED",
             approved_at=now,
@@ -135,7 +135,7 @@ class ConfirmationRecord:
         """生成拒绝后的内存快照。"""
 
         if self.authorization_status != "PENDING":
-            raise ConfirmationStateError("only pending confirmations can be rejected")
+            raise ConfirmationStateError("只有待确认的确认单才能拒绝")
         return self._replace(
             authorization_status="REJECTED",
             rejected_at=now,
@@ -152,7 +152,7 @@ class ConfirmationRecord:
             or self.credential_consumed_at is not None
             or not self.is_expired(now)
         ):
-            raise ConfirmationStateError("confirmation is not eligible for expiry")
+            raise ConfirmationStateError("该确认单不符合过期条件")
         return self._replace(
             authorization_status="EXPIRED",
             credential_jti=None,
@@ -163,13 +163,13 @@ class ConfirmationRecord:
         """撤销尚未执行的批准或待确认动作。"""
 
         if self.authorization_status not in {"PENDING", "APPROVED"}:
-            raise ConfirmationStateError("confirmation is not cancellable")
+            raise ConfirmationStateError("该确认单不可取消")
         if self.execution_status != "NOT_STARTED":
-            raise ConfirmationStateError("started execution cannot be cancelled")
+            raise ConfirmationStateError("已开始执行的确认单不能取消")
         if self.is_expired(now):
-            raise ConfirmationStateError("expired confirmation cannot be cancelled")
+            raise ConfirmationStateError("已过期的确认单不能取消")
         if not revocation_request_id.strip():
-            raise ConfirmationStateError("revocation request id is required")
+            raise ConfirmationStateError("必须提供撤销请求 ID")
         return self._replace(
             authorization_status="CANCELLED",
             cancelled_at=now,
@@ -182,13 +182,13 @@ class ConfirmationRecord:
         """领取一次批准动作的执行权，防止两个恢复请求同时执行。"""
 
         if self.authorization_status != "APPROVED":
-            raise ConfirmationStateError("only approved confirmations can execute")
+            raise ConfirmationStateError("只有已批准的确认单才能执行")
         if self.is_expired(now):
-            raise ConfirmationStateError("expired confirmation cannot execute")
+            raise ConfirmationStateError("已过期的确认单不能执行")
         if self.execution_status != "NOT_STARTED":
-            raise ConfirmationStateError("confirmation execution has already been claimed")
+            raise ConfirmationStateError("确认单执行权已被领取")
         if not self.credential_jti or self.credential_consumed_at is not None:
-            raise ConfirmationStateError("confirmation credential is not available")
+            raise ConfirmationStateError("确认凭证不可用")
         return self._replace(
             execution_status="RUNNING",
             execution_started_at=now,
@@ -200,20 +200,20 @@ class ConfirmationRecord:
         """绑定一次性凭证标识；真实 Token 仍只在服务端运行时签发。"""
 
         if self.authorization_status != "APPROVED":
-            raise ConfirmationStateError("only approved confirmations can issue credentials")
+            raise ConfirmationStateError("只有已批准的确认单才能签发凭证")
         if self.is_expired(now):
-            raise ConfirmationStateError("expired confirmation cannot issue credentials")
+            raise ConfirmationStateError("已过期的确认单不能签发凭证")
         if self.credential_jti is not None:
-            raise ConfirmationStateError("confirmation credential has already been issued")
+            raise ConfirmationStateError("确认凭证已经签发")
         if not credential_jti.strip():
-            raise ConfirmationStateError("credential jti is required")
+            raise ConfirmationStateError("必须提供凭证 JTI")
         return self._replace(credential_jti=credential_jti, version=self.version + 1)
 
     def requeue_retryable(self) -> ConfirmationRecord:
         """允许可恢复的工具失败重新领取执行权。"""
 
         if self.execution_status != "FAILED_RETRYABLE":
-            raise ConfirmationStateError("only retryable execution can be requeued")
+            raise ConfirmationStateError("只有可重试的执行才能重新入队")
         return self._replace(
             execution_status="NOT_STARTED",
             execution_started_at=None,
@@ -228,7 +228,7 @@ class ConfirmationRecord:
         """记录业务工具真实返回成功。"""
 
         if self.execution_status != "RUNNING":
-            raise ConfirmationStateError("only running execution can succeed")
+            raise ConfirmationStateError("只有执行中的操作才能标记为成功")
         return self._replace(
             execution_status="SUCCEEDED",
             finished_at=now,
@@ -239,7 +239,7 @@ class ConfirmationRecord:
         """记录执行失败；可重试失败不会篡改原始批准决定。"""
 
         if self.execution_status != "RUNNING":
-            raise ConfirmationStateError("only running execution can fail")
+            raise ConfirmationStateError("只有执行中的操作才能标记为失败")
         return self._replace(
             execution_status="FAILED_RETRYABLE" if retryable else "FAILED_FINAL",
             finished_at=now,

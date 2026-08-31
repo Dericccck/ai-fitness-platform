@@ -130,7 +130,7 @@ class NotificationOutboxRepository:
         """原子领取一批待发布事件，支持多个发布器实例并行消费。"""
 
         if not worker_id.strip() or limit < 1 or limit > 500:
-            raise ValueError("notification worker id and safe batch limit are required")
+            raise ValueError("必须提供通知 Worker ID 和安全批次限制")
         statement = text(
             """
             WITH picked AS (
@@ -200,7 +200,7 @@ class NotificationOutboxRepository:
         """发布失败时进入重试或死信状态，不允许无限重试。"""
 
         if not error_code.strip() or delay_seconds < 1 or max_attempts < 1:
-            raise ValueError("notification retry parameters are invalid")
+            raise ValueError("通知重试参数无效")
         result = await connection.execute(
             text(
                 """
@@ -236,7 +236,7 @@ class NotificationOutboxRepository:
         """安静时间内不算失败，延迟到下一个允许时间再领取。"""
 
         if available_at <= datetime.now(UTC) or not reason.strip():
-            raise ValueError("deferred notification must have a future time and reason")
+            raise ValueError("延迟通知必须有未来时间和原因")
         result = await connection.execute(
             text(
                 """
@@ -266,7 +266,7 @@ class NotificationOutboxRepository:
         """用户关闭或频率限制时终态抑制，不进入无限重试。"""
 
         if not reason.strip():
-            raise ValueError("suppression reason is required")
+            raise ValueError("必须提供抑制原因")
         result = await connection.execute(
             text(
                 """
@@ -297,7 +297,7 @@ class NotificationOutboxRepository:
         """
 
         if template_version < 1 or not title.strip() or not body.strip():
-            raise ValueError("notification delivery snapshot is invalid")
+            raise ValueError("通知投递快照无效")
         inserted = (
             await connection.execute(
                 text(
@@ -338,7 +338,7 @@ class NotificationOutboxRepository:
             )
         ).scalar_one_or_none()
         if existing is None:
-            raise RuntimeError("in-app notification dedupe row disappeared")
+            raise RuntimeError("应用内通知去重记录已消失")
         return str(existing)
 
     async def start_delivery_attempt(
@@ -352,7 +352,7 @@ class NotificationOutboxRepository:
         """记录投递开始；相同 Outbox、渠道和次数只创建一条尝试。"""
 
         if not outbox_id.strip() or not channel.strip() or attempt_no < 1:
-            raise ValueError("delivery attempt parameters are invalid")
+            raise ValueError("投递尝试参数无效")
         await connection.execute(
             text(
                 """
@@ -385,7 +385,7 @@ class NotificationOutboxRepository:
         """完成一次投递尝试，状态只允许进入终态。"""
 
         if status not in {"SUCCEEDED", "RETRYABLE_FAILED", "FINAL_FAILED"}:
-            raise ValueError("delivery attempt status is invalid")
+            raise ValueError("投递尝试状态无效")
         result = await connection.execute(
             text(
                 """
@@ -426,20 +426,20 @@ class NotificationOutboxRepository:
         """
 
         if limit < 1 or limit > 100:
-            raise ValueError("delivery attempt list limit must be between 1 and 100")
+            raise ValueError("投递尝试列表限制必须在 1 到 100 之间")
         if organization_id is not None and not organization_id.strip():
-            raise ValueError("organization id cannot be blank")
+            raise ValueError("机构 ID 不能为空白")
         if notification_type is not None and not notification_type.strip():
-            raise ValueError("notification type cannot be blank")
+            raise ValueError("通知类型不能为空白")
         if channel is not None and not channel.strip():
-            raise ValueError("notification channel cannot be blank")
+            raise ValueError("通知渠道不能为空白")
         if status is not None and status not in {
             "STARTED",
             "SUCCEEDED",
             "RETRYABLE_FAILED",
             "FINAL_FAILED",
         }:
-            raise ValueError("delivery attempt status is invalid")
+            raise ValueError("投递尝试状态无效")
 
         rows = (
             (
@@ -492,7 +492,7 @@ class NotificationOutboxRepository:
         """按签名主体和机构读取站内通知，不允许调用方传入任意用户 ID。"""
 
         if limit < 1 or limit > 100:
-            raise ValueError("notification list limit must be between 1 and 100")
+            raise ValueError("通知列表限制必须在 1 到 100 之间")
         statement = text(
             """
             SELECT * FROM agent_in_app_notifications
@@ -586,7 +586,7 @@ def _delivery_attempt_from_row(row: Any) -> NotificationDeliveryAttemptRecord:
 
     started_at = row["started_at"]
     if started_at is None:
-        raise RuntimeError("notification delivery attempt started_at is NULL")
+        raise RuntimeError("通知投递尝试的 started_at 为 NULL")
     return NotificationDeliveryAttemptRecord(
         id=int(row["id"]),
         outbox_id=str(row["outbox_id"]),
@@ -638,5 +638,5 @@ def _as_utc(value: datetime | None) -> datetime | None:
 def _required_utc(value: datetime) -> datetime:
     normalized = _as_utc(value)
     if normalized is None:
-        raise RuntimeError("notification outbox required timestamp is NULL")
+        raise RuntimeError("通知 Outbox 必需的时间戳为 NULL")
     return normalized

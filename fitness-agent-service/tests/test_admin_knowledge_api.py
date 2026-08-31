@@ -19,7 +19,7 @@ def _job(status: str = "PENDING_REVIEW") -> KnowledgeIngestionJob:
         storage_key="job-1.md",
         content_type="text/markdown",
         size_bytes=20,
-        title="Warmup",
+        title="热身",
         document_type="FITNESS_GUIDE",
         organization_id=None,
         owner_user_id=None,
@@ -112,11 +112,11 @@ async def test_student_cannot_upload_knowledge() -> None:
             headers={"X-Agent-Context": "signed-context"},
             data={
                 "source_uri": "knowledge://fitness/warmup.md",
-                "title": "Warmup",
+                "title": "热身",
                 "document_type": "FITNESS_GUIDE",
                 "effective_from": "2026-01-01T00:00:00Z",
             },
-            files={"file": ("warmup.md", b"# Warmup", "text/markdown")},
+            files={"file": ("warmup.md", "# 热身".encode(), "text/markdown")},
         )
 
     assert response.status_code == 403
@@ -131,12 +131,12 @@ async def test_admin_upload_returns_pending_review_task() -> None:
             headers={"X-Agent-Context": "signed-context"},
             data={
                 "source_uri": "knowledge://fitness/warmup.md",
-                "title": "Warmup",
+                "title": "热身",
                 "document_type": "FITNESS_GUIDE",
                 "visibility": "GLOBAL",
                 "effective_from": "2026-01-01T00:00:00Z",
             },
-            files={"file": ("warmup.md", b"# Warmup", "text/markdown")},
+            files={"file": ("warmup.md", "# 热身".encode(), "text/markdown")},
         )
 
     assert response.status_code == 202

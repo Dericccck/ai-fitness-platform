@@ -49,7 +49,7 @@ DOMAIN_AGENT_SPECS: Mapping[SupervisorRoute, DomainAgentSpec] = {
     "FITNESS_COACHING": DomainAgentSpec(
         route="FITNESS_COACHING",
         node_name="fitness_agent",
-        display_name="Fitness Agent",
+        display_name="健身指导 Agent",
         allowed_tool_ids=frozenset(
             {
                 "fitness.user.get_current.v1",
@@ -77,7 +77,7 @@ DOMAIN_AGENT_SPECS: Mapping[SupervisorRoute, DomainAgentSpec] = {
     "BOOKING": DomainAgentSpec(
         route="BOOKING",
         node_name="booking_agent",
-        display_name="Booking Agent",
+        display_name="预约 Agent",
         allowed_tool_ids=frozenset(
             {
                 "fitness.user.get_current.v1",
@@ -95,14 +95,14 @@ DOMAIN_AGENT_SPECS: Mapping[SupervisorRoute, DomainAgentSpec] = {
     "OPERATIONS": DomainAgentSpec(
         route="OPERATIONS",
         node_name="operations_agent",
-        display_name="Operations Agent",
+        display_name="经营分析 Agent",
         allowed_tool_ids=frozenset({"fitness.operations.metric.query.v1"}),
         deterministic_operations_input=True,
     ),
     "CUSTOMER_SERVICE": DomainAgentSpec(
         route="CUSTOMER_SERVICE",
         node_name="customer_service_agent",
-        display_name="Customer Service Agent",
+        display_name="客服 Agent",
         allowed_tool_ids=frozenset(
             {
                 "fitness.user.get_current.v1",
@@ -136,7 +136,7 @@ def domain_agent_spec(route: SupervisorRoute) -> DomainAgentSpec:
     try:
         return DOMAIN_AGENT_SPECS[route]
     except KeyError as exc:
-        raise ValueError(f"route has no executable domain subgraph: {route}") from exc
+        raise ValueError(f"路由没有可执行的领域子图：{route}") from exc
 
 
 def executable_domain_specs() -> tuple[DomainAgentSpec, ...]:
@@ -168,7 +168,7 @@ def build_domain_subgraph(
         route = state.get("route")
         if route != spec.route:
             raise ValueError(
-                f"domain subgraph route mismatch: expected={spec.route}, actual={route}"
+                f"领域子图路由不匹配：期望={spec.route}，实际={route}"
             )
         return {"active_domain": spec.node_name}
 

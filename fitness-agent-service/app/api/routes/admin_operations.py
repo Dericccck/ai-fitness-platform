@@ -1,4 +1,4 @@
-"""管理员 Operations 查询审计只读 API。"""
+"""管理员经营查询审计只读 API。"""
 
 from __future__ import annotations
 
@@ -180,7 +180,7 @@ async def list_operations_query_audits(
     ):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
-            detail="organization is outside signed admin scope",
+            detail="机构不在已签名管理员的权限范围内",
         )
     organization_ids = (
         None
@@ -222,17 +222,17 @@ def _repository(request: Request) -> OperationsAuditRepository:
 def _verify_operations_admin(request: Request, token: str | None) -> AgentIdentity:
     if not token:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="signed agent context is required"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="必须提供已签名的 AgentContext"
         )
     try:
         identity = cast(AgentIdentity, request.app.state.context_verifier.verify(token))
     except AgentContextVerificationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid signed agent context"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="已签名的 AgentContext 无效"
         ) from exc
     if not _OPERATIONS_ADMIN_ROLES.intersection(identity.roles):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="operations admin role is required"
+            status_code=status.HTTP_403_FORBIDDEN, detail="需要经营管理员角色"
         )
     return identity
 

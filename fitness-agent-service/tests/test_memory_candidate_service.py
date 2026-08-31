@@ -225,7 +225,7 @@ async def test_expired_pending_candidate_cannot_be_approved() -> None:
         **{**record.__dict__, "expires_at": datetime.now(UTC) - timedelta(minutes=1)}
     )
 
-    with pytest.raises(RuntimeError, match="expired"):
+    with pytest.raises(RuntimeError, match="已过期"):
         await service.decide(
             "candidate-1",
             identity=IDENTITY,

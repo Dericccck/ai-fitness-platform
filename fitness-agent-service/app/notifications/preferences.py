@@ -261,17 +261,17 @@ def _validate_preference(
     minimum_interval_seconds: int,
 ) -> None:
     if notification_type not in SUPPORTED_NOTIFICATION_TYPES:
-        raise NotificationPreferenceValidationError("unsupported notification type")
+        raise NotificationPreferenceValidationError("不支持的通知类型")
     if (quiet_start is None) != (quiet_end is None):
         raise NotificationPreferenceValidationError(
-            "quiet start and quiet end must be configured together"
+            "quiet_start 和 quiet_end 必须同时配置"
         )
     if quiet_start is not None and quiet_start == quiet_end:
-        raise NotificationPreferenceValidationError("quiet window cannot be zero length")
+        raise NotificationPreferenceValidationError("免打扰时间窗口不能为零长度")
     _validate_timezone(timezone)
     if minimum_interval_seconds < 0 or minimum_interval_seconds > 7 * 24 * 3600:
         raise NotificationPreferenceValidationError(
-            "minimum notification interval must be between 0 and 7 days"
+            "最小通知间隔必须在 0 到 7 天之间"
         )
 
 
@@ -280,7 +280,7 @@ def _validate_timezone(timezone: str) -> None:
         ZoneInfo(timezone)
     except (ZoneInfoNotFoundError, ValueError) as exc:
         raise NotificationPreferenceValidationError(
-            "timezone must be a valid IANA timezone"
+            "timezone 必须是有效的 IANA 时区"
         ) from exc
 
 

@@ -1,4 +1,4 @@
-"""执行一次真实 Operations Agent 冒烟联调。
+"""执行一次真实经营 Agent 冒烟联调。
 
 该脚本只调用已经启动的 Agent HTTP API，不创建假身份、不直接连接 MySQL，也不绕过
 Java Gateway。调用者必须显式提供认证服务签发的组织管理员 AgentContext；脚本不会把
@@ -27,7 +27,7 @@ class OperationsLiveCheckError(RuntimeError):
 def build_parser() -> argparse.ArgumentParser:
     """构造命令行参数，敏感 AgentContext 只从环境变量读取。"""
 
-    parser = argparse.ArgumentParser(description="真实 Operations Agent HTTP 冒烟联调")
+    parser = argparse.ArgumentParser(description="真实经营 Agent HTTP 冒烟联调")
     parser.add_argument(
         "--endpoint",
         default=os.getenv("AGENT_LIVE_API_URL", "http://127.0.0.1:8090"),
@@ -75,9 +75,9 @@ def _response_summary(payload: Any) -> tuple[str, str, int, str]:
     if route != "OPERATIONS":
         raise OperationsLiveCheckError(f"真实请求未进入 OPERATIONS 路由，实际路由: {route!r}")
     if status != "COMPLETED":
-        raise OperationsLiveCheckError(f"Operations 请求未完成，实际状态: {status!r}")
+        raise OperationsLiveCheckError(f"经营请求未完成，实际状态: {status!r}")
     if not isinstance(tool_steps, int) or tool_steps < 1:
-        raise OperationsLiveCheckError("Operations 请求没有完成真实工具调用")
+        raise OperationsLiveCheckError("经营请求没有完成真实工具调用")
     if not isinstance(answer, str) or not answer.strip():
         raise OperationsLiveCheckError("Agent 返回了空的经营分析结果")
     # 仅用于终端定位，去掉换行并限制长度，避免把完整业务报表复制进日志。
@@ -86,7 +86,7 @@ def _response_summary(payload: Any) -> tuple[str, str, int, str]:
 
 
 async def run_live_check(args: argparse.Namespace) -> None:
-    """调用真实 Agent API 并验证它确实完成了 Operations 工具调用。"""
+    """调用真实 Agent API 并验证它确实完成了经营工具调用。"""
 
     if args.timeout_seconds <= 0:
         raise OperationsLiveCheckError("--timeout-seconds 必须大于 0")
@@ -127,7 +127,7 @@ async def run_live_check(args: argparse.Namespace) -> None:
         raise OperationsLiveCheckError("Agent API 返回了非 JSON 响应") from exc
 
     route, status, tool_steps, answer_preview = _response_summary(payload)
-    print("Operations 真实联调通过")
+    print("经营真实联调通过")
     print(f"route={route} status={status} tool_steps={tool_steps}")
     print(f"request_id={request_id}")
     print(f"answer_preview={answer_preview}")
@@ -139,7 +139,7 @@ def main() -> int:
     try:
         asyncio.run(run_live_check(build_parser().parse_args()))
     except OperationsLiveCheckError as exc:
-        print(f"Operations 真实联调失败：{exc}", file=sys.stderr)
+        print(f"经营真实联调失败：{exc}", file=sys.stderr)
         return 1
     return 0
 

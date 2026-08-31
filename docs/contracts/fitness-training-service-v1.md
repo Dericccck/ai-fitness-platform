@@ -1,4 +1,4 @@
-# Fitness Training Service v1 契约
+# 健身训练服务 v1 契约
 
 该服务是训练计划的业务事实源，和只读 `fitness-core-gateway` 分离。赛事、作品和活动运营不在
 契约范围内。

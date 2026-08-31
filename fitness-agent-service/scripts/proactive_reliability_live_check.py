@@ -1,6 +1,6 @@
 """执行主动提醒 RabbitMQ/PostgreSQL 可靠性真实验收。
 
-本脚本不调用 Booking、Training 或客服接口，也不写入 MySQL 业务事实。它只使用唯一的
+本脚本不调用预约、训练或客服接口，也不写入 MySQL 业务事实。它只使用唯一的
 临时 RabbitMQ 队列、事件 ID 和聚合 ID，验证 Agent 自己的事件 Inbox 与通知 Outbox：
 
 1. 同一个事件通过真实 RabbitMQ 重复投递两次，最终只能有一条 Inbox 记录和两条通知 Outbox；
@@ -201,7 +201,7 @@ def _new_event(config: LiveCheckConfig, *, suffix: str) -> ReliabilityEvent:
 
 
 def _envelope(event: ReliabilityEvent) -> dict[str, Any]:
-    """生成与 Booking Outbox 相同字段命名的标准事件信封。"""
+    """生成与预约 Outbox 相同字段命名的标准事件信封。"""
 
     return {
         "eventId": event.event_id,

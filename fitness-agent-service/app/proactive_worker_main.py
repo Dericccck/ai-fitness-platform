@@ -19,7 +19,7 @@ async def run() -> None:
 
     settings = Settings()
     if not settings.proactive_worker_enabled:
-        raise RuntimeError("PROACTIVE_WORKER_ENABLED must be true for proactive worker")
+        raise RuntimeError("主动事件 Worker 需要将 PROACTIVE_WORKER_ENABLED 设置为 true")
     start_http_server(settings.proactive_worker_metrics_port, registry=http_metrics.registry)
     async with lifespan(app):
         event_repository = ProactiveEventRepository()

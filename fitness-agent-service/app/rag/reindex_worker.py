@@ -27,7 +27,7 @@ class KnowledgeReindexWorker:
         batch_size: int = 2,
     ) -> None:
         if batch_size < 1 or batch_size > 100:
-            raise ValueError("re-index worker batch size must be between 1 and 100")
+            raise ValueError("重新索引 Worker 批次大小必须在 1 到 100 之间")
         self.jobs = jobs
         self.service = service
         self.batch_size = batch_size

@@ -44,11 +44,11 @@ class KnowledgeIngestionRepository:
         """在同一事务中持久化待审核任务和不可变的首版解析报告。"""
 
         if review_report.job_id != job.id:
-            raise ValueError("review report must be bound to the created ingestion job")
+            raise ValueError("审查报告必须绑定到已创建的摄取任务")
         if review_report.document_sha256 != job.content_sha256:
-            raise ValueError("review report hash must match the staged document hash")
+            raise ValueError("审查报告哈希必须与暂存文档哈希匹配")
         if review_report.report_version != 1:
-            raise ValueError("the first review report version must be 1")
+            raise ValueError("第一版审查报告的版本必须为 1")
 
         statement = text(
             """
@@ -109,7 +109,7 @@ class KnowledgeIngestionRepository:
         async with self._database.engine.connect() as connection:
             row = (await connection.execute(statement, {"job_id": job_id})).mappings().first()
         if row is None:
-            raise KnowledgeReviewReportNotFound("knowledge review report was not found")
+            raise KnowledgeReviewReportNotFound("未找到知识审查报告")
         return _review_report_from_row(row)
 
     async def list_review_decisions(self, report_id: str) -> list[KnowledgeReviewDecision]:
@@ -138,7 +138,7 @@ class KnowledgeIngestionRepository:
         """
 
         if decision.report_id != report.id or decision.job_id != report.job_id:
-            raise ValueError("review decision must be bound to the report and job")
+            raise ValueError("审查决定必须绑定到报告和任务")
         insert_decision = text(
             """
             INSERT INTO knowledge_review_decisions (
@@ -210,7 +210,7 @@ class KnowledgeIngestionRepository:
                     ).first()
                     if rejected is None:
                         raise KnowledgeJobTransitionError(
-                            "knowledge review rejection was not applicable to the current job"
+                            "知识审查拒绝不适用于当前任务"
                         )
                     return KnowledgeReviewOutcome(restored, None)
 
@@ -255,7 +255,7 @@ class KnowledgeIngestionRepository:
                 return KnowledgeReviewOutcome(restored, credential)
         except IntegrityError as exc:
             raise KnowledgeJobTransitionError(
-                "this review domain already has a final decision"
+                "该审查领域已经存在最终决定"
             ) from exc
 
     async def get_publication_credential(
@@ -275,7 +275,7 @@ class KnowledgeIngestionRepository:
         async with self._database.engine.connect() as connection:
             row = (await connection.execute(statement, {"id": job_id})).mappings().first()
         if row is None:
-            raise KnowledgeJobNotFound("knowledge ingestion job was not found")
+            raise KnowledgeJobNotFound("未找到知识摄取任务")
         return job_from_row(row)
 
     async def get_active_job_by_source(self, source_uri: str) -> KnowledgeIngestionJob | None:
@@ -307,7 +307,7 @@ class KnowledgeIngestionRepository:
         """只列出签名管理员身份被允许访问的任务范围。"""
 
         if limit < 1 or limit > 100:
-            raise ValueError("job list limit must be between 1 and 100")
+            raise ValueError("任务列表限制必须在 1 到 100 之间")
         if not platform_wide and not organization_ids:
             return []
         scope_clause = (
@@ -337,7 +337,7 @@ class KnowledgeIngestionRepository:
         """返回数量受限的排队任务 ID；每个 Worker 处理前仍需原子认领。"""
 
         if limit < 1 or limit > 100:
-            raise ValueError("worker batch size must be between 1 and 100")
+            raise ValueError("Worker 批次大小必须在 1 到 100 之间")
         statement = text(
             """
             SELECT id
@@ -485,7 +485,7 @@ class KnowledgeIngestionRepository:
             row = (await connection.execute(statement, params)).mappings().first()
         if row is None:
             raise KnowledgeJobTransitionError(
-                "knowledge ingestion job state transition was rejected"
+                "知识摄取任务状态转换被拒绝"
             )
         return job_from_row(row)
 

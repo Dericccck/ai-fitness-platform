@@ -92,7 +92,7 @@ class KnowledgeReviewService:
         job, report, requirements = await self._load_current_case(job_id)
         requirement = next((item for item in requirements if item.domain == review_domain), None)
         if requirement is None:
-            raise ValueError("the selected review domain is not required by this report")
+            raise ValueError("所选审查领域不是该报告要求的领域")
         validate_reviewer(identity, job, requirement)
         # 决定接口不能假设审核人一定先调用过原件下载接口。提交决定前再次读取并
         # 校验暂存对象，保证最终决定确实绑定报告中的文件字节。
@@ -108,7 +108,7 @@ class KnowledgeReviewService:
         )
         normalized_comment = comment.strip()
         if len(normalized_comment) < 10 or len(normalized_comment) > 2000:
-            raise ValueError("review comment must contain 10 to 2000 characters")
+            raise ValueError("审查评论必须包含 10 到 2000 个字符")
         review_decision = KnowledgeReviewDecision(
             id=token_hex(16),
             report_id=report.id,
@@ -137,17 +137,17 @@ class KnowledgeReviewService:
     ]:
         job = await self.jobs.get_job(job_id)
         if job.status != "PENDING_REVIEW":
-            raise KnowledgeJobTransitionError("knowledge task is not awaiting professional review")
+            raise KnowledgeJobTransitionError("知识任务未等待专业审查")
         report = await self.jobs.get_latest_review_report(job_id)
         if report.status != "REVIEW_REQUIRED" or not report.is_current:
             raise KnowledgeJobTransitionError(
-                "knowledge report is blocked, already passed, or requires re-analysis"
+                "知识报告已阻断、已通过或需要重新分析"
             )
         if report.document_sha256 != job.content_sha256:
-            raise KnowledgeJobTransitionError("review report is not bound to the staged file hash")
+            raise KnowledgeJobTransitionError("审查报告未绑定到暂存文件哈希")
         requirements = review_requirements(report)
         if not requirements:
-            raise KnowledgeJobTransitionError("knowledge report has no professional review scope")
+            raise KnowledgeJobTransitionError("知识报告没有专业审查范围")
         return job, report, requirements
 
     @staticmethod
@@ -159,7 +159,7 @@ class KnowledgeReviewService:
         actual_sha256 = hashlib.sha256(content).hexdigest()
         if actual_sha256 != job.content_sha256 or actual_sha256 != report.document_sha256:
             raise KnowledgeJobTransitionError(
-                "staged source hash changed after the review report was generated"
+                "生成审查报告后暂存来源哈希发生了变化"
             )
 
 

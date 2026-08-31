@@ -1,4 +1,4 @@
-"""Booking/Fitness 真实联调脚本共用的安全 HTTP 辅助函数。
+"""预约/健身真实联调脚本共用的安全 HTTP 辅助函数。
 
 真实联调和单元测试的边界不同：脚本会访问正在运行的 Agent、Java Gateway 和业务
 数据库，因此默认只验证 Agent 能否生成正确的确认单。只有调用者显式提供 ``--execute``
@@ -20,7 +20,7 @@ import httpx
 
 
 class BusinessLiveCheckError(RuntimeError):
-    """真实 Booking/Fitness 联调未达到预期。"""
+    """真实预约/健身联调未达到预期。"""
 
 
 @dataclass(frozen=True)
@@ -40,7 +40,7 @@ class LiveCheckConfig:
 
 
 def add_common_arguments(parser: argparse.ArgumentParser, *, description: str) -> None:
-    """给 Booking/Fitness 包装脚本增加统一参数。"""
+    """给预约/健身包装脚本增加统一参数。"""
 
     parser.description = description
     parser.add_argument(

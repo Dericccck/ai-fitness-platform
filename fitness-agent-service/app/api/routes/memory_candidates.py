@@ -116,7 +116,7 @@ async def list_memory_candidates(
         )
     except MemoryValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="organization is forbidden"
+            status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该机构"
         ) from exc
     return [_to_response(record) for record in records]
 
@@ -146,7 +146,7 @@ async def get_memory_candidate_inbox(
         )
     except MemoryValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="organization is forbidden"
+            status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该机构"
         ) from exc
 
     notification_repository = _notification_repository(request)
@@ -191,7 +191,7 @@ async def decide_memory_candidate(
         )
     except MemoryCandidateNotFound as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="memory candidate not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="未找到 Memory 候选"
         ) from exc
     except MemoryCandidateStateError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -202,7 +202,7 @@ async def decide_memory_candidate(
     except MemoryCandidatePersistenceError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="memory candidate is temporarily unavailable",
+            detail="Memory 候选暂时不可用",
         ) from exc
     return _to_response(result.candidate, memory_id=result.memory.id if result.memory else None)
 
@@ -223,7 +223,7 @@ async def list_memory_candidate_events(
         )
     except MemoryCandidateNotFound as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="memory candidate not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="未找到 Memory 候选"
         ) from exc
     return [_to_event_response(event) for event in events]
 
@@ -240,14 +240,14 @@ def _verify_identity(request: Request, token: str | None) -> AgentIdentity:
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="signed agent context is required",
+            detail="必须提供已签名的 AgentContext",
         )
     try:
         return cast(AgentIdentity, request.app.state.context_verifier.verify(token))
     except AgentContextVerificationError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid signed agent context",
+            detail="已签名的 AgentContext 无效",
         ) from exc
 
 

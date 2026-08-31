@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "fitness-ocr-service"
 version = "0.1.0"
-description = "Private OCR and document-structure service for the fitness Agent"
+description = "面向健身 Agent 的内部 OCR 与文档结构化服务"
 requires-python = ">=3.11"
 dependencies = [
     "fastapi>=0.115,<1.0",

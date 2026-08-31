@@ -29,18 +29,18 @@ class PdfOcrService:
         """解析指定页面，同时保留原始的从 1 开始的页码。"""
 
         if not content:
-            raise OcrInputError("file must not be empty")
+            raise OcrInputError("文件不能为空")
         if not content.startswith(b"%PDF-"):
-            raise OcrInputError("file must be a PDF")
+            raise OcrInputError("文件必须是 PDF")
         try:
             reader = PdfReader(BytesIO(content))
             total_pages = len(reader.pages)
         except Exception as exc:
-            raise OcrInputError("PDF is malformed or unreadable") from exc
+            raise OcrInputError("PDF 格式错误或无法读取") from exc
         if total_pages == 0:
-            raise OcrInputError("PDF contains no pages")
+            raise OcrInputError("PDF 不包含页面")
         if total_pages > self.settings.max_pages:
-            raise OcrInputError(f"PDF exceeds the {self.settings.max_pages}-page limit")
+            raise OcrInputError(f"PDF 超过 {self.settings.max_pages} 页的限制")
 
         selected_pages = _parse_pages(pages, total_pages)
         with _temporary_pdf(reader, selected_pages) as input_path:
@@ -66,16 +66,16 @@ class PdfOcrService:
                         page_height=page_height,
                     )
                     if not page_blocks:
-                        warnings.append(f"page {source_page} produced no indexable OCR blocks")
+                        warnings.append(f"第 {source_page} 页没有产生可索引的 OCR 块")
                     blocks.extend(page_blocks)
             except OcrInputError:
                 raise
             except Exception as exc:
                 if isinstance(exc, OcrEngineError):
                     raise
-                raise OcrEngineError("OCR result conversion failed") from exc
+                raise OcrEngineError("OCR 结果转换失败") from exc
         if not blocks:
-            raise OcrEngineError("OCR produced no indexable blocks")
+            raise OcrEngineError("OCR 没有产生可索引的块")
         return OcrResponse(warnings=warnings, blocks=blocks)
 
 
@@ -86,14 +86,14 @@ def _parse_pages(value: str | None, total_pages: int) -> list[int]:
     for token in value.split(","):
         token = token.strip()
         if not token.isdigit() or int(token) < 1:
-            raise OcrInputError("pages must be a comma-separated list of positive integers")
+            raise OcrInputError("pages 必须是以逗号分隔的正整数列表")
         page = int(token)
         if page > total_pages:
-            raise OcrInputError(f"requested page {page} is outside the PDF")
+            raise OcrInputError(f"请求的第 {page} 页不在 PDF 范围内")
         if page not in pages:
             pages.append(page)
     if not pages:
-        raise OcrInputError("pages must select at least one page")
+        raise OcrInputError("pages 至少必须选择一个页面")
     return pages
 
 

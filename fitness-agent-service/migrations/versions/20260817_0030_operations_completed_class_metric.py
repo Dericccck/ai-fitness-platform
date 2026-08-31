@@ -45,7 +45,7 @@ def downgrade() -> None:
     ).scalar_one()
     if completed_count:
         raise RuntimeError(
-            "cannot downgrade completed class metric migration while完课量审计记录仍存在"
+            "无法回退完课量指标迁移，因为仍存在完课量审计记录"
         )
     op.drop_constraint(
         "ck_agent_operations_audit_metric",

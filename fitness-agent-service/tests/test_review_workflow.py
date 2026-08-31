@@ -144,9 +144,9 @@ def test_visual_only_requires_exact_pages_but_training_guide_requires_document()
         (KnowledgeReviewRegion(2, 0.1, 0.2, 0.3, 0.4, "膝关节轨迹"),),
         total_pages=5,
     )
-    with pytest.raises(ValueError, match="exactly cover"):
+    with pytest.raises(ValueError, match="完全覆盖"):
         validate_decision_scope(visual, "PAGES", (2,), (), total_pages=5)
-    with pytest.raises(ValueError, match="normalized coordinates"):
+    with pytest.raises(ValueError, match="归一化坐标"):
         validate_decision_scope(
             visual,
             "PAGES",
@@ -165,9 +165,9 @@ def test_reviewer_uses_signed_capabilities_and_cannot_self_review() -> None:
     )
     validate_reviewer(authorized, job(), requirement)
 
-    with pytest.raises(KnowledgeAdminForbidden, match="uploader"):
+    with pytest.raises(KnowledgeAdminForbidden, match="上传者"):
         validate_reviewer(replace(authorized, subject="uploader-1"), job(), requirement)
-    with pytest.raises(KnowledgeAdminForbidden, match="fitness knowledge review"):
+    with pytest.raises(KnowledgeAdminForbidden, match="健身知识审查"):
         validate_reviewer(
             identity("coach-2", roles=("COACH",), capabilities=(GLOBAL_REVIEW_CAPABILITY,)),
             job(),
@@ -181,7 +181,7 @@ def test_clinical_review_requires_both_capability_and_verified_qualification() -
         for item in review_requirements(report(clinical=True))
         if item.domain == "CLINICAL_EXERCISE_SAFETY"
     )
-    with pytest.raises(KnowledgeAdminForbidden, match="qualification"):
+    with pytest.raises(KnowledgeAdminForbidden, match="健康专业资质"):
         validate_reviewer(
             identity(
                 "doctor-1",

@@ -30,7 +30,7 @@ def main() -> int:
     try:
         scanner.scan("eicar.com", EICAR_TEST_STRING.encode("ascii"))
     except DocumentSafetyError as exc:
-        if "malware detected" not in str(exc):
+        if "检测到恶意软件" not in str(exc):
             print(f"EICAR 测试串返回了异常错误：{exc}")
             return 1
     else:

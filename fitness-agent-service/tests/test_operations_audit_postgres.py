@@ -1,4 +1,4 @@
-"""需要显式开启的 Operations 查询审计 PostgreSQL 契约测试。"""
+"""需要显式开启的经营查询审计 PostgreSQL 契约测试。"""
 
 from __future__ import annotations
 

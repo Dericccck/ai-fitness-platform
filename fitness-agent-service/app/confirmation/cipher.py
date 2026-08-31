@@ -33,21 +33,21 @@ class AesGcmPayloadCipher:
 
     def __post_init__(self) -> None:
         if len(self.key) not in {16, 24, 32}:
-            raise ConfirmationPayloadCipherError("AES key must be 128, 192 or 256 bits")
+            raise ConfirmationPayloadCipherError("AES 密钥长度必须为 128、192 或 256 位")
         if not self.key_version.strip():
-            raise ConfirmationPayloadCipherError("encryption key version is required")
+            raise ConfirmationPayloadCipherError("必须提供加密密钥版本")
 
     @classmethod
     def from_base64(cls, encoded_key: str, key_version: str) -> AesGcmPayloadCipher:
         """从 URL-safe Base64 Secret 构造加密器，不接受弱口令或隐式派生密钥。"""
 
         if not encoded_key.strip():
-            raise ConfirmationPayloadCipherError("confirmation encryption key is not configured")
+            raise ConfirmationPayloadCipherError("确认加密密钥未配置")
         try:
             key = base64.urlsafe_b64decode(encoded_key.encode("ascii"))
         except (UnicodeEncodeError, binascii.Error, ValueError) as exc:
             raise ConfirmationPayloadCipherError(
-                "confirmation encryption key is invalid base64"
+                "确认加密密钥不是有效的 Base64"
             ) from exc
         return cls(key=key, key_version=key_version)
 
@@ -61,7 +61,7 @@ class AesGcmPayloadCipher:
         """加密参数并附加随机 nonce；空参数也必须经过认证。"""
 
         if not associated_data.strip():
-            raise ConfirmationPayloadCipherError("associated data is required")
+            raise ConfirmationPayloadCipherError("必须提供关联数据")
         nonce = os.urandom(12)
         ciphertext = AESGCM(self.key).encrypt(nonce, plaintext, associated_data.encode("utf-8"))
         return nonce + ciphertext
@@ -70,12 +70,12 @@ class AesGcmPayloadCipher:
         """验证 AAD 和 GCM Tag 后解密；任何篡改都转换为稳定错误。"""
 
         if len(ciphertext) < 12 + 16:
-            raise ConfirmationPayloadCipherError("encrypted payload is truncated")
+            raise ConfirmationPayloadCipherError("加密 Payload 不完整")
         if not associated_data.strip():
-            raise ConfirmationPayloadCipherError("associated data is required")
+            raise ConfirmationPayloadCipherError("必须提供关联数据")
         try:
             return AESGCM(self.key).decrypt(
                 ciphertext[:12], ciphertext[12:], associated_data.encode("utf-8")
             )
         except InvalidTag as exc:
-            raise ConfirmationPayloadCipherError("encrypted payload authentication failed") from exc
+            raise ConfirmationPayloadCipherError("加密 Payload 身份验证失败") from exc

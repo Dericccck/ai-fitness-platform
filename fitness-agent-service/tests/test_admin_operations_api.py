@@ -175,7 +175,7 @@ async def test_admin_audit_filters_reject_unsupported_metric_capability_combinat
         )
 
     assert response.status_code == 422
-    assert "does not support bucket DAY" in response.json()["detail"]
+    assert "不支持时间桶 DAY" in response.json()["detail"]
     assert repository.filters == {}
 
 
@@ -193,7 +193,7 @@ async def test_admin_audit_filters_reject_unsupported_comparison_combination() -
         )
 
     assert response.status_code == 422
-    assert "does not support PREVIOUS_PERIOD comparison" in response.json()["detail"]
+    assert "不支持 PREVIOUS_PERIOD 对比" in response.json()["detail"]
     assert repository.filters == {}
 
 
@@ -211,7 +211,7 @@ async def test_admin_audit_filters_reject_unsupported_year_over_year_combination
         )
 
     assert response.status_code == 422
-    assert "does not support SAME_PERIOD_LAST_YEAR comparison" in response.json()["detail"]
+    assert "不支持 SAME_PERIOD_LAST_YEAR 对比" in response.json()["detail"]
     assert repository.filters == {}
 
 

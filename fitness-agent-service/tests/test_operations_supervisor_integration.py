@@ -1,4 +1,4 @@
-"""Operations Agent 从自然语言到受控工具调用的端到端单元联调。"""
+"""经营 Agent 从自然语言到受控工具调用的端到端单元联调。"""
 
 from datetime import UTC, date, datetime
 from typing import Any, cast
@@ -170,7 +170,7 @@ async def test_operations_request_runs_route_tool_gateway_audit_and_final_answer
 
 
 async def test_student_operations_request_is_rejected_before_gateway() -> None:
-    """验证学员不能通过自然语言绕过 Operations 的管理员工具权限。
+    """验证学员不能通过自然语言绕过经营查询的管理员工具权限。
 
     这里故意让模型返回合法的固定指标工具调用，测试重点不是模型是否会选错工具，
     而是 ToolRegistry 是否在真实 Supervisor 链路中先校验签名身份，再决定是否允许
@@ -199,7 +199,7 @@ async def test_student_operations_request_is_rejected_before_gateway() -> None:
         expires_at=2,
     )
 
-    with pytest.raises(SupervisorRuntimeError, match="supervisor execution failed"):
+    with pytest.raises(SupervisorRuntimeError, match="Supervisor 执行失败"):
         await supervisor.invoke(
             SupervisorRequest(
                 user_message="查看 2026-08-01 到 2026-08-15 的营收金额按周趋势",

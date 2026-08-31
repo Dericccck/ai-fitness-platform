@@ -270,17 +270,17 @@ def _outbox_repository(request: Request) -> NotificationOutboxRepository:
 def _verify_platform_admin(request: Request, token: str | None) -> AgentIdentity:
     if not token:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="signed agent context is required"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="必须提供已签名的 AgentContext"
         )
     try:
         identity = cast(AgentIdentity, request.app.state.context_verifier.verify(token))
     except AgentContextVerificationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid signed agent context"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="已签名的 AgentContext 无效"
         ) from exc
     if not {"SYSTEM_ADMIN", "ADMIN", "SUPER_ADMIN"}.intersection(identity.roles):
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="platform admin role is required"
+            status_code=status.HTTP_403_FORBIDDEN, detail="需要平台管理员角色"
         )
     return identity
 

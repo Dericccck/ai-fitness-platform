@@ -205,25 +205,25 @@ class ToolRegistry:
         """注册工具并检查版本、角色和写操作安全元数据。"""
 
         if not _TOOL_ID_PATTERN.fullmatch(definition.tool_id):
-            raise InvalidToolDefinitionError("tool_id must use a namespaced name ending with .vN")
+            raise InvalidToolDefinitionError("tool_id 必须使用以 .vN 结尾的命名空间名称")
         if not definition.description.strip():
-            raise InvalidToolDefinitionError("tool description is required")
+            raise InvalidToolDefinitionError("必须提供工具描述")
         if not definition.allowed_roles:
-            raise InvalidToolDefinitionError("at least one allowed role is required")
+            raise InvalidToolDefinitionError("至少需要一个允许的角色")
         if not definition.read_only and not definition.requires_confirmation:
-            raise InvalidToolDefinitionError("write tools must require explicit confirmation")
+            raise InvalidToolDefinitionError("写工具必须要求显式确认")
         if (
             not definition.read_only
             and definition.requires_confirmation
             and definition.confirmation_policy is None
         ):
             raise InvalidToolDefinitionError(
-                "confirmed write tools must declare a confirmation policy"
+                "需要确认的写工具必须声明确认策略"
             )
         if definition.tool_id in self._definitions:
-            raise DuplicateToolError(f"tool already registered: {definition.tool_id}")
+            raise DuplicateToolError(f"工具已注册：{definition.tool_id}")
         if any(item.model_name == definition.model_name for item in self._definitions.values()):
-            raise DuplicateToolError(f"model tool name already registered: {definition.model_name}")
+            raise DuplicateToolError(f"模型工具名称已注册：{definition.model_name}")
         self._definitions[definition.tool_id] = definition
 
     def get(self, tool_id: str) -> ToolDefinition:
@@ -235,7 +235,7 @@ class ToolRegistry:
             for definition in self._definitions.values():
                 if definition.model_name == tool_id:
                     return definition
-            raise UnknownToolError(f"unknown tool: {tool_id}") from exc
+            raise UnknownToolError(f"未知工具：{tool_id}") from exc
 
     def public_specs(self) -> list[dict[str, Any]]:
         """返回稳定排序的工具 Schema，供 Supervisor 构建受控 Tool Calling。"""
@@ -337,9 +337,9 @@ class ToolRegistry:
 
         definition = self.get(tool_id)
         if definition.read_only or not definition.requires_confirmation:
-            raise ToolConfirmationNormalizationError("only confirmed write tools can be normalized")
+            raise ToolConfirmationNormalizationError("只有需要确认的写工具才能归一化")
         if definition.confirmation_policy is None:
-            raise ToolConfirmationNormalizationError("tool confirmation policy is missing")
+            raise ToolConfirmationNormalizationError("缺少工具确认策略")
         try:
             validated_input = definition.input_model.model_validate(dict(raw_input))
             return normalize_confirmation_action(
@@ -352,7 +352,7 @@ class ToolRegistry:
             )
         except ValueError as exc:
             raise ToolConfirmationNormalizationError(
-                f"cannot normalize confirmation for tool: {definition.tool_id}"
+                f"无法归一化工具确认单：{definition.tool_id}"
             ) from exc
 
     async def invoke(
@@ -420,14 +420,14 @@ class ToolRegistry:
             self._record_failure(
                 definition.tool_id, request_id, trace_id, "ROLE_FORBIDDEN", started_at
             )
-            raise ToolRoleForbiddenError(f"role is not allowed for tool: {definition.tool_id}")
+            raise ToolRoleForbiddenError(f"该角色无权使用工具：{definition.tool_id}")
 
         if not definition.read_only and not context.gateway_context.confirmation_token:
             self._record_failure(
                 definition.tool_id, request_id, trace_id, "CONFIRMATION_REQUIRED", started_at
             )
             raise ToolConfirmationRequiredError(
-                f"confirmation is required for tool: {definition.tool_id}"
+                f"工具需要确认：{definition.tool_id}"
             )
 
         try:
@@ -437,13 +437,13 @@ class ToolRegistry:
             self._record_failure(
                 definition.tool_id, request_id, trace_id, "INVALID_INPUT", started_at
             )
-            raise ToolInputValidationError(f"invalid input for tool: {definition.tool_id}") from exc
+            raise ToolInputValidationError(f"工具输入无效：{definition.tool_id}") from exc
         except ToolContextBindingError as exc:
             self._record_failure(
                 definition.tool_id, request_id, trace_id, "CONTEXT_BINDING_FAILED", started_at
             )
             raise ToolInputValidationError(
-                f"tool input cannot be bound to verified context: {definition.tool_id}"
+                f"工具输入无法绑定到已验证上下文：{definition.tool_id}"
             ) from exc
 
         try:
@@ -457,7 +457,7 @@ class ToolRegistry:
             self._record_failure(
                 definition.tool_id, request_id, trace_id, "TOOL_EXECUTION_FAILED", started_at
             )
-            raise ToolExecutionError("tool execution failed") from exc
+            raise ToolExecutionError("工具执行失败") from exc
 
         self._audit_sink.record(
             ToolAuditEvent(

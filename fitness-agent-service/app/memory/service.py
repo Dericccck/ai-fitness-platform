@@ -73,7 +73,7 @@ class MemoryService:
             expires_at=expires_at,
         )
         if not source_request_id.strip():
-            raise MemoryValidationError("source_request_id is required for idempotent writes")
+            raise MemoryValidationError("幂等写入需要 source_request_id")
         return await self.repository.save(
             identity=identity,
             organization_id=organization_id,
@@ -108,11 +108,11 @@ class MemoryService:
         validate_memory_owner(identity, organization_id)
         if not memory_id.strip() or expected_version < 1 or not source_request_id.strip():
             raise MemoryValidationError(
-                "memory id, positive expected version, and source request id are required"
+                "必须提供 memory id、正数 expected_version 和 source_request_id"
             )
         target = await self.repository.get_for_subject(memory_id, identity=identity)
         if target.organization_id != organization_id:
-            raise MemoryValidationError("memory organization is outside signed identity scope")
+            raise MemoryValidationError("Memory 所属机构不在已签名身份范围内")
         _, _, content, normalized_expiry = _normalize_memory_payload(
             # 类型和稳定键从数据库目标读取，管理页面只能修改值、单位和过期策略，不能
             # 借纠正接口改变 Memory 的身份分类或把它迁移到另一条稳定键。
@@ -145,7 +145,7 @@ class MemoryService:
         """读取本人 Memory 的完整领域对象，机构由数据库主体范围决定。"""
 
         if not memory_id.strip():
-            raise MemoryValidationError("memory id is required")
+            raise MemoryValidationError("必须提供 memory id")
         return await self.repository.get_for_subject(memory_id, identity=identity)
 
     async def revoke(
@@ -163,7 +163,7 @@ class MemoryService:
         validate_memory_owner(identity, organization_id)
         if not memory_id.strip() or expected_version < 1 or not source_request_id.strip():
             raise MemoryValidationError(
-                "memory id, positive expected version, and source request id are required"
+                "必须提供 memory id、正数 expected_version 和 source_request_id"
             )
         return await self.repository.revoke(
             identity=identity,
@@ -180,7 +180,7 @@ class MemoryService:
         """返回本人 Memory 的生命周期摘要，并对不存在/越权统一按不存在处理。"""
 
         if not memory_id.strip():
-            raise MemoryValidationError("memory id is required")
+            raise MemoryValidationError("必须提供 memory id")
         # 先读主体范围内的 Memory，避免越权 ID 因“没有事件”泄露存在性差异。
         memory = await self.repository.get_for_subject(memory_id, identity=identity)
         validate_memory_owner(identity, memory.organization_id)
@@ -190,16 +190,16 @@ class MemoryService:
         """执行一批到期标记，后续由独立 Worker/定时任务触发。"""
 
         if limit < 1 or limit > 5000:
-            raise MemoryValidationError("expiry batch limit must be between 1 and 5000")
+            raise MemoryValidationError("过期批次限制必须在 1 到 5000 之间")
         return await self.repository.expire_due(limit=limit)
 
 
 def _validate_text(value: str | None, field_name: str, max_length: int) -> str:
     if value is None:
-        raise MemoryValidationError(f"{field_name} is required")
+        raise MemoryValidationError(f"必须提供 {field_name}")
     normalized = " ".join(value.split())
     if not normalized or len(normalized) > max_length:
-        raise MemoryValidationError(f"{field_name} is blank or too long")
+        raise MemoryValidationError(f"{field_name} 不能为空白且长度不能过长")
     return normalized
 
 
@@ -215,17 +215,17 @@ def _normalize_memory_payload(
 
     normalized_type = memory_type.strip().upper()
     if normalized_type not in _MEMORY_TYPES:
-        raise MemoryValidationError("memory type is outside the current fitness scope")
+        raise MemoryValidationError("Memory 类型不在当前健身业务范围内")
     normalized_key = _validate_text(memory_key, "memory_key", 64)
     normalized_value = _validate_text(value, "value", 500)
     if any(term in normalized_value for term in _FORBIDDEN_TERMS):
         raise MemoryValidationError(
-            "health diagnosis, disease, medication, and treatment facts are not stored as v1 memory"
+            "v1 Memory 不保存健康诊断、疾病、药物和治疗事实"
         )
     normalized_unit = _validate_text(unit, "unit", 16) if unit is not None else None
     normalized_expiry = _as_utc(expires_at) if expires_at is not None else None
     if normalized_expiry is not None and normalized_expiry <= datetime.now(UTC):
-        raise MemoryValidationError("memory expiry must be in the future")
+        raise MemoryValidationError("Memory 过期时间必须在未来")
     content: dict[str, Any] = {"key": normalized_key, "value": normalized_value}
     if normalized_unit:
         content["unit"] = normalized_unit

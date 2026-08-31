@@ -37,7 +37,7 @@ class MemoryCandidateExpiryWorker:
         metrics: HttpMetrics | None = None,
     ) -> None:
         if batch_size < 1 or batch_size > 5000:
-            raise ValueError("candidate expiry worker batch size must be between 1 and 5000")
+            raise ValueError("候选过期 Worker 批次大小必须在 1 到 5000 之间")
         self.service = service
         self.batch_size = batch_size
         self.metrics = metrics

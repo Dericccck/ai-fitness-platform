@@ -236,7 +236,7 @@ def test_registry_context_binding_preserves_coach_cross_student_capability() -> 
     registry.register(
         ToolDefinition(
             tool_id="fitness.test.context_binding.v1",
-            description="test",
+            description="测试",
             input_model=Input,
             handler=handler,
             allowed_roles=frozenset({"COACH"}),
@@ -479,7 +479,7 @@ def test_registry_rejects_duplicate_and_unsafe_write_definition() -> None:
 
     definition = ToolDefinition(
         tool_id="fitness.example.read.v1",
-        description="test",
+        description="测试",
         input_model=BaseModel,
         handler=handler,
         allowed_roles=frozenset({"STUDENT"}),
@@ -496,7 +496,7 @@ def test_registry_rejects_duplicate_and_unsafe_write_definition() -> None:
         registry.register(
             ToolDefinition(
                 tool_id="fitness.example.write.v1",
-                description="test",
+                description="测试",
                 input_model=BaseModel,
                 handler=handler,
                 allowed_roles=frozenset({"STUDENT"}),

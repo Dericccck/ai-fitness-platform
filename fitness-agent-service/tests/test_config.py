@@ -66,7 +66,7 @@ def test_local_embedding_and_reranker_configuration_is_explicit() -> None:
 def test_rabbitmq_reconnect_delays_are_validated_at_settings_load() -> None:
     """最大退避时间小于初始时间时，配置加载阶段必须直接失败。"""
 
-    with pytest.raises(ValidationError, match="max reconnect delay"):
+    with pytest.raises(ValidationError, match="最大重连延迟不能小于初始延迟"):
         Settings(
             _env_file=None,
             proactive_rabbitmq_reconnect_initial_seconds=10,
@@ -75,7 +75,7 @@ def test_rabbitmq_reconnect_delays_are_validated_at_settings_load() -> None:
 
 
 def test_production_requires_asymmetric_authentication_contract() -> None:
-    with pytest.raises(ValidationError, match="production authentication contract is incomplete"):
+    with pytest.raises(ValidationError, match="生产身份验证契约不完整"):
         Settings(_env_file=None, environment="production")
 
 
@@ -112,7 +112,7 @@ def test_production_authentication_contract_accepts_rs256_and_jwks() -> None:
 
 
 def test_production_rejects_non_https_jwks_url() -> None:
-    with pytest.raises(ValidationError, match="must use HTTPS"):
+    with pytest.raises(ValidationError, match="必须使用 HTTPS"):
         Settings(
             _env_file=None,
             environment="production",
@@ -143,7 +143,7 @@ def test_production_rejects_non_https_jwks_url() -> None:
 
 
 def test_production_rejects_local_runtime_defaults() -> None:
-    with pytest.raises(ValidationError, match="AGENT_DATABASE_URL must not use localhost"):
+    with pytest.raises(ValidationError, match="AGENT_DATABASE_URL 不能使用 localhost"):
         Settings(
             _env_file=None,
             environment="production",

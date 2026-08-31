@@ -1,8 +1,7 @@
-"""Create the versioned fitness knowledge base and pgvector index.
+"""创建版本化健身知识库和 pgvector 索引。
 
-The tables in this migration belong to the Agent service. They are deliberately
-not the source of truth for contracts, bookings, training records, or other
-business facts managed by the Java application.
+本次迁移中的表属于 Agent 服务。它们有意不作为合同、预约、训练记录或其他由 Java
+应用管理的业务事实的权威来源。
 """
 
 from collections.abc import Sequence
@@ -18,11 +17,10 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Create documents, chunks, permission metadata, and ANN indexes."""
+    """创建文档、切片、权限元数据和 ANN 索引。"""
 
-    # pgvector is an infrastructure dependency, so migrations fail explicitly
-    # when the deployment image does not contain the extension instead of
-    # silently creating a table that cannot execute vector search.
+    # pgvector 是基础设施依赖；部署镜像缺少该扩展时必须显式迁移失败，不能静默创建
+    # 无法执行向量检索的表。
     op.execute("CREATE EXTENSION IF NOT EXISTS vector")
 
     op.create_table(
@@ -68,9 +66,8 @@ def upgrade() -> None:
         sa.Column("chunk_index", sa.Integer(), nullable=False),
         sa.Column("content", sa.Text(), nullable=False),
         sa.Column("content_hash", sa.Text(), nullable=False),
-        # HNSW requires a fixed vector dimension. 1536 is the project contract
-        # for the first production Embedding model; changing it requires a
-        # versioned migration and a full re-index, not an environment-only edit.
+        # HNSW 要求固定向量维度。1536 是首个生产 Embedding 模型的项目契约；修改它必须
+        # 使用版本化迁移并完整重建索引，不能只修改环境变量。
         sa.Column("embedding", Vector(1536), nullable=False),
         sa.Column("organization_id", sa.Text(), nullable=True),
         sa.Column("owner_user_id", sa.Text(), nullable=True),
@@ -92,8 +89,7 @@ def upgrade() -> None:
         ),
     )
 
-    # The vector index accelerates candidate recall. Authorization is still
-    # applied in the WHERE clause before content is returned to the reranker.
+    # 向量索引用于加速候选召回。内容返回给 Reranker 前仍会在 WHERE 子句中执行授权过滤。
     op.execute(
         "CREATE INDEX knowledge_chunks_embedding_hnsw_idx "
         "ON knowledge_chunks USING hnsw (embedding vector_cosine_ops)"
@@ -112,7 +108,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Remove the Agent knowledge base while retaining the shared extension."""
+    """删除 Agent 知识库，同时保留共享扩展。"""
 
     op.drop_index("ix_knowledge_chunks_document", table_name="knowledge_chunks")
     op.drop_index("ix_knowledge_chunks_scope", table_name="knowledge_chunks")

@@ -55,9 +55,9 @@ class NotificationPreferenceRequest(BaseModel):
     @model_validator(mode="after")
     def validate_quiet_window(self) -> NotificationPreferenceRequest:
         if (self.quiet_start is None) != (self.quiet_end is None):
-            raise ValueError("quiet_start and quiet_end must be configured together")
+            raise ValueError("quiet_start 和 quiet_end 必须同时配置")
         if self.quiet_start is not None and self.quiet_start == self.quiet_end:
-            raise ValueError("quiet window cannot be zero length")
+            raise ValueError("免打扰时间窗口不能为零长度")
         return self
 
 
@@ -190,7 +190,7 @@ async def mark_notification_read(
             organization_ids=list(identity.organization_ids),
         )
     if notification is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="notification not found")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到通知")
     return _to_response(notification)
 
 
@@ -205,7 +205,7 @@ def _preference_repository(request: Request) -> NotificationPreferenceRepository
 def _require_organization(identity: AgentIdentity, organization_id: str) -> None:
     if organization_id not in identity.organization_ids:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="organization is forbidden"
+            status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该机构"
         )
 
 
@@ -213,14 +213,14 @@ def _verify_identity(request: Request, token: str | None) -> AgentIdentity:
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="signed agent context is required",
+            detail="必须提供已签名的 AgentContext",
         )
     try:
         return cast(AgentIdentity, request.app.state.context_verifier.verify(token))
     except AgentContextVerificationError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid signed agent context",
+            detail="已签名的 AgentContext 无效",
         ) from exc
 
 

@@ -37,9 +37,9 @@ class KnowledgeReindexService:
         item_batch_size: int = 10,
     ) -> None:
         if max_attempts < 1 or max_attempts > 5:
-            raise ValueError("re-index max attempts must be between 1 and 5")
+            raise ValueError("重新索引最大尝试次数必须在 1 到 5 之间")
         if item_batch_size < 1 or item_batch_size > 100:
-            raise ValueError("re-index item batch size must be between 1 and 100")
+            raise ValueError("重新索引条目批次大小必须在 1 到 100 之间")
         self.jobs = jobs
         self.ingestion = ingestion
         self.storage = storage
@@ -59,16 +59,16 @@ class KnowledgeReindexService:
         platform_wide = bool(PLATFORM_ADMIN_ROLES.intersection(identity.roles))
         if not platform_wide:
             if organization_id is None:
-                raise ValueError("organization_id is required for an organization administrator")
+                raise ValueError("机构管理员必须提供 organization_id")
             if organization_id not in identity.organization_ids:
-                raise KnowledgeAdminForbidden("re-index scope is outside the signed admin scope")
+                raise KnowledgeAdminForbidden("重新索引范围不在已签名管理员权限范围内")
 
         sources = await self.jobs.list_sources(
             organization_id=organization_id,
             document_id=document_id,
         )
         if not sources:
-            raise KnowledgeReindexNotFound("no published document is available for re-indexing")
+            raise KnowledgeReindexNotFound("没有可用于重新索引的已发布文档")
         job = KnowledgeReindexJob(
             id=token_hex(16),
             requested_by=identity.subject,
@@ -149,7 +149,7 @@ class KnowledgeReindexService:
                 except Exception as exc:  # noqa: BLE001 - 必须持久化项目级失败状态
                     await self.jobs.fail_item(
                         item.id,
-                        error_message=str(exc) or "re-index item failed",
+                        error_message=str(exc) or "重新索引条目失败",
                     )
         await self.jobs.finalize_job(job.id)
 
@@ -158,7 +158,7 @@ class KnowledgeReindexService:
         """只使用签名上下文中的角色；重建范围绝不来自模型或上传文件。"""
 
         if not ADMIN_ROLES.intersection(identity.roles):
-            raise KnowledgeAdminForbidden("administrator role is required")
+            raise KnowledgeAdminForbidden("需要管理员角色")
 
     @staticmethod
     def _require_scope(identity: AgentIdentity, job: KnowledgeReindexJob) -> None:
@@ -166,4 +166,4 @@ class KnowledgeReindexService:
             return
         if job.organization_id in identity.organization_ids:
             return
-        raise KnowledgeAdminForbidden("re-index job is outside the signed admin scope")
+        raise KnowledgeAdminForbidden("重新索引任务不在已签名管理员权限范围内")

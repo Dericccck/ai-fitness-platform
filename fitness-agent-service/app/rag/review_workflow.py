@@ -126,7 +126,7 @@ def review_requirements(report: KnowledgeReviewReport) -> tuple[KnowledgeReviewR
             "FITNESS_CONTENT_REVIEW",
             "CLINICAL_EXERCISE_SAFETY",
         }:
-            raise KnowledgeJobTransitionError(f"unsupported review domain: {raw_domain}")
+            raise KnowledgeJobTransitionError(f"不支持的审查领域：{raw_domain}")
         domain: ReviewDomain = raw_domain  # type: ignore[assignment]
         matching = tuple(
             finding
@@ -158,25 +158,25 @@ def validate_reviewer(
     """基于签名 claims 和任务租户执行职责分离，拒绝表单自报资质。"""
 
     if identity.subject == job.submitted_by:
-        raise KnowledgeAdminForbidden("the uploader cannot review the same knowledge version")
+        raise KnowledgeAdminForbidden("上传者不能审查同一知识版本")
     if job.visibility == "ORGANIZATION":
         if not job.organization_id or job.organization_id not in identity.organization_ids:
-            raise KnowledgeAdminForbidden("review task is outside the signed organization scope")
+            raise KnowledgeAdminForbidden("审查任务不在已签名机构范围内")
     elif GLOBAL_REVIEW_CAPABILITY not in identity.capabilities:
         # 全局和私有知识都不能由任意组织教练批准。私有高风险资料暂时也走平台审核，
         # 直到学员-专业人员指派模型进入 Java 业务事实库。
-        raise KnowledgeAdminForbidden("platform knowledge review capability is required")
+        raise KnowledgeAdminForbidden("需要平台知识审查能力")
 
     if requirement.domain == "CLINICAL_EXERCISE_SAFETY":
         if CLINICAL_REVIEW_CAPABILITY not in identity.capabilities:
-            raise KnowledgeAdminForbidden("clinical knowledge review capability is required")
+            raise KnowledgeAdminForbidden("需要临床知识审查能力")
         if HEALTH_PROFESSIONAL_QUALIFICATION not in identity.qualifications:
-            raise KnowledgeAdminForbidden("verified health professional qualification is required")
+            raise KnowledgeAdminForbidden("需要经过验证的健康专业资质")
         return
     if "COACH" not in identity.roles:
-        raise KnowledgeAdminForbidden("coach role is required for fitness knowledge review")
+        raise KnowledgeAdminForbidden("健身知识审查需要教练角色")
     if FITNESS_REVIEW_CAPABILITY not in identity.capabilities:
-        raise KnowledgeAdminForbidden("fitness knowledge review capability is required")
+        raise KnowledgeAdminForbidden("需要健身知识审查能力")
 
 
 def validate_decision_scope(
@@ -191,16 +191,16 @@ def validate_decision_scope(
 
     normalized_pages = tuple(sorted(set(page_numbers)))
     if normalized_pages != page_numbers:
-        raise ValueError("page_numbers must be unique and sorted")
+        raise ValueError("page_numbers 必须唯一且已排序")
     if any(page < 1 or page > total_pages for page in page_numbers):
-        raise ValueError("review page is outside the parsed document")
+        raise ValueError("审查页不在已解析文档范围内")
     if scope_type != requirement.scope_type or page_numbers != requirement.page_numbers:
-        raise ValueError("decision scope must exactly cover the required review scope")
+        raise ValueError("决定范围必须完全覆盖所需审查范围")
     if scope_type == "DOCUMENT" and regions:
-        raise ValueError("document-level decisions cannot contain page regions")
+        raise ValueError("文档级决定不能包含页面区域")
     for region in regions:
         if region.page_number not in page_numbers:
-            raise ValueError("review region must belong to an approved page")
+            raise ValueError("审查区域必须属于已批准页面")
         if (
             region.x < 0
             or region.y < 0
@@ -209,7 +209,7 @@ def validate_decision_scope(
             or region.x + region.width > 1
             or region.y + region.height > 1
         ):
-            raise ValueError("review region must use normalized coordinates within the page")
+            raise ValueError("审查区域必须使用页面内的归一化坐标")
 
 
 def approved_visual_pages(report: KnowledgeReviewReport) -> tuple[int, ...]:

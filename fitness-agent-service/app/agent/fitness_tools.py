@@ -103,7 +103,7 @@ class AppointmentListToolInput(ContractListToolInput):
         if self.to_time:
             self.to_time = _normalize_gateway_datetime(self.to_time)
         if self.from_time and self.to_time and self.from_time >= self.to_time:
-            raise ValueError("from_time must be earlier than to_time")
+            raise ValueError("from_time 必须早于 to_time")
         return self
 
 
@@ -137,7 +137,7 @@ class BookingAvailabilityToolInput(OrganizationToolInput):
         self.start_time = _normalize_gateway_datetime(self.start_time)
         self.end_time = _normalize_gateway_datetime(self.end_time)
         if self.start_time >= self.end_time:
-            raise ValueError("start_time must be earlier than end_time")
+            raise ValueError("start_time 必须早于 end_time")
         return self
 
 
@@ -234,9 +234,9 @@ class BookingCreateToolInput(OrganizationToolInput):
         self.start_time = _normalize_gateway_datetime(self.start_time)
         self.end_time = _normalize_gateway_datetime(self.end_time)
         if self.start_time >= self.end_time:
-            raise ValueError("start_time must be earlier than end_time")
+            raise ValueError("start_time 必须早于 end_time")
         if self.end_time - self.start_time > timedelta(hours=8):
-            raise ValueError("booking duration must not exceed 8 hours")
+            raise ValueError("预约时长不能超过 8 小时")
         return self
 
 
@@ -266,7 +266,7 @@ class BookingRescheduleToolInput(OrganizationToolInput):
         pattern=r"^[A-Za-z0-9._:-]+$",
     )
     # expected_start_time 是乐观并发前置条件：确认卡展示后，如果原预约已被修改，
-    # Java Booking Service 会拒绝本次改约，避免把用户确认的旧预约误改到新状态。
+    # Java 预约服务会拒绝本次改约，避免把用户确认的旧预约误改到新状态。
     expected_start_time: datetime = Field(alias="expectedStartTime")
     start_time: datetime = Field(alias="startTime")
     end_time: datetime = Field(alias="endTime")
@@ -277,9 +277,9 @@ class BookingRescheduleToolInput(OrganizationToolInput):
         self.start_time = _normalize_gateway_datetime(self.start_time)
         self.end_time = _normalize_gateway_datetime(self.end_time)
         if self.start_time >= self.end_time:
-            raise ValueError("start_time must be earlier than end_time")
+            raise ValueError("start_time 必须早于 end_time")
         if self.end_time - self.start_time > timedelta(hours=8):
-            raise ValueError("booking duration must not exceed 8 hours")
+            raise ValueError("预约时长不能超过 8 小时")
         return self
 
 
@@ -383,7 +383,7 @@ class ReviewTrainingPlanToolInput(TrainingPlanToolInput):
         """驳回必须给出可追溯原因，避免确认卡和审核记录出现无解释拒绝。"""
 
         if self.decision == "REJECT" and not self.comment:
-            raise ValueError("comment is required when decision is REJECT")
+            raise ValueError("decision 为 REJECT 时必须填写 comment")
         return self
 
 
@@ -981,7 +981,7 @@ def build_fitness_tool_registry(
         """只返回签名身份本人在指定机构内的 active Memory。"""
 
         if memory_service is None or context.identity is None:
-            raise RuntimeError("Memory service and verified AgentContext are required")
+            raise RuntimeError("Memory 服务和已验证的 AgentContext 均为必需项")
         data = cast(ListMemoryToolInput, raw)
         memories = await memory_service.list_active(
             identity=context.identity, organization_id=data.organization_id
@@ -992,11 +992,11 @@ def build_fitness_tool_registry(
         """确认恢复后保存 Memory；主体始终来自签名上下文，不接受模型指定用户。"""
 
         if memory_service is None or context.identity is None:
-            raise RuntimeError("Memory service and verified AgentContext are required")
+            raise RuntimeError("Memory 服务和已验证的 AgentContext 均为必需项")
         data = cast(SaveMemoryToolInput, raw)
         request_id = context.gateway_context.request_id
         if not request_id:
-            raise RuntimeError("confirmed Memory write requires request_id")
+            raise RuntimeError("已确认的 Memory 写入需要 request_id")
         memory = await memory_service.save(
             identity=context.identity,
             organization_id=data.organization_id,
@@ -1014,11 +1014,11 @@ def build_fitness_tool_registry(
         """确认恢复后撤销 Memory，保留数据库记录但移出后续上下文。"""
 
         if memory_service is None or context.identity is None:
-            raise RuntimeError("Memory service and verified AgentContext are required")
+            raise RuntimeError("Memory 服务和已验证的 AgentContext 均为必需项")
         data = cast(RevokeMemoryToolInput, raw)
         request_id = context.gateway_context.request_id
         if not request_id:
-            raise RuntimeError("confirmed Memory revoke requires request_id")
+            raise RuntimeError("已确认的 Memory 撤销需要 request_id")
         memory = await memory_service.revoke(
             identity=context.identity,
             organization_id=data.organization_id,

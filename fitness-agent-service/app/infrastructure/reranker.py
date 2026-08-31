@@ -44,7 +44,7 @@ class RerankerClient:
         """
 
         if not self.settings.reranker_configured:
-            raise ModelConfigurationError("Reranker provider is not configured")
+            raise ModelConfigurationError("Reranker 服务未配置")
 
         if self.settings.reranker_backend == "local":
             return await asyncio.to_thread(self._rerank_local, query, documents, top_n)

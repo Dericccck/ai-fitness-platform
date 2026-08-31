@@ -128,15 +128,15 @@ class PdfPageRoutingPolicy:
 
     def __post_init__(self) -> None:
         if not 0 <= self.min_image_area_ratio <= 1:
-            raise ValueError("min_image_area_ratio must be between 0 and 1")
+            raise ValueError("min_image_area_ratio 必须在 0 到 1 之间")
         if self.max_image_page_text_chars < 0:
-            raise ValueError("max_image_page_text_chars must not be negative")
+            raise ValueError("max_image_page_text_chars 不能为负数")
         if not 0 <= self.max_image_page_text_area_ratio <= 1:
-            raise ValueError("max_image_page_text_area_ratio must be between 0 and 1")
+            raise ValueError("max_image_page_text_area_ratio 必须在 0 到 1 之间")
         if self.min_ocr_text_chars < 0:
-            raise ValueError("min_ocr_text_chars must not be negative")
+            raise ValueError("min_ocr_text_chars 不能为负数")
         if not 0 <= self.min_ocr_confidence <= 1:
-            raise ValueError("min_ocr_confidence must be between 0 and 1")
+            raise ValueError("min_ocr_confidence 必须在 0 到 1 之间")
 
 
 class DocumentParser(Protocol):
@@ -208,29 +208,29 @@ class DocumentParserRegistry:
         """解析支持的扩展名，并尽早拒绝超大或空上传文件。"""
 
         if not content:
-            raise DocumentParseError("document content must not be empty")
+            raise DocumentParseError("文档内容不能为空")
         if len(content) > self.max_source_bytes:
-            raise DocumentParseError("document exceeds the configured size limit")
+            raise DocumentParseError("文档超过配置的大小限制")
         suffix = PurePosixPath(file_name).suffix.lower()
         parser = self._parsers.get(suffix)
         if parser is None:
             supported = ", ".join(sorted(self._parsers))
             raise UnsupportedDocumentFormatError(
-                f"unsupported document extension {suffix or '<none>'}; supported: {supported}"
+                f"不支持的文档扩展名 {suffix or '<none>'}；支持的扩展名：{supported}"
             )
         try:
             parsed = parser.parse(content, file_name=file_name)
         except (DocumentParseError, UnsupportedDocumentFormatError):
             raise
         except Exception as exc:
-            raise DocumentParseError(f"failed to parse {file_name}") from exc
+            raise DocumentParseError(f"解析 {file_name} 失败") from exc
         # 待 OCR/视觉审核的 PDF 即使暂时没有可索引正文，也必须保留页面画像供
         # 质量报告和人工审核使用。真正发布时由入库门禁 fail-closed；其他格式
         # 仍然要求至少产生一个内容块，避免空文档进入任务队列。
         if not parsed.blocks and not any(
             profile.route != "NORMAL" for profile in parsed.page_profiles
         ):
-            raise DocumentParseError(f"document {file_name} contains no indexable content")
+            raise DocumentParseError(f"文档 {file_name} 不包含可索引内容")
         return parsed
 
 
@@ -241,7 +241,7 @@ class MarkdownParser:
         try:
             raw = content.decode("utf-8")
         except UnicodeDecodeError as exc:
-            raise DocumentParseError("Markdown/text must be UTF-8") from exc
+            raise DocumentParseError("Markdown/文本必须是 UTF-8") from exc
         cleaned = clean_markdown(raw)
         return ParsedDocument(
             blocks=(ParsedBlock(kind="TEXT", content=cleaned),),
@@ -411,14 +411,14 @@ class PdfParser:
         # “requires OCR”旧警告。OCR 服务自身的低置信度等警告仍然完整保留。
         for profile in page_profiles:
             if profile.route == "OCR_REQUIRED":
-                warnings.append(f"page {profile.page_number} requires OCR before publication")
+                warnings.append(f"第 {profile.page_number} 页发布前需要 OCR")
             elif profile.route == "VISUAL_REVIEW_REQUIRED":
                 warnings.append(
-                    f"page {profile.page_number} is image-heavy and requires professional visual review"
+                    f"第 {profile.page_number} 页图片占比高，需要专业人工视觉审查"
                 )
             elif profile.route == "OCR_AND_VISUAL_REVIEW_REQUIRED":
                 warnings.append(
-                    f"page {profile.page_number} requires OCR and professional visual review"
+                    f"第 {profile.page_number} 页需要 OCR 和专业人工视觉审查"
                 )
         blocks = _annotate_pdf_table_continuations(blocks)
         return ParsedDocument(
@@ -651,7 +651,7 @@ def _pdf_word_coordinate(word: dict[str, object], key: str) -> float:
     if value is None:
         # 调用方只传入了 _group_pdf_words_into_lines 的有效 word；这里的异常表示
         # 第三方解析库返回了不符合契约的数据，宁可跳过当前解析也不猜坐标。
-        raise ValueError(f"PDF word coordinate {key} is not numeric")
+        raise ValueError(f"PDF word 坐标 {key} 不是数值")
     return value
 
 
@@ -1580,7 +1580,7 @@ class DocxParser:
                     )
                     table_index += 1
         if not blocks:
-            raise DocumentParseError("DOCX contains no indexable paragraphs or tables")
+            raise DocumentParseError("DOCX 不包含可索引的段落或表格")
         return ParsedDocument(
             tuple(blocks), "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
         )
@@ -1603,7 +1603,7 @@ class XlsxParser:
                 ]
                 rows = [row for row in rows if any(cell for cell in row)]
                 if not rows:
-                    warnings.append(f"worksheet {sheet.title} is empty")
+                    warnings.append(f"工作表 {sheet.title} 为空")
                     continue
                 normalized = _table_to_markdown(rows)
                 if normalized:
@@ -1620,7 +1620,7 @@ class XlsxParser:
         finally:
             workbook.close()
         if not blocks:
-            raise DocumentParseError("XLSX contains no non-empty worksheets")
+            raise DocumentParseError("XLSX 不包含非空工作表")
         return ParsedDocument(
             tuple(blocks),
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",

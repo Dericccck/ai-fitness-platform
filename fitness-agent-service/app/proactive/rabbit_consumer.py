@@ -27,11 +27,11 @@ def reconnect_delay(attempt: int, *, initial_seconds: float, max_seconds: float)
     """
 
     if attempt < 1:
-        raise ValueError("attempt must be greater than zero")
+        raise ValueError("attempt 必须大于零")
     if initial_seconds <= 0 or max_seconds <= 0:
-        raise ValueError("reconnect delays must be greater than zero")
+        raise ValueError("重连延迟必须大于零")
     if initial_seconds > max_seconds:
-        raise ValueError("initial reconnect delay cannot exceed max delay")
+        raise ValueError("初始重连延迟不能超过最大延迟")
     # 30 次之后已经达到常见的最大退避范围，限制指数位数也避免异常长时间故障
     # 导致无界整数增长；最终等待时间仍由 max_seconds 统一封顶。
     return cast(float, min(max_seconds, initial_seconds * (2 ** min(attempt - 1, 30))))
@@ -63,9 +63,9 @@ class ProactiveRabbitConsumer:
         self.queue_name = queue_name
         self.routing_key = routing_key
         if reconnect_initial_seconds <= 0:
-            raise ValueError("reconnect_initial_seconds must be greater than zero")
+            raise ValueError("reconnect_initial_seconds 必须大于零")
         if reconnect_max_seconds < reconnect_initial_seconds:
-            raise ValueError("reconnect_max_seconds must not be smaller than initial delay")
+            raise ValueError("reconnect_max_seconds 不能小于初始延迟")
         self.reconnect_initial_seconds = reconnect_initial_seconds
         self.reconnect_max_seconds = reconnect_max_seconds
 

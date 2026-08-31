@@ -2,7 +2,7 @@
 """签发仅限本地开发使用的短时 AgentContext。
 
 这个脚本不是认证服务，也不能部署成生产接口。它只用于在本地已经启动
-Agent 和 Java Gateway 后，给 Operations 真实冒烟联调提供一个可验证的
+Agent 和 Java Gateway 后，给经营真实冒烟联调提供一个可验证的
 受控角色上下文。
 
 安全边界：

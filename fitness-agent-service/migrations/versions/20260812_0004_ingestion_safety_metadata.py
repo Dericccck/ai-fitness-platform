@@ -1,4 +1,4 @@
-"""Record deterministic file safety checks for knowledge ingestion jobs."""
+"""记录知识导入任务的确定性文件安全检查结果。"""
 
 from collections.abc import Sequence
 
@@ -12,7 +12,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Store content identity and the scanner verdict used before staging."""
+    """保存内容身份和进入暂存阶段前使用的扫描器结论。"""
 
     op.add_column(
         "knowledge_ingestion_jobs",
@@ -39,7 +39,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Remove safety metadata while retaining the task lifecycle."""
+    """删除安全元数据，同时保留任务生命周期。"""
 
     op.drop_index("ix_knowledge_ingestion_jobs_sha256", table_name="knowledge_ingestion_jobs")
     op.drop_column("knowledge_ingestion_jobs", "scanner_name")

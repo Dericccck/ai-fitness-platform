@@ -46,9 +46,9 @@ class ProactiveEventWorker:
         max_attempts: int = 8,
     ) -> None:
         if batch_size < 1 or batch_size > 500:
-            raise ValueError("proactive event batch size must be between 1 and 500")
+            raise ValueError("主动事件批次大小必须在 1 到 500 之间")
         if max_attempts < 1 or max_attempts > 20:
-            raise ValueError("proactive event max attempts must be between 1 and 20")
+            raise ValueError("主动事件最大尝试次数必须在 1 到 20 之间")
         self.database = database
         self.event_repository = event_repository
         self.notification_repository = notification_repository
@@ -87,7 +87,7 @@ class ProactiveEventWorker:
                         error_code="PROACTIVE_EVENT_PROCESSING_FAILED",
                         max_attempts=self.max_attempts,
                     ):
-                        raise RuntimeError("proactive event lock was lost while retrying")
+                        raise RuntimeError("重试主动事件时丢失了主动事件锁")
         if self.metrics is not None:
             self.metrics.maintenance_runs_total.labels(
                 worker=_WORKER_NAME, status="succeeded"
@@ -126,7 +126,7 @@ class ProactiveEventWorker:
                 worker_id=self.worker_id,
             )
             if not processed:
-                raise RuntimeError("proactive event lock was lost while processing")
+                        raise RuntimeError("处理主动事件时丢失了主动事件锁")
 
 
 def _event_from_record(record: ProactiveEventRecord) -> ProactiveEventMessage:
@@ -142,4 +142,4 @@ def _event_from_record(record: ProactiveEventRecord) -> ProactiveEventMessage:
             }
         )
     except Exception as exc:
-        raise ProactiveEventContractError("stored proactive event is invalid") from exc
+        raise ProactiveEventContractError("存储的主动事件无效") from exc

@@ -1,4 +1,4 @@
-# Fitness Core Gateway v1 契约
+# 健身核心 Gateway v1 契约
 
 该契约描述 Python Agent 与 Java `fitness-core-gateway` 之间的内部调用边界。赛事、作品和活动运营不属于契约范围。
 
@@ -84,7 +84,7 @@ Agent 解释层会根据 `from`、`to` 和 `bucket` 补齐 Gateway 没有返回�
 2 月 29 日在非闰年映射为 2 月 28 日，实际日期范围会写入审计。当前环比和同比开放
 `APPOINTMENT_COUNT`、`COMPLETED_CLASS_COUNT`、`NEW_CUSTOMER_COUNT`、`REVENUE_AMOUNT`、`COURSE_APPOINTMENT_COUNT` 和 `COACH_APPOINTMENT_COUNT`，对比周期为 0 时只返回差值，不生成无意义的百分比。
 
-Operations 查询在 Agent 服务侧还受资源策略约束：单次时间范围最多 92 天、最多返回 100 行；当前周期、环比或同比最多产生两次
+经营查询在 Agent 服务侧还受资源策略约束：单次时间范围最多 92 天、最多返回 100 行；当前周期、环比或同比最多产生两次
 Gateway 调用，每次调用都有独立超时。生产环境按机构使用 Redis 固定窗口限流，限流计数器只保存不可逆机构摘要和次数，不保存
 经营参数或结果；Redis 不可用时 Agent fail-closed。该策略用于保护 Agent、Gateway 和 MySQL 的资源，不改变 Gateway 作为最终权限
 与数据范围裁决者的职责。Agent 同时暴露低基数 `operations_query_events_total{event=...}` 指标，用于观察成功、限流、超时、

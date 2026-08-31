@@ -50,7 +50,7 @@ def test_jwks_provider_fails_closed_when_refresh_fails(monkeypatch: pytest.Monke
     monkeypatch.setattr("app.infrastructure.jwks.httpx.get", fake_get)
     provider = JwksPublicKeyProvider("https://issuer.test/.well-known/jwks.json")
 
-    with pytest.raises(JwksUnavailableError, match="JWKS is unavailable"):
+    with pytest.raises(JwksUnavailableError, match="JWKS 不可用"):
         provider.get_public_key("rsa-v1")
 
 
@@ -124,7 +124,7 @@ def test_jwks_provider_fails_closed_when_rotated_kid_refresh_fails(
 
 
 def test_jwks_provider_rejects_empty_document() -> None:
-    with pytest.raises(JwksUnavailableError, match="no keys"):
+    with pytest.raises(JwksUnavailableError, match="不包含密钥"):
         from app.infrastructure.jwks import _parse_jwks
 
         _parse_jwks({"keys": []})

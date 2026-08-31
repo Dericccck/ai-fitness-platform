@@ -75,9 +75,9 @@ class KnowledgeAdminService:
         self.require_admin(identity)
         self._validate_metadata(identity, metadata)
         if not content:
-            raise ValueError("uploaded document must not be empty")
+            raise ValueError("上传文档不能为空")
         if len(content) > self.max_source_bytes:
-            raise ValueError("uploaded document exceeds the configured size limit")
+            raise ValueError("上传文档超过配置的大小限制")
         safety_result = self.safety_scanner.scan(file_name, content)
         # 在信任边界处先解析一次。后续 Worker 会重新解析不可变字节，
         # 避免损坏文件长期停留在审核队列中而无人发现。
@@ -146,7 +146,7 @@ class KnowledgeAdminService:
             report = await self.jobs.get_latest_review_report(job_id)
         except KnowledgeReviewReportNotFound as exc:
             raise KnowledgeJobTransitionError(
-                "knowledge review report is missing; re-analysis is required"
+                "缺少知识审查报告；需要重新分析"
             ) from exc
         credential = await self.jobs.get_publication_credential(job.id)
         professionally_approved = credential is not None and credential.validates(report, job)
@@ -154,12 +154,12 @@ class KnowledgeAdminService:
             # 这里故意不接受 force/override 参数。BLOCKED 需要重新解析或 OCR，
             # REVIEW_REQUIRED 需要后续专业审核决策；普通管理员备注不能代替二者。
             raise KnowledgeJobTransitionError(
-                "knowledge review report does not allow administrator approval: "
+                "知识审查报告不允许管理员批准："
                 f"status={report.status}, required_domains={list(report.required_review_domains)}"
             )
         if report.document_sha256 != job.content_sha256:
             raise KnowledgeJobTransitionError(
-                "knowledge review report is not bound to the staged document hash"
+                "知识审查报告未绑定到暂存文档哈希"
             )
         return await self.jobs.approve(job_id, reviewer_id=identity.subject, comment=comment)
 
@@ -170,7 +170,7 @@ class KnowledgeAdminService:
 
         self.require_admin(identity)
         if not comment.strip():
-            raise ValueError("rejection comment is required")
+            raise ValueError("必须填写拒绝评论")
         await self._get_scoped_job(identity, job_id)
         return await self.jobs.reject(job_id, reviewer_id=identity.subject, comment=comment[:500])
 
@@ -241,7 +241,7 @@ class KnowledgeAdminService:
                 # 审批到执行之间可能发生部署升级或对象篡改。Worker 必须再次校验
                 # 报告版本和内容身份，不能因为任务已经排队就默认信任旧决定。
                 raise KnowledgeJobTransitionError(
-                    "review report is stale or staged document hash verification failed"
+                    "审查报告已过期或暂存文档哈希验证失败"
                 )
             ingestion_request = IngestionRequest(
                 source_uri=job.source_uri,
@@ -274,7 +274,7 @@ class KnowledgeAdminService:
             await self.jobs.fail(
                 job_id,
                 error_code=type(exc).__name__,
-                error_message=str(exc) or "indexing task failed",
+                error_message=str(exc) or "索引任务失败",
             )
 
     @staticmethod
@@ -282,7 +282,7 @@ class KnowledgeAdminService:
         """从签名上下文校验管理员角色，绝不信任 multipart 表单中的角色。"""
 
         if not ADMIN_ROLES.intersection(identity.roles):
-            raise KnowledgeAdminForbidden("administrator role is required")
+            raise KnowledgeAdminForbidden("需要管理员角色")
 
     async def _get_scoped_job(self, identity: AgentIdentity, job_id: str) -> KnowledgeIngestionJob:
         """在返回或转换任务前应用任务范围校验。"""
@@ -296,31 +296,31 @@ class KnowledgeAdminService:
             and job.organization_id in identity.organization_ids
         ):
             return job
-        raise KnowledgeAdminForbidden("knowledge task is outside the signed admin scope")
+        raise KnowledgeAdminForbidden("知识任务不在已签名管理员权限范围内")
 
     @staticmethod
     def _validate_metadata(identity: AgentIdentity, metadata: KnowledgeUploadMetadata) -> None:
         if not _SAFE_TEXT.fullmatch(metadata.source_uri) or not metadata.source_uri.startswith(
             "knowledge://"
         ):
-            raise ValueError("source_uri must be a safe knowledge:// URI")
+            raise ValueError("source_uri 必须是安全的 knowledge:// URI")
         if not _SAFE_TEXT.fullmatch(metadata.title):
-            raise ValueError("title is invalid")
+            raise ValueError("标题无效")
         if not re.fullmatch(r"[A-Z][A-Z0-9_]{1,63}", metadata.document_type):
-            raise ValueError("document_type must be uppercase and bounded")
+            raise ValueError("document_type 必须为大写且长度受限")
         if metadata.risk_level not in {"NORMAL", "CAUTION", "MEDICAL"}:
-            raise ValueError("risk_level must be NORMAL, CAUTION, or MEDICAL")
+            raise ValueError("risk_level 必须为 NORMAL、CAUTION 或 MEDICAL")
         if metadata.visibility == "GLOBAL" and metadata.organization_id is not None:
-            raise ValueError("global documents cannot carry an organization scope")
+            raise ValueError("全局文档不能携带机构范围")
         if metadata.visibility == "GLOBAL" and not PLATFORM_ADMIN_ROLES.intersection(
             identity.roles
         ):
-            raise KnowledgeAdminForbidden("global knowledge requires a platform administrator")
+            raise KnowledgeAdminForbidden("全局知识需要平台管理员")
         if metadata.visibility == "ORGANIZATION":
             if metadata.organization_id is None:
                 if len(identity.organization_ids) != 1:
-                    raise ValueError("organization_id is required for multi-organization admins")
+                    raise ValueError("多机构管理员必须提供 organization_id")
             elif metadata.organization_id not in identity.organization_ids:
-                raise KnowledgeAdminForbidden("organization is outside the signed admin scope")
+                raise KnowledgeAdminForbidden("机构不在已签名管理员权限范围内")
         if metadata.effective_to is not None and metadata.effective_to <= metadata.effective_from:
-            raise ValueError("effective_to must be after effective_from")
+            raise ValueError("effective_to 必须晚于 effective_from")

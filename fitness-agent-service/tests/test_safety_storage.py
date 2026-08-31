@@ -24,13 +24,13 @@ def test_structural_scanner_returns_content_identity_for_text() -> None:
 
 def test_structural_scanner_rejects_invalid_pdf_and_zip_traversal(tmp_path) -> None:
     scanner = StructuralDocumentScanner()
-    with pytest.raises(DocumentSafetyError, match="signature"):
+    with pytest.raises(DocumentSafetyError, match="签名"):
         scanner.scan("guide.pdf", b"not-a-pdf")
 
     payload = BytesIO()
     with ZipFile(payload, "w") as archive:
         archive.writestr("../escape.txt", "bad")
-    with pytest.raises(DocumentSafetyError, match="unsafe paths"):
+    with pytest.raises(DocumentSafetyError, match="不安全路径"):
         scanner.scan("guide.docx", payload.getvalue())
 
 
@@ -101,7 +101,7 @@ def test_clamav_scanner_rejects_infected_response(monkeypatch: pytest.MonkeyPatc
         "app.rag.safety.socket.create_connection", lambda address, timeout: FakeConnection()
     )
 
-    with pytest.raises(DocumentSafetyError, match="malware detected"):
+    with pytest.raises(DocumentSafetyError, match="检测到恶意软件"):
         ClamAvScanner("clamav").scan("guide.md", b"# Warmup")
 
 
@@ -138,5 +138,5 @@ def test_clamav_scanner_fails_closed_when_service_is_unavailable(
 
     monkeypatch.setattr("app.rag.safety.socket.create_connection", unavailable)
 
-    with pytest.raises(DocumentSecurityUnavailable, match="unavailable"):
+    with pytest.raises(DocumentSecurityUnavailable, match="杀毒扫描器不可用"):
         ClamAvScanner("clamav").scan("guide.md", b"# Warmup")

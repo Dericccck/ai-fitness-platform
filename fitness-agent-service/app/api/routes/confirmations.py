@@ -92,7 +92,7 @@ async def get_confirmation(
         )
     except (ConfirmationNotFound, ConfirmationStateError) as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="confirmation not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="未找到确认单"
         ) from exc
     return _to_response(record)
 
@@ -118,7 +118,7 @@ async def decide_confirmation(
         )
     except ConfirmationNotFound as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="confirmation not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="未找到确认单"
         ) from exc
     except ConfirmationStateError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -131,7 +131,7 @@ async def decide_confirmation(
     if record.execution_status == "RUNNING":
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="confirmed operation is already running",
+            detail="已确认的操作正在执行",
         )
 
     # 批准后由服务端使用同一 thread 恢复图；前端不提交 thread、参数或 Token。
@@ -149,12 +149,12 @@ async def decide_confirmation(
         )
     except SupervisorSessionBusy as exc:
         raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT, detail="conversation is already being processed"
+            status_code=status.HTTP_409_CONFLICT, detail="会话正在处理中"
         ) from exc
     except SupervisorRuntimeError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="confirmed operation is temporarily unavailable",
+            detail="已确认的操作暂时不可用",
         ) from exc
     return _to_response(
         await request.app.state.confirmation_service.get_for_subject(confirmation_id, identity)
@@ -181,7 +181,7 @@ async def revoke_confirmation(
         )
     except ConfirmationNotFound as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="confirmation not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="未找到确认单"
         ) from exc
     except (ConfirmationStateError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
@@ -191,13 +191,13 @@ async def revoke_confirmation(
 def _verify_identity(request: Request, token: str | None) -> AgentIdentity:
     if not token:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="signed agent context is required"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="必须提供已签名的 AgentContext"
         )
     try:
         return cast(AgentIdentity, request.app.state.context_verifier.verify(token))
     except AgentContextVerificationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid signed agent context"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="已签名的 AgentContext 无效"
         ) from exc
 
 

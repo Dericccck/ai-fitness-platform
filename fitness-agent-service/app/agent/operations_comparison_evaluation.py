@@ -1,4 +1,4 @@
-"""Operations Agent 环比/同比摘要的确定性离线评测。
+"""经营 Agent 环比/同比摘要的确定性离线评测。
 
 本模块只验证已经进入摘要函数的两个聚合结果，不访问数据库、LLM 或线上数据，重点
 保护固定对比类型、日期边界、差值、方向和除零边界。
@@ -103,7 +103,7 @@ def evaluate_case(case: OperationsComparisonEvalCase) -> OperationsComparisonEva
         return OperationsComparisonEvalResult(
             case.case_id,
             False,
-            (f"invalid result: {exc}",),
+            (f"结果无效：{exc}",),
             invalid=True,
         )
 
@@ -136,7 +136,7 @@ def evaluate_case(case: OperationsComparisonEvalCase) -> OperationsComparisonEva
     note = str(report.get("note", ""))
     for fragment in case.expected_note_fragments:
         if fragment not in note:
-            failures.append(f"missing note fragment: {fragment}")
+            failures.append(f"缺少备注片段：{fragment}")
     return OperationsComparisonEvalResult(case.case_id, not failures, tuple(failures))
 
 
@@ -158,7 +158,7 @@ def case_from_mapping(data: dict[str, Any]) -> OperationsComparisonEvalCase:
 
     comparison_type = str(data.get("comparison_type", "PREVIOUS_PERIOD"))
     if comparison_type not in {"PREVIOUS_PERIOD", "SAME_PERIOD_LAST_YEAR"}:
-        raise ValueError(f"unsupported comparison_type: {comparison_type}")
+        raise ValueError(f"不支持的 comparison_type：{comparison_type}")
     return OperationsComparisonEvalCase(
         case_id=str(data["case_id"]),
         metric=str(data.get("metric", "APPOINTMENT_COUNT")),
@@ -203,7 +203,7 @@ def main(argv: list[str] | None = None) -> int:
                 OperationsComparisonEvalResult(
                     case_id,
                     False,
-                    (f"invalid case: {exc}",),
+                    (f"案例无效：{exc}",),
                     invalid=True,
                 )
             )
@@ -261,7 +261,7 @@ def _load_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"cannot load evaluation file {path}: {exc}") from exc
+        raise SystemExit(f"无法加载评估文件 {path}：{exc}") from exc
 
 
 if __name__ == "__main__":

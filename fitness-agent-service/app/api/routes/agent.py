@@ -72,7 +72,7 @@ async def chat(
     if not x_agent_context:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="signed agent context is required",
+            detail="必须提供已签名的 AgentContext",
         )
 
     try:
@@ -80,7 +80,7 @@ async def chat(
     except AgentContextVerificationError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid signed agent context",
+            detail="已签名的 AgentContext 无效",
         ) from exc
 
     request_id = normalize_context_id(x_request_id) or str(uuid4())
@@ -107,14 +107,14 @@ async def chat(
     except SupervisorSessionBusy as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="conversation is already being processed",
+            detail="会话正在处理中",
         ) from exc
     except SupervisorRuntimeError as exc:
         # 不把模型、Gateway、Prompt 或签名上下文详情返回给调用方；具体原因通过
         # request_id/trace_id 在结构化日志和 Trace 系统中定位。
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="agent service is temporarily unavailable",
+            detail="Agent 服务暂时不可用",
         ) from exc
 
     return AgentChatResponse(

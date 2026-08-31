@@ -77,11 +77,11 @@ class StructuralDocumentScanner:
             self._scan_text(content)
         elif suffix == ".pdf":
             if not content.startswith(b"%PDF-"):
-                raise DocumentSafetyError("PDF signature is invalid")
+                raise DocumentSafetyError("PDF 签名无效")
         elif suffix in {".docx", ".xlsx"}:
             self._scan_office_archive(content)
         else:
-            raise DocumentSafetyError("file extension is not allowed")
+            raise DocumentSafetyError("不允许的文件扩展名")
         return SafetyScanResult(
             sha256=hashlib.sha256(content).hexdigest(),
             status="STRUCTURAL_VALIDATED",
@@ -91,37 +91,37 @@ class StructuralDocumentScanner:
     @staticmethod
     def _scan_text(content: bytes) -> None:
         if b"\x00" in content:
-            raise DocumentSafetyError("text document contains binary NUL bytes")
+            raise DocumentSafetyError("文本文件包含二进制 NUL 字节")
         try:
             content.decode("utf-8")
         except UnicodeDecodeError as exc:
-            raise DocumentSafetyError("text document must be UTF-8") from exc
+            raise DocumentSafetyError("文本文件必须是 UTF-8") from exc
 
     def _scan_office_archive(self, content: bytes) -> None:
         try:
             with zipfile.ZipFile(io.BytesIO(content)) as archive:
                 members = archive.infolist()
                 if len(members) > 2000:
-                    raise DocumentSafetyError("office archive contains too many members")
+                    raise DocumentSafetyError("Office 压缩包包含过多成员")
                 expanded_size = 0
                 for member in members:
                     parts = PurePosixPath(member.filename).parts
                     if PurePosixPath(member.filename).is_absolute() or ".." in parts:
-                        raise DocumentSafetyError("office archive contains unsafe paths")
+                        raise DocumentSafetyError("Office 压缩包包含不安全路径")
                     if member.flag_bits & 0x1:
-                        raise DocumentSafetyError("encrypted office archives are not supported")
+                        raise DocumentSafetyError("不支持加密的 Office 压缩包")
                     file_mode = (member.external_attr >> 16) & 0o170000
                     if file_mode == 0o120000:
-                        raise DocumentSafetyError("office archive contains a symbolic link")
+                        raise DocumentSafetyError("Office 压缩包包含符号链接")
                     expanded_size += member.file_size
                     if expanded_size > self.max_uncompressed_bytes:
-                        raise DocumentSafetyError("office archive exceeds expansion limit")
+                        raise DocumentSafetyError("Office 压缩包超过解压展开限制")
                     if PurePosixPath(member.filename).name == "vbaProject.bin":
-                        raise DocumentSafetyError("macro-enabled office files are not supported")
+                        raise DocumentSafetyError("不支持启用宏的 Office 文件")
                 if archive.testzip() is not None:
-                    raise DocumentSafetyError("office archive is corrupted")
+                    raise DocumentSafetyError("Office 压缩包已损坏")
         except zipfile.BadZipFile as exc:
-            raise DocumentSafetyError("office document is not a valid ZIP package") from exc
+            raise DocumentSafetyError("Office 文档不是有效的 ZIP 压缩包") from exc
 
 
 class ClamAvScanner:
@@ -164,16 +164,16 @@ class ClamAvScanner:
                     connection.recv(4096).decode("utf-8", errors="replace").strip("\x00\r\n ")
                 )
         except OSError as exc:
-            raise DocumentSecurityUnavailable("malware scanner is unavailable") from exc
+            raise DocumentSecurityUnavailable("杀毒扫描器不可用") from exc
 
         if not response.startswith("stream:"):
-            raise DocumentSafetyError("malware scanner returned an invalid response")
+            raise DocumentSafetyError("杀毒扫描器返回了无效响应")
         verdict = response.removeprefix("stream:").strip()
         if verdict.endswith(" FOUND"):
             signature = verdict.removesuffix(" FOUND").strip() or None
-            raise DocumentSafetyError(f"malware detected: {signature or 'unknown signature'}")
+            raise DocumentSafetyError(f"检测到恶意软件：{signature or '未知签名'}")
         if verdict != "OK":
-            raise DocumentSafetyError("malware scanner returned an unsafe verdict")
+            raise DocumentSafetyError("杀毒扫描器返回了不安全判定")
         return MalwareScanResult(
             status="CLEAN",
             scanner_name="clamav-instream",

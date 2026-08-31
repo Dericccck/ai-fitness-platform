@@ -1,4 +1,4 @@
-"""Operations Agent 趋势摘要的确定性离线评测。
+"""经营 Agent 趋势摘要的确定性离线评测。
 
 评测只调用本地的 ``build_operations_report``，不访问 MySQL、PostgreSQL、LLM 或线上用户
 数据。它验证的是“聚合结果已经返回后，Agent 是否正确补齐时间桶和解释趋势”，不能替代
@@ -49,7 +49,7 @@ class OperationsTrendEvalResult:
 
 @dataclass(frozen=True)
 class OperationsTrendEvalThresholds:
-    """Operations 趋势离线质量门槛。"""
+    """经营趋势离线质量门槛。"""
 
     min_pass_rate: float
     max_failed_cases: int = 0
@@ -60,14 +60,14 @@ class OperationsTrendEvalThresholds:
 
         failures: list[str] = []
         if metrics["pass_rate"] < self.min_pass_rate:
-            failures.append(f"pass_rate {metrics['pass_rate']:.4f} < {self.min_pass_rate:.4f}")
+            failures.append(f"通过率 pass_rate {metrics['pass_rate']:.4f} < {self.min_pass_rate:.4f}")
         if metrics["failed_cases"] > self.max_failed_cases:
             failures.append(
-                f"failed_cases {int(metrics['failed_cases'])} > {self.max_failed_cases}"
+                f"失败案例数 failed_cases {int(metrics['failed_cases'])} > {self.max_failed_cases}"
             )
         if metrics["invalid_cases"] > self.max_invalid_cases:
             failures.append(
-                f"invalid_cases {int(metrics['invalid_cases'])} > {self.max_invalid_cases}"
+                f"无效案例数 invalid_cases {int(metrics['invalid_cases'])} > {self.max_invalid_cases}"
             )
         return failures
 
@@ -104,32 +104,32 @@ def evaluate_case(case: OperationsTrendEvalCase) -> OperationsTrendEvalResult:
         return OperationsTrendEvalResult(
             case.case_id,
             False,
-            (f"invalid result: {exc}",),
+            (f"结果无效：{exc}",),
             invalid=True,
         )
 
     failures: list[str] = []
     if report["trend_available"] != case.expected_trend_available:
         failures.append(
-            f"trend_available {report['trend_available']} != {case.expected_trend_available}"
+            f"趋势可用性 trend_available {report['trend_available']} != {case.expected_trend_available}"
         )
     actual_series = tuple(
         (str(item["bucket"]), int(item["value"])) for item in report.get("series", [])
     )
     if actual_series != case.expected_series:
-        failures.append(f"series {actual_series} != {case.expected_series}")
+        failures.append(f"序列 series {actual_series} != {case.expected_series}")
     if case.expected_direction is not None:
         actual_direction = report.get("trend", {}).get("direction")
         if actual_direction != case.expected_direction:
-            failures.append(f"direction {actual_direction} != {case.expected_direction}")
+            failures.append(f"方向 direction {actual_direction} != {case.expected_direction}")
     warnings = tuple(str(item) for item in report.get("warnings", []))
     for fragment in case.expected_warning_fragments:
         if not any(fragment in warning for warning in warnings):
-            failures.append(f"missing warning fragment: {fragment}")
+            failures.append(f"缺少警告片段：{fragment}")
     if case.expected_change_percent_null:
         change_percent = report.get("trend", {}).get("change_percent")
         if change_percent is not None:
-            failures.append(f"change_percent {change_percent} must be null")
+            failures.append(f"change_percent {change_percent} 必须为 null")
     return OperationsTrendEvalResult(case.case_id, not failures, tuple(failures))
 
 
@@ -178,7 +178,7 @@ def case_from_mapping(data: dict[str, Any]) -> OperationsTrendEvalCase:
 
 
 def main(argv: list[str] | None = None) -> int:
-    """运行 Operations 趋势离线门禁并输出机器可读 JSON。"""
+    """运行经营趋势离线门禁并输出机器可读 JSON。"""
 
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", type=Path, required=True)
@@ -196,7 +196,7 @@ def main(argv: list[str] | None = None) -> int:
                 OperationsTrendEvalResult(
                     case_id,
                     False,
-                    (f"invalid case: {exc}",),
+                    (f"案例无效：{exc}",),
                     invalid=True,
                 )
             )
@@ -230,7 +230,7 @@ def _load_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"cannot load evaluation file {path}: {exc}") from exc
+        raise SystemExit(f"无法加载评估文件 {path}：{exc}") from exc
 
 
 if __name__ == "__main__":

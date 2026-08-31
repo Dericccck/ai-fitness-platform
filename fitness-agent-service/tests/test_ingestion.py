@@ -162,9 +162,9 @@ def test_chunk_parsed_blocks_carries_page_sheet_and_table_metadata() -> None:
         [
             ParsedBlock(
                 kind="TABLE",
-                content="| Exercise | Sets |\n|---|---|\n| Squat | 4 |",
-                heading_path=("Beginner Plan",),
-                source_sheet="Week 1",
+                content="| 动作 | 组数 |\n|---|---|\n| 深蹲 | 4 |",
+                heading_path=("初级计划",),
+                source_sheet="第 1 周",
                 table_index=2,
                 metadata={"parser": "openpyxl"},
             )
@@ -173,7 +173,7 @@ def test_chunk_parsed_blocks_carries_page_sheet_and_table_metadata() -> None:
         overlap_chars=0,
     )
 
-    assert drafts[0].source_sheet == "Week 1"
+    assert drafts[0].source_sheet == "第 1 周"
     assert drafts[0].table_index == 2
     assert drafts[0].metadata == {"parser": "openpyxl"}
 
@@ -186,9 +186,9 @@ async def test_ingest_file_indexes_xlsx_with_source_metadata() -> None:
     workbook = Workbook()
     sheet = workbook.active
     assert sheet is not None
-    sheet.title = "Week 1"
-    sheet.append(["Exercise", "Sets"])
-    sheet.append(["Squat", 4])
+    sheet.title = "第 1 周"
+    sheet.append(["动作", "组数"])
+    sheet.append(["深蹲", 4])
     payload = BytesIO()
     workbook.save(payload)
 
@@ -204,9 +204,9 @@ async def test_ingest_file_indexes_xlsx_with_source_metadata() -> None:
     assert result.status == "INDEXED"
     document, chunks, parents = rag.calls[0]
     assert document.checksum == result.checksum
-    assert chunks[0].metadata["source_sheet"] == "Week 1"
+    assert chunks[0].metadata["source_sheet"] == "第 1 周"
     assert chunks[0].metadata["parser"] == "openpyxl"
-    assert parents[0].metadata["source_sheet"] == "Week 1"
+    assert parents[0].metadata["source_sheet"] == "第 1 周"
 
 
 class RoutedParserRegistry:

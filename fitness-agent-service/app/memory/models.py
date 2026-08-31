@@ -96,4 +96,4 @@ def validate_memory_owner(identity: AgentIdentity, organization_id: str) -> None
     """拒绝把 Memory 写入签名身份没有覆盖的机构。"""
 
     if not organization_id.strip() or organization_id not in identity.organization_ids:
-        raise MemoryValidationError("memory organization is outside signed identity scope")
+        raise MemoryValidationError("Memory 所属机构不在已签名身份的权限范围内")

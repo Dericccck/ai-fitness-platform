@@ -1,4 +1,4 @@
-"""Booking/Fitness 真实联调脚本的安全边界测试。"""
+"""预约/健身真实联调脚本的安全边界测试。"""
 
 from __future__ import annotations
 
@@ -196,7 +196,7 @@ async def test_dry_run_rejects_confirmation_and_does_not_leave_pending_record(
         action_prefix=("CREATE_APPOINTMENT",),
     )
 
-    await run_business_live_check(config, label="Booking")
+    await run_business_live_check(config, label="预约")
 
     client = FakeLiveHttpClient.instances[-1]
     decisions = [call for call in client.calls if call[0] == "POST" and "decisions" in call[1]]
@@ -224,7 +224,7 @@ async def test_execute_polls_until_confirmation_execution_succeeds(
         action_prefix=("CREATE_APPOINTMENT",),
     )
 
-    await run_business_live_check(config, label="Booking")
+    await run_business_live_check(config, label="预约")
 
     client = FakeLiveHttpClient.instances[-1]
     decisions = [call for call in client.calls if call[0] == "POST" and "decisions" in call[1]]

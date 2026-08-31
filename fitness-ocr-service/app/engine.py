@@ -77,7 +77,7 @@ class PaddleStructureEngine:
                 format_block_content=self.settings.format_block_content,
             )
         except Exception as exc:  # noqa: BLE001 - 不同模型运行时可能抛出不同异常。
-            self._load_error = f"PaddleOCR engine is unavailable: {exc}"
+            self._load_error = f"PaddleOCR 引擎不可用：{exc}"
             return EngineStatus(False, self.name, self._load_error)
         return EngineStatus(True, self.name)
 
@@ -86,11 +86,11 @@ class PaddleStructureEngine:
 
         status = self.status()
         if not status.ready or self._pipeline is None:
-            raise OcrEngineUnavailable(status.error or "OCR engine is unavailable")
+            raise OcrEngineUnavailable(status.error or "OCR 引擎不可用")
         try:
             yield from self._pipeline.predict(input_path)
         except Exception as exc:
-            raise OcrEngineError(f"PaddleOCR inference failed: {exc}") from exc
+            raise OcrEngineError(f"PaddleOCR 推理失败：{exc}") from exc
 
 
 def result_to_mapping(result: Any) -> Mapping[str, Any]:
@@ -101,7 +101,7 @@ def result_to_mapping(result: Any) -> Mapping[str, Any]:
         payload = payload()
     if isinstance(payload, Mapping):
         return payload
-    raise OcrEngineError("OCR engine returned a non-object result")
+    raise OcrEngineError("OCR 引擎返回了非对象结果")
 
 
 def blocks_from_page_result(
@@ -117,7 +117,7 @@ def blocks_from_page_result(
     payload = result_to_mapping(result)
     raw_blocks = payload.get("parsing_res_list", [])
     if not isinstance(raw_blocks, list):
-        raise OcrEngineError("OCR page result parsing_res_list must be an array")
+        raise OcrEngineError("OCR 页面结果的 parsing_res_list 必须是数组")
 
     blocks: list[OcrBlock] = []
     heading_path: list[str] = []
@@ -125,7 +125,7 @@ def blocks_from_page_result(
     page_confidence = _page_confidence(payload)
     for raw_block in raw_blocks:
         if not isinstance(raw_block, Mapping):
-            raise OcrEngineError("OCR page block must be an object")
+            raise OcrEngineError("OCR 页面块必须是对象")
         label = _safe_text(raw_block.get("block_label"), "text").lower()
         content = _safe_text(raw_block.get("block_content"), "").strip()
         if not content:
@@ -208,7 +208,7 @@ def _block_confidence(raw_block: Mapping[str, Any], page_confidence: float | Non
             return float(value)
     if page_confidence is not None:
         return page_confidence
-    raise OcrEngineError("OCR block has no confidence score")
+    raise OcrEngineError("OCR 块缺少置信度分数")
 
 
 def _block_source_region(
@@ -220,7 +220,7 @@ def _block_source_region(
     """将 Paddle 像素坐标框转成 Agent 契约要求的归一化区域。"""
 
     if page_width <= 0 or page_height <= 0:
-        raise OcrEngineError("PDF page dimensions must be positive")
+        raise OcrEngineError("PDF 页面尺寸必须为正数")
     raw_box = next(
         (
             raw_block.get(key)
@@ -231,17 +231,17 @@ def _block_source_region(
     )
     raw_coordinates = _as_sequence(raw_box)
     if raw_coordinates is None or len(raw_coordinates) < 4:
-        raise OcrEngineError("OCR block has no source bounding box")
+        raise OcrEngineError("OCR 块缺少源边界框")
     coordinates = _numeric_values(raw_coordinates)
     if len(coordinates) < 4:
-        raise OcrEngineError("OCR block source bounding box is invalid")
+        raise OcrEngineError("OCR 块源边界框无效")
     if len(coordinates) >= 8:
         x0, y0 = min(coordinates[0::2]), min(coordinates[1::2])
         x1, y1 = max(coordinates[0::2]), max(coordinates[1::2])
     else:
         x0, y0, x1, y1 = coordinates[:4]
     if x1 <= x0 or y1 <= y0:
-        raise OcrEngineError("OCR block source bounding box has invalid size")
+        raise OcrEngineError("OCR 块源边界框尺寸无效")
     return OcrSourceRegion(
         x=round(max(0.0, x0 / page_width), 6),
         y=round(max(0.0, y0 / page_height), 6),

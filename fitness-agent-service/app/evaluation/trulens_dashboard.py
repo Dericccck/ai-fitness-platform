@@ -1,4 +1,4 @@
-"""Start the optional TruLens dashboard over the configured evaluation database."""
+"""在已配置的评估数据库上启动可选的 TruLens 仪表盘。"""
 
 from __future__ import annotations
 

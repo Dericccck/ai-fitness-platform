@@ -41,7 +41,7 @@ def create_app(
         yield
 
     app = FastAPI(
-        title="Fitness OCR Service",
+        title="健身 OCR 服务",
         version="0.1.0",
         docs_url="/docs" if resolved_settings.api_docs_enabled else None,
         redoc_url=None,
@@ -57,7 +57,7 @@ def create_app(
         state: AppState = app.state.ocr
         engine_status = state.engine.status()
         if not engine_status.ready:
-            raise HTTPException(status_code=503, detail="OCR engine is not ready")
+            raise HTTPException(status_code=503, detail="OCR 引擎尚未就绪")
         return {"status": "READY", "engine": engine_status.engine_name}
 
     @app.post("/v1/parse", response_model=OcrResponse)
@@ -69,20 +69,20 @@ def create_app(
         state: AppState = app.state.ocr
         _verify_authorization(state.settings, authorization)
         if file.content_type not in {"application/pdf", "application/octet-stream", None}:
-            raise HTTPException(status_code=415, detail="file must be uploaded as a PDF")
+            raise HTTPException(status_code=415, detail="文件必须以 PDF 格式上传")
         content = await file.read(state.settings.max_source_bytes + 1)
         if len(content) > state.settings.max_source_bytes:
-            raise HTTPException(status_code=413, detail="file exceeds the configured size limit")
+            raise HTTPException(status_code=413, detail="文件超过配置的大小限制")
         try:
             return await _run_inference(state, content, pages)
         except OcrInputError as exc:
             raise HTTPException(status_code=422, detail=str(exc)) from exc
         except TimeoutError as exc:
-            raise HTTPException(status_code=504, detail="OCR inference timed out") from exc
+            raise HTTPException(status_code=504, detail="OCR 推理超时") from exc
         except (OcrEngineUnavailable, OcrEngineError) as exc:
-            logger.exception("OCR request failed")
+            logger.exception("OCR 请求失败")
             raise HTTPException(
-                status_code=503, detail="OCR engine failed to process document"
+                status_code=503, detail="OCR 引擎处理文档失败"
             ) from exc
 
     app.state.ocr = AppState(resolved_settings, resolved_engine)
@@ -123,7 +123,7 @@ async def _drain_worker(worker: asyncio.Task[OcrResponse], semaphore: asyncio.Se
     try:
         await worker
     except Exception:
-        logger.exception("background OCR inference failed after request cancellation")
+        logger.exception("请求取消后后台 OCR 推理失败")
     finally:
         semaphore.release()
 
@@ -132,10 +132,10 @@ def _verify_authorization(settings: Settings, authorization: str | None) -> None
     if not settings.auth_required:
         return
     if not settings.api_key:
-        raise HTTPException(status_code=503, detail="OCR service authentication is not configured")
+        raise HTTPException(status_code=503, detail="OCR 服务身份验证未配置")
     expected = f"Bearer {settings.api_key}"
     if authorization is None or not hmac.compare_digest(authorization, expected):
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid credentials")
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="凭证无效")
 
 
 app = create_app()

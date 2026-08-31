@@ -233,7 +233,7 @@ async def run_check(args: argparse.Namespace) -> None:
         for probe in probes:
             await _run_probe(client, args, probe)
             print(f"[通过] {probe.name}: HTTP {probe.expected_status}")
-    print("Customer Service 三角色只读权限联调通过（本轮没有写入业务数据）")
+    print("客服三角色只读权限联调通过（本轮没有写入业务数据）")
 
 
 def main() -> int:
@@ -242,7 +242,7 @@ def main() -> int:
     try:
         asyncio.run(run_check(build_parser().parse_args()))
     except (CustomerServiceRoleLiveCheckError, ValueError) as exc:
-        print(f"Customer Service 角色联调失败：{exc}", file=sys.stderr)
+        print(f"客服角色联调失败：{exc}", file=sys.stderr)
         return 1
     return 0
 

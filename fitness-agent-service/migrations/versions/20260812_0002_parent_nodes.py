@@ -1,4 +1,4 @@
-"""Add parent records for small retrieval chunks and richer source context."""
+"""为小型检索切片增加父记录和更丰富的来源上下文。"""
 
 from collections.abc import Sequence
 
@@ -12,7 +12,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Create non-vector parent nodes and link child chunks to them."""
+    """创建非向量父节点，并将子切片关联到父节点。"""
 
     op.create_table(
         "knowledge_parents",
@@ -49,7 +49,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Remove parent links and parent nodes."""
+    """删除父节点关联和父节点。"""
 
     op.drop_index("ix_knowledge_chunks_parent", table_name="knowledge_chunks")
     op.drop_index("ix_knowledge_parents_document", table_name="knowledge_parents")

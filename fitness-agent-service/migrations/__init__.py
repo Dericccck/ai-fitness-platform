@@ -1,1 +1,1 @@
-"""Alembic migration package for the Agent service."""
+"""Agent 服务的 Alembic 迁移包。"""

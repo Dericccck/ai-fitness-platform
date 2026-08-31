@@ -100,7 +100,7 @@ async def list_memories(
         )
     except MemoryValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="organization is forbidden"
+            status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该机构"
         ) from exc
     return [_to_response(memory) for memory in memories]
 
@@ -134,12 +134,12 @@ async def correct_memory(
         )
     except MemoryNotFoundError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="memory not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="未找到 Memory"
         ) from exc
     except MemoryVersionConflictError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="memory version changed or memory is no longer active",
+            detail="Memory 版本已变更或已不再生效",
         ) from exc
     except MemoryValidationError as exc:
         raise HTTPException(
@@ -178,16 +178,16 @@ async def revoke_memory(
         )
     except MemoryNotFoundError as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="memory not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="未找到 Memory"
         ) from exc
     except MemoryVersionConflictError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
-            detail="memory version changed or memory is no longer active",
+            detail="Memory 版本已变更或已不再生效",
         ) from exc
     except MemoryValidationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, detail="memory organization is forbidden"
+            status_code=status.HTTP_403_FORBIDDEN, detail="无权访问 Memory 所属机构"
         ) from exc
     return _to_response(memory)
 
@@ -208,7 +208,7 @@ async def list_memory_events(
         )
     except (MemoryNotFoundError, MemoryValidationError) as exc:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="memory not found"
+            status_code=status.HTTP_404_NOT_FOUND, detail="未找到 Memory"
         ) from exc
     return [_to_event_response(event) for event in events]
 
@@ -221,14 +221,14 @@ def _verify_identity(request: Request, token: str | None) -> AgentIdentity:
     if not token:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="signed agent context is required",
+            detail="必须提供已签名的 AgentContext",
         )
     try:
         return cast(AgentIdentity, request.app.state.context_verifier.verify(token))
     except AgentContextVerificationError as exc:
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="invalid signed agent context",
+            detail="已签名的 AgentContext 无效",
         ) from exc
 
 

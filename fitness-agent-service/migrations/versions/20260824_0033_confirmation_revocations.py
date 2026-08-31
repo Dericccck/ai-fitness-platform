@@ -47,7 +47,7 @@ def downgrade() -> None:
         )
     ).scalar_one()
     if revoked_count:
-        raise RuntimeError("cannot downgrade confirmation revocation migration while facts exist")
+        raise RuntimeError("无法回退确认撤销迁移，因为仍存在撤销事实")
     op.drop_constraint(
         "uq_agent_confirmation_revocation_request",
         "agent_action_confirmations",

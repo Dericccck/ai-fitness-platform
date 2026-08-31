@@ -55,9 +55,9 @@ class NotificationOutboxWorker:
         max_delivery_attempts: int = 8,
     ) -> None:
         if batch_size < 1 or batch_size > 500:
-            raise ValueError("notification outbox batch size must be between 1 and 500")
+            raise ValueError("通知 Outbox 批次大小必须在 1 到 500 之间")
         if max_delivery_attempts < 1 or max_delivery_attempts > 20:
-            raise ValueError("notification max delivery attempts must be between 1 and 20")
+            raise ValueError("通知最大投递次数必须在 1 到 20 之间")
         self.database = database
         self.repository = repository
         self.batch_size = batch_size
@@ -145,7 +145,7 @@ class NotificationOutboxWorker:
                 decision = await self.preferences.evaluate(connection, record=record)
                 if decision.action == "DEFER":
                     if decision.available_at is None:
-                        raise RuntimeError("deferred notification has no next available time")
+                        raise RuntimeError("延迟通知没有下一次可用时间")
                     deferred = await self.repository.mark_deferred(
                         connection,
                         outbox_id=record.id,
@@ -154,7 +154,7 @@ class NotificationOutboxWorker:
                         reason=decision.reason or "QUIET_HOURS",
                     )
                     if not deferred:
-                        raise RuntimeError("notification outbox lock was lost while deferring")
+                        raise RuntimeError("延迟通知时丢失了通知 Outbox 锁")
                     return "deferred"
                 if decision.action == "SUPPRESS":
                     suppressed = await self.repository.mark_suppressed(
@@ -164,12 +164,12 @@ class NotificationOutboxWorker:
                         reason=decision.reason or "POLICY_SUPPRESSED",
                     )
                     if not suppressed:
-                        raise RuntimeError("notification outbox lock was lost while suppressing")
+                        raise RuntimeError("抑制通知时丢失了通知 Outbox 锁")
                     return "suppressed"
 
             adapter = self.channel_adapters.get(channel)
             if adapter is None:
-                raise RuntimeError(f"notification channel is unsupported: {channel}")
+                raise RuntimeError(f"不支持的通知渠道：{channel}")
 
             # 先提交 STARTED。这样即使渠道调用过程中进程崩溃，下一次排查也能看到
             # 哪一次尝试中断，而不会把所有失败都压缩成 Outbox 的一个计数器。
@@ -215,12 +215,12 @@ class NotificationOutboxWorker:
                     provider_message_id=receipt.provider_message_id,
                 )
                 if not finished:
-                    raise RuntimeError("notification delivery attempt was not open")
+                    raise RuntimeError("通知投递尝试未处于开放状态")
                 published = await self.repository.mark_published(
                     connection, outbox_id=record.id, worker_id=self.worker_id
                 )
                 if not published:
-                    raise RuntimeError("notification outbox lock was lost while publishing")
+                    raise RuntimeError("发布通知时丢失了通知 Outbox 锁")
             # 指标在事务提交后再增加，避免数据库回滚但 Prometheus 已记录成功的假象。
             if self.metrics is not None:
                 self.metrics.record_notification_delivery_attempt(channel, "SUCCEEDED")
@@ -257,7 +257,7 @@ class NotificationOutboxWorker:
                     max_attempts=self.max_delivery_attempts,
                 )
                 if not retried:
-                    raise RuntimeError("notification outbox lock was lost while retrying")
+                    raise RuntimeError("重试通知时丢失了通知 Outbox 锁")
             # 只有失败状态和 Outbox 重试状态一起提交后，才向监控系统报告本次失败。
             if self.metrics is not None and failed_attempt_status is not None:
                 self.metrics.record_notification_delivery_attempt(channel, failed_attempt_status)

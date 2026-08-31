@@ -48,11 +48,11 @@ class ConfirmationResourceSnapshot:
 
     def __post_init__(self) -> None:
         if not self.organization_id.strip():
-            raise ConfirmationNormalizationError("resource organization_id is required")
+            raise ConfirmationNormalizationError("资源必须提供 organization_id")
         if not self.resource_id.strip():
-            raise ConfirmationNormalizationError("resource_id is required")
+            raise ConfirmationNormalizationError("必须提供 resource_id")
         if self.version < 0:
-            raise ConfirmationNormalizationError("resource version cannot be negative")
+            raise ConfirmationNormalizationError("资源版本不能为负数")
 
 
 @dataclass(frozen=True)
@@ -73,7 +73,7 @@ class ConfirmationNormalizationContext:
     def __post_init__(self) -> None:
         for field_name in ("request_id", "thread_id", "subject_user_id"):
             if not getattr(self, field_name).strip():
-                raise ConfirmationNormalizationError(f"{field_name} is required")
+                raise ConfirmationNormalizationError(f"必须提供 {field_name}")
 
 
 PayloadBuilder = Callable[[BaseModel], Mapping[str, Any]]
@@ -138,9 +138,9 @@ class NormalizedConfirmationAction:
         """把已加密参数装配为可交给 PostgreSQL 仓储的领域对象。"""
 
         if not payload_ciphertext:
-            raise ConfirmationNormalizationError("encrypted payload is required")
+            raise ConfirmationNormalizationError("必须提供加密 Payload")
         if not payload_key_version.strip():
-            raise ConfirmationNormalizationError("payload key version is required")
+            raise ConfirmationNormalizationError("必须提供 Payload 密钥版本")
         return ConfirmationAction(
             tool_id=self.tool_id,
             organization_id=self.organization_id,
@@ -179,9 +179,9 @@ def normalize_confirmation_action(
     """
 
     if not organization_id.strip():
-        raise ConfirmationNormalizationError("organization_id is required")
+        raise ConfirmationNormalizationError("必须提供 organization_id")
     if policy.resource_required and resource is None:
-        raise ConfirmationNormalizationError("trusted resource snapshot is required")
+        raise ConfirmationNormalizationError("必须提供受信任的资源快照")
     declared_resource_id = (
         policy.resource_id_builder(input_data) if policy.resource_id_builder is not None else None
     )
@@ -191,14 +191,14 @@ def normalize_confirmation_action(
         else None
     )
     if declared_organization_id is not None and declared_organization_id != organization_id:
-        raise ConfirmationNormalizationError("input organization does not match action")
+        raise ConfirmationNormalizationError("输入机构与操作不匹配")
     if resource is not None and resource.organization_id != organization_id:
-        raise ConfirmationNormalizationError("resource organization does not match action")
+        raise ConfirmationNormalizationError("资源机构与操作不匹配")
 
     payload = _json_compatible_mapping(policy.payload_builder(input_data))
     resource_id = resource.resource_id if resource else declared_resource_id
     if resource is not None and resource_id != declared_resource_id:
-        raise ConfirmationNormalizationError("resource snapshot does not match tool input")
+        raise ConfirmationNormalizationError("资源快照与工具输入不匹配")
     expected_version = (
         resource.version
         if resource is not None
@@ -212,14 +212,14 @@ def normalize_confirmation_action(
     summary = _json_compatible_mapping(policy.summary_builder(input_data, resource_projection))
     operation = summary.get("operation")
     if operation != policy.operation:
-        raise ConfirmationNormalizationError("display summary operation is not policy controlled")
+        raise ConfirmationNormalizationError("展示摘要中的操作不受策略控制")
     target_status = summary.get("target_status")
     if policy.target_status != "DYNAMIC" and target_status != policy.target_status:
         raise ConfirmationNormalizationError(
-            "display summary target status is not policy controlled"
+            "展示摘要目标状态不受策略控制"
         )
     if not isinstance(target_status, str) or not target_status.strip():
-        raise ConfirmationNormalizationError("display summary target status is required")
+        raise ConfirmationNormalizationError("必须提供展示摘要的目标状态")
 
     # 这些边界字段由规范化器统一覆盖，而不是信任每个模板自行填写，防止模板漏掉
     # 组织、资源版本或真实 Payload。业务模板仍负责 operation 和可读的 details。
@@ -294,7 +294,7 @@ def canonical_json_bytes(value: Any) -> bytes:
             allow_nan=False,
         ).encode("utf-8")
     except (TypeError, ValueError) as exc:
-        raise ConfirmationNormalizationError("value cannot be canonically serialized") from exc
+        raise ConfirmationNormalizationError("值无法按规范序列化") from exc
 
 
 def _canonicalize(value: Any) -> Any:
@@ -309,16 +309,16 @@ def _canonicalize(value: Any) -> Any:
     if isinstance(value, Decimal):
         return str(value)
     if isinstance(value, float) and not math.isfinite(value):
-        raise ConfirmationNormalizationError("NaN and Infinity are not valid action values")
+        raise ConfirmationNormalizationError("NaN 和 Infinity 不是有效的操作值")
     return value
 
 
 def _json_compatible_mapping(value: Mapping[str, Any]) -> dict[str, Any]:
     if not isinstance(value, Mapping):
-        raise ConfirmationNormalizationError("confirmation builder must return an object")
+        raise ConfirmationNormalizationError("确认构建器必须返回对象")
     canonical = _canonicalize(value)
     if not isinstance(canonical, dict):
-        raise ConfirmationNormalizationError("confirmation builder must return an object")
+        raise ConfirmationNormalizationError("确认构建器必须返回对象")
     return canonical
 
 
@@ -372,4 +372,4 @@ def _validate_summary_binding(
     }
     for key, value in expected.items():
         if key not in summary or _canonicalize(summary[key]) != _canonicalize(value):
-            raise ConfirmationNormalizationError(f"display summary is not bound to {key}")
+            raise ConfirmationNormalizationError(f"展示摘要未绑定到 {key}")

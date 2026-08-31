@@ -68,7 +68,7 @@ def test_same_student_and_coach_is_not_notified_twice() -> None:
 
 
 def test_unknown_event_type_is_rejected_before_inbox_persistence() -> None:
-    with pytest.raises(ProactiveEventContractError, match="unsupported proactive event type"):
+    with pytest.raises(ProactiveEventContractError, match="不支持的主动事件类型"):
         ProactiveEventMessage.from_json(
             json.dumps(
                 {
@@ -84,7 +84,7 @@ def test_unknown_event_type_is_rejected_before_inbox_persistence() -> None:
 
 
 def test_unknown_event_source_is_rejected_before_inbox_persistence() -> None:
-    with pytest.raises(ProactiveEventContractError, match="unsupported proactive event source"):
+    with pytest.raises(ProactiveEventContractError, match="不支持的主动事件来源"):
         ProactiveEventMessage.from_json(
             json.dumps(
                 {
@@ -102,5 +102,5 @@ def test_unknown_event_source_is_rejected_before_inbox_persistence() -> None:
 def test_missing_recipient_is_rejected() -> None:
     event = appointment_event().model_copy(update={"payload": {"studentId": "student-1"}})
 
-    with pytest.raises(ProactiveEventContractError, match="recipient ID is missing"):
+    with pytest.raises(ProactiveEventContractError, match="缺少接收者 ID"):
         notification_targets(event)

@@ -1,4 +1,4 @@
-"""Operations Agent 第一阶段的受控经营指标工具。
+"""经营 Agent 第一阶段的受控经营指标工具。
 
 这里不实现任意 Text-to-SQL。模型只能选择固定指标 ID，Python 只调用 Java Gateway 的
 只读接口；角色、组织范围、SQL 投影和时间范围会在 Java 侧再次校验。后续增加自然语言
@@ -218,13 +218,13 @@ def validate_operations_metric_capability(
 
     definition = get_operations_metric_definition(metric)
     if definition is None:
-        raise ValueError("unsupported operations metric definition")
+        raise ValueError("不支持的经营指标定义")
     if bucket is not None and bucket not in definition.supported_buckets:
-        raise ValueError(f"metric {metric} does not support bucket {bucket}")
+        raise ValueError(f"指标 {metric} 不支持时间桶 {bucket}")
     if comparison_role == "PREVIOUS_PERIOD" and not definition.supports_previous_period:
-        raise ValueError(f"metric {metric} does not support PREVIOUS_PERIOD comparison")
+        raise ValueError(f"指标 {metric} 不支持 PREVIOUS_PERIOD 对比")
     if comparison_role == "SAME_PERIOD_LAST_YEAR" and not definition.supports_year_over_year:
-        raise ValueError(f"metric {metric} does not support SAME_PERIOD_LAST_YEAR comparison")
+        raise ValueError(f"指标 {metric} 不支持 SAME_PERIOD_LAST_YEAR 对比")
 
 
 def _metric_definition_view(metric: str) -> dict[str, object]:
@@ -506,7 +506,7 @@ def parse_operations_intent(
 
 
 def operations_prompt_hint(user_message: str) -> str:
-    """生成只读的 Operations 提示，明确告诉模型不能退化为任意 SQL。"""
+    """生成只读的经营查询提示，明确告诉模型不能退化为任意 SQL。"""
 
     hint = parse_operations_intent(user_message)
     if hint is None:
@@ -625,9 +625,9 @@ class OperationsMetricToolInput(BaseModel):
     @model_validator(mode="after")
     def validate_range(self) -> OperationsMetricToolInput:
         if self.from_date and self.to_date and self.from_date > self.to_date:
-            raise ValueError("from must be earlier than or equal to to")
+            raise ValueError("from 必须早于或等于 to")
         if self.from_date and self.to_date and (self.to_date - self.from_date).days > 92:
-            raise ValueError("operations time range must not exceed 92 days")
+            raise ValueError("经营查询时间范围不能超过 92 天")
         validate_operations_metric_capability(
             self.metric,
             bucket=self.bucket,
@@ -643,7 +643,7 @@ def build_authorized_operations_tool_input(
 ) -> dict[str, object]:
     """根据用户原问题和签名身份生成唯一的经营工具参数。
 
-    Operations 的指标、日期、时间桶和组织范围都属于受控查询条件，不应由模型
+    经营查询的指标、日期、时间桶和组织范围都属于受控查询条件，不应由模型
     自由填写。模型只负责表达“需要调用固定经营指标工具”；真正执行前由这里重新
     解析用户原问题，并从已验证 AgentContext 中取得唯一机构。这样既避免模型猜测
     内部机构 ID，也防止模型通过工具参数扩大日期、切换指标或跨组织查询。
@@ -758,9 +758,9 @@ def build_operations_tool_definitions(
             getattr(gateway, "settings", None), "gateway_timeout_seconds", 5.0
         )
     if effective_timeout_seconds <= 0:
-        raise ValueError("operations query timeout must be positive")
+        raise ValueError("经营查询超时时间必须为正数")
     if rate_limit_requests < 1 or rate_limit_window_seconds < 1:
-        raise ValueError("operations rate limit configuration is invalid")
+        raise ValueError("经营查询限流配置无效")
 
     async def query_metric(raw: BaseModel, context: ToolContext) -> object:
         data = cast(OperationsMetricToolInput, raw)
@@ -775,7 +775,7 @@ def build_operations_tool_definitions(
             if not decision.allowed:
                 # 在 Gateway 调用前 fail-closed；ToolRegistry 会把内部原因收敛成稳定
                 # 的工具失败，不把用户原文或组织权限细节写入 Agent 审计。
-                raise ValueError(f"operations query policy rejected: {decision.reason_code}")
+                raise ValueError(f"经营查询策略拒绝了请求：{decision.reason_code}")
 
         if rate_limit_cache is not None:
             # 频率限制按机构聚合，避免平台管理员通过切换主体绕过单机构保护；Redis Key
@@ -796,7 +796,7 @@ def build_operations_tool_definitions(
                     request_id=context.gateway_context.request_id,
                     trace_id=context.gateway_context.trace_id,
                 )
-                raise ValueError("operations resource limiter unavailable") from exc
+                raise ValueError("经营资源限流器不可用") from exc
             if not allowed:
                 if metrics is not None:
                     metrics.record_operations_query_event("RATE_LIMITED")
@@ -806,7 +806,7 @@ def build_operations_tool_definitions(
                     request_id=context.gateway_context.request_id,
                     trace_id=context.gateway_context.trace_id,
                 )
-                raise ValueError("operations query rate limit exceeded")
+                raise ValueError("经营查询超过限流阈值")
 
         gateway_call_count = 0
 
@@ -818,7 +818,7 @@ def build_operations_tool_definitions(
             if gateway_call_count > OPERATIONS_MAX_GATEWAY_CALLS:
                 if metrics is not None:
                     metrics.record_operations_query_event("GATEWAY_CALL_BUDGET_EXCEEDED")
-                raise ValueError("operations gateway call budget exceeded")
+                raise ValueError("经营 Gateway 调用次数超过预算")
             try:
                 async with asyncio.timeout(effective_timeout_seconds):
                     result = await gateway.query_operations_metric(

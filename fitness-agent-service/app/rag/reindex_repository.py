@@ -75,7 +75,7 @@ class KnowledgeReindexRepository:
         """在一个事务中持久化重建批次及其来源快照。"""
 
         if len(sources) != len(item_ids) or not sources:
-            raise ValueError("a re-index job must contain one item per source")
+            raise ValueError("重新索引任务必须为每个来源包含一个条目")
         job_statement = text(
             """
             INSERT INTO knowledge_reindex_jobs (
@@ -144,7 +144,7 @@ class KnowledgeReindexRepository:
         async with self._database.engine.connect() as connection:
             row = (await connection.execute(statement, {"id": job_id})).mappings().first()
         if row is None:
-            raise KnowledgeJobNotFound("knowledge re-index job was not found")
+            raise KnowledgeJobNotFound("未找到知识重新索引任务")
         return reindex_job_from_row(row)
 
     async def list_jobs(
@@ -155,7 +155,7 @@ class KnowledgeReindexRepository:
         limit: int = 50,
     ) -> list[KnowledgeReindexJob]:
         if limit < 1 or limit > 100:
-            raise ValueError("re-index job list limit must be between 1 and 100")
+            raise ValueError("重新索引任务列表限制必须在 1 到 100 之间")
         if not platform_wide and not organization_ids:
             return []
         scope_clause = "TRUE" if platform_wide else "organization_id IN :organization_ids"
@@ -177,7 +177,7 @@ class KnowledgeReindexRepository:
 
     async def list_queued_ids(self, *, limit: int = 10) -> list[str]:
         if limit < 1 or limit > 100:
-            raise ValueError("re-index worker batch size must be between 1 and 100")
+            raise ValueError("重新索引 Worker 批次大小必须在 1 到 100 之间")
         statement = text(
             """
             SELECT id FROM knowledge_reindex_jobs
@@ -306,7 +306,7 @@ class KnowledgeReindexRepository:
         async with self._database.engine.begin() as connection:
             row = (await connection.execute(statement, {"id": job_id})).mappings().first()
         if row is None:
-            raise KnowledgeJobNotFound("knowledge re-index job was not found")
+            raise KnowledgeJobNotFound("未找到知识重新索引任务")
         return reindex_job_from_row(row)
 
     async def retry(self, job_id: str) -> KnowledgeReindexJob:
@@ -331,10 +331,10 @@ class KnowledgeReindexRepository:
         async with self._database.engine.begin() as connection:
             result = await connection.execute(item_statement, {"job_id": job_id})
             if result.rowcount == 0:
-                raise KnowledgeJobTransitionError("no failed re-index item can be retried")
+                raise KnowledgeJobTransitionError("没有失败的重新索引条目可重试")
             row = (await connection.execute(job_statement, {"job_id": job_id})).mappings().first()
         if row is None:
-            raise KnowledgeJobTransitionError("re-index job is not failed")
+            raise KnowledgeJobTransitionError("重新索引任务未处于失败状态")
         return reindex_job_from_row(row)
 
     async def _transition_item(
@@ -343,7 +343,7 @@ class KnowledgeReindexRepository:
         async with self._database.engine.begin() as connection:
             row = (await connection.execute(statement, params)).mappings().first()
         if row is None:
-            raise KnowledgeJobTransitionError("re-index item state transition was rejected")
+            raise KnowledgeJobTransitionError("重新索引条目状态转换被拒绝")
         return reindex_item_from_row(row)
 
 

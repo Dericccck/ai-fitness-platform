@@ -57,7 +57,7 @@ def downgrade() -> None:
     ).scalar_one()
     if non_memory_count:
         raise RuntimeError(
-            "cannot downgrade training notification types while non-memory notifications exist"
+            "无法回退训练通知类型迁移，因为仍存在非 Memory 站内通知"
         )
     op.drop_constraint(
         "ck_agent_in_app_notification_type",

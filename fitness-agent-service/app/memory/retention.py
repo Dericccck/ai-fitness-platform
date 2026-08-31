@@ -32,7 +32,7 @@ class MemoryRetentionRepository:
         """批量脱敏到期终态正文，使用 ``SKIP LOCKED`` 支持多实例并行。"""
 
         if limit < 1 or limit > 5000:
-            raise ValueError("memory retention batch size must be between 1 and 5000")
+            raise ValueError("Memory 保留批次大小必须在 1 到 5000 之间")
         memory_statement = text(
             """
             WITH due AS (

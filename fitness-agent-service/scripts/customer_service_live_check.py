@@ -95,9 +95,9 @@ def main() -> int:
 
     try:
         config = build_config(build_parser().parse_args())
-        asyncio.run(run_business_live_check(config, label="Customer Service"))
+        asyncio.run(run_business_live_check(config, label="客服"))
     except (BusinessLiveCheckError, ValueError) as exc:
-        print(f"Customer Service 确认联调失败：{exc}", file=sys.stderr)
+        print(f"客服确认联调失败：{exc}", file=sys.stderr)
         return 1
     return 0
 

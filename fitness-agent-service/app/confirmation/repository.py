@@ -76,7 +76,7 @@ class ConfirmationRepository:
                 existing = await self._select_by_request(connection, action.request_id)
                 if existing is not None and _same_action(existing, action):
                     return _record_from_row(existing)
-                raise ConfirmationStateError("request id is already bound to another action")
+                raise ConfirmationStateError("请求 ID 已绑定到其他操作")
             record = _record_from_row(row)
             await self._insert_event(
                 connection,
@@ -113,7 +113,7 @@ class ConfirmationRepository:
                 .first()
             )
             if row is None:
-                raise ConfirmationNotFound("confirmation was not found")
+                raise ConfirmationNotFound("未找到确认单")
             record = _record_from_row(row)
             # 页面刷新不应继续显示已经过期的待确认动作。这里使用短事务和行锁做惰性过期，
             # 仍由 ConfirmationRecord 统一判断状态转移，并记录不可变 EXPIRED 事件。
@@ -144,7 +144,7 @@ class ConfirmationRepository:
         """在行锁事务中批准或拒绝，并追加不可变事件。"""
 
         if decision not in {"APPROVE", "REJECT"}:
-            raise ConfirmationStateError("decision must be APPROVE or REJECT")
+                raise ConfirmationStateError("决定值必须为 APPROVE 或 REJECT")
         expired_record: ConfirmationRecord | None = None
         result: ConfirmationRecord | None = None
         async with self._database.engine.begin() as connection:
@@ -155,7 +155,7 @@ class ConfirmationRepository:
             if record.actor_roles != tuple(
                 sorted(actor_roles)
             ) or record.actor_organization_ids != tuple(sorted(organization_ids)):
-                raise ConfirmationStateError("confirmation identity scope has changed")
+                raise ConfirmationStateError("确认单身份范围已变更")
             if record.authorization_status == "PENDING" and record.is_expired(now):
                 expired = record.expire(now)
                 await self._update_record(connection, expired, expected_version=record.version)
@@ -176,7 +176,7 @@ class ConfirmationRepository:
                 expected_status = "APPROVED" if decision == "APPROVE" else "REJECTED"
                 if record.authorization_status != expected_status:
                     raise ConfirmationStateError(
-                        "decision request id was reused with another decision"
+                        "decision_request_id 已被其他决定复用"
                     )
                 result = record
             else:
@@ -199,9 +199,9 @@ class ConfirmationRepository:
                 )
                 result = decided
         if expired_record is not None:
-            raise ConfirmationStateError("expired confirmation cannot be decided")
+                raise ConfirmationStateError("已过期的确认单不能作出决定")
         if result is None:
-            raise AssertionError("confirmation decision did not produce a result")
+                raise AssertionError("确认决定没有产生结果")
         return result
 
     async def issue_credential_jti(
@@ -246,7 +246,7 @@ class ConfirmationRepository:
             if record.revocation_request_id == revocation_request_id:
                 return record
             if record.authorization_status == "CANCELLED":
-                raise ConfirmationStateError("confirmation has already been revoked")
+                raise ConfirmationStateError("确认单已经撤销")
             cancelled = record.cancel(now, revocation_request_id)
             await self._update_record(connection, cancelled, expected_version=record.version)
             await self._insert_event(
@@ -314,7 +314,7 @@ class ConfirmationRepository:
                 event_type: ConfirmationEventType = "EXECUTION_SUCCEEDED"
             else:
                 if not error_code:
-                    raise ConfirmationStateError("error code is required for failed execution")
+                    raise ConfirmationStateError("失败执行必须提供错误码")
                 finished = record.finish_failure(now, error_code, retryable)
                 event_type = "EXECUTION_FAILED"
             await self._update_record(connection, finished, expected_version=record.version)
@@ -371,7 +371,7 @@ class ConfirmationRepository:
             .first()
         )
         if row is None:
-            raise ConfirmationNotFound("confirmation was not found")
+            raise ConfirmationNotFound("未找到确认单")
         return row
 
     async def _select_for_update_unscoped(self, connection: Any, confirmation_id: str) -> Any:
@@ -386,7 +386,7 @@ class ConfirmationRepository:
             .first()
         )
         if row is None:
-            raise ConfirmationNotFound("confirmation was not found")
+            raise ConfirmationNotFound("未找到确认单")
         return row
 
     async def _select_by_request(self, connection: Any, request_id: str) -> Any:
@@ -438,7 +438,7 @@ class ConfirmationRepository:
             },
         )
         if result.rowcount != 1:
-            raise ConfirmationStateError("confirmation was changed by another request")
+            raise ConfirmationStateError("确认单已被其他请求修改")
 
     async def _insert_event(self, connection: Any, event: ConfirmationEvent) -> None:
         await connection.execute(

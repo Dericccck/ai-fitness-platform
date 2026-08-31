@@ -1,4 +1,4 @@
-# AI Fitness Agent Service
+# AI 健身 Agent 服务
 
 这是健身平台的 Python Agent 服务，与现有 Java Spring Boot 业务后端并行部署。
 赛事、活动运营及其遗留代码不属于本服务的业务范围。
@@ -18,11 +18,11 @@
 - LLM：DeepSeek OpenAI-compatible Chat Completions 接口，配置变量与 `learning-langchain-CN` 保持一致。
 - Embedding：OpenAI-compatible Embeddings 接口，可与 LLM 使用不同服务商。
 - Reranker：可配置的 HTTP 服务，不提供本地 mock 或静默降级。
-- Fitness Core Gateway：Java 只读业务 Tool 服务，查询用户、机构、课程、合同、课时和预约。
+- 健身核心 Gateway：Java 只读业务 Tool 服务，查询用户、机构、课程、合同、课时和预约。
 - Tool Registry：版本化注册首批健身只读工具，校验输入 Schema、限制未知工具，并记录不含原始参数的调用审计。
-- Operations 管理审计：管理员可通过 `/api/v1/admin/operations/query-audits` 按机构、固定指标、时间桶、比较周期、状态和创建时间分页查询经营查询审计；响应同时附带固定指标口径元数据，组织管理员只能查看签名机构范围，接口不返回 SQL、Prompt 或业务明细；指标、时间桶和比较周期的组合会按固定目录校验，不支持的组合返回 `422`。当前固定指标支持上一等长周期环比和上一自然年同期同比，日期边界与除零处理由程序确定；新增 `COMPLETED_CLASS_COUNT`，按已完成/核销成功预约统计完课量；新增 `NEW_CUSTOMER_COUNT`，按有效合同的新客标记统计去重学员数；新增 `REVENUE_AMOUNT`，按合同创建口径统计扣除退款后的净营收。`/api/v1/admin/operations/metric-catalog` 提供不含业务数据的指标能力目录，带有内容版本、ETag 和私有缓存语义，供前端动态生成筛选器和报表配置。
-- Operations Agent 端到端联调：经营问题经过 Supervisor 路由、固定指标工具、Tool Registry 角色/参数校验、Java Gateway 和审计后，才由模型基于真实聚合结果生成摘要；集成测试同时验证管理员成功查询和学员越权请求在到达 Gateway 前被阻断。
-- Supervisor Runtime：顶层 Supervisor Router 挂载 Fitness、Booking、Operations、Customer Service
+- 经营管理审计：管理员可通过 `/api/v1/admin/operations/query-audits` 按机构、固定指标、时间桶、比较周期、状态和创建时间分页查询经营查询审计；响应同时附带固定指标口径元数据，组织管理员只能查看签名机构范围，接口不返回 SQL、Prompt 或业务明细；指标、时间桶和比较周期的组合会按固定目录校验，不支持的组合返回 `422`。当前固定指标支持上一等长周期环比和上一自然年同期同比，日期边界与除零处理由程序确定；新增 `COMPLETED_CLASS_COUNT`，按已完成/核销成功预约统计完课量；新增 `NEW_CUSTOMER_COUNT`，按有效合同的新客标记统计去重学员数；新增 `REVENUE_AMOUNT`，按合同创建口径统计扣除退款后的净营收。`/api/v1/admin/operations/metric-catalog` 提供不含业务数据的指标能力目录，带有内容版本、ETag 和私有缓存语义，供前端动态生成筛选器和报表配置。
+- 经营 Agent 端到端联调：经营问题经过 Supervisor 路由、固定指标工具、Tool Registry 角色/参数校验、Java Gateway 和审计后，才由模型基于真实聚合结果生成摘要；集成测试同时验证管理员成功查询和学员越权请求在到达 Gateway 前被阻断。
+- Supervisor Runtime：顶层 Supervisor Router 挂载健身、预约、经营、客服
   四个真正编译的 LangGraph 领域子图；子图使用独立 namespace、领域提示和工具白名单，统一执行
   Tool Calling、工具预算、真实结果回填、跨领域 fail-closed 和写操作确认恢复。
 - 会话持久化：PostgreSQL 保存 LangGraph Checkpoint，Redis 负责会话互斥锁和短期状态。
@@ -167,7 +167,7 @@ openssl rand -hex 32
 `ORGANIZATION_ADMIN`、`COACH`、`STUDENT` 白名单内，禁止签发 `SYSTEM_ADMIN`，不会作为
 生产接口部署，也不会打印签名密钥。
 
-Operations 使用机构管理员上下文：
+经营查询使用机构管理员上下文：
 
 ```bash
 export DEV_AGENT_ORG_ID='<本地 MySQL 中真实存在的机构 ID>'
@@ -175,7 +175,7 @@ export AGENT_LIVE_AGENT_CONTEXT="$(make agent-dev-context)"
 make agent-operations-live-preflight
 ```
 
-Booking/Fitness 必须使用 MySQL 中真实存在的业务用户；例如 Booking 学员 dry-run：
+预约/健身联调必须使用 MySQL 中真实存在的业务用户；例如预约学员 dry-run：
 
 ```bash
 export DEV_AGENT_ORG_ID='<学员所属机构 ID>'
@@ -255,7 +255,7 @@ PostgreSQL 库和只允许评测服务访问的账号。
 - `AGENT_TRULENS_CAPTURE_MODE=metadata`：只产生路由、状态、工具 ID、耗时和 Token 等低基数元数据，适合生产。
 - `AGENT_TRULENS_CAPTURE_MODE=evaluation`：额外产生脱敏、限长的问题、答案和检索上下文，只适合受控评测环境。
 
-TruLens 不能替代既有的 RAG Recall/MRR、Operations 策略、角色权限、确认凭证和会话安全评测；
+TruLens 不能替代既有的 RAG Recall/MRR、经营策略、角色权限、确认凭证和会话安全评测；
 它补充回答相关性、上下文相关性和 groundedness 等语义指标。评测样例位于
 `evals/trulens_smoke.json`，阈值位于 `evals/trulens_thresholds.json`。
 
@@ -267,7 +267,7 @@ TruLens 不能替代既有的 RAG Recall/MRR、Operations 策略、角色权限�
 每次业务请求还必须由认证服务提供签名的 `GatewayRequestContext`；Client 对 408、429、5xx
 和连接超时做有限指数退避，对 401、403、404 和参数错误不重试。完整 HTTP 契约见
 `docs/contracts/fitness-core-gateway-v1.md`。
-Operations 指标还通过 HTTP 契约回归测试固定路径、组织/指标/日期/时间桶参数、双层认证 Header
+经营指标还通过 HTTP 契约回归测试固定路径、组织/指标/日期/时间桶参数、双层认证 Header
 和 `GatewayOperationsMetric` 响应字段；缺少 `generatedAt` 等版本化字段时会 fail-closed，
 不会把不完整结果交给模型。
 
@@ -297,7 +297,7 @@ HMAC 兼容模式和 Agent RSA 私钥签发的 RS256 模式；生产部署应优
 内部联调过渡通道，接口拒绝额外的用户/组织/角色字段；浏览器和模型不应接触该 Token。当前先提供
 非流式稳定协议；SSE 和更完整的断线/重启故障演练将在 v2 凭证边界完成后接入。
 
-Operations 真实服务冒烟联调使用仓库根目录的 `make agent-operations-live-check`。执行前必须
+经营真实服务冒烟联调使用仓库根目录的 `make agent-operations-live-check`。执行前必须
 启动 Agent API 和 Java Gateway，并把认证服务签发的组织管理员 `AgentContext` 临时放入
 `AGENT_LIVE_AGENT_CONTEXT` 环境变量：
 
@@ -352,7 +352,7 @@ Gateway 训练完整角色工作流验收使用 `make gateway-training-workflow-
 和确认消费记录清理；如果清理失败，脚本返回失败并打印计划 ID，禁止继续下一轮验收。该脚本不验证
 LangGraph `interrupt()`，只验证 Gateway 到训练服务的角色和确认声明闭环。
 
-Fitness Agent 的 dry-run 使用 `make agent-fitness-live-check`。当请求明确包含“创建/制定/生成/安排
+健身 Agent 的 dry-run 使用 `make agent-fitness-live-check`。当请求明确包含“创建/制定/生成/安排
 训练计划”时，Agent 会先调用 RAG 生成并校验结构化预览，再由运行时将同一份 Payload 直接交给确认单，
 不再依赖模型第二次工具调用。确认单进入 `interrupt()` 后，dry-run 会查询 `PENDING` 并自动提交
 `REJECT` 清理；只有明确授权并传入 `--execute` 才会批准、恢复图并写入草案。
@@ -501,21 +501,21 @@ IN_APP，不接入短信（包括模拟短信）或 Push；预约等主动提醒
 过滤，并且只返回投递摘要、错误码和渠道消息 ID，不返回用户主体 ID、业务聚合 ID、标题或正文；同时提供低基数
 Prometheus 指标 `fitness_agent_notification_delivery_attempts_total`，用于观察各渠道成功、可重试失败和最终失败数量。
 
-主动提醒第一版：Booking 服务会把预约创建、改约和取消事件包装为标准事件信封，发布到共享领域事件 Exchange
-`fitness.domain.events`；Training Service 会把训练计划提交审核和发布事件写入自己的 Outbox 后发布到同一 Exchange；
+主动提醒第一版：预约服务会把预约创建、改约和取消事件包装为标准事件信封，发布到共享领域事件 Exchange
+`fitness.domain.events`；训练服务会把训练计划提交审核和发布事件写入自己的 Outbox 后发布到同一 Exchange；
 `make agent-proactive-worker` 启动独立 Proactive Worker。Worker 先把事件按 `event_id` 幂等写入
 `agent_proactive_event_inbox`，再根据事件中的学员/教练 ID 生成通知 Outbox，最后由已有的
 `agent-notification-worker` 投递到站内收件箱。事件 Inbox 和通知 Outbox 都有租约、有限重试、死信状态和去重键，
 因此 RabbitMQ 重投不会生成重复通知。启动本地链路前执行 `make infra-up-messaging`、`make agent-migrate`，
-并在 Booking 服务开启 `BOOKING_OUTBOX_PUBLISHER_ENABLED=true`；Training Service 的对应开关为
+并在预约服务开启 `BOOKING_OUTBOX_PUBLISHER_ENABLED=true`；训练服务的对应开关为
 `TRAINING_OUTBOX_PUBLISHER_ENABLED=true`。主动提醒 Worker 默认关闭，需显式设置
 `AGENT_PROACTIVE_WORKER_ENABLED=true`。训练计划事件路由键为 `training.plan.review_required` 和
 `training.plan.published`；短信、Push 和 Memory 模拟短信仍不在本阶段范围内。
 
-使用 `make agent-proactive-live-check` 可执行主动提醒链路验收。脚本默认只检查 Agent/Gateway/Booking 健康状态、
+使用 `make agent-proactive-live-check` 可执行主动提醒链路验收。脚本默认只检查 Agent/Gateway/预约健康状态、
 Agent PostgreSQL 和 RabbitMQ，不写入预约；确认使用本地测试数据后，追加 `ARGS=--execute` 才会执行一次真实预约。
 真实模式还必须提供 `BOOKING_DB_CONTAINER`、`BOOKING_DB_USERNAME` 和 `BOOKING_DB_PASSWORD`，脚本通过容器内
-MySQL 客户端只读核对本轮 `agent_booking_operation` 和 `agent_booking_outbox`，确认 Booking Outbox 已为
+MySQL 客户端只读核对本轮 `agent_booking_operation` 和 `agent_booking_outbox`，确认预约 Outbox 已为
 `PUBLISHED`，再按同一 `event_id` 重投一次 RabbitMQ 消息，验证 Agent Inbox 和站内通知数量不增长。脚本不会直接删除预约，
 验收完成后请通过已有的取消预约确认流程清理本地测试数据。
 
@@ -523,7 +523,7 @@ MySQL 客户端只读核对本轮 `agent_booking_operation` 和 `agent_booking_o
 表和 RabbitMQ 连接前置检查；追加 `ARGS=--execute` 后，脚本会启动使用唯一临时队列的 Proactive Worker，向真实
 RabbitMQ 重复投递同一个预约事件，验证 Inbox 只有一条记录、通知 Outbox 只有两个接收目标；随后停止 Worker，
 在 RabbitMQ 临时队列中发布 3 条事件并在 PostgreSQL Inbox 写入一个临时待处理事件，再启动 Worker 验证消息堆积和进程重启后的恢复处理。测试只写入自身生成的临时
-事件和通知数据，并在结束时精确删除，不调用 Booking/Training/客服接口，也不修改 MySQL 业务事实。RabbitMQ
+事件和通知数据，并在结束时精确删除，不调用预约/训练/客服接口，也不修改 MySQL 业务事实。RabbitMQ
 容器断电、网络隔离和 PostgreSQL 容器重启仍需要按发布演练手册人工执行，并观察监控与日志。
 
 PostgreSQL 备份恢复可使用 `make agent-postgres-backup-restore-check` 验收。该命令默认只检查容器、源库和
@@ -556,19 +556,19 @@ Agent 就绪探针在重启后的数据库连接池短暂重连窗口内会有�
 `make agent-eval` 会校验 Recall@K、MRR 和禁止 ID 命中数；CI 会把同一命令作为质量门禁。
 当前是稳定的黄金结果回归集，不使用线上用户数据；后续接入真实评测数据库时复用相同指标和阈值模型。
 
-Operations 趋势摘要的离线评测样例位于 `evals/operations_trend_smoke.json`，阈值位于
+经营趋势摘要的离线评测样例位于 `evals/operations_trend_smoke.json`，阈值位于
 `evals/operations_trend_thresholds.json`。执行 `make agent-operations-eval` 会调用真实的
 `build_operations_report`，验证 DAY/WEEK 时间桶补零、首桶为 0 时不伪造变化百分比、空结果不判断趋势、
 单个原始桶不宣称趋势，以及课程/教练预约量和完课量的固定指标过滤结果。该门禁不访问数据库、LLM 或在线数据，
 只验证聚合结果进入解释层后的确定性安全边界；CI 通过率低于阈值或出现失败用例时直接失败。
 
-Operations 环比摘要的离线评测样例位于 `evals/operations_comparison_smoke.json`，阈值位于
+经营环比摘要的离线评测样例位于 `evals/operations_comparison_smoke.json`，阈值位于
 `evals/operations_comparison_thresholds.json`。执行 `make agent-operations-comparison-eval` 会验证当前周期与上一等长
 周期的总量、差值、方向、百分比和跨月/跨年的日期边界，并覆盖预约总量、课程预约量和教练预约量，以及上一周期为 0、
 两周期都为 0 和当前周期为 0 的除零场景。
 当前同比已固定为上一自然年同一月日区间，2 月 29 日在非闰年映射到 2 月 28 日；本门禁覆盖该边界及对比周期为 0 的除零处理。
 
-Operations 查询前策略评测样例位于 `evals/operations_policy_smoke.json`，阈值位于
+经营查询前策略评测样例位于 `evals/operations_policy_smoke.json`，阈值位于
 `evals/operations_policy_thresholds.json`。执行 `make agent-operations-policy-eval` 会验证用户问题与模型工具参数的
 指标、日期、时间桶、环比/同比口径和组织范围一致；歧义问题、指标漂移、日期扩大和组织越权会在访问 Java Gateway
 之前被拦截。策略校验只提供 fail-closed 的前置保护，最终权限仍由 Java Gateway 根据签名 AgentContext 决定。
@@ -577,7 +577,7 @@ Operations 查询前策略评测样例位于 `evals/operations_policy_smoke.json
 支持的时间桶、是否支持上一等长周期环比和是否支持上一自然年同期同比；报表的 `metric_definition` 会返回这些非敏感元数据，帮助模型和管理员正确
 解释结果。新增经营指标时必须先补齐目录定义、Gateway 固定 SQL、权限/审计和评测，不能只增加一个自然语言关键词。
 
-Operations 查询还受服务端资源策略保护：单次时间范围最多 92 天、结果最多 100 行；当前周期加环比/同比最多触发两次
+经营查询还受服务端资源策略保护：单次时间范围最多 92 天、结果最多 100 行；当前周期加环比/同比最多触发两次
 Gateway 查询，每次调用受 `AGENT_OPERATIONS_QUERY_TIMEOUT_SECONDS` 超时约束。生产 API 按机构使用 Redis 固定窗口限制请求量，
 由 `AGENT_OPERATIONS_RATE_LIMIT_REQUESTS` 和 `AGENT_OPERATIONS_RATE_LIMIT_WINDOW_SECONDS` 配置；Redis 限流不可用时查询 fail-closed，
 避免把缓存故障转化为 MySQL 查询洪峰。Prometheus 会通过低基数 `operations_query_events_total{event=...}` 记录成功、限流、

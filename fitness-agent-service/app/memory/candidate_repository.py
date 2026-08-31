@@ -39,7 +39,7 @@ class MemoryCandidateRepository:
         terminal_retention_days: int = 30,
     ) -> None:
         if terminal_retention_days < 1 or terminal_retention_days > 3650:
-            raise ValueError("candidate terminal retention must be between 1 and 3650 days")
+            raise ValueError("候选终态保留期限必须在 1 到 3650 天之间")
         self._database = database
         self._cipher = cipher
         self._terminal_retention_days = terminal_retention_days
@@ -58,9 +58,9 @@ class MemoryCandidateRepository:
 
         validate_memory_owner(identity, organization_id)
         if not source_thread_id.strip() or not source_request_id.strip():
-            raise MemoryCandidateStateError("candidate source identifiers are required")
+            raise MemoryCandidateStateError("必须提供候选来源标识")
         if expires_at <= datetime.now(UTC):
-            raise MemoryCandidateStateError("candidate expiry must be in the future")
+            raise MemoryCandidateStateError("候选过期时间必须在未来")
         payload = canonical_json_bytes(candidate.model_dump(mode="json", exclude_none=True))
         payload_hash = _sha256(payload)
         ciphertext = self._cipher.encrypt(payload, associated_data=payload_hash)
@@ -152,7 +152,7 @@ class MemoryCandidateRepository:
                     payload={"candidate_id": str(row["id"])},
                 )
         if row is None:
-            raise MemoryCandidateStateError("candidate idempotency write did not return a row")
+            raise MemoryCandidateStateError("候选幂等写入没有返回记录")
         return self._record_from_row(row)
 
     async def list_events(
@@ -165,7 +165,7 @@ class MemoryCandidateRepository:
         """查询本人候选的不可变生命周期事件，不返回候选正文。"""
 
         if limit < 1 or limit > 100:
-            raise ValueError("candidate event limit must be between 1 and 100")
+            raise ValueError("候选事件数量限制必须在 1 到 100 之间")
         statement = text(
             """
             SELECT event.*
@@ -261,9 +261,9 @@ class MemoryCandidateRepository:
                 .first()
             )
         if row is None:
-            raise MemoryCandidateNotFound("memory candidate was not found")
+            raise MemoryCandidateNotFound("未找到 Memory 候选")
         if bool(row.get("payload_redacted", False)):
-            raise MemoryCandidateStateError("memory candidate payload has been redacted")
+            raise MemoryCandidateStateError("Memory 候选 Payload 已脱敏")
         return self._record_from_row(row)
 
     async def ensure_exists_for_subject(
@@ -294,7 +294,7 @@ class MemoryCandidateRepository:
                 .first()
             )
         if row is None:
-            raise MemoryCandidateNotFound("memory candidate was not found")
+            raise MemoryCandidateNotFound("未找到 Memory 候选")
 
     async def decide(
         self,
@@ -342,11 +342,11 @@ class MemoryCandidateRepository:
                 .first()
             )
             if row is None:
-                raise MemoryCandidateNotFound("memory candidate was not found")
+                raise MemoryCandidateNotFound("未找到 Memory 候选")
             if row["status"] == decision and row["decision_request_id"] == decision_request_id:
                 return self._record_from_row(row)
             if row["status"] != "PENDING":
-                raise MemoryCandidateStateError("memory candidate decision is already final")
+                raise MemoryCandidateStateError("Memory 候选决定已经是终态")
             updated = (
                 (
                     await connection.execute(
@@ -476,14 +476,14 @@ class MemoryCandidateRepository:
         try:
             if str(row["payload_key_version"]) != self._cipher.key_version:
                 raise ConfirmationPayloadCipherError(
-                    "candidate encryption key version is unavailable"
+                    "候选加密密钥版本不可用"
                 )
             plaintext = self._cipher.decrypt(
                 bytes(row["payload_ciphertext"]), associated_data=str(row["payload_hash"])
             )
             candidate = MemoryCandidate.model_validate(json.loads(plaintext))
         except (ConfirmationPayloadCipherError, json.JSONDecodeError, ValidationError) as exc:
-            raise MemoryCandidateStateError("memory candidate payload cannot be restored") from exc
+            raise MemoryCandidateStateError("无法恢复 Memory 候选 Payload") from exc
         return MemoryCandidateRecord(
             id=str(row["id"]),
             subject_user_id=str(row["subject_user_id"]),

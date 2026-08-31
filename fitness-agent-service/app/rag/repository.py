@@ -23,10 +23,9 @@ from .models import (
 class KnowledgeRepository:
     """持久化并检索 Agent 知识，不向 Agent 暴露原始数据库。
 
-    PostgreSQL remains the source of truth for indexed knowledge metadata. The
-    vector column is only a retrieval accelerator; every search applies tenant,
-    role, ownership, publication, and effective-time constraints in SQL before
-    a candidate is sent to the Reranker or the LLM.
+    PostgreSQL 仍是已索引知识元数据的事实来源。
+    向量列仅用于加速检索；每次搜索都会在将候选发送给 Reranker 或 LLM 前，在 SQL 中应用
+    租户、角色、所有权、发布状态和生效时间约束。
     """
 
     def __init__(self, database: Database) -> None:
@@ -114,14 +113,12 @@ class KnowledgeRepository:
     ) -> None:
         """在一个事务中插入已生成 Embedding 的内容块。
 
-        The caller is responsible for publishing the document version before
-        exposing it to retrieval. ``executemany`` keeps one document batch
-        atomic, so a partial embedding write cannot create a half-indexed
-        document.
+        调用方负责在将文档暴露给检索前发布文档版本。``executemany`` 使一个文档批次保持
+        原子性，因此部分 Embedding 写入不会产生半索引文档。
         """
 
         if len(chunks) != len(embeddings):
-            raise ValueError("chunks and embeddings must have the same length")
+            raise ValueError("chunks 和 embeddings 的长度必须相同")
         if not chunks:
             return
 
@@ -153,15 +150,14 @@ class KnowledgeRepository:
     ) -> None:
         """写入或更新一个文档版本，并原子替换其内容块。
 
-        Re-indexing is intentionally a single database transaction. Until the
-        transaction commits, the published document still exposes its previous
-        chunks; after commit, no half-old/half-new version can be retrieved.
+        重新索引有意放在单个数据库事务中。事务提交前，已发布文档仍暴露之前的分块；提交后，
+        不会检索到新旧混合的版本。
         """
 
         if len(chunks) != len(embeddings):
-            raise ValueError("chunks and embeddings must have the same length")
+            raise ValueError("chunks 和 embeddings 的长度必须相同")
         if not chunks:
-            raise ValueError("a knowledge document must contain at least one chunk")
+            raise ValueError("知识文档至少必须包含一个 chunk")
 
         document_statement = text(
             """
@@ -394,13 +390,12 @@ class KnowledgeRepository:
 def _vector_literal(values: Sequence[float]) -> str:
     """为显式 PostgreSQL 类型转换序列化向量。
 
-    The explicit cast keeps the repository independent of SQLAlchemy ORM model
-    state and makes the query type visible. Values are validated as finite
-    numbers so malformed model output cannot reach the database driver.
+    显式类型转换使仓储不依赖 SQLAlchemy ORM 模型状态，并让查询类型清晰可见。值会验证为
+    有限数值，避免格式错误的模型输出进入数据库驱动。
     """
 
     if not values:
-        raise ValueError("embedding must not be empty")
+        raise ValueError("embedding 不能为空")
     return "[" + ",".join(str(float(value)) for value in values) + "]"
 
 

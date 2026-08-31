@@ -58,7 +58,7 @@ class MemoryCandidateService:
         metrics: HttpMetrics | None = None,
     ) -> None:
         if ttl_hours < 1 or ttl_hours > 168:
-            raise ValueError("candidate ttl must be between 1 and 168 hours")
+            raise ValueError("候选 TTL 必须在 1 到 168 小时之间")
         self.extractor = extractor
         self.repository = repository
         self.memory_service = memory_service
@@ -103,7 +103,7 @@ class MemoryCandidateService:
         """查询本人、指定机构、仍在确认期限内的候选。"""
 
         if limit < 1 or limit > 100:
-            raise ValueError("candidate list limit must be between 1 and 100")
+            raise ValueError("候选列表限制必须在 1 到 100 之间")
         validate_memory_owner(identity, organization_id)
         return await self.repository.list_pending(
             identity=identity, organization_id=organization_id, limit=limit
@@ -118,7 +118,7 @@ class MemoryCandidateService:
         """
 
         if limit < 1 or limit > 5000:
-            raise ValueError("candidate expiry batch size must be between 1 and 5000")
+            raise ValueError("候选过期批次大小必须在 1 到 5000 之间")
         return await self.repository.expire_due(limit=limit)
 
     async def list_events(
@@ -151,10 +151,10 @@ class MemoryCandidateService:
         """
 
         if not decision_request_id.strip():
-            raise ValueError("decision_request_id is required")
+            raise ValueError("必须提供 decision_request_id")
         candidate = await self.repository.get_for_subject(candidate_id, identity=identity)
         if candidate.expires_at <= datetime.now(UTC) and candidate.status == "PENDING":
-            raise MemoryCandidateStateError("memory candidate has expired")
+            raise MemoryCandidateStateError("Memory 候选已过期")
         if decision == "REJECT":
             rejected = await self.repository.decide(
                 candidate_id,
@@ -170,7 +170,7 @@ class MemoryCandidateService:
             memory = await self._save_candidate_memory(candidate, identity)
             return MemoryCandidateDecisionResult(candidate, memory)
         if candidate.status != "PENDING":
-            raise MemoryCandidateStateError("memory candidate decision is already final")
+            raise MemoryCandidateStateError("Memory 候选决定已经是终态")
         memory = await self._save_candidate_memory(candidate, identity)
         approved = await self.repository.decide(
             candidate_id,

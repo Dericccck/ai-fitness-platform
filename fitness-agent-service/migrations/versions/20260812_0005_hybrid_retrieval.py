@@ -1,4 +1,4 @@
-"""Add PostgreSQL full-text and trigram indexes for permission-filtered hybrid recall."""
+"""增加用于权限过滤混合召回的 PostgreSQL 全文和三元组索引。"""
 
 from collections.abc import Sequence
 
@@ -11,7 +11,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Build lexical indexes without replacing the existing vector index."""
+    """构建词法索引，不替换现有向量索引。"""
 
     op.execute("CREATE EXTENSION IF NOT EXISTS pg_trgm")
     op.execute(
@@ -29,7 +29,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Remove lexical indexes while retaining pgvector and knowledge content."""
+    """删除词法索引，同时保留 pgvector 和知识内容。"""
 
     op.execute("DROP INDEX IF EXISTS knowledge_chunks_content_trgm_idx")
     op.execute("DROP INDEX IF EXISTS knowledge_chunks_search_vector_gin_idx")

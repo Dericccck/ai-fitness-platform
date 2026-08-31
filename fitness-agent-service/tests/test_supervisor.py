@@ -483,5 +483,5 @@ def test_customer_service_prompt_declares_confirmation_and_no_fake_ticket() -> N
 def test_booking_prompt_requires_write_tool_and_confirmation_flow() -> None:
     prompt = _system_prompt("BOOKING", "zh-CN")
 
-    assert "必须调用对应的 Booking 工具" in prompt
+    assert "必须调用对应的预约工具" in prompt
     assert "自动生成确认单并暂停" in prompt

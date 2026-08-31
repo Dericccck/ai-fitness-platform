@@ -89,7 +89,7 @@ class ModelGateway:
         """
 
         if not self.settings.llm_configured:
-            raise ModelConfigurationError("LLM provider is not configured")
+            raise ModelConfigurationError("LLM 服务未配置")
 
         response = await self._create_completion(
             {
@@ -136,7 +136,7 @@ class ModelGateway:
         """结构化生成并保留 Token 用量，供摘要等后台能力做成本监控。"""
 
         if not self.settings.llm_configured:
-            raise ModelConfigurationError("LLM provider is not configured")
+            raise ModelConfigurationError("LLM 服务未配置")
         request: dict[str, Any] = {
             "model": self.settings.llm_model,
             "messages": messages,
@@ -147,10 +147,10 @@ class ModelGateway:
         }
         response = await self._create_completion(request, kind="json")
         if not response.choices:
-            raise ModelResponseError("LLM returned no choices")
+            raise ModelResponseError("LLM 未返回任何候选结果")
         content = response.choices[0].message.content or ""
         if not content.strip():
-            raise ModelResponseError("LLM returned an empty JSON response")
+            raise ModelResponseError("LLM 返回了空 JSON 响应")
         usage = getattr(response, "usage", None)
         return JsonModelTurn(
             content=content,
@@ -175,7 +175,7 @@ class ModelGateway:
         """
 
         if not self.settings.llm_configured:
-            raise ModelConfigurationError("LLM provider is not configured")
+            raise ModelConfigurationError("LLM 服务未配置")
         request: dict[str, Any] = {
             "model": self.settings.llm_model,
             "messages": messages,
@@ -201,7 +201,7 @@ class ModelGateway:
             )
         response = await self._create_completion(request, kind="tool_calling")
         if not response.choices:
-            raise ModelResponseError("LLM returned no choices")
+            raise ModelResponseError("LLM 未返回任何候选结果")
 
         message = response.choices[0].message
         parsed_calls: list[ModelToolCall] = []
@@ -209,9 +209,9 @@ class ModelGateway:
             try:
                 arguments = json.loads(raw_call.function.arguments)
             except (TypeError, json.JSONDecodeError) as exc:
-                raise ModelResponseError("LLM returned invalid tool arguments") from exc
+                raise ModelResponseError("LLM 返回了无效的工具参数") from exc
             if not isinstance(arguments, dict):
-                raise ModelResponseError("LLM tool arguments must be a JSON object")
+                raise ModelResponseError("LLM 工具参数必须是 JSON 对象")
             parsed_calls.append(
                 ModelToolCall(
                     call_id=raw_call.id,
@@ -236,7 +236,7 @@ class ModelGateway:
         """
 
         if not self.settings.embedding_configured:
-            raise ModelConfigurationError("Embedding provider is not configured")
+            raise ModelConfigurationError("Embedding 服务未配置")
 
         if self.settings.embedding_backend == "local":
             return await asyncio.to_thread(self._embed_local, texts)
@@ -248,7 +248,7 @@ class ModelGateway:
         return [item.embedding for item in response.data]
 
     async def _create_completion(self, request: dict[str, Any], *, kind: str) -> Any:
-        """Call the provider once and emit bounded generation telemetry."""
+        """调用供应商一次并发出有界的生成遥测数据。"""
 
         messages = request.get("messages", [])
         with self.telemetry.span(
@@ -266,7 +266,7 @@ class ModelGateway:
                     generation_span,
                     {"fitness.agent.generation_status": "failed"},
                 )
-                raise ModelResponseError("LLM provider request failed") from exc
+                raise ModelResponseError("LLM 服务请求失败") from exc
             usage = getattr(response, "usage", None)
             self.telemetry.set_attributes(
                 generation_span,

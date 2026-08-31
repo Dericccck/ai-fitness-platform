@@ -145,7 +145,7 @@ class SessionSummaryRepository:
                 .first()
             )
         if row is None:
-            raise SessionSummaryScopeError("session thread is already bound to another subject")
+            raise SessionSummaryScopeError("会话线程已绑定到其他主体")
         return _record_from_row(row)
 
     async def delete_due(self, *, limit: int) -> int:
@@ -188,9 +188,9 @@ class SessionSummaryService:
         metrics: HttpMetrics | None = None,
     ) -> None:
         if trigger_messages < 2 or keep_recent_messages < 1:
-            raise ValueError("invalid session summary message thresholds")
+            raise ValueError("会话摘要消息阈值无效")
         if keep_recent_messages >= trigger_messages:
-            raise ValueError("keep_recent_messages must be smaller than trigger_messages")
+            raise ValueError("keep_recent_messages 必须小于 trigger_messages")
         self.models = models
         self.repository = repository
         self.cipher = cipher
@@ -264,7 +264,7 @@ class SessionSummaryService:
             payload = SessionSummaryPayload.model_validate(json.loads(raw))
         except (json.JSONDecodeError, TypeError, ValidationError) as exc:
             self._record_event("failed")
-            raise SessionSummaryError("LLM returned an invalid session summary") from exc
+            raise SessionSummaryError("LLM 返回了无效的会话摘要") from exc
         raw_summary = payload.summary.strip()
         summary = _sanitize_summary(raw_summary, self.max_summary_chars)
         if summary != raw_summary:

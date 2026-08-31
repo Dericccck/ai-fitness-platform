@@ -72,37 +72,37 @@ class AgentContextVerifier:
 
     def verify(self, token: str) -> AgentIdentity:
         if not token or len(token) > 8192:
-            raise AgentContextVerificationError("invalid agent context")
+            raise AgentContextVerificationError("AgentContext 无效")
         parts = token.split(".")
         if len(parts) != 2:
-            raise AgentContextVerificationError("invalid agent context format")
+            raise AgentContextVerificationError("AgentContext 格式无效")
         try:
             payload = _decode_base64url(parts[0])
             signature = _decode_base64url(parts[1])
         except ValueError as exc:
-            raise AgentContextVerificationError("invalid agent context encoding") from exc
+            raise AgentContextVerificationError("AgentContext 编码无效") from exc
 
         try:
             claims = json.loads(payload)
             if not isinstance(claims, dict):
-                raise TypeError("claims must be an object")
+                raise TypeError("claims 必须是对象")
             algorithm = _optional_text(claims, "alg", "HS256")
             key_id = _optional_text(claims, "kid", "legacy")
             if algorithm not in {"HS256", "RS256"} or algorithm != self.signing_algorithm:
-                raise ValueError("unsupported signing contract")
+                    raise ValueError("不支持的签名契约")
             if algorithm == "HS256":
                 if not self.signing_key_id:
-                    raise ValueError("missing active key id")
+                    raise ValueError("缺少当前密钥 ID")
                 secret = (
                     self.secret
                     if key_id == self.signing_key_id
                     else self.signing_key_ring.get(key_id, b"")
                 )
                 if not secret:
-                    raise ValueError("unknown key id")
+                    raise ValueError("未知密钥 ID")
                 expected = hmac.new(secret, payload, hashlib.sha256).digest()
                 if not hmac.compare_digest(expected, signature):
-                    raise AgentContextVerificationError("invalid agent context signature")
+                    raise AgentContextVerificationError("AgentContext 签名无效")
             else:
                 public_key_pem = self.verification_public_key_ring.get(key_id, "")
                 public_key: RSAPublicKey | None
@@ -116,7 +116,7 @@ class AgentContextVerifier:
                 else:
                     public_key = None
                 if public_key is None:
-                    raise ValueError("unknown verification key id")
+                    raise ValueError("未知验证密钥 ID")
                 try:
                     public_key.verify(
                         signature,
@@ -125,7 +125,7 @@ class AgentContextVerifier:
                         hashes.SHA256(),
                     )
                 except InvalidSignature as exc:
-                    raise AgentContextVerificationError("invalid agent context signature") from exc
+                    raise AgentContextVerificationError("AgentContext 签名无效") from exc
             subject = _required_text(claims, "sub")
             organizations = _required_string_set(claims, "orgs")
             roles = _required_string_set(claims, "roles")
@@ -135,7 +135,7 @@ class AgentContextVerifier:
             expires_at = _required_int(claims, "exp")
             _required_text(claims, "nonce")
         except (TypeError, ValueError, KeyError, json.JSONDecodeError) as exc:
-            raise AgentContextVerificationError("invalid agent context claims") from exc
+            raise AgentContextVerificationError("AgentContext 声明无效") from exc
 
         now = int(time.time())
         if (
@@ -144,7 +144,7 @@ class AgentContextVerifier:
             or issued_at > now + 30
             or expires_at <= now
         ):
-            raise AgentContextVerificationError("expired or invalid agent context")
+            raise AgentContextVerificationError("AgentContext 已过期或无效")
         return AgentIdentity(
             subject,
             organizations,
@@ -169,7 +169,7 @@ def conversation_thread_id(conversation_id: str, identity: AgentIdentity) -> str
 
 def _decode_base64url(value: str) -> bytes:
     if not value:
-        raise ValueError("empty base64 value")
+        raise ValueError("Base64 值不能为空")
     padding = "=" * (-len(value) % 4)
     return base64.urlsafe_b64decode(value + padding)
 

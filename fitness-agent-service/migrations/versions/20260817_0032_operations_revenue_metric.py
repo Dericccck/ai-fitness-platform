@@ -44,7 +44,7 @@ def downgrade() -> None:
         )
     ).scalar_one()
     if revenue_count:
-        raise RuntimeError("cannot downgrade revenue metric migration while营收金额审计记录仍存在")
+        raise RuntimeError("无法回退营收金额指标迁移，因为仍存在营收金额审计记录")
     op.drop_constraint(
         "ck_agent_operations_audit_metric",
         "agent_operations_query_audits",

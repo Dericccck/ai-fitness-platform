@@ -1,4 +1,4 @@
-"""Store immutable document metadata in each re-index item."""
+"""在每个索引重建条目中保存不可变的文档元数据。"""
 
 from collections.abc import Sequence
 
@@ -11,11 +11,10 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Make a rebuild item independent from later document-version changes."""
+    """让重建条目不受后续文档版本变化影响。"""
 
-    # 0006 was briefly applied in local development while this snapshot shape was
-    # being finalized. IF NOT EXISTS keeps this forward-only migration safe for both
-    # that database and a clean installation built from the committed history.
+    # 0006 曾在本地开发中短暂执行，而当时快照结构仍在定稿。IF NOT EXISTS 让这次只前进
+    # 的迁移同时兼容该数据库和根据已提交历史全新安装的数据库。
     op.execute("ALTER TABLE knowledge_reindex_items ADD COLUMN IF NOT EXISTS source_uri TEXT")
     op.execute("ALTER TABLE knowledge_reindex_items ADD COLUMN IF NOT EXISTS title TEXT")
     op.execute("ALTER TABLE knowledge_reindex_items ADD COLUMN IF NOT EXISTS document_type TEXT")
@@ -71,7 +70,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Remove the snapshot fields while retaining the original rebuild task state."""
+    """删除快照字段，同时保留原有重建任务状态。"""
 
     op.drop_column("knowledge_reindex_items", "version")
     op.drop_column("knowledge_reindex_items", "effective_to")

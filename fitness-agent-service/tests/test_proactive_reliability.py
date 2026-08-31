@@ -105,7 +105,7 @@ def test_rabbitmq_reconnect_delay_rejects_invalid_configuration() -> None:
 
     with pytest.raises(ValueError, match="attempt"):
         reconnect_delay(0, initial_seconds=1, max_seconds=10)
-    with pytest.raises(ValueError, match="initial"):
+    with pytest.raises(ValueError, match="初始重连延迟"):
         reconnect_delay(1, initial_seconds=11, max_seconds=10)
 
 

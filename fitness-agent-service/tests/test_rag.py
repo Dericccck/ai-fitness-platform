@@ -153,7 +153,7 @@ async def test_rag_rejects_invalid_reranker_index() -> None:
 
     service = RagService(FakeRepository([chunk("a", "候选 A")]), FakeModels(), InvalidReranker())
 
-    with pytest.raises(RagSearchError, match="invalid"):
+    with pytest.raises(RagSearchError, match="无效"):
         await service.search("如何热身", scope())
 
 
@@ -162,7 +162,7 @@ async def test_rag_rejects_unexpected_embedding_dimension() -> None:
         FakeRepository([]), FakeModels(), FakeReranker(), embedding_dimensions=1536
     )
 
-    with pytest.raises(RagSearchError, match="dimension"):
+    with pytest.raises(RagSearchError, match="维度"):
         await service.search("如何热身", scope())
 
 

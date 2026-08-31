@@ -98,7 +98,7 @@ class NotificationTemplateRepository:
         )
         if row is None:
             raise NotificationTemplateNotFound(
-                f"published notification template not found: {template_key}/{channel}"
+                f"未找到已发布的通知模板：{template_key}/{channel}"
             )
         return _from_row(row)
 
@@ -173,7 +173,7 @@ class NotificationTemplateRepository:
             .first()
         )
         if row is None:
-            raise RuntimeError("notification template draft was not created")
+            raise RuntimeError("通知模板草稿未创建")
         await self._insert_event(
             connection,
             template_key=template_key,
@@ -212,7 +212,7 @@ class NotificationTemplateRepository:
         if replay is not None:
             return replay
         if version < 1 or not approved_by.strip():
-            raise NotificationTemplateValidationError("template version and approver are required")
+            raise NotificationTemplateValidationError("必须提供模板版本和审批人")
         row = (
             (
                 await connection.execute(
@@ -239,7 +239,7 @@ class NotificationTemplateRepository:
             .first()
         )
         if row is None:
-            raise NotificationTemplateValidationError("only DRAFT templates can be approved")
+            raise NotificationTemplateValidationError("只有 DRAFT 模板才能审批")
         await self._insert_event(
             connection,
             template_key=template_key,
@@ -278,7 +278,7 @@ class NotificationTemplateRepository:
         if replay is not None:
             return replay
         if version < 1 or not published_by.strip():
-            raise NotificationTemplateValidationError("template version must be positive")
+            raise NotificationTemplateValidationError("模板版本必须为正数")
         target = (
             (
                 await connection.execute(
@@ -302,7 +302,7 @@ class NotificationTemplateRepository:
             .first()
         )
         if target is None or target["status"] != "APPROVED":
-            raise NotificationTemplateValidationError("only APPROVED templates can be published")
+            raise NotificationTemplateValidationError("只有 APPROVED 模板才能发布")
         retired_rows = (
             (
                 await connection.execute(
@@ -356,7 +356,7 @@ class NotificationTemplateRepository:
             .first()
         )
         if row is None:
-            raise NotificationTemplateValidationError("only APPROVED templates can be published")
+            raise NotificationTemplateValidationError("只有 APPROVED 模板才能发布")
         await self._insert_event(
             connection,
             template_key=template_key,
@@ -383,7 +383,7 @@ class NotificationTemplateRepository:
 
         _validate_key_and_channel(template_key, channel)
         if version < 1 or limit < 1 or limit > 100:
-            raise ValueError("template event parameters are invalid")
+            raise ValueError("模板事件参数无效")
         rows = (
             (
                 await connection.execute(
@@ -443,7 +443,7 @@ class NotificationTemplateRepository:
             or (version is not None and int(row["version"]) != version)
         ):
             raise NotificationTemplateValidationError(
-                "operation_id was used for another template action"
+                "operation_id 已用于其他模板操作"
             )
         template_row = (
             (
@@ -466,7 +466,7 @@ class NotificationTemplateRepository:
         )
         if template_row is None:
             raise NotificationTemplateValidationError(
-                "template for idempotent operation is missing"
+                "幂等操作对应的模板不存在"
             )
         return _from_row(template_row)
 
@@ -521,12 +521,12 @@ def render_notification_template(
     provided = set(values)
     declared = set(template.variables)
     if not provided <= declared:
-        raise NotificationTemplateValidationError("template values contain undeclared variables")
+        raise NotificationTemplateValidationError("模板值包含未声明的变量")
     try:
         title = template.title_template.format_map(_StrictFormatValues(values))
         body = template.body_template.format_map(_StrictFormatValues(values))
     except (KeyError, ValueError, IndexError) as exc:
-        raise NotificationTemplateValidationError("notification template rendering failed") from exc
+        raise NotificationTemplateValidationError("通知模板渲染失败") from exc
     return title, body
 
 
@@ -548,11 +548,11 @@ def _validate_template(
 ) -> None:
     _validate_key_and_channel(template_key, channel)
     if not created_by.strip() or not title_template.strip() or not body_template.strip():
-        raise NotificationTemplateValidationError("template author and content are required")
+        raise NotificationTemplateValidationError("必须提供模板作者和内容")
     if len(title_template) > 200 or len(body_template) > 2000:
-        raise NotificationTemplateValidationError("notification template is too long")
+        raise NotificationTemplateValidationError("通知模板过长")
     if len(set(variables)) != len(variables) or any(not item.strip() for item in variables):
-        raise NotificationTemplateValidationError("template variables must be unique and non-empty")
+        raise NotificationTemplateValidationError("模板变量必须唯一且非空")
     fields = {
         field_name
         for source in (title_template, body_template)
@@ -562,21 +562,21 @@ def _validate_template(
     if any(
         not field or not field.replace("_", "a").isalnum() or field[0].isdigit() for field in fields
     ):
-        raise NotificationTemplateValidationError("template variables must be simple names")
+        raise NotificationTemplateValidationError("模板变量必须是简单名称")
     if fields - set(variables):
-        raise NotificationTemplateValidationError("template contains undeclared variables")
+        raise NotificationTemplateValidationError("模板包含未声明的变量")
 
 
 def _validate_key_and_channel(template_key: str, channel: str) -> None:
     if not template_key.strip() or len(template_key) > 128:
-        raise NotificationTemplateValidationError("template key is invalid")
+        raise NotificationTemplateValidationError("模板键无效")
     if channel not in _CHANNELS:
-        raise NotificationTemplateValidationError("notification channel is not supported")
+        raise NotificationTemplateValidationError("不支持的通知渠道")
 
 
 def _validate_operation_id(operation_id: str) -> None:
     if not operation_id.strip() or len(operation_id) > 128:
-        raise NotificationTemplateValidationError("operation_id is invalid")
+        raise NotificationTemplateValidationError("operation_id 无效")
 
 
 async def _lock_operation(connection: Any, operation_id: str) -> None:
@@ -632,5 +632,5 @@ def _as_utc(value: datetime | None) -> datetime | None:
 def _required_utc(value: datetime) -> datetime:
     normalized = _as_utc(value)
     if normalized is None:
-        raise RuntimeError("notification template required timestamp is NULL")
+        raise RuntimeError("通知模板必需的时间戳为 NULL")
     return normalized

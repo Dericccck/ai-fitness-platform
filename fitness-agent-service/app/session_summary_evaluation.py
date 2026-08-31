@@ -251,7 +251,7 @@ def _load_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"cannot load evaluation file {path}: {exc}") from exc
+        raise SystemExit(f"无法加载评估文件 {path}：{exc}") from exc
 
 
 if __name__ == "__main__":

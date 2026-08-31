@@ -27,5 +27,5 @@ def clean_markdown(raw_content: str) -> str:
         previous_blank = False
     cleaned = "\n".join(lines).strip()
     if not cleaned:
-        raise ValueError("document content must not be empty")
+        raise ValueError("文档内容不能为空")
     return cleaned

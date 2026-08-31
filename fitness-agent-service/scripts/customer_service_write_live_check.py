@@ -392,7 +392,7 @@ async def run_check(config: WriteCheckConfig) -> None:
                 )
         fact = _read_ticket_fact(config, request_id)
         _validate_ticket_fact(fact, marker)
-        print("Customer Service 真实写入验收通过")
+        print("客服真实写入验收通过")
         print(f"operation={operation} execution_status=SUCCEEDED")
         print(f"request_id={request_id} ticket_id={fact.ticket_id}")
         print("已验证：确认批准、AGENT/OPEN 工单、确认 JTI 消费、CREATED 审计、中文内容编码")
@@ -409,7 +409,7 @@ def main() -> int:
         config = build_config(args)
         asyncio.run(run_check(config))
     except (CustomerServiceWriteLiveCheckError, BusinessLiveCheckError, ValueError) as exc:
-        print(f"Customer Service 真实写入验收失败：{exc}", file=sys.stderr)
+        print(f"客服真实写入验收失败：{exc}", file=sys.stderr)
         return 1
     return 0
 

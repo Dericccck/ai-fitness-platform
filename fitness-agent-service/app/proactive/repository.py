@@ -75,7 +75,7 @@ class ProactiveEventRepository:
         """原子领取事件，支持多实例并行且可恢复失联 Worker 的租约。"""
 
         if not worker_id.strip() or limit < 1 or limit > 500:
-            raise ValueError("proactive worker id and safe batch limit are required")
+            raise ValueError("必须提供主动事件 Worker ID 和安全批次限制")
         rows = (
             (
                 await connection.execute(
@@ -144,7 +144,7 @@ class ProactiveEventRepository:
         """失败事件有限重试，超过上限进入 DEAD，等待人工补偿。"""
 
         if not error_code.strip() or delay_seconds < 1 or max_attempts < 1:
-            raise ValueError("proactive event retry parameters are invalid")
+            raise ValueError("主动事件重试参数无效")
         result = await connection.execute(
             text(
                 """
@@ -188,7 +188,7 @@ def _from_row(row: Any) -> ProactiveEventRecord:
 def _required_utc(value: Any) -> datetime:
     result = _as_utc(value)
     if result is None:
-        raise RuntimeError("proactive event required timestamp is NULL")
+        raise RuntimeError("主动事件必需的时间戳为 NULL")
     return result
 
 
@@ -196,7 +196,7 @@ def _as_utc(value: Any) -> datetime | None:
     if value is None:
         return None
     if not isinstance(value, datetime):
-        raise TypeError("proactive event timestamp has invalid type")
+        raise TypeError("主动事件时间戳类型无效")
     return value.replace(tzinfo=UTC) if value.tzinfo is None else value.astimezone(UTC)
 
 

@@ -155,7 +155,7 @@ async def test_domain_subgraph_rejects_noncompliant_cross_domain_tool_call() -> 
     )
     supervisor = Supervisor(cast(ModelGateway, model), build_registry())
 
-    with pytest.raises(SupervisorRuntimeError, match="outside its allowlist"):
+    with pytest.raises(SupervisorRuntimeError, match="白名单之外"):
         await supervisor.invoke(build_request("查询明天可约时间", "booking-cross-domain"))
 
 
@@ -189,7 +189,7 @@ async def test_same_thread_can_switch_domain_without_reusing_old_system_context(
         message["content"] for message in model.messages_seen[1] if message.get("role") == "system"
     ]
     assert len(second_system_messages) == 1
-    assert "Booking Agent" in second_system_messages[0]
-    assert "Fitness Agent" not in second_system_messages[0]
+    assert "预约 Agent" in second_system_messages[0]
+    assert "健身 Agent" not in second_system_messages[0]
     assert "fitness_booking_create_v1" in model.tools_seen[1]
     assert "fitness_training_plan_generate_draft_v1" not in model.tools_seen[1]

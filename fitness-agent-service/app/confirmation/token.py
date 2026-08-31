@@ -38,16 +38,16 @@ class ConfirmationTokenIssuer:
 
     def __post_init__(self) -> None:
         if self.signing_algorithm not in {"HS256", "RS256"}:
-            raise ConfirmationTokenError("confirmation signing algorithm must be HS256 or RS256")
+            raise ConfirmationTokenError("确认签名算法必须为 HS256 或 RS256")
         if not self.signing_key_id.strip():
-            raise ConfirmationTokenError("confirmation signing key id must not be empty")
+            raise ConfirmationTokenError("确认签名密钥 ID 不能为空")
         if self.signing_algorithm == "HS256" and len(self.secret.encode("utf-8")) < 32:
-            raise ConfirmationTokenError("confirmation signing secret must be at least 32 bytes")
+            raise ConfirmationTokenError("确认签名密钥至少需要 32 字节")
         if self.signing_algorithm == "RS256" and not self.signing_private_key_pem.strip():
-            raise ConfirmationTokenError("confirmation RSA private key must be configured")
+            raise ConfirmationTokenError("必须配置确认 RSA 私钥")
         if self.ttl_seconds < 30 or self.ttl_seconds > 600:
             raise ConfirmationTokenError(
-                "confirmation token ttl must be between 30 and 600 seconds"
+                "确认 Token TTL 必须在 30 到 600 秒之间"
             )
 
     def issue(
@@ -61,13 +61,13 @@ class ConfirmationTokenIssuer:
         """为已经批准且已绑定 JTI 的确认单签发短时 Token。"""
 
         if record.authorization_status != "APPROVED":
-            raise ConfirmationTokenError("only approved confirmation can issue a token")
+            raise ConfirmationTokenError("只有已批准的确认单才能签发 Token")
         if not jti.strip() or not resource.strip():
-            raise ConfirmationTokenError("confirmation token scope is incomplete")
+            raise ConfirmationTokenError("确认 Token 的范围不完整")
         issued_at = int(time.time()) if now is None else now
         expires_at = min(issued_at + self.ttl_seconds, int(record.expires_at.timestamp()))
         if expires_at <= issued_at:
-            raise ConfirmationTokenError("confirmation token would be immediately expired")
+            raise ConfirmationTokenError("确认 Token 会立即过期")
         payload: dict[str, object] = {
             "alg": self.signing_algorithm,
             "kid": self.signing_key_id,

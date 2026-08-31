@@ -1,4 +1,4 @@
-# OCR Service Contract v1
+# OCR 服务契约 v1
 
 这是 Agent 服务与独立 OCR 服务之间的最小 HTTP 契约。OCR 服务可以由内部 GPU 服务或云厂商适配器实现，
 但不能改变 Agent 的父子节点、引用和权限流程。
@@ -8,7 +8,7 @@ PaddleOCR PP-StructureV3；接口层不依赖具体 OCR 厂商。服务端会从
 PDF 原始页尺寸计算归一化区域；若引擎没有可追溯置信度或块框，服务会失败关闭，不能
 用默认值伪造识别质量。
 
-## Request
+## 请求
 
 ```http
 POST /v1/parse
@@ -21,7 +21,7 @@ Authorization: Bearer <service-secret>
 - `file`：原始 PDF 文件。
 - `pages`：可选，逗号分隔的缺失页码；空值表示整份 PDF。
 
-## Response
+## 响应
 
 ```json
 {
@@ -50,7 +50,7 @@ Authorization: Bearer <service-secret>
 `row_start`、`row_end`；所有 block 的来源页码和区域会被复制到子节点和最终引用中。Agent 会把置信度和区域
 转换为整数基点保存，低于部署门槛的结果不会解除 OCR 阻断。
 
-## Failure rules
+## 失败规则
 
 - HTTP 4xx/5xx、网络超时、响应不是 JSON 或响应超过大小限制：上传任务失败，不进入审核队列。
 - block 结构不合法：上传任务失败，不允许按纯文本猜测入库。

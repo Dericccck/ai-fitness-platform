@@ -1,4 +1,4 @@
-"""Run TruLens semantic evaluation on sanitized, offline case data."""
+"""对已脱敏的离线案例数据运行 TruLens 语义评估。"""
 
 from __future__ import annotations
 
@@ -22,8 +22,8 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cases", type=Path, required=True)
     parser.add_argument("--thresholds", type=Path, required=True)
-    parser.add_argument("--judge", action="store_true", help="call the configured DeepSeek Judge")
-    parser.add_argument("--no-persist", action="store_true", help="do not write the TruLens DB")
+    parser.add_argument("--judge", action="store_true", help="调用已配置的 DeepSeek Judge")
+    parser.add_argument("--no-persist", action="store_true", help="不写入 TruLens 数据库")
     args = parser.parse_args(argv)
     try:
         evaluator = TruLensEvaluator(get_settings(), persist=not args.no_persist, judge=args.judge)

@@ -36,5 +36,5 @@ async def test_candidate_expiry_worker_runs_bounded_batch_and_records_metrics() 
 
 
 def test_candidate_expiry_worker_rejects_unsafe_batch_size() -> None:
-    with pytest.raises(ValueError, match="between 1 and 5000"):
+    with pytest.raises(ValueError, match="1 到 5000"):
         MemoryCandidateExpiryWorker(FakeCandidateService(expired=0), batch_size=0)  # type: ignore[arg-type]

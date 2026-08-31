@@ -1,6 +1,6 @@
-"""Operations Agent 查询审计的 PostgreSQL 持久化。
+"""经营 Agent 查询审计的 PostgreSQL 持久化。
 
-Operations 查询返回的是机构经营聚合数据，不能只依赖结构化日志：日志轮转、服务重启
+经营查询返回的是机构经营聚合数据，不能只依赖结构化日志：日志轮转、服务重启
 或多实例采集异常时，管理员仍需要知道谁在什么机构、什么时间范围查询了哪个固定指标。
 本仓储只保存审计元数据，不保存 SQL、Prompt、模型原始输出、预约明细或 Gateway 返回行。
 """
@@ -67,7 +67,7 @@ class OperationsAuditRecord:
 
 
 class OperationsAuditRepository:
-    """把 Operations 查询元数据追加写入 Agent PostgreSQL。
+    """把经营查询元数据追加写入 Agent PostgreSQL。
 
     审计是只追加事实，不允许根据模型文本自由拼接 SQL 或写入任意字段。生产环境
     由已验证的 ToolContext 提供主体和角色；没有身份的系统任务可以留下空主体，但
@@ -100,11 +100,11 @@ class OperationsAuditRepository:
         """
 
         if limit < 1 or limit > 100 or offset < 0 or offset > 100_000:
-            raise ValueError("operations audit pagination is out of range")
+            raise ValueError("经营审计分页参数超出范围")
         if created_from is not None and created_to is not None and created_from > created_to:
-            raise ValueError("created_from must be earlier than or equal to created_to")
+            raise ValueError("created_from 必须早于或等于 created_to")
         if organization_id is not None and not organization_id:
-            raise ValueError("organization_id must not be empty")
+            raise ValueError("organization_id 不能为空")
         if organization_ids is not None and not organization_ids:
             return [], False
 
@@ -257,18 +257,18 @@ def _validate_event(
     """在应用层先拒绝非法审计事件，数据库约束负责最后一道防线。"""
 
     if not organization_id:
-        raise OperationsAuditValidationError("organization_id is required")
+        raise OperationsAuditValidationError("必须提供 organization_id")
     if metric not in _METRICS:
-        raise OperationsAuditValidationError("unsupported operations metric")
+        raise OperationsAuditValidationError("不支持的经营指标")
     if bucket not in _BUCKETS:
-        raise OperationsAuditValidationError("unsupported operations bucket")
+        raise OperationsAuditValidationError("不支持的经营时间桶")
     if comparison_role not in _ROLES:
-        raise OperationsAuditValidationError("unsupported comparison role")
+        raise OperationsAuditValidationError("不支持的对比角色")
     if status not in _STATUSES:
-        raise OperationsAuditValidationError("unsupported operations audit status")
+        raise OperationsAuditValidationError("不支持的经营审计状态")
     if row_count is not None and row_count < 0:
-        raise OperationsAuditValidationError("row_count must not be negative")
+        raise OperationsAuditValidationError("row_count 不能为负数")
     if status == "SUCCEEDED" and error_code is not None:
-        raise OperationsAuditValidationError("successful audit must not contain an error")
+        raise OperationsAuditValidationError("成功的审计记录不能包含错误")
     if status == "FAILED" and error_code is None:
-        raise OperationsAuditValidationError("failed audit requires an error code")
+        raise OperationsAuditValidationError("失败的审计记录必须包含错误码")

@@ -56,7 +56,7 @@ def test_validate_live_response_only_accepts_stable_ok_status() -> None:
 async def test_business_preflight_checks_booking_service_when_url_is_provided(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Booking/Fitness 联调必须先发现 8083 不可用，不能等 DeepSeek 请求后才报 503。"""
+    """预约/健身联调必须先发现 8083 不可用，不能等 DeepSeek 请求后才报 503。"""
 
     monkeypatch.setenv("AGENT_LIVE_AGENT_CONTEXT", "signed-context")
     probe = AsyncMock(side_effect=lambda client, name, url: preflight.ProbeResult(name, True, url))

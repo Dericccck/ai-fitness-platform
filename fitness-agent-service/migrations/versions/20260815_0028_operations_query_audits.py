@@ -1,4 +1,4 @@
-"""增加 Operations Agent 经营查询的持久化审计表。"""
+"""增加经营 Agent 经营查询的持久化审计表。"""
 
 from collections.abc import Sequence
 

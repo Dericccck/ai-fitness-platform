@@ -87,9 +87,9 @@ class RagService:
         self.embedding_batch_size = embedding_batch_size
         self.embedding_dimensions = embedding_dimensions
         if vector_weight < 0 or keyword_weight < 0 or vector_weight + keyword_weight <= 0:
-            raise ValueError("retrieval weights must be non-negative and not both zero")
+            raise ValueError("检索权重必须为非负数且不能同时为零")
         if rrf_k < 1:
-            raise ValueError("rrf_k must be positive")
+            raise ValueError("rrf_k 必须为正数")
         self.vector_weight = vector_weight
         self.keyword_weight = keyword_weight
         self.rrf_k = rrf_k
@@ -116,7 +116,7 @@ class RagService:
         """生成 Embedding，并原子化替换文档版本及其分块。"""
 
         if not chunks:
-            raise RagSearchError("knowledge document must contain chunks")
+            raise RagSearchError("知识文档必须包含分块")
         embeddings = await self._embed_chunks(chunks)
         await self.repository.replace_document(document, chunks, embeddings, parents=parents)
 
@@ -133,7 +133,7 @@ class RagService:
             _validate_embedding_dimensions(batch_embeddings, self.embedding_dimensions)
             embeddings.extend(batch_embeddings)
         if len(embeddings) != len(chunks):
-            raise RagSearchError("embedding provider returned an incomplete batch")
+            raise RagSearchError("Embedding 服务返回了不完整的批次")
         return embeddings
 
     async def search(self, query: str, scope: RetrievalScope) -> RagSearchResult:
@@ -157,7 +157,7 @@ class RagService:
         query_embedding = await self.models.embed([query])
         _validate_embedding_dimensions(query_embedding, self.embedding_dimensions)
         if len(query_embedding) != 1:
-            raise RagSearchError("embedding provider returned an invalid query result")
+            raise RagSearchError("Embedding 服务返回了无效的查询结果")
         vector_candidates, keyword_candidates = await asyncio.gather(
             self.repository.search_candidates(
                 query_embedding[0], scope, limit=self.candidate_limit
@@ -199,7 +199,7 @@ def _select_ranked_chunks(
     seen: set[int] = set()
     for item in ranked:
         if item.index < 0 or item.index >= len(candidates) or item.index in seen:
-            raise RagSearchError("reranker returned an invalid or duplicate result index")
+            raise RagSearchError("Reranker 返回了无效或重复的结果索引")
         seen.add(item.index)
         selected.append(replace(candidates[item.index], similarity=item.score))
         if len(selected) >= top_k:
@@ -297,9 +297,9 @@ def _validate_embedding_dimensions(
     """在持久化前拒绝格式错误或维度混杂的服务商响应。"""
 
     if not embeddings or any(not embedding for embedding in embeddings):
-        raise RagSearchError("embedding provider returned an empty vector")
+        raise RagSearchError("Embedding 服务返回了空向量")
     actual_dimensions = {len(embedding) for embedding in embeddings}
     if len(actual_dimensions) != 1:
-        raise RagSearchError("embedding provider returned mixed dimensions")
+        raise RagSearchError("Embedding 服务返回了混合维度")
     if expected_dimensions is not None and actual_dimensions != {expected_dimensions}:
-        raise RagSearchError("embedding dimension does not match configured dimension")
+        raise RagSearchError("Embedding 维度与配置的维度不匹配")

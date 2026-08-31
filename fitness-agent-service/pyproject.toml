@@ -5,7 +5,7 @@ build-backend = "hatchling.build"
 [project]
 name = "fitness-agent-service"
 version = "0.1.0"
-description = "Enterprise AI agent service for the fitness platform"
+description = "健身平台企业级 AI Agent 服务"
 requires-python = ">=3.11"
 dependencies = [
     "alembic>=1.13,<2.0",

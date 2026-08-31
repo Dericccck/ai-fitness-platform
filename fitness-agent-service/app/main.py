@@ -189,7 +189,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         batch_size=settings.rag_reindex_worker_batch_size,
     )
     app.state.gateway = GatewayClient(settings)
-    # Operations 审计属于 Agent 的可追溯事实，不写入 Java/MySQL 业务库。工具注册时
+                # 经营审计属于 Agent 的可追溯事实，不写入 Java/MySQL 业务库。工具注册时
     # 注入同一个 PostgreSQL 仓储，保证管理员查询成功或失败都能形成持久化审计记录。
     app.state.operations_audit = OperationsAuditRepository(app.state.database)
     # Memory 属于 Agent 的长期上下文，不是 Java/MySQL 的健身业务事实。通过独立仓储和
@@ -316,7 +316,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 
 app = FastAPI(
-    title="AI Fitness Agent Service",
+        title="AI 健身 Agent 服务",
     version="0.1.0",
     docs_url="/docs" if runtime_settings.api_docs_enabled else None,
     redoc_url="/redoc" if runtime_settings.api_docs_enabled else None,

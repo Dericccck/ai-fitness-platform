@@ -37,7 +37,7 @@ def evaluate_case(
     """根据稳定 ID 计算 Recall@K 和 MRR，而不是依赖模型生成的解释。"""
 
     if k < 1:
-        raise ValueError("evaluation k must be positive")
+        raise ValueError("评估 k 必须为正数")
     top_ids = list(retrieved_ids[:k])
     unique_top_ids = set(top_ids)
     hits = len(unique_top_ids.intersection(case.relevant_ids))
@@ -85,7 +85,7 @@ class RetrievalEvalThresholds:
             failures.append(f"mrr {metrics['mrr']:.4f} < {self.min_mrr:.4f}")
         if metrics["forbidden_hits"] > self.max_forbidden_hits:
             failures.append(
-                f"forbidden hits {int(metrics['forbidden_hits'])} > {self.max_forbidden_hits}"
+                f"禁止命中数 forbidden_hits {int(metrics['forbidden_hits'])} > {self.max_forbidden_hits}"
             )
         return failures
 

@@ -567,7 +567,7 @@ class GatewayClient:
         try:
             return model.model_validate(response_json)
         except ValidationError as exc:
-            raise GatewayProtocolError("gateway response does not match tool contract") from exc
+            raise GatewayProtocolError("Gateway 响应不符合工具契约") from exc
 
     async def _post(
         self,
@@ -580,7 +580,7 @@ class GatewayClient:
         try:
             return model.model_validate(response_json)
         except ValidationError as exc:
-            raise GatewayProtocolError("gateway response does not match tool contract") from exc
+            raise GatewayProtocolError("Gateway 响应不符合工具契约") from exc
 
     async def _get_list(
         self,
@@ -591,12 +591,12 @@ class GatewayClient:
     ) -> list[T]:
         response_json = await self._request(path, context, params, method="GET")
         if not isinstance(response_json, list):
-            raise GatewayProtocolError("gateway list response does not match tool contract")
+            raise GatewayProtocolError("Gateway 列表响应不符合工具契约")
         try:
             return [model.model_validate(item) for item in response_json]
         except ValidationError as exc:
             raise GatewayProtocolError(
-                "gateway list response does not match tool contract"
+                "Gateway 列表响应不符合工具契约"
             ) from exc
 
     async def _request(
@@ -609,9 +609,9 @@ class GatewayClient:
         json_body: dict[str, Any] | None = None,
     ) -> Any:
         if not self.settings.gateway_configured:
-            raise GatewayConfigurationError("fitness core gateway is not configured")
+            raise GatewayConfigurationError("健身核心 Gateway 未配置")
         if not context.signed_context:
-            raise GatewayAuthenticationError("signed agent context is required")
+            raise GatewayAuthenticationError("必须提供已签名的 AgentContext")
 
         headers = {
             "X-Internal-Service-Token": self.settings.gateway_internal_service_token,
@@ -635,41 +635,41 @@ class GatewayClient:
                 if attempt < self.settings.gateway_max_retries:
                     await self._sleep_before_retry(attempt)
                     continue
-                raise GatewayUnavailableError("fitness core gateway request failed") from exc
+                raise GatewayUnavailableError("健身核心 Gateway 请求失败") from exc
 
             if response.status_code in {408, 429} or response.status_code >= 500:
                 if attempt < self.settings.gateway_max_retries:
                     await self._sleep_before_retry(attempt)
                     continue
                 raise GatewayUnavailableError(
-                    "fitness core gateway is temporarily unavailable",
+                    "健身核心 Gateway 暂时不可用",
                     status_code=response.status_code,
                 )
             if response.status_code == 401:
-                raise GatewayAuthenticationError("gateway authentication failed", status_code=401)
+                raise GatewayAuthenticationError("Gateway 身份验证失败", status_code=401)
             if response.status_code == 403:
                 raise GatewayForbiddenError(
-                    "gateway denied the requested fitness resource", status_code=403
+                    "Gateway 拒绝了请求的健身资源", status_code=403
                 )
             if response.status_code == 404:
-                raise GatewayNotFoundError("fitness resource was not found", status_code=404)
+                raise GatewayNotFoundError("未找到健身资源", status_code=404)
             if response.status_code == 409:
                 raise GatewayConflictError(
-                    "gateway detected a concurrent fitness plan change", status_code=409
+                    "Gateway 检测到并发的健身计划变更", status_code=409
                 )
             if response.status_code >= 400:
                 raise GatewayBadRequestError(
-                    "gateway rejected the tool request", status_code=response.status_code
+                    "Gateway 拒绝了工具请求", status_code=response.status_code
                 )
 
             try:
                 return response.json()
             except ValueError as exc:
                 raise GatewayProtocolError(
-                    "gateway returned invalid JSON", status_code=response.status_code
+                    "Gateway 返回了无效 JSON", status_code=response.status_code
                 ) from exc
 
-        raise GatewayUnavailableError("fitness core gateway request failed") from last_error
+        raise GatewayUnavailableError("健身核心 Gateway 请求失败") from last_error
 
     async def _sleep_before_retry(self, attempt: int) -> None:
         delay = self.settings.gateway_retry_backoff_seconds * (2**attempt)

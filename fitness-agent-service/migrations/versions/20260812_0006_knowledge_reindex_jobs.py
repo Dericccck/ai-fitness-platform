@@ -1,4 +1,4 @@
-"""Add durable batch jobs for rebuilding published knowledge indexes."""
+"""增加用于重建已发布知识索引的持久化批次任务。"""
 
 from collections.abc import Sequence
 
@@ -12,7 +12,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Create batch and item state for reproducible, resumable re-indexing."""
+    """创建批次和条目状态，以支持可复现、可恢复的索引重建。"""
 
     op.create_table(
         "knowledge_reindex_jobs",
@@ -96,7 +96,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Remove rebuild task state without touching searchable knowledge."""
+    """删除重建任务状态，但不修改可检索知识。"""
 
     op.drop_index("ix_knowledge_reindex_items_queue", table_name="knowledge_reindex_items")
     op.drop_table("knowledge_reindex_items")

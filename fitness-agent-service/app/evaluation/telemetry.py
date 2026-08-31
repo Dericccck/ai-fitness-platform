@@ -1,9 +1,7 @@
-"""Privacy-aware TruLens/OpenTelemetry integration.
+"""注重隐私的 TruLens/OpenTelemetry 集成。
 
-The application already owns the process-wide OpenTelemetry provider.  This module
-only creates child spans and emits TruLens semantic attributes; it never installs a
-second provider and never puts credentials, signed contexts, confirmation payloads,
-or raw tool arguments into a span.
+应用已经拥有进程级 OpenTelemetry provider。本模块只创建子 span 并发出 TruLens 语义属性；
+不会安装第二个 provider，也不会将凭证、签名上下文、确认 Payload 或原始工具参数放入 span。
 """
 
 from __future__ import annotations
@@ -29,9 +27,8 @@ _UUID = re.compile(
 _JWT = re.compile(r"\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b")
 _LONG_NUMBER = re.compile(r"(?<!\d)\d{6,}(?!\d)")
 
-# TruLens semantic conventions.  Keeping string fallbacks here means the core API
-# can still run when the optional evaluation extra is not installed in a lean API
-# image; the emitted attributes remain consumable after the extra is enabled.
+# TruLens 语义约定。保留字符串回退值，使精简 API 镜像未安装可选评估额外依赖时，
+# 核心 API 仍可运行；启用额外依赖后，发出的属性仍可被正常消费。
 RECORD_INPUT = "ai.observability.record_root.input"
 RECORD_OUTPUT = "ai.observability.record_root.output"
 RETRIEVAL_QUERY = "ai.observability.retrieval.query_text"
@@ -40,7 +37,7 @@ RETRIEVAL_COUNT = "ai.observability.retrieval.num_contexts"
 
 
 def hash_identifier(value: str | None) -> str | None:
-    """Return a stable non-reversible identifier for trace correlation."""
+    """返回用于追踪关联的稳定不可逆标识符。"""
 
     if not value:
         return None
@@ -48,7 +45,7 @@ def hash_identifier(value: str | None) -> str | None:
 
 
 def redact_text(value: str | None, *, max_chars: int = 2000) -> str:
-    """Redact common PII and credential-shaped values before evaluation capture."""
+    """在评估采集前对常见个人信息和凭证形态的值进行脱敏。"""
 
     if not value:
         return ""
@@ -62,7 +59,7 @@ def redact_text(value: str | None, *, max_chars: int = 2000) -> str:
 
 
 class TruLensTelemetry:
-    """Emit bounded, low-cardinality spans compatible with TruLens selectors."""
+    """发出有界、低基数且兼容 TruLens 选择器的 span。"""
 
     def __init__(self, settings: Settings) -> None:
         self.enabled = bool(
@@ -74,7 +71,7 @@ class TruLensTelemetry:
 
     @classmethod
     def disabled(cls) -> TruLensTelemetry:
-        """Create a no-op instance for unit tests and compatibility assemblers."""
+        """创建用于单元测试和兼容性装配器的空操作实例。"""
 
         instance = object.__new__(cls)
         instance.enabled = False
@@ -90,7 +87,7 @@ class TruLensTelemetry:
         *,
         attributes: Mapping[str, Any] | None = None,
     ) -> Iterator[Span]:
-        """Create a child span and attach only allow-listed scalar metadata."""
+        """创建子 span，并仅附加允许列表中的标量元数据。"""
 
         if not self.enabled:
             yield trace.get_current_span()
@@ -109,7 +106,7 @@ class TruLensTelemetry:
         user_message: str | None,
         route: str | None = None,
     ) -> Iterator[Span]:
-        """Create a TruLens record-root span for one Supervisor invocation."""
+        """为一次 Supervisor 调用创建 TruLens 记录根 span。"""
 
         attributes: dict[str, Any] = {
             "fitness.agent.request_id_hash": hash_identifier(request_id),
@@ -123,7 +120,7 @@ class TruLensTelemetry:
             yield current
 
     def set_text(self, span: Span, key: str, value: str | None) -> None:
-        """Set text only in explicit evaluation-capture mode."""
+        """仅在显式评估采集模式下设置文本。"""
 
         if self.enabled and self.capture_content and value:
             span.set_attribute(key, redact_text(value, max_chars=self.max_chars))

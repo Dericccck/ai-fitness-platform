@@ -2,7 +2,7 @@
 
 Supervisor 负责维护一次对话的状态、让模型选择已注册工具、执行工具并把真实结果
 放回模型上下文。它不直接访问数据库，也不把自然语言中的用户 ID 当作权限依据。
-当前版本先完成稳定的 Runtime 边界，专业 Fitness/Booking/Operations Agent 会在此
+当前版本先完成稳定的 Runtime 边界，专业健身/预约/经营 Agent 会在此
 基础上逐步接入；赛事、作品和活动运营请求明确返回不在本项目范围内。
 """
 
@@ -258,7 +258,7 @@ class Supervisor:
                 knowledge_context = rag_result.as_prompt_context()
             except RagSearchError as exc:
                 # 检索失败必须对调用方可见；模型不能收到未标记或伪造的回退上下文。
-                raise SupervisorRuntimeError("knowledge retrieval failed") from exc
+                raise SupervisorRuntimeError("知识检索失败") from exc
 
         memory_candidate_context = ""
         if (
@@ -346,7 +346,7 @@ class Supervisor:
                     "channel_values", {}
                 ):
                     raise SupervisorCheckpointIncompatible(
-                        "checkpoint uses an incompatible sensitive runtime state"
+                        "Checkpoint 包含不兼容的敏感运行时状态"
                     )
                 previous = await self._graph.aget_state(config)
                 previous_values = previous.values if previous else {}
@@ -354,7 +354,7 @@ class Supervisor:
                 # 旧版本把签名上下文和潜在确认凭证放进 State。不能继续反序列化或
                 # 自动迁移这类状态，避免敏感对象在恢复链路中继续传播；调用方应重建会话。
                 raise SupervisorCheckpointIncompatible(
-                    "checkpoint uses an incompatible sensitive runtime state"
+                    "Checkpoint 包含不兼容的敏感运行时状态"
                 )
             previous_messages = previous_values.get("messages", [])
             if previous_messages:
@@ -372,7 +372,7 @@ class Supervisor:
                             request_id=request.gateway_context.request_id,
                         )
                 # system、RAG 引用和 Memory 候选都是“本轮临时上下文”，不能沿用上一轮
-                # 的领域提示。尤其同一会话从 Fitness 切换到 Booking 时，如果保留旧
+                # 的领域提示。尤其同一会话从健身切换到预约时，如果保留旧
                 # system 消息，即使工具白名单已经切换，模型仍可能受旧领域规则影响。
                 # 因此先移除历史 system 消息，再由本轮重新构建领域提示、可选短期摘要
                 # 和候选上下文；user/assistant/tool 历史继续保留，保证多轮语义连续。
@@ -425,7 +425,7 @@ class Supervisor:
                 async with self.session_lock.hold(thread_id):
                     final_state = await run_with_persisted_history()
         except SessionLockUnavailable as exc:
-            raise SupervisorSessionBusy("conversation is already being processed") from exc
+            raise SupervisorSessionBusy("会话正在处理中") from exc
         except (
             GatewayClientError,
             ModelConfigurationError,
@@ -442,7 +442,7 @@ class Supervisor:
                 trace_id=request.gateway_context.trace_id,
                 error_type=type(exc).__name__,
             )
-            raise SupervisorRuntimeError("supervisor execution failed") from exc
+            raise SupervisorRuntimeError("Supervisor 执行失败") from exc
         except SupervisorRuntimeError as exc:
             # 一些运行时护栏（例如模型工具调用超预算、确认运行上下文不完整或
             # 业务查询准备失败）本身不会落入上面的底层异常集合。若不在这里记录，
@@ -460,7 +460,7 @@ class Supervisor:
         if interrupts:
             interrupt_value = interrupts[0].value
             if not isinstance(interrupt_value, dict):
-                raise SupervisorRuntimeError("supervisor returned an invalid confirmation prompt")
+                raise SupervisorRuntimeError("Supervisor 返回了无效的确认提示")
             return SupervisorResponse(
                 answer="",
                 route=route,
@@ -478,7 +478,7 @@ class Supervisor:
             )
         answer = final_state.get("final_answer", "").strip()
         if not answer:
-            raise SupervisorRuntimeError("supervisor produced an empty answer")
+            raise SupervisorRuntimeError("Supervisor 生成了空回答")
         response = SupervisorResponse(
             answer=answer,
             route=final_state["route"],
@@ -545,7 +545,7 @@ class Supervisor:
         """
 
         if self.confirmation_service is None:
-            raise SupervisorRuntimeError("confirmation service is not configured")
+            raise SupervisorRuntimeError("确认服务未配置")
         config = {"configurable": {"thread_id": thread_id}}
         try:
             if self.session_lock is None:
@@ -570,7 +570,7 @@ class Supervisor:
                         ),
                     )
         except SessionLockUnavailable as exc:
-            raise SupervisorSessionBusy("conversation is already being processed") from exc
+            raise SupervisorSessionBusy("会话正在处理中") from exc
         except (
             ConfirmationStateError,
             GatewayClientError,
@@ -584,7 +584,7 @@ class Supervisor:
                 trace_id=gateway_context.trace_id,
                 error_type=type(exc).__name__,
             )
-            raise SupervisorRuntimeError("confirmation execution failed") from exc
+            raise SupervisorRuntimeError("确认操作执行失败") from exc
         except SupervisorRuntimeError as exc:
             # 恢复路径同样可能触发运行时护栏；否则确认接口会返回 503，却缺少可关联
             # 的服务端错误记录。确认 ID 不写入日志，避免把业务凭证标识扩散到普通日志。
@@ -660,7 +660,7 @@ class Supervisor:
 
         answer = str(final_state.get("final_answer", "")).strip()
         if not answer:
-            raise SupervisorRuntimeError("confirmed execution produced an empty answer")
+            raise SupervisorRuntimeError("已确认的执行生成了空回答")
         return SupervisorResponse(
             answer=answer,
             route=final_state["route"],
@@ -730,7 +730,7 @@ class Supervisor:
 
         route = state.get("route")
         if route is None or route == "UNSUPPORTED_LEGACY":
-            raise SupervisorRuntimeError("supervisor route is not executable")
+            raise SupervisorRuntimeError("Supervisor 路由不可执行")
         spec = domain_agent_spec(route)
         return {"active_domain": spec.node_name}
 
@@ -742,7 +742,7 @@ class Supervisor:
             return "legacy_model"
         route = state.get("route")
         if route is None:
-            raise SupervisorRuntimeError("supervisor route is missing")
+            raise SupervisorRuntimeError("缺少 Supervisor 路由")
         return domain_agent_spec(route).node_name
 
     async def _model_node(
@@ -783,16 +783,16 @@ class Supervisor:
         for call in tool_calls:
             definition = self.tools.get(call.name)
             if definition.tool_id not in spec.allowed_tool_ids:
-                raise SupervisorRuntimeError("domain agent requested a tool outside its allowlist")
+                raise SupervisorRuntimeError("领域 Agent 请求了白名单之外的工具")
         if any(not self.tools.get(call.name).read_only for call in tool_calls):
             if len(tool_calls) != 1:
                 raise SupervisorRuntimeError(
-                    "a confirmation is required for each write tool call separately"
+                    "每次写工具调用都必须单独确认"
                 )
             if runtime.context is None or runtime.context.identity is None:
-                raise SupervisorRuntimeError("signed identity is required for write confirmation")
+                raise SupervisorRuntimeError("写操作确认需要已签名身份")
             if self.confirmation_service is None:
-                raise SupervisorRuntimeError("confirmation service is not configured")
+                raise SupervisorRuntimeError("确认服务未配置")
             call = tool_calls[0]
             # 模型返回的是 model_name，确认单必须保存内部稳定 tool_id，避免供应商
             # 别名进入凭证、审计和后续恢复流程。
@@ -854,14 +854,14 @@ class Supervisor:
 
         confirmation_id = state.get("pending_confirmation_id")
         if not confirmation_id or runtime.context is None or runtime.context.identity is None:
-            raise SupervisorRuntimeError("confirmation runtime context is incomplete")
+            raise SupervisorRuntimeError("确认运行时上下文不完整")
         if self.confirmation_service is None:
-            raise SupervisorRuntimeError("confirmation service is not configured")
+            raise SupervisorRuntimeError("确认服务未配置")
         record = await self.confirmation_service.get_for_subject(
             confirmation_id, runtime.context.identity
         )
         if record.tool_id not in domain_agent_spec(state["route"]).allowed_tool_ids:
-            raise ConfirmationStateError("confirmation tool is outside the active domain")
+            raise ConfirmationStateError("确认工具不属于当前领域")
         if record.authorization_status == "PENDING":
             # 首次进入节点只展示脱敏摘要并暂停；resume 的内容不会被当作批准事实。
             resume_value = interrupt(
@@ -880,12 +880,12 @@ class Supervisor:
                 not isinstance(resume_value, dict)
                 or resume_value.get("confirmation_id") != confirmation_id
             ):
-                raise SupervisorRuntimeError("confirmation resume scope does not match")
+                raise SupervisorRuntimeError("确认恢复范围不匹配")
             record = await self.confirmation_service.get_for_subject(
                 confirmation_id, runtime.context.identity
             )
         if record.authorization_status != "APPROVED":
-            raise ConfirmationStateError("confirmation is not approved for execution")
+            raise ConfirmationStateError("确认单尚未获批准，不能执行")
 
         prepared = await self.confirmation_service.prepare_execution(
             confirmation_id,
@@ -913,7 +913,7 @@ class Supervisor:
                 error_code=type(exc).__name__,
                 retryable=retryable,
             )
-            raise SupervisorRuntimeError("confirmed training operation failed") from exc
+            raise SupervisorRuntimeError("已确认的训练操作失败") from exc
         await self.confirmation_service.finish_execution(
             confirmation_id,
             success=True,
@@ -938,7 +938,7 @@ class Supervisor:
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
     ) -> dict[str, Any]:
         if runtime.context is None:
-            raise SupervisorRuntimeError("supervisor runtime context is missing")
+            raise SupervisorRuntimeError("缺少 Supervisor 运行时上下文")
         context = ToolContext(
             gateway_context=runtime.context.gateway_context,
             identity=runtime.context.identity,
@@ -950,17 +950,17 @@ class Supervisor:
         for call in calls:
             definition = self.tools.get(call.name)
             if definition.tool_id not in spec.allowed_tool_ids:
-                raise SupervisorRuntimeError("tool execution is outside the active domain")
+                raise SupervisorRuntimeError("工具执行不属于当前领域")
             raw_input = call.arguments
             if (
                 spec.deterministic_operations_input
                 and definition.tool_id == "fitness.operations.metric.query.v1"
             ):
                 if runtime.context.identity is None:
-                    raise SupervisorRuntimeError("signed identity is required for operations query")
+                    raise SupervisorRuntimeError("经营查询需要已签名身份")
                 if not runtime.context.user_message:
                     raise SupervisorRuntimeError(
-                        "original user message is required for operations query"
+                        "经营查询需要原始用户消息"
                     )
                 try:
                     # 经营查询的组织、指标和日期来自已验证身份及用户原问题。模型只
@@ -971,7 +971,7 @@ class Supervisor:
                     )
                 except OperationsQueryPreparationError as exc:
                     raise SupervisorRuntimeError(
-                        "operations query could not be prepared safely"
+                        "无法安全准备经营查询"
                     ) from exc
                 _logger.info(
                     "operations_tool_input_prepared",
@@ -1030,12 +1030,12 @@ class Supervisor:
         """统一创建写操作确认单，确保模型直写和生成后直写使用同一安全边界。"""
 
         if runtime.context is None or runtime.context.identity is None:
-            raise SupervisorRuntimeError("signed identity is required for write confirmation")
+            raise SupervisorRuntimeError("写操作确认需要已签名身份")
         if self.confirmation_service is None:
-            raise SupervisorRuntimeError("confirmation service is not configured")
+            raise SupervisorRuntimeError("确认服务未配置")
         definition = self.tools.get(tool_id)
         if definition.tool_id not in domain_agent_spec(route).allowed_tool_ids:
-            raise SupervisorRuntimeError("write confirmation is outside the active domain")
+            raise SupervisorRuntimeError("写操作确认不属于当前领域")
         bound_input = self.tools.bind_context_input(
             definition.tool_id,
             raw_input,
@@ -1107,7 +1107,7 @@ def classify_route(user_message: str) -> SupervisorRoute:
         )
     ):
         return "OPERATIONS"
-    # 只有创建/改约/取消和“可约时间”属于 Booking 操作域；“我的预约是什么”
+    # 只有创建/改约/取消和“可约时间”属于预约操作域；“我的预约是什么”
     # 是客服只读查询，不能因为包含“预约”两个字就暴露预约写工具。
     if any(
         keyword in text
@@ -1153,7 +1153,7 @@ def classify_route(user_message: str) -> SupervisorRoute:
 def _system_prompt(route: SupervisorRoute, locale: str) -> str:
     spec = domain_agent_spec(route)
     booking_instruction = (
-        "预约规则：用户明确要求创建预约、改约或取消预约时，必须调用对应的 Booking 工具，"
+        "预约规则：用户明确要求创建预约、改约或取消预约时，必须调用对应的预约工具，"
         "不能只用自然语言回复或声称已完成。创建、改约和取消工具会自动生成确认单并暂停，"
         "不要等待用户再次说‘确认’才调用工具；只有用户批准确认单后才会真正写入。"
         if route == "BOOKING"
@@ -1259,7 +1259,7 @@ def _looks_like_customer_service_write_request(user_message: str) -> bool:
 
 
 def _forced_write_tool_name(route: SupervisorRoute, user_message: str) -> str | None:
-    """为明确的 Booking 或客服工单写意图选择强制工具。
+    """为明确的预约或客服工单写意图选择强制工具。
 
     <p>模型仍负责从自然语言提取课程、合同、教练和时间，但不能因为先调用了一个
     只读工具就直接结束。这里只处理高置信度的“创建/改约/取消预约”和“提交客服工单”命令；
@@ -1324,10 +1324,10 @@ def _generated_draft_payload(result: Any) -> dict[str, Any]:
     """读取已通过生成服务校验的创建 Payload，拒绝不完整的内部工具结果。"""
 
     if not isinstance(result, dict) or result.get("status") != "DRAFT_PREVIEW":
-        raise SupervisorRuntimeError("training draft generation did not return a preview")
+        raise SupervisorRuntimeError("训练草案生成没有返回预览")
     payload = result.get("payload")
     if not isinstance(payload, dict) or not payload:
-        raise SupervisorRuntimeError("training draft preview payload is missing")
+        raise SupervisorRuntimeError("缺少训练草案预览 Payload")
     return {str(key): value for key, value in payload.items()}
 
 
@@ -1349,7 +1349,7 @@ def _model_tools(registry: ToolRegistry, route: SupervisorRoute) -> list[dict[st
                 # 别名，满足 DeepSeek/OpenAI-compatible 函数名约束。
                 "name": spec["model_name"],
                 "description": spec["description"],
-                # Operations 参数全部由服务端根据用户原问题和签名身份生成。模型只
+                # 经营查询参数全部由服务端根据用户原问题和签名身份生成。模型只
                 # 决定是否调用固定指标工具，不接触内部机构 ID、日期或指标参数。
                 "parameters": _model_tool_parameters(spec, route),
             },

@@ -1,4 +1,4 @@
-"""执行 Operations 真实联调前的安全前置检查。
+"""执行经营真实联调前的安全前置检查。
 
 前置检查不调用 DeepSeek，不调用业务指标接口，也不打印任何密钥。它只检查 Agent
 和 Java Gateway 的存活/就绪探针，以及当前 Shell 是否提供认证服务签发的
@@ -35,7 +35,7 @@ class ProbeResult:
 def build_parser() -> argparse.ArgumentParser:
     """构造前置检查命令参数。"""
 
-    parser = argparse.ArgumentParser(description="Operations 真实联调前置检查")
+    parser = argparse.ArgumentParser(description="经营真实联调前置检查")
     parser.add_argument(
         "--agent-url",
         default=os.getenv("AGENT_LIVE_API_URL", "http://127.0.0.1:8090"),
@@ -130,7 +130,7 @@ async def _verify_current_user(
     """验证签名主体能映射到真实业务用户，但不输出用户资料或任何 Token。
 
     AgentContext 通过验签只说明 Token 本身可信，不能证明 ``sub`` 在 MySQL 中存在。
-    Booking/Fitness 会先读取当前用户，所以必须在调用模型前完成这层业务身份门禁。
+    预约/健身会先读取当前用户，所以必须在调用模型前完成这层业务身份门禁。
     """
 
     settings = Settings()
@@ -212,7 +212,7 @@ def main() -> int:
     try:
         results = asyncio.run(run_preflight(build_parser().parse_args()))
     except OperationsPreflightError as exc:
-        print(f"Operations 联调前置检查失败：{exc}", file=sys.stderr)
+        print(f"经营联调前置检查失败：{exc}", file=sys.stderr)
         return 1
     for result in results:
         state = "通过" if result.passed else "失败"

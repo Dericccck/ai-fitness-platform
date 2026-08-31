@@ -64,14 +64,14 @@ class ProactiveEventMessage(BaseModel):
             value = json.loads(raw.decode("utf-8"))
             message = cls.model_validate(value)
         except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as exc:
-            raise ProactiveEventContractError("proactive event envelope is invalid") from exc
+            raise ProactiveEventContractError("主动事件信封无效") from exc
         if message.event_type not in SUPPORTED_PROACTIVE_EVENT_TYPES:
             raise ProactiveEventContractError(
-                f"unsupported proactive event type: {message.event_type}"
+                f"不支持的主动事件类型：{message.event_type}"
             )
         if message.source not in SUPPORTED_PROACTIVE_EVENT_SOURCES:
             raise ProactiveEventContractError(
-                f"unsupported proactive event source: {message.source}"
+                f"不支持的主动事件来源：{message.source}"
             )
         return message
 
@@ -124,7 +124,7 @@ def notification_targets(event: ProactiveEventMessage) -> tuple[ProactiveNotific
         seen.add(target.user_id)
         targets.append(target)
     if not targets:
-        raise ProactiveEventContractError("proactive event has no notification target")
+        raise ProactiveEventContractError("主动事件没有通知目标")
     return tuple(targets)
 
 
@@ -133,4 +133,4 @@ def _required_id(payload: dict[str, Any], *keys: str) -> str:
         value = payload.get(key)
         if isinstance(value, str) and value.strip():
             return value.strip()
-    raise ProactiveEventContractError("proactive event recipient ID is missing")
+    raise ProactiveEventContractError("主动事件缺少接收者 ID")

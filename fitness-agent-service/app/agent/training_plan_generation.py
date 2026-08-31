@@ -55,7 +55,7 @@ class TrainingPlanGenerationInput(BaseModel):
         """拒绝空字符串，避免把无效条件传给检索和模型。"""
 
         if any(not item.strip() for item in self.equipment):
-            raise ValueError("equipment values must not be blank")
+            raise ValueError("equipment 取值不能为空白")
         return self
 
 
@@ -87,7 +87,7 @@ class TrainingPlanGenerationService:
         max_output_tokens: int | None = None,
     ) -> None:
         if max_repair_attempts < 0 or max_repair_attempts > 2:
-            raise ValueError("max_repair_attempts must be between 0 and 2")
+            raise ValueError("max_repair_attempts 必须在 0 到 2 之间")
         self.models = models
         self.rag_service = rag_service
         self.memory_service = memory_service

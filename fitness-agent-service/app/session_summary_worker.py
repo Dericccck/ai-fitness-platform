@@ -32,7 +32,7 @@ class SessionSummaryCleanupWorker:
         metrics: HttpMetrics | None = None,
     ) -> None:
         if batch_size < 1 or batch_size > 5000:
-            raise ValueError("session summary batch size must be between 1 and 5000")
+            raise ValueError("会话摘要批次大小必须在 1 到 5000 之间")
         self.repository = repository
         self.batch_size = batch_size
         self.metrics = metrics

@@ -40,7 +40,7 @@ class MemoryRepository:
 
     def __init__(self, database: Database, *, terminal_retention_days: int = 90) -> None:
         if terminal_retention_days < 1 or terminal_retention_days > 3650:
-            raise ValueError("memory terminal retention must be between 1 and 3650 days")
+            raise ValueError("Memory 终态保留期限必须在 1 到 3650 天之间")
         self._database = database
         self._terminal_retention_days = terminal_retention_days
 
@@ -154,7 +154,7 @@ class MemoryRepository:
                     .first()
                 )
                 if row is None:
-                    raise RuntimeError("Memory audit event points to a missing row")
+                    raise RuntimeError("Memory 审计事件指向不存在的记录")
                 return memory_from_row(row)
             # 先按确认执行请求做幂等读取，确保同一恢复请求不会把 Memory 版本再次加一。
             row = (await connection.execute(existing_request_statement, params)).mappings().first()
@@ -170,7 +170,7 @@ class MemoryRepository:
                     .first()
                 )
             if row is None:
-                raise RuntimeError("Memory idempotency write did not return a row")
+                raise RuntimeError("Memory 幂等写入没有返回记录")
             if is_new_operation and row["source_request_id"] == source_request_id:
                 await self._insert_event(
                     connection,
@@ -280,7 +280,7 @@ class MemoryRepository:
                     .first()
                 )
                 if row is None:
-                    raise RuntimeError("Memory audit event points to a missing row")
+                    raise RuntimeError("Memory 审计事件指向不存在的记录")
                 return memory_from_row(row)
             row = (await connection.execute(update_statement, params)).mappings().first()
             if row is None:
@@ -316,7 +316,7 @@ class MemoryRepository:
                     )
                     if row is not None:
                         return memory_from_row(row)
-                raise MemoryVersionConflictError("memory is missing, revoked, or version changed")
+                raise MemoryVersionConflictError("Memory 不存在、已撤销或版本已变更")
             await self._insert_event(
                 connection,
                 memory_id=str(row["id"]),
@@ -440,7 +440,7 @@ class MemoryRepository:
                     .first()
                 )
                 if row is None:
-                    raise RuntimeError("Memory audit event points to a missing row")
+                    raise RuntimeError("Memory 审计事件指向不存在的记录")
                 return memory_from_row(row)
             row = (
                 (
@@ -492,7 +492,7 @@ class MemoryRepository:
                     )
                     if row is not None:
                         return memory_from_row(row)
-                raise MemoryVersionConflictError("memory is missing, revoked, or version changed")
+                raise MemoryVersionConflictError("Memory 不存在、已撤销或版本已变更")
             await self._insert_event(
                 connection,
                 memory_id=str(row["id"]),
@@ -535,7 +535,7 @@ class MemoryRepository:
                 .first()
             )
         if row is None:
-            raise MemoryNotFoundError("memory not found")
+            raise MemoryNotFoundError("未找到 Memory")
         return memory_from_row(row)
 
     async def list_events(
@@ -548,7 +548,7 @@ class MemoryRepository:
         """查询本人 Memory 的生命周期摘要，不返回正文或内部幂等参数。"""
 
         if limit < 1 or limit > 100:
-            raise ValueError("memory event limit must be between 1 and 100")
+            raise ValueError("Memory 事件数量限制必须在 1 到 100 之间")
         statement = text(
             """
             SELECT event.*
@@ -730,5 +730,5 @@ def _required_as_utc(value: datetime) -> datetime:
 
     normalized = _as_utc(value)
     if normalized is None:
-        raise RuntimeError("required timestamp is NULL")
+        raise RuntimeError("必需的时间戳为 NULL")
     return normalized

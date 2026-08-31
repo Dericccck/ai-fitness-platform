@@ -47,7 +47,7 @@ def test_issue_token_defaults_to_local_organization_admin_role() -> None:
 
 
 def test_issue_token_supports_allowlisted_student_role() -> None:
-    """Booking 联调可签发真实学员上下文，但不能借此生成系统管理员权限。"""
+    """预约联调可签发真实学员上下文，但不能借此生成系统管理员权限。"""
 
     token = issue_token(
         secret="local-context-secret",
@@ -113,7 +113,7 @@ def test_agent_verifier_rejects_unknown_key_id_without_fallback() -> None:
         now=1_800_000_000,
     )
 
-    with pytest.raises(AgentContextVerificationError, match="invalid agent context"):
+    with pytest.raises(AgentContextVerificationError, match="AgentContext 声明无效"):
         AgentContextVerifier("active-context-secret", signing_key_id="v2").verify(token)
 
 

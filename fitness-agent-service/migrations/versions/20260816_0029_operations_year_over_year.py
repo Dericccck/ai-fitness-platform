@@ -43,7 +43,7 @@ def downgrade() -> None:
     ).scalar_one()
     if yoy_count:
         raise RuntimeError(
-            "cannot downgrade Operations year-over-year migration while同比审计记录仍存在"
+            "无法回退经营同比迁移，因为仍存在同比审计记录"
         )
     op.drop_constraint(
         "ck_agent_operations_audit_comparison_role",

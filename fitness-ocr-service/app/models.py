@@ -24,7 +24,7 @@ class OcrSourceRegion(BaseModel):
     @model_validator(mode="after")
     def validate_page_bounds(self) -> "OcrSourceRegion":
         if not self.within_page:
-            raise ValueError("source_region must stay within the page")
+            raise ValueError("source_region 必须位于页面范围内")
         return self
 
 

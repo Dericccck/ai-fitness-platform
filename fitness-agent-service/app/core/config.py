@@ -39,9 +39,8 @@ class Settings(BaseSettings):
     otel_export_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
     otel_trace_sample_ratio: float = Field(default=0.1, ge=0, le=1)
 
-    # TruLens uses the existing OTEL provider for bounded semantic spans.  Evaluation
-    # capture is opt-in because it may contain redacted user text; production should
-    # normally use metadata mode and run Judge evaluation in a restricted environment.
+    # TruLens 使用现有 OTEL provider 记录有界语义 span。评测采集默认关闭，因为其中可能
+    # 包含已脱敏的用户文本；生产环境通常应使用元数据模式，并在受限环境中运行 Judge 评测。
     trulens_enabled: bool = False
     trulens_capture_mode: Literal["disabled", "metadata", "evaluation"] = "disabled"
     trulens_capture_max_chars: int = Field(default=2000, ge=256, le=8000)
@@ -320,7 +319,7 @@ class Settings(BaseSettings):
             self.proactive_rabbitmq_reconnect_initial_seconds
         ):
             raise ValueError(
-                "proactive RabbitMQ max reconnect delay must not be smaller than initial delay"
+                "主动事件 RabbitMQ 最大重连延迟不能小于初始延迟"
             )
         return self
 
@@ -338,27 +337,27 @@ class Settings(BaseSettings):
             return self
         errors: list[str] = []
         if self.gateway_context_signing_algorithm != "RS256":
-            errors.append("GATEWAY_CONTEXT_SIGNING_ALGORITHM must be RS256")
+            errors.append("GATEWAY_CONTEXT_SIGNING_ALGORITHM 必须为 RS256")
         if not (
             self.gateway_context_verification_jwks_url.strip()
             or self.gateway_context_verification_public_key_ring
         ):
-            errors.append("GATEWAY_CONTEXT_VERIFICATION_JWKS_URL or public key ring is required")
+            errors.append("必须提供 GATEWAY_CONTEXT_VERIFICATION_JWKS_URL 或公钥环")
         if self.gateway_context_verification_jwks_url.strip():
             parsed_jwks_url = urlparse(self.gateway_context_verification_jwks_url)
             if parsed_jwks_url.scheme != "https" or not parsed_jwks_url.netloc:
-                errors.append("GATEWAY_CONTEXT_VERIFICATION_JWKS_URL must use HTTPS")
+                errors.append("GATEWAY_CONTEXT_VERIFICATION_JWKS_URL 必须使用 HTTPS")
         if not self.gateway_context_signing_key_id.strip():
-            errors.append("GATEWAY_CONTEXT_SIGNING_KEY_ID is required")
+            errors.append("必须提供 GATEWAY_CONTEXT_SIGNING_KEY_ID")
         if self.confirmation_signing_algorithm != "RS256":
-            errors.append("AGENT_CONFIRMATION_SIGNING_ALGORITHM must be RS256")
+            errors.append("AGENT_CONFIRMATION_SIGNING_ALGORITHM 必须为 RS256")
         if not self.confirmation_signing_key_id.strip():
-            errors.append("AGENT_CONFIRMATION_SIGNING_KEY_ID is required")
+            errors.append("必须提供 AGENT_CONFIRMATION_SIGNING_KEY_ID")
         if not self.confirmation_signing_private_key_pem.strip():
-            errors.append("AGENT_CONFIRMATION_SIGNING_PRIVATE_KEY_PEM is required")
+            errors.append("必须提供 AGENT_CONFIRMATION_SIGNING_PRIVATE_KEY_PEM")
         if errors:
             raise ValueError(
-                "production authentication contract is incomplete: " + "; ".join(errors)
+                "生产身份验证契约不完整：" + "；".join(errors)
             )
         return self
 
@@ -377,44 +376,44 @@ class Settings(BaseSettings):
 
         errors: list[str] = []
         if self.api_docs_enabled:
-            errors.append("AGENT_API_DOCS_ENABLED must be false")
+            errors.append("AGENT_API_DOCS_ENABLED 必须为 false")
         if not self.metrics_enabled:
-            errors.append("AGENT_METRICS_ENABLED must be true")
+            errors.append("AGENT_METRICS_ENABLED 必须为 true")
         if not self.otel_configured:
             errors.append(
-                "AGENT_OTEL_ENABLED and AGENT_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT are required"
+                "必须提供 AGENT_OTEL_ENABLED 和 AGENT_OTEL_EXPORTER_OTLP_TRACES_ENDPOINT"
             )
         if self.trulens_capture_mode == "evaluation":
-            errors.append("AGENT_TRULENS_CAPTURE_MODE=evaluation is not allowed in production")
+            errors.append("生产环境不允许 AGENT_TRULENS_CAPTURE_MODE=evaluation")
         if not self.llm_configured:
-            errors.append("DEEPSEEK_API_KEY and DEEPSEEK_MODEL are required")
+            errors.append("必须提供 DEEPSEEK_API_KEY 和 DEEPSEEK_MODEL")
         if not self.gateway_configured:
             errors.append(
-                "AGENT_GATEWAY_BASE_URL and AGENT_GATEWAY_INTERNAL_SERVICE_TOKEN are required"
+                "必须提供 AGENT_GATEWAY_BASE_URL 和 AGENT_GATEWAY_INTERNAL_SERVICE_TOKEN"
             )
         if not self.confirmation_encryption_key_base64.strip():
-            errors.append("AGENT_CONFIRMATION_ENCRYPTION_KEY_BASE64 is required")
+            errors.append("必须提供 AGENT_CONFIRMATION_ENCRYPTION_KEY_BASE64")
         if self.rag_storage_backend != "s3":
-            errors.append("AGENT_RAG_STORAGE_BACKEND must be s3")
+            errors.append("AGENT_RAG_STORAGE_BACKEND 必须为 s3")
         if not (
             self.rag_s3_endpoint_url.strip()
             and self.rag_s3_bucket.strip()
             and self.rag_s3_access_key.strip()
             and self.rag_s3_secret_key.strip()
         ):
-            errors.append("S3 endpoint, bucket and credentials are required")
+            errors.append("必须提供 S3 endpoint、bucket 和凭证")
         if self.rag_malware_scanner_backend != "clamav":
-            errors.append("AGENT_RAG_MALWARE_SCANNER_BACKEND must be clamav")
+            errors.append("AGENT_RAG_MALWARE_SCANNER_BACKEND 必须为 clamav")
         if self.rag_ocr_backend != "http" or not self.rag_ocr_endpoint_url.strip():
-            errors.append("AGENT_RAG_OCR_BACKEND=http and AGENT_RAG_OCR_ENDPOINT_URL are required")
+            errors.append("必须提供 AGENT_RAG_OCR_BACKEND=http 和 AGENT_RAG_OCR_ENDPOINT_URL")
         if self._uses_local_host(self.database_url):
-            errors.append("AGENT_DATABASE_URL must not use localhost in production")
+            errors.append("生产环境的 AGENT_DATABASE_URL 不能使用 localhost")
         if self._uses_local_host(self.redis_url):
-            errors.append("AGENT_REDIS_URL must not use localhost in production")
+            errors.append("生产环境的 AGENT_REDIS_URL 不能使用 localhost")
         if self._uses_local_host(self.gateway_base_url):
-            errors.append("AGENT_GATEWAY_BASE_URL must not use localhost in production")
+            errors.append("生产环境的 AGENT_GATEWAY_BASE_URL 不能使用 localhost")
         if errors:
-            raise ValueError("production runtime contract is incomplete: " + "; ".join(errors))
+            raise ValueError("生产运行时契约不完整：" + "；".join(errors))
         return self
 
     @staticmethod

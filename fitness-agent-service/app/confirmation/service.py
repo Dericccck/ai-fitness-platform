@@ -121,13 +121,13 @@ class ConfirmationService:
 
         record = await self.get_for_subject(confirmation_id, identity)
         if record.authorization_status != "APPROVED":
-            raise ConfirmationStateError("only approved confirmation can execute")
+            raise ConfirmationStateError("只有已批准的确认单才能执行")
         if record.execution_status == "FAILED_RETRYABLE":
             # 网络超时等可恢复失败不能直接复用旧 Token；先清空旧 JTI 和执行时间，
             # 再为下一次尝试重新领取执行权。授权仍保持 APPROVED，不需要用户重复确认。
             record = await self.repository.requeue_retryable(confirmation_id, trace_id)
         if record.execution_status != "NOT_STARTED":
-            raise ConfirmationStateError("confirmation execution is not ready to run")
+            raise ConfirmationStateError("确认单尚未准备好执行")
         jti = record.credential_jti or str(uuid4())
         if record.credential_jti is None:
             record = await self.repository.issue_credential_jti(
@@ -139,9 +139,9 @@ class ConfirmationService:
             )
             payload = json.loads(plaintext)
         except (ConfirmationPayloadCipherError, ValueError, TypeError) as exc:
-            raise ConfirmationStateError("confirmation payload cannot be restored") from exc
+            raise ConfirmationStateError("无法恢复确认单 Payload") from exc
         if not isinstance(payload, dict):
-            raise ConfirmationStateError("confirmation payload must be an object")
+            raise ConfirmationStateError("确认单 Payload 必须是对象")
 
         tool_input = {str(key): value for key, value in payload.items()}
         token = self.token_issuer.issue(
@@ -154,7 +154,7 @@ class ConfirmationService:
                 confirmation_id, datetime.now(UTC), trace_id
             )
         elif record.execution_status != "RUNNING":
-            raise ConfirmationStateError("confirmation execution is no longer resumable")
+            raise ConfirmationStateError("确认单执行已无法恢复")
         return ConfirmationExecutionPreparation(record, tool_input, token)
 
     async def finish_execution(
@@ -207,7 +207,7 @@ class ConfirmationService:
         """
 
         if not decision_request_id.strip():
-            raise ValueError("decision_request_id is required")
+            raise ValueError("必须提供 decision_request_id")
 
         record = await self.repository.get_for_subject(
             confirmation_id,
@@ -243,7 +243,7 @@ class ConfirmationService:
         """
 
         if not revocation_request_id.strip():
-            raise ValueError("revocation request id is required")
+            raise ValueError("必须提供撤销请求 ID")
         record = await self.repository.get_for_subject(
             confirmation_id,
             identity.subject,
@@ -269,7 +269,7 @@ def _ensure_identity_snapshot(record: ConfirmationRecord, identity: AgentIdentit
         sorted(identity.roles)
     ) or record.actor_organization_ids != tuple(sorted(identity.organization_ids)):
         # 对外按“不可见”处理，避免通过确认接口探测其他授权快照。
-        raise ConfirmationStateError("confirmation identity scope has changed")
+            raise ConfirmationStateError("确认单身份范围已变更")
 
 
 def _organization_from_input(tool_id: str, raw_input: Mapping[str, Any]) -> str:
@@ -282,7 +282,7 @@ def _organization_from_input(tool_id: str, raw_input: Mapping[str, Any]) -> str:
         "fitness.memory.save.v1",
         "fitness.memory.revoke.v1",
     }:
-        # 训练计划、Booking 和客服工单创建的组织范围直接来自已绑定的工具参数；
+        # 训练计划、预约和客服工单创建的组织范围直接来自已绑定的工具参数；
         # 资源型训练计划审核/发布等动作则仍必须从 Gateway 读取可信资源快照。
         # 这些创建类动作虽然都需要确认，但当前版本的策略没有 resource_required，
         # 不能把占位值 ``__resolved_from_gateway__`` 传给规范化器，否则会被动作中
@@ -297,7 +297,7 @@ def _organization_from_input(tool_id: str, raw_input: Mapping[str, Any]) -> str:
 def _plan_id_from_input(raw_input: Mapping[str, Any]) -> str:
     value = raw_input.get("plan_id")
     if not isinstance(value, str) or not value.strip():
-        raise ValueError("plan_id is required for a training plan confirmation")
+            raise ValueError("训练计划确认单必须提供 plan_id")
     return value
 
 
@@ -318,7 +318,7 @@ def _token_resource(record: ConfirmationRecord, payload: Mapping[str, Any]) -> s
     # 到确认创建时的主体和机构，而不是允许模型伪造 student_id。
     if record.resource_type == "agent_memory" and isinstance(organization_id, str):
         return f"{organization_id}:{record.subject_user_id}"
-    raise ConfirmationStateError("confirmation resource scope is incomplete")
+    raise ConfirmationStateError("确认单资源范围不完整")
 
 
 def _confirmation_resource_id(tool_id: str, raw_input: Mapping[str, Any], plan_id: str) -> str:
@@ -328,5 +328,5 @@ def _confirmation_resource_id(tool_id: str, raw_input: Mapping[str, Any], plan_i
         day_id = raw_input.get("day_id")
         if isinstance(day_id, str) and day_id.strip():
             return f"{plan_id}:{day_id}"
-        raise ConfirmationStateError("training day resource scope is incomplete")
+        raise ConfirmationStateError("训练日资源范围不完整")
     return plan_id

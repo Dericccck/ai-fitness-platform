@@ -1,4 +1,4 @@
-# Fitness OCR Service
+# 健身 OCR 服务
 
 这是独立部署的 PDF OCR 与文档结构化服务，当前使用 PaddleOCR PP-StructureV3，向健身
 Agent 提供稳定的 `POST /v1/parse` 契约。赛事、活动运营及旧作品模块不属于本服务范围。

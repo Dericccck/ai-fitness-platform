@@ -1,4 +1,4 @@
-"""Add reviewable, retryable knowledge upload and indexing tasks."""
+"""增加可审核、可重试的知识上传和索引任务。"""
 
 from collections.abc import Sequence
 
@@ -12,7 +12,7 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    """Create the durable task state without making an upload searchable by itself."""
+    """创建持久化任务状态，但不让上传内容自动变为可检索内容。"""
 
     op.create_table(
         "knowledge_ingestion_jobs",
@@ -75,7 +75,7 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    """Remove upload/indexing task state while retaining searchable knowledge tables."""
+    """删除上传/索引任务状态，同时保留可检索知识表。"""
 
     op.drop_index("ix_knowledge_ingestion_jobs_source", table_name="knowledge_ingestion_jobs")
     op.drop_index("ix_knowledge_ingestion_jobs_status", table_name="knowledge_ingestion_jobs")

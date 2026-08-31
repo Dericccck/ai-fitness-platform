@@ -229,12 +229,12 @@ async def upload_document(
     except DocumentSecurityUnavailable as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="malware scanner is temporarily unavailable",
+            detail="杀毒扫描器暂时不可用",
         ) from exc
     except OcrServiceUnavailable as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="OCR service is temporarily unavailable",
+            detail="OCR 服务暂时不可用",
         ) from exc
     except ValueError as exc:
         raise HTTPException(
@@ -460,13 +460,13 @@ async def retry_reindex_job(
 def _verify_identity(request: Request, token: str | None) -> AgentIdentity:
     if not token:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="signed agent context is required"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="必须提供已签名的 AgentContext"
         )
     try:
         return cast(AgentIdentity, request.app.state.context_verifier.verify(token))
     except AgentContextVerificationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid signed agent context"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="已签名的 AgentContext 无效"
         ) from exc
 
 
@@ -480,7 +480,7 @@ async def _read_upload(file: UploadFile, max_bytes: int) -> bytes:
         if total > max_bytes:
             raise HTTPException(
                 status_code=status.HTTP_413_REQUEST_ENTITY_TOO_LARGE,
-                detail="uploaded document exceeds the configured size limit",
+                detail="上传文档超过配置的大小限制",
             )
         parts.append(chunk)
     return b"".join(parts)
@@ -490,7 +490,7 @@ def _parse_roles(raw_roles: str) -> tuple[str, ...]:
     roles = tuple(sorted({item.strip().upper() for item in raw_roles.split(",") if item.strip()}))
     if len(roles) > 20 or any(len(role) > 64 for role in roles):
         raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="too many roles"
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="角色数量过多"
         )
     return roles
 

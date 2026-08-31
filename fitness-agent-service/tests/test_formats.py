@@ -24,10 +24,10 @@ from app.rag.formats import (
 def test_registry_parses_markdown_and_rejects_unknown_extensions() -> None:
     registry = DocumentParserRegistry(max_source_bytes=1000)
 
-    parsed = registry.parse(b"# Warmup\n\nPrepare the hips.", file_name="guide.md")
+    parsed = registry.parse("# 热身\n\n准备髋部。".encode(), file_name="guide.md")
 
     assert parsed.media_type == "text/markdown"
-    assert parsed.blocks[0].content == "# Warmup\n\nPrepare the hips."
+    assert parsed.blocks[0].content == "# 热身\n\n准备髋部。"
     with pytest.raises(UnsupportedDocumentFormatError):
         registry.parse(b"content", file_name="guide.rtf")
 
@@ -35,7 +35,7 @@ def test_registry_parses_markdown_and_rejects_unknown_extensions() -> None:
 def test_registry_enforces_source_size_before_parser_work() -> None:
     registry = DocumentParserRegistry(max_source_bytes=3)
 
-    with pytest.raises(DocumentParseError, match="size limit"):
+    with pytest.raises(DocumentParseError, match="大小限制"):
         registry.parse(b"abcd", file_name="guide.txt")
 
 
@@ -70,9 +70,9 @@ def test_xlsx_parser_keeps_worksheet_as_a_header_preserving_table() -> None:
     workbook = Workbook()
     sheet = workbook.active
     assert sheet is not None
-    sheet.title = "Beginner Plan"
-    sheet.append(["Exercise", "Sets", "Reps"])
-    sheet.append(["Squat", 4, 12])
+    sheet.title = "初级计划"
+    sheet.append(["动作", "组数", "次数"])
+    sheet.append(["深蹲", 4, 12])
     payload = BytesIO()
     workbook.save(payload)
 
@@ -80,10 +80,10 @@ def test_xlsx_parser_keeps_worksheet_as_a_header_preserving_table() -> None:
 
     block = parsed.blocks[0]
     assert block.kind == "TABLE"
-    assert block.source_sheet == "Beginner Plan"
-    assert block.heading_path == ("Beginner Plan",)
-    assert "| Exercise | Sets | Reps |" in block.content
-    assert "| Squat | 4 | 12 |" in block.content
+    assert block.source_sheet == "初级计划"
+    assert block.heading_path == ("初级计划",)
+    assert "| 动作 | 组数 | 次数 |" in block.content
+    assert "| 深蹲 | 4 | 12 |" in block.content
 
 
 def test_pdf_parser_preserves_ocr_route_for_scanned_pdf_without_linux_service() -> None:
@@ -98,7 +98,7 @@ def test_pdf_parser_preserves_ocr_route_for_scanned_pdf_without_linux_service() 
 
     assert parsed.blocks == ()
     assert parsed.page_profiles[0].route == "OCR_REQUIRED"
-    assert "requires OCR" in parsed.warnings[0]
+    assert "需要 OCR" in parsed.warnings[0]
 
 
 def test_pdf_cleaning_normalizes_font_mapping_and_removes_web_templates() -> None:

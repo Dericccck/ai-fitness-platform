@@ -45,7 +45,7 @@ class CheckpointStore:
         """返回已经初始化的 Saver，启动顺序错误时立即失败。"""
 
         if self._saver is None:
-            raise RuntimeError("checkpoint store has not been started")
+            raise RuntimeError("Checkpoint 存储尚未启动")
         return self._saver
 
     async def ping(self) -> None:

@@ -148,7 +148,7 @@ async def test_memory_save_is_structured_and_same_key_correction_increments_vers
 async def test_memory_rejects_out_of_scope_and_health_diagnosis_content() -> None:
     service = MemoryService(FakeMemoryRepository())  # type: ignore[arg-type]
 
-    with pytest.raises(MemoryValidationError, match="outside signed identity scope"):
+    with pytest.raises(MemoryValidationError, match="不在已签名身份的权限范围内"):
         await service.save(
             identity=IDENTITY,
             organization_id="org-2",
@@ -160,7 +160,7 @@ async def test_memory_rejects_out_of_scope_and_health_diagnosis_content() -> Non
             source_request_id="request-1",
         )
 
-    with pytest.raises(MemoryValidationError, match="not stored"):
+    with pytest.raises(MemoryValidationError, match="不保存"):
         await service.save(
             identity=IDENTITY,
             organization_id="org-1",
@@ -177,7 +177,7 @@ async def test_memory_rejects_out_of_scope_and_health_diagnosis_content() -> Non
 async def test_memory_expiry_must_be_in_the_future_and_revoke_is_version_bound() -> None:
     repository = FakeMemoryRepository()
     service = MemoryService(repository)  # type: ignore[arg-type]
-    with pytest.raises(MemoryValidationError, match="expiry"):
+    with pytest.raises(MemoryValidationError, match="过期时间"):
         await service.save(
             identity=IDENTITY,
             organization_id="org-1",

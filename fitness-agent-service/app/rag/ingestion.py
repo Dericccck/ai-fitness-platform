@@ -99,7 +99,7 @@ class DocumentIngestionService:
         parser_registry: DocumentParserRegistry | None = None,
     ) -> None:
         if max_chunk_chars <= 0 or overlap_chars < 0 or overlap_chars >= max_chunk_chars:
-            raise ValueError("invalid chunking limits")
+            raise ValueError("分块限制无效")
         self.repository = repository
         self.rag_service = rag_service
         self.max_chunk_chars = max_chunk_chars
@@ -190,11 +190,11 @@ class DocumentIngestionService:
                 request.version == current.version and current.checksum != checksum
             ):
                 raise IngestionConflictError(
-                    f"document version {request.version} is not newer than {current.version}"
+                    f"文档版本 {request.version} 不高于 {current.version}"
                 )
 
         if not drafts:
-            raise RagSearchError("document produced no indexable chunks")
+            raise RagSearchError("文档没有产生可索引的分块")
 
         document_id = versioned_document_id(request.source_uri, request.version)
         document = KnowledgeDocumentInput(
@@ -334,7 +334,7 @@ def chunk_markdown(
     """按标题/段落切分 Markdown，再按句子切分过大的内容块。"""
 
     if max_chunk_chars <= 0 or overlap_chars < 0 or overlap_chars >= max_chunk_chars:
-        raise ValueError("invalid chunking limits")
+        raise ValueError("分块限制无效")
 
     heading_path: list[str] = []
     sections: list[tuple[tuple[str, ...], str]] = []

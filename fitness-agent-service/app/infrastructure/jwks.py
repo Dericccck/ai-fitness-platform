@@ -93,27 +93,27 @@ class JwksPublicKeyProvider:
         except JwksUnavailableError:
             raise
         except Exception as exc:
-            raise JwksUnavailableError("agent context JWKS is unavailable") from exc
+            raise JwksUnavailableError("AgentContext JWKS 不可用") from exc
         return _JwksSnapshot(keys=keys, expires_at=now + self.cache_ttl_seconds)
 
 
 def _parse_jwks(payload: Any) -> dict[str, RSAPublicKey]:
     if not isinstance(payload, dict) or not isinstance(payload.get("keys"), list):
-        raise JwksUnavailableError("invalid agent context JWKS")
+            raise JwksUnavailableError("AgentContext JWKS 无效")
     if len(payload["keys"]) > 50:
-        raise JwksUnavailableError("agent context JWKS contains too many keys")
+            raise JwksUnavailableError("AgentContext JWKS 包含过多密钥")
     if not payload["keys"]:
-        raise JwksUnavailableError("agent context JWKS contains no keys")
+            raise JwksUnavailableError("AgentContext JWKS 不包含密钥")
 
     result: dict[str, RSAPublicKey] = {}
     for item in payload["keys"]:
         if not isinstance(item, dict):
-            raise JwksUnavailableError("invalid agent context JWKS key")
+            raise JwksUnavailableError("AgentContext JWKS 密钥无效")
         key_id = _required_text(item, "kid")
         if item.get("kty") != "RSA" or item.get("alg", "RS256") != "RS256":
-            raise JwksUnavailableError("invalid agent context JWKS key algorithm")
+            raise JwksUnavailableError("AgentContext JWKS 密钥算法无效")
         if item.get("use", "sig") != "sig":
-            raise JwksUnavailableError("invalid agent context JWKS key use")
+            raise JwksUnavailableError("AgentContext JWKS 密钥用途无效")
         modulus = int.from_bytes(_decode_base64url(_required_text(item, "n")), "big")
         exponent = int.from_bytes(_decode_base64url(_required_text(item, "e")), "big")
         # JWKS 是认证边界，不是普通配置文件：过短的 RSA 密钥会降低离线破解成本，
@@ -124,7 +124,7 @@ def _parse_jwks(payload: Any) -> dict[str, RSAPublicKey]:
             or exponent < 3
             or exponent % 2 == 0
         ):
-            raise JwksUnavailableError("invalid agent context RSA key")
+            raise JwksUnavailableError("AgentContext RSA 密钥无效")
         result[key_id] = RSAPublicNumbers(exponent, modulus).public_key()
     return result
 
@@ -132,7 +132,7 @@ def _parse_jwks(payload: Any) -> dict[str, RSAPublicKey]:
 def _required_text(item: dict[str, Any], field: str) -> str:
     value = item.get(field)
     if not isinstance(value, str) or not value.strip():
-        raise JwksUnavailableError(f"invalid agent context JWKS field: {field}")
+            raise JwksUnavailableError(f"AgentContext JWKS 字段无效：{field}")
     return value
 
 
@@ -142,4 +142,4 @@ def _decode_base64url(value: str) -> bytes:
     try:
         return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
     except ValueError as exc:
-        raise JwksUnavailableError("invalid agent context JWKS encoding") from exc
+            raise JwksUnavailableError("AgentContext JWKS 编码无效") from exc

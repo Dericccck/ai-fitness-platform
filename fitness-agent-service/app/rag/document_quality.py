@@ -190,19 +190,19 @@ class DocumentQualityThresholds:
             ),
         )
         if not 0 <= threshold.max_noise_rate <= 1:
-            raise ValueError("max_noise_rate must be between 0 and 1")
+            raise ValueError("max_noise_rate 必须在 0 到 1 之间")
         if not 0 <= threshold.max_fragment_rate <= 1:
-            raise ValueError("max_fragment_rate must be between 0 and 1")
+            raise ValueError("max_fragment_rate 必须在 0 到 1 之间")
         if not 0 <= threshold.max_duplicate_rate <= 1:
-            raise ValueError("max_duplicate_rate must be between 0 and 1")
+            raise ValueError("max_duplicate_rate 必须在 0 到 1 之间")
         if not 0 <= threshold.min_parent_integrity <= 1:
-            raise ValueError("min_parent_integrity must be between 0 and 1")
+            raise ValueError("min_parent_integrity 必须在 0 到 1 之间")
         if not 0 <= threshold.min_table_integrity <= 1:
-            raise ValueError("min_table_integrity must be between 0 and 1")
+            raise ValueError("min_table_integrity 必须在 0 到 1 之间")
         if threshold.max_missing_pages < 0:
-            raise ValueError("max_missing_pages must not be negative")
+            raise ValueError("max_missing_pages 不能为负数")
         if threshold.max_ocr_required_pages < 0:
-            raise ValueError("max_ocr_required_pages must not be negative")
+            raise ValueError("max_ocr_required_pages 不能为负数")
         return threshold
 
     def validate(self, metrics: DocumentQualityMetrics) -> list[str]:
@@ -210,30 +210,30 @@ class DocumentQualityThresholds:
 
         failures: list[str] = []
         if metrics.noise_rate > self.max_noise_rate:
-            failures.append(f"noise_rate {metrics.noise_rate:.4f} > {self.max_noise_rate:.4f}")
+            failures.append(f"noise_rate 噪声率 {metrics.noise_rate:.4f} > {self.max_noise_rate:.4f}")
         if metrics.fragment_rate > self.max_fragment_rate:
             failures.append(
-                f"fragment_rate {metrics.fragment_rate:.4f} > {self.max_fragment_rate:.4f}"
+                f"fragment_rate 碎片率 {metrics.fragment_rate:.4f} > {self.max_fragment_rate:.4f}"
             )
         if metrics.duplicate_rate > self.max_duplicate_rate:
             failures.append(
-                f"duplicate_rate {metrics.duplicate_rate:.4f} > {self.max_duplicate_rate:.4f}"
+                f"duplicate_rate 重复率 {metrics.duplicate_rate:.4f} > {self.max_duplicate_rate:.4f}"
             )
         if metrics.parent_integrity < self.min_parent_integrity:
             failures.append(
-                f"parent_integrity {metrics.parent_integrity:.4f} < {self.min_parent_integrity:.4f}"
+                f"parent_integrity 父文档完整性 {metrics.parent_integrity:.4f} < {self.min_parent_integrity:.4f}"
             )
         if metrics.table_integrity < self.min_table_integrity:
             failures.append(
-                f"table_integrity {metrics.table_integrity:.4f} < {self.min_table_integrity:.4f}"
+                f"table_integrity 表格完整性 {metrics.table_integrity:.4f} < {self.min_table_integrity:.4f}"
             )
         if len(metrics.missing_pages) > self.max_missing_pages:
             failures.append(
-                f"missing_pages {len(metrics.missing_pages)} > {self.max_missing_pages}"
+                f"missing_pages 缺失页面 {len(metrics.missing_pages)} > {self.max_missing_pages}"
             )
         if len(metrics.ocr_required_pages) > self.max_ocr_required_pages:
             failures.append(
-                "ocr_required_pages "
+                "ocr_required_pages 需要 OCR 的页面 "
                 f"{len(metrics.ocr_required_pages)} > {self.max_ocr_required_pages}"
             )
         return failures
@@ -256,7 +256,7 @@ def compare_quality_reports(before: Mapping[str, Any], after: Mapping[str, Any])
         missing = sorted(before_paths - after_paths)
         added = sorted(after_paths - before_paths)
         raise ValueError(
-            f"quality reports cover different sources: missing={missing}, added={added}"
+            f"质量报告覆盖的来源不同：缺失={missing}，新增={added}"
         )
 
     entries: list[dict[str, Any]] = []
@@ -326,16 +326,16 @@ def compare_quality_reports(before: Mapping[str, Any], after: Mapping[str, Any])
 def _report_entries(report: Mapping[str, Any]) -> dict[str, Mapping[str, Any]]:
     raw_entries = report.get("results")
     if not isinstance(raw_entries, list):
-        raise TypeError("quality report results must be a list")
+        raise TypeError("质量报告结果必须是列表")
     entries: dict[str, Mapping[str, Any]] = {}
     for raw_entry in raw_entries:
         if not isinstance(raw_entry, Mapping):
-            raise TypeError("quality report entry must be an object")
+            raise TypeError("质量报告条目必须是对象")
         relative_path = raw_entry.get("relative_path")
         if not isinstance(relative_path, str) or not relative_path:
-            raise ValueError("quality report entry requires relative_path")
+            raise ValueError("质量报告条目必须包含 relative_path")
         if relative_path in entries:
-            raise ValueError(f"quality report contains duplicate source: {relative_path}")
+            raise ValueError(f"质量报告包含重复来源：{relative_path}")
         entries[relative_path] = raw_entry
     return entries
 
@@ -348,13 +348,13 @@ def _ensure_same_source_hash(
     before_hash = before.get("source_sha256")
     after_hash = after.get("source_sha256")
     if before_hash and after_hash and before_hash != after_hash:
-        raise ValueError(f"source SHA-256 changed for {relative_path}")
+        raise ValueError(f"{relative_path} 的源 SHA-256 已变更")
 
 
 def _metrics_mapping(entry: Mapping[str, Any]) -> Mapping[str, Any]:
     metrics = entry.get("metrics", {})
     if not isinstance(metrics, Mapping):
-        raise TypeError("quality report metrics must be an object")
+        raise TypeError("质量报告指标必须是对象")
     return metrics
 
 
@@ -367,7 +367,7 @@ def _metric_value(metrics: Mapping[str, Any], metric: str) -> float | None:
     if value is None:
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise TypeError(f"quality metric {metric} must be numeric or null")
+        raise TypeError(f"质量指标 {metric} 必须是数值或 null")
     return float(value)
 
 

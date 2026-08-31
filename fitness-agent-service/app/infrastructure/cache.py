@@ -35,7 +35,7 @@ class SessionLockManager:
         owner = str(uuid4())
         acquired = await self.client.set(key, owner, nx=True, ex=self.ttl_seconds)
         if not acquired:
-            raise SessionLockUnavailable("conversation is already being processed")
+            raise SessionLockUnavailable("会话正在处理中")
         try:
             yield
         finally:
@@ -75,7 +75,7 @@ class Cache:
         """
 
         if not key or limit < 1 or window_seconds < 1:
-            raise ValueError("fixed window rate limit arguments are invalid")
+            raise ValueError("固定窗口限流参数无效")
         current = await cast(
             Awaitable[Any],
             self.client.eval(self._FIXED_WINDOW_SCRIPT, 1, key, str(window_seconds)),

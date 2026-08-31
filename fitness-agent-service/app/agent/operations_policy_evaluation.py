@@ -1,4 +1,4 @@
-"""Operations 查询前策略校验的确定性离线评测。
+"""经营查询前策略校验的确定性离线评测。
 
 评测验证自然语言意图和模型工具参数之间的安全边界，不访问 Java Gateway、数据库或
 LLM。它与 RAG/趋势评测不同：这里关注的是“是否允许执行查询”，而不是查询结果内容。
@@ -55,15 +55,15 @@ def evaluate_case(case: OperationsPolicyEvalCase) -> OperationsPolicyEvalResult:
         return OperationsPolicyEvalResult(
             case.case_id,
             False,
-            (f"invalid result: {exc}",),
+            (f"结果无效：{exc}",),
             invalid=True,
         )
 
     failures: list[str] = []
     if decision.allowed != case.expected_allowed:
-        failures.append(f"allowed {decision.allowed} != {case.expected_allowed}")
+            failures.append(f"allowed {decision.allowed} != {case.expected_allowed}")
     if decision.reason_code != case.expected_reason_code:
-        failures.append(f"reason_code {decision.reason_code} != {case.expected_reason_code}")
+            failures.append(f"原因码 reason_code {decision.reason_code} != {case.expected_reason_code}")
     return OperationsPolicyEvalResult(case.case_id, not failures, tuple(failures))
 
 
@@ -113,7 +113,7 @@ def main(argv: list[str] | None = None) -> int:
                 OperationsPolicyEvalResult(
                     case_id,
                     False,
-                    (f"invalid case: {exc}",),
+                    (f"案例无效：{exc}",),
                     invalid=True,
                 )
             )
@@ -123,11 +123,11 @@ def main(argv: list[str] | None = None) -> int:
     max_failed_cases = int(threshold_data.get("max_failed_cases", 0))
     max_invalid_cases = int(threshold_data.get("max_invalid_cases", 0))
     if metrics["pass_rate"] < min_pass_rate:
-        failures.append(f"pass_rate {metrics['pass_rate']:.4f} < {min_pass_rate:.4f}")
+            failures.append(f"通过率 pass_rate {metrics['pass_rate']:.4f} < {min_pass_rate:.4f}")
     if metrics["failed_cases"] > max_failed_cases:
-        failures.append(f"failed_cases {int(metrics['failed_cases'])} > {max_failed_cases}")
+            failures.append(f"失败案例数 failed_cases {int(metrics['failed_cases'])} > {max_failed_cases}")
     if metrics["invalid_cases"] > max_invalid_cases:
-        failures.append(f"invalid_cases {int(metrics['invalid_cases'])} > {max_invalid_cases}")
+            failures.append(f"无效案例数 invalid_cases {int(metrics['invalid_cases'])} > {max_invalid_cases}")
     output = {
         "metrics": metrics,
         "thresholds": threshold_data,
@@ -151,7 +151,7 @@ def _load_json(path: Path) -> Any:
     try:
         return json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise SystemExit(f"cannot load evaluation file {path}: {exc}") from exc
+        raise SystemExit(f"无法加载评估文件 {path}：{exc}") from exc
 
 
 if __name__ == "__main__":

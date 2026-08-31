@@ -1,4 +1,4 @@
-"""执行 Operations Redis 固定窗口限流的并发验收。
+"""执行经营 Redis 固定窗口限流的并发验收。
 
 本脚本只使用一个带唯一后缀的临时 Redis Key，验证高并发下 Lua 原子计数不会超发；
 不调用 DeepSeek、不访问 Java Gateway，也不写入 PostgreSQL/MySQL 业务数据。默认只
@@ -37,7 +37,7 @@ class LoadCheckConfig:
 def build_parser() -> argparse.ArgumentParser:
     """构造参数；默认只读，避免把前置检查误当成限流压力测试。"""
 
-    parser = argparse.ArgumentParser(description="验收 Operations Redis 并发限流")
+    parser = argparse.ArgumentParser(description="验收经营 Redis 并发限流")
     parser.add_argument(
         "--redis-url",
         default=os.getenv("AGENT_TEST_REDIS_URL", "redis://127.0.0.1:6380/15"),

@@ -66,7 +66,7 @@ async def search_knowledge(
     except RagSearchError as exc:
         raise HTTPException(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="knowledge retrieval is temporarily unavailable",
+            detail="知识检索暂时不可用",
         ) from exc
     return KnowledgeSearchResponse(
         citations=tuple(_to_response(citation) for citation in result.citations())
@@ -76,13 +76,13 @@ async def search_knowledge(
 def _verify_identity(request: Request, token: str | None) -> AgentIdentity:
     if not token:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="signed agent context is required"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="必须提供已签名的 AgentContext"
         )
     try:
         return cast(AgentIdentity, request.app.state.context_verifier.verify(token))
     except AgentContextVerificationError as exc:
         raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, detail="invalid signed agent context"
+            status_code=status.HTTP_401_UNAUTHORIZED, detail="已签名的 AgentContext 无效"
         ) from exc
 
 

@@ -23,8 +23,8 @@ class DocumentStorage(Protocol):
 class LocalDocumentStorage:
     """首个部署版本使用的本地存储边界实现。
 
-    The job stores an opaque key rather than a user-provided path. Production can replace
-    this class with an S3/OSS adapter without changing review, retry, or indexing logic.
+    任务保存不透明键，而不是用户提供的路径。生产环境可以将此类替换为 S3/OSS 适配器，
+    无需修改审查、重试或索引逻辑。
     """
 
     def __init__(self, root_dir: str) -> None:
@@ -36,7 +36,7 @@ class LocalDocumentStorage:
 
         suffix = PurePosixPath(file_name).suffix.lower()
         if not suffix or len(suffix) > 10 or not suffix[1:].isalnum():
-            raise DocumentStorageError("uploaded file must have a safe extension")
+            raise DocumentStorageError("上传文件必须使用安全扩展名")
         key = f"{job_id}{suffix}"
         target = self._safe_path(key)
         temporary = target.with_suffix(target.suffix + ".tmp")
@@ -44,7 +44,7 @@ class LocalDocumentStorage:
             temporary.write_bytes(content)
             temporary.replace(target)
         except OSError as exc:
-            raise DocumentStorageError("could not persist uploaded document") from exc
+            raise DocumentStorageError("无法持久化上传文档") from exc
         return key
 
     def read(self, key: str) -> bytes:
@@ -53,22 +53,22 @@ class LocalDocumentStorage:
         try:
             return self._safe_path(key).read_bytes()
         except OSError as exc:
-            raise DocumentStorageError("could not read staged document") from exc
+            raise DocumentStorageError("无法读取暂存文档") from exc
 
     def _safe_path(self, key: str) -> Path:
         """在访问文件系统前拒绝路径穿越和绝对路径。"""
 
         candidate = (self._root / key).resolve()
         if candidate.parent != self._root or Path(key).is_absolute():
-            raise DocumentStorageError("invalid storage key")
+            raise DocumentStorageError("存储键无效")
         return candidate
 
 
 class S3DocumentStorage:
     """兼容 S3 的对象存储适配器，包括 MinIO 和 OSS 网关。
 
-    boto3 is synchronous, so network calls are moved to worker threads. The rest of the
-    Agent service only sees the small storage contract and does not depend on a vendor SDK.
+    boto3 是同步的，因此网络调用会移至 Worker 线程。Agent 服务的其余部分只接触简化的
+    存储契约，不依赖供应商 SDK。
     """
 
     def __init__(
@@ -81,7 +81,7 @@ class S3DocumentStorage:
         secret_key: str,
     ) -> None:
         if not endpoint_url or not bucket or not access_key or not secret_key:
-            raise ValueError("S3 storage requires endpoint, bucket, access key, and secret key")
+            raise ValueError("S3 存储需要 endpoint、bucket、access key 和 secret key")
         import boto3  # type: ignore[import-untyped]
 
         self._bucket = bucket
@@ -96,7 +96,7 @@ class S3DocumentStorage:
     def store(self, job_id: str, file_name: str, content: bytes, *, content_type: str = "") -> str:
         suffix = PurePosixPath(file_name).suffix.lower()
         if not suffix or len(suffix) > 10 or not suffix[1:].isalnum():
-            raise DocumentStorageError("uploaded file must have a safe extension")
+            raise DocumentStorageError("上传文件必须使用安全扩展名")
         key = f"knowledge/{job_id}{suffix}"
         try:
             self._client.put_object(
@@ -106,17 +106,17 @@ class S3DocumentStorage:
                 ContentType=content_type or "application/octet-stream",
             )
         except Exception as exc:
-            raise DocumentStorageError("could not persist uploaded document") from exc
+            raise DocumentStorageError("无法持久化上传文档") from exc
         return key
 
     def read(self, key: str) -> bytes:
         if not _is_safe_s3_key(key):
-            raise DocumentStorageError("invalid storage key")
+            raise DocumentStorageError("存储键无效")
         try:
             response = self._client.get_object(Bucket=self._bucket, Key=key)
             return cast(bytes, response["Body"].read())
         except Exception as exc:
-            raise DocumentStorageError("could not read staged document") from exc
+            raise DocumentStorageError("无法读取暂存文档") from exc
 
 
 def _is_safe_s3_key(key: str) -> bool:

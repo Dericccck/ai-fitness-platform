@@ -65,7 +65,7 @@ def test_http_ocr_provider_rejects_malformed_response() -> None:
     )
     provider = HttpPdfOcrProvider("https://ocr.internal/v1/parse", client=client)
 
-    with pytest.raises(DocumentParseError, match="blocks array"):
+    with pytest.raises(DocumentParseError, match="blocks 数组"):
         provider.parse(blank_pdf(), file_name="scan.pdf")
 
 
@@ -114,7 +114,7 @@ def test_http_ocr_provider_surfaces_transport_unavailability() -> None:
         client=httpx.Client(transport=httpx.MockTransport(handler)),
     )
 
-    with pytest.raises(OcrServiceUnavailable, match="unavailable"):
+    with pytest.raises(OcrServiceUnavailable, match="OCR 服务不可用"):
         provider.parse(blank_pdf(), file_name="scan.pdf")
 
 

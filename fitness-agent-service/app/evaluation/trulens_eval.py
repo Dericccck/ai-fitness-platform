@@ -1,8 +1,7 @@
-"""TruLens offline evaluator for sanitized Supervisor traces.
+"""用于已脱敏 Supervisor 追踪记录的 TruLens 离线评估器。
 
-This runner is deliberately separate from the request path.  Deterministic policy,
-authorization, confirmation, and retrieval gates remain the release authority; the
-TruLens metrics add semantic quality signals and are persisted for comparison.
+该运行器刻意与请求路径分离。确定性的策略、授权、确认和检索门仍是发布依据；TruLens
+指标补充语义质量信号，并持久化用于比较。
 """
 
 from __future__ import annotations
@@ -18,7 +17,7 @@ from app.evaluation.telemetry import redact_text
 
 
 class TruLensEvaluationError(RuntimeError):
-    """Raised when the optional TruLens evaluation environment is incomplete."""
+    """可选 TruLens 评估环境不完整时抛出。"""
 
 
 @dataclass(frozen=True)
@@ -57,18 +56,18 @@ def _load_trulens() -> tuple[Any, Any, Any, Any, Any]:
         from trulens.core.schema.record import Record
     except ImportError as exc:  # pragma: no cover - exercised in lean images
         raise TruLensEvaluationError(
-            "TruLens evaluation extra is not installed; run uv sync --extra eval"
+            "TruLens 评估额外依赖未安装；请运行 uv sync --extra eval"
         ) from exc
     return Metric, Selector, TruSession, DefaultDBConnector, Record
 
 
 class TruLensEvaluator:
-    """Build TruLens metrics, run them, and optionally persist results."""
+    """构建 TruLens 指标、运行评估并按需持久化结果。"""
 
     def __init__(self, settings: Settings, *, persist: bool = True, judge: bool = False) -> None:
         if persist:
-            # The offline runner uses TruLens' relational connector, not its experimental
-            # global OTEL provider; the service owns that provider already.
+        # 离线运行器使用 TruLens 的关系连接器，而不是其实验性的全局 OTEL provider；
+        # 该 provider 已由服务负责管理。
             os.environ.setdefault("TRULENS_OTEL_TRACING", "0")
         Metric, Selector, TruSession, DefaultDBConnector, Record = _load_trulens()
         self._Metric = Metric
@@ -102,13 +101,13 @@ class TruLensEvaluator:
         if judge:
             if not settings.trulens_judge_api_key:
                 raise TruLensEvaluationError(
-                    "TRULENS_JUDGE_API_KEY is required when --judge is enabled"
+                    "启用 --judge 时必须提供 TRULENS_JUDGE_API_KEY"
                 )
             try:
                 from trulens.providers.openai import OpenAI
             except ImportError as exc:  # pragma: no cover
                 raise TruLensEvaluationError(
-                    "TruLens OpenAI provider is not installed; run uv sync --extra eval"
+                    "TruLens OpenAI provider 未安装；请运行 uv sync --extra eval"
                 ) from exc
             provider_factory: Any = OpenAI
             provider = provider_factory(
@@ -207,9 +206,9 @@ def load_cases(path: Path) -> list[TruLensCase]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise TruLensEvaluationError(f"cannot load TruLens cases {path}: {exc}") from exc
+        raise TruLensEvaluationError(f"无法加载 TruLens 案例 {path}：{exc}") from exc
     if not isinstance(raw, list):
-        raise TruLensEvaluationError("TruLens cases must be a JSON array")
+        raise TruLensEvaluationError("TruLens 案例必须是 JSON 数组")
     return [case_from_mapping(item) for item in raw]
 
 
@@ -217,14 +216,14 @@ def load_thresholds(path: Path) -> dict[str, float]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
     except (OSError, json.JSONDecodeError) as exc:
-        raise TruLensEvaluationError(f"cannot load TruLens thresholds {path}: {exc}") from exc
+        raise TruLensEvaluationError(f"无法加载 TruLens 阈值 {path}：{exc}") from exc
     return {str(key): float(value) for key, value in raw.items()}
 
 
 def validate_thresholds(results: list[dict[str, Any]], thresholds: dict[str, float]) -> list[str]:
     failures: list[str] = []
     if not results:
-        return ["no TruLens cases were evaluated"]
+        return ["没有评估 TruLens 案例"]
     for metric_name, minimum in thresholds.items():
         scores = [
             item["metrics"][metric_name]["score"]
