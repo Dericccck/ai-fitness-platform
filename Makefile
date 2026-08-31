@@ -159,13 +159,13 @@ agent-eval:
 
 agent-trulens-eval:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --extra eval python -m app.evaluation.trulens_cli \
-		--cases evals/trulens_smoke.json --thresholds evals/trulens_thresholds.json
+		--cases evals/trulens_smoke.json --thresholds evals/trulens_thresholds.json $(ARGS)
 
 agent-trulens-judge:
 	@test -n "$$TRULENS_JUDGE_API_KEY" || (echo "请先设置 TRULENS_JUDGE_API_KEY（仅用于受控离线评测）"; exit 1)
 	cd $(AGENT_DIR) && TRULENS_JUDGE_API_KEY=$(TRULENS_JUDGE_API_KEY) UV_CACHE_DIR=$(UV_CACHE_DIR) \
 		uv run --extra eval python -m app.evaluation.trulens_cli --judge \
-		--cases evals/trulens_smoke.json --thresholds evals/trulens_judge_thresholds.json
+		--cases evals/trulens_smoke.json --thresholds evals/trulens_judge_thresholds.json $(ARGS)
 
 agent-trulens-retention:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/trulens_retention.py $(ARGS)

@@ -1,3 +1,5 @@
+from collections.abc import Sequence
+
 import structlog
 from fastapi import FastAPI
 from opentelemetry import trace
@@ -5,16 +7,19 @@ from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExport
 from opentelemetry.instrumentation.fastapi import FastAPIInstrumentor
 from opentelemetry.instrumentation.httpx import HTTPXClientInstrumentor
 from opentelemetry.sdk.resources import Resource
-from opentelemetry.sdk.trace import TracerProvider
-from opentelemetry.sdk.trace.export import BatchSpanProcessor
+from opentelemetry.sdk.trace import ReadableSpan, TracerProvider
+from opentelemetry.sdk.trace.export import BatchSpanProcessor, SpanExporter, SpanExportResult
 from opentelemetry.sdk.trace.sampling import ParentBased, TraceIdRatioBased
 
 from app.core.config import Settings
+from app.core.metrics import HttpMetrics
 
 logger = structlog.get_logger(__name__)
 
 
-def configure_tracing(app: FastAPI, settings: Settings) -> TracerProvider | None:
+def configure_tracing(
+    app: FastAPI, settings: Settings, metrics: HttpMetrics | None = None
+) -> TracerProvider | None:
     """按环境配置启用 OpenTelemetry，并通过 OTLP/HTTP 批量导出 Trace。
 
     默认配置不会导出任何数据。只有 ``AGENT_OTEL_ENABLED=true`` 且明确提供 Trace
@@ -45,7 +50,7 @@ def configure_tracing(app: FastAPI, settings: Settings) -> TracerProvider | None
     # BatchSpanProcessor 在后台批量发送，避免每个请求同步等待观测平台网络响应。
     provider.add_span_processor(BatchSpanProcessor(exporter))
     if settings.trulens_online_export_enabled:
-        _add_trulens_database_exporter(provider, settings)
+        _add_trulens_database_exporter(provider, settings, metrics=metrics)
     trace.set_tracer_provider(provider)
 
     # 健康检查和 Metrics 高频且价值较低，排除后可减少噪声与存储成本。
@@ -64,7 +69,36 @@ def configure_tracing(app: FastAPI, settings: Settings) -> TracerProvider | None
     return provider
 
 
-def _add_trulens_database_exporter(provider: TracerProvider, settings: Settings) -> None:
+class _MonitoredTruLensExporter(SpanExporter):
+    """为官方 TruLens 导出器增加低基数成功/失败指标。"""
+
+    def __init__(self, delegate: SpanExporter, metrics: HttpMetrics) -> None:
+        self._delegate = delegate
+        self._metrics = metrics
+
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        try:
+            result = self._delegate.export(spans)
+        except Exception:
+            self._metrics.record_trulens_export("FAILED", len(spans))
+            logger.exception("trulens_export_failed")
+            return SpanExportResult.FAILURE
+        status = "SUCCEEDED" if result is SpanExportResult.SUCCESS else "FAILED"
+        self._metrics.record_trulens_export(status, len(spans))
+        if status == "FAILED":
+            logger.error("trulens_export_failed", span_count=len(spans))
+        return result
+
+    def force_flush(self, timeout_millis: int = 30_000) -> bool:
+        return self._delegate.force_flush(timeout_millis)
+
+    def shutdown(self) -> None:
+        self._delegate.shutdown()
+
+
+def _add_trulens_database_exporter(
+    provider: TracerProvider, settings: Settings, *, metrics: HttpMetrics | None = None
+) -> None:
     """把带 TruLens 语义标识的 OTEL Span 直接写入独立评测数据库。
 
     TruLens 的在线 OTEL 路径和离线 ``TruSession.add_record`` 是两条不同链路：这里
@@ -87,7 +121,9 @@ def _add_trulens_database_exporter(provider: TracerProvider, settings: Settings)
         raise ValueError("已启用 TruLens 在线导出，但 TRULENS_DATABASE_URL 为空")
     try:
         connector = DefaultDBConnector(database_url=database_url)
-        exporter = TruLensOtelSpanExporter(connector)
+        exporter: SpanExporter = TruLensOtelSpanExporter(connector)
     except Exception as exc:  # pragma: no cover - depends on external database
         raise RuntimeError("无法初始化 TruLens 在线评测数据库连接") from exc
+    if metrics is not None:
+        exporter = _MonitoredTruLensExporter(exporter, metrics)
     provider.add_span_processor(BatchSpanProcessor(exporter))

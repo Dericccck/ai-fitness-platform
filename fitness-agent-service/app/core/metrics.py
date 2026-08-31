@@ -27,6 +27,8 @@ class HttpMetrics:
     session_summary_tokens_total: Counter
     session_summary_chars: Histogram
     operations_query_events_total: Counter
+    trulens_export_batches_total: Counter
+    trulens_export_spans_total: Counter
 
     @classmethod
     def create(
@@ -134,6 +136,20 @@ class HttpMetrics:
                 namespace="fitness_agent",
                 registry=target_registry,
             ),
+            trulens_export_batches_total=Counter(
+                "trulens_export_batches_total",
+                "TruLens OTEL 在线导出批次结果；status 只允许 SUCCEEDED 或 FAILED。",
+                labelnames=("status",),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
+            trulens_export_spans_total=Counter(
+                "trulens_export_spans_total",
+                "TruLens OTEL 在线导出 Span 数量；status 只允许 SUCCEEDED 或 FAILED。",
+                labelnames=("status",),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
         )
 
     def record_memory_candidate_event(self, event: str, count: int = 1) -> None:
@@ -163,6 +179,16 @@ class HttpMetrics:
 
         if count > 0:
             self.operations_query_events_total.labels(event=event).inc(count)
+
+    def record_trulens_export(self, status: str, span_count: int) -> None:
+        """记录 TruLens 导出结果；不记录 Trace、记录或用户标识。"""
+
+        if status not in {"SUCCEEDED", "FAILED"}:
+            raise ValueError("TruLens 导出状态必须为 SUCCEEDED 或 FAILED")
+        if span_count < 0:
+            raise ValueError("TruLens 导出 Span 数量不能为负数")
+        self.trulens_export_batches_total.labels(status=status).inc()
+        self.trulens_export_spans_total.labels(status=status).inc(span_count)
 
 
 def _route_template(scope: Scope) -> str:

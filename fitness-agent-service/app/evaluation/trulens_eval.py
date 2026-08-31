@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
+import math
 import os
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
@@ -35,11 +38,16 @@ class TruLensCase:
     prompt_version: str = ""
     model_version: str = ""
     knowledge_base_version: str = ""
+    graph_version: str = ""
 
 
 def case_from_mapping(data: dict[str, Any]) -> TruLensCase:
     """从离线案例 JSON 创建案例；不允许缺少核心输入。"""
 
+    for field_name in ("case_id", "question", "answer"):
+        value = data.get(field_name)
+        if not isinstance(value, str) or not value.strip():
+            raise TruLensEvaluationError(f"TruLens 案例缺少非空字段 {field_name}")
     expectations = data.get("expectations", {})
     if not isinstance(expectations, dict):
         raise TruLensEvaluationError("TruLens 案例 expectations 必须是 JSON 对象")
@@ -58,6 +66,7 @@ def case_from_mapping(data: dict[str, Any]) -> TruLensCase:
         prompt_version=str(data.get("prompt_version", "")),
         model_version=str(data.get("model_version", "")),
         knowledge_base_version=str(data.get("knowledge_base_version", "")),
+        graph_version=str(data.get("graph_version", "")),
     )
 
 
@@ -80,8 +89,33 @@ def _span_attributes(span: Mapping[str, Any]) -> dict[str, Any]:
 
 
 def _trace_spans(trace_data: Mapping[str, Any] | list[Any]) -> list[Mapping[str, Any]]:
+    """兼容单条 Trace、Trace 数组以及 OTLP resourceSpans 数组。"""
+
     if isinstance(trace_data, list):
-        raw_spans: Any = trace_data
+        if trace_data and all(
+            isinstance(item, Mapping) and "resourceSpans" in item for item in trace_data
+        ):
+            raw_spans = [
+                span
+                for trace in trace_data
+                for resource in trace.get("resourceSpans", [])
+                if isinstance(resource, Mapping)
+                for scope in resource.get("scopeSpans", [])
+                if isinstance(scope, Mapping)
+                for span in scope.get("spans", [])
+            ]
+        elif trace_data and all(
+            isinstance(item, Mapping) and "scopeSpans" in item for item in trace_data
+        ):
+            raw_spans = [
+                span
+                for resource in trace_data
+                for scope in resource.get("scopeSpans", [])
+                if isinstance(scope, Mapping)
+                for span in scope.get("spans", [])
+            ]
+        else:
+            raw_spans = trace_data
     else:
         raw_spans = trace_data.get("spans", trace_data.get("resourceSpans", []))
         if (
@@ -165,20 +199,41 @@ def trace_to_case(
 
     trace_id = str(root.get("trace_id", root.get("traceId", "")))
     record_id = text_attribute("ai.observability.record_id")
+    question = text_attribute("ai.observability.record_root.input")
+    answer = text_attribute("ai.observability.record_root.output")
+    if not trace_id:
+        raise TruLensEvaluationError("Trace 根 Span 缺少 trace_id，无法关联评测记录")
+    if not record_id:
+        raise TruLensEvaluationError("Trace 根 Span 缺少 ai.observability.record_id")
+    if not question or not answer:
+        raise TruLensEvaluationError(
+            "Trace 缺少可评测的输入或输出；请使用 evaluation 采集模式导出 Trace"
+        )
+    versions = {
+        "code": text_attribute("fitness.agent.code_version"),
+        "prompt": text_attribute("fitness.agent.prompt_version"),
+        "model": text_attribute("fitness.agent.model", "gen_ai.request.model"),
+        "knowledge_base": text_attribute("fitness.agent.knowledge_base_version"),
+        "graph": text_attribute("fitness.agent.graph_version"),
+    }
+    missing_versions = [name for name, value in versions.items() if not value]
+    if missing_versions:
+        raise TruLensEvaluationError("Trace 缺少版本关联字段：" + ", ".join(missing_versions))
     return TruLensCase(
         case_id=case_id or record_id or trace_id or "trace-case",
-        question=text_attribute("ai.observability.record_root.input"),
-        answer=text_attribute("ai.observability.record_root.output"),
+        question=question,
+        answer=answer,
         contexts=tuple(dict.fromkeys(contexts)),
         route=text_attribute("fitness.agent.route") or (routes[0] if routes else "UNKNOWN"),
         tool_trace=" -> ".join(dict.fromkeys(tools)),
         status=text_attribute("fitness.agent.status") or "SUCCEEDED",
         record_id=record_id,
         trace_id=trace_id,
-        code_version=text_attribute("fitness.agent.code_version"),
-        prompt_version=text_attribute("fitness.agent.prompt_version"),
-        model_version=text_attribute("fitness.agent.model", "gen_ai.request.model"),
-        knowledge_base_version=text_attribute("fitness.agent.knowledge_base_version"),
+        code_version=versions["code"],
+        prompt_version=versions["prompt"],
+        model_version=versions["model"],
+        knowledge_base_version=versions["knowledge_base"],
+        graph_version=versions["graph"],
     )
 
 
@@ -370,6 +425,7 @@ class TruLensEvaluator:
                 "prompt_version": case.prompt_version,
                 "model_version": case.model_version,
                 "knowledge_base_version": case.knowledge_base_version,
+                "graph_version": case.graph_version,
             },
         )
         if self._session is not None:
@@ -386,6 +442,7 @@ class TruLensEvaluator:
                 "prompt": case.prompt_version,
                 "model": case.model_version,
                 "knowledge_base": case.knowledge_base_version,
+                "graph": case.graph_version,
             },
             "metrics": {
                 name: {"score": score, "explanation": None, "error": None}
@@ -474,7 +531,7 @@ def validate_thresholds(results: list[dict[str, Any]], thresholds: dict[str, flo
                 failures.append(f"{case_id} 缺少指标 {metric_name}")
                 continue
             score = metric.get("score")
-            if not isinstance(score, (int, float)):
+            if not isinstance(score, (int, float)) or not math.isfinite(float(score)):
                 failures.append(f"{case_id} 指标 {metric_name} 没有有效分数")
                 continue
             scores.append(float(score))
@@ -483,3 +540,73 @@ def validate_thresholds(results: list[dict[str, Any]], thresholds: dict[str, flo
             if average < minimum:
                 failures.append(f"{metric_name} {average:.4f} < {minimum:.4f}")
     return failures
+
+
+def evaluation_run_summary(
+    results: list[dict[str, Any]],
+    thresholds: dict[str, float],
+    *,
+    source: str,
+    dataset_version: str,
+    run_id: str,
+) -> dict[str, Any]:
+    """生成一次评测运行的机器可读汇总。
+
+    单案例结果适合定位问题，但不适合在 CI、报表或发布记录中判断整体结果。
+    汇总同时保留数据集摘要、运行标识、版本覆盖率、各指标平均分和失败数量，
+    让“这次评测究竟评了什么、使用了哪版数据、是否完整”可以被审计。
+    """
+
+    metric_averages: dict[str, float | None] = {}
+    metric_coverage: dict[str, int] = {}
+    for metric_name in thresholds:
+        scores = [
+            float(item["metrics"][metric_name]["score"])
+            for item in results
+            if isinstance(item.get("metrics", {}).get(metric_name), dict)
+            and isinstance(item["metrics"][metric_name].get("score"), (int, float))
+            and math.isfinite(float(item["metrics"][metric_name]["score"]))
+        ]
+        metric_coverage[metric_name] = len(scores)
+        metric_averages[metric_name] = sum(scores) / len(scores) if scores else None
+
+    status_counts: dict[str, int] = {}
+    route_counts: dict[str, int] = {}
+    for item in results:
+        status = str(item.get("status", "UNKNOWN"))
+        route = str(item.get("route", "UNKNOWN"))
+        status_counts[status] = status_counts.get(status, 0) + 1
+        route_counts[route] = route_counts.get(route, 0) + 1
+
+    version_fields = ("code", "prompt", "model", "knowledge_base", "graph")
+    version_coverage = {
+        field: sum(
+            bool(item.get("versions", {}).get(field))
+            for item in results
+            if isinstance(item.get("versions"), dict)
+        )
+        for field in version_fields
+    }
+    return {
+        "run_id": run_id,
+        "source": source,
+        "dataset_version": dataset_version,
+        "generated_at": datetime.now(UTC).isoformat(),
+        "case_count": len(results),
+        "status_counts": status_counts,
+        "route_counts": route_counts,
+        "metric_averages": metric_averages,
+        "metric_coverage": metric_coverage,
+        "version_coverage": version_coverage,
+        "threshold_count": len(thresholds),
+    }
+
+
+def file_fingerprint(path: Path) -> str:
+    """计算评测输入文件摘要，不读取或输出文件中的业务内容。"""
+
+    try:
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+    except OSError as exc:
+        raise TruLensEvaluationError(f"无法读取评测输入文件 {path}：{exc}") from exc
+    return f"sha256:{digest}"

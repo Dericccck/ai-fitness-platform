@@ -69,3 +69,14 @@ def test_operations_metrics_use_fixed_event_label_without_identifiers() -> None:
     assert 'event="GATEWAY_TIMEOUT"' in exposition
     assert "organization_id" not in exposition
     assert "request_id" not in exposition
+
+
+def test_trulens_export_metrics_are_low_cardinality() -> None:
+    _, metrics = build_test_app()
+    metrics.record_trulens_export("SUCCEEDED", 3)
+    metrics.record_trulens_export("FAILED", 1)
+
+    exposition = generate_latest(metrics.registry).decode()
+    assert 'status="SUCCEEDED"' in exposition
+    assert 'status="FAILED"' in exposition
+    assert "trace_id" not in exposition

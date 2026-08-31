@@ -36,6 +36,16 @@ def test_provider_configuration_is_explicit() -> None:
     assert settings.rag_quality_max_missing_pages == 0
 
 
+def test_online_trulens_requires_a_real_otel_capture_chain() -> None:
+    with pytest.raises(ValidationError, match="OTLP Trace Endpoint"):
+        Settings(
+            _env_file=None,
+            trulens_enabled=True,
+            trulens_capture_mode="metadata",
+            trulens_online_export_enabled=True,
+        )
+
+
 def test_deepseek_environment_names_are_supported(monkeypatch) -> None:
     monkeypatch.setenv("DEEPSEEK_API_KEY", "deepseek-key")
     monkeypatch.setenv("DEEPSEEK_MODEL", "deepseek-chat")

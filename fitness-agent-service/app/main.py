@@ -322,7 +322,7 @@ app = FastAPI(
     redoc_url="/redoc" if runtime_settings.api_docs_enabled else None,
     lifespan=lifespan,
 )
-app.state.trace_provider = configure_tracing(app, runtime_settings)
+app.state.trace_provider = configure_tracing(app, runtime_settings, metrics=http_metrics)
 if runtime_settings.metrics_enabled:
     app.add_middleware(MetricsMiddleware, metrics=http_metrics)
 app.add_middleware(RequestContextMiddleware, service_name=runtime_settings.service_name)

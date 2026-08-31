@@ -183,6 +183,11 @@ class TruLensTelemetry:
             "fitness.agent.conversation_id_hash": hash_identifier(
                 conversation_id, secret=self.identifier_hash_secret
             ),
+            # TruLens 官方选择器使用 conversation_id 做会话级聚合；这里仍只写入
+            # HMAC 摘要，既能关联同一会话，又不会把真实会话标识送入评测库。
+            TRULENS_CONVERSATION_ID: hash_identifier(
+                conversation_id, secret=self.identifier_hash_secret
+            ),
             "fitness.agent.route": route,
         }
         if self.capture_content:
@@ -224,6 +229,7 @@ class TruLensTelemetry:
         if not self.enabled:
             return
         span.set_attribute("fitness.agent.status", status)
+        span.set_attribute("fitness.agent.outcome", status)
         if answer:
             self.set_text(span, RECORD_OUTPUT, answer)
 

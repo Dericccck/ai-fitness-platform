@@ -353,6 +353,27 @@ class Settings(BaseSettings):
         return self
 
     @model_validator(mode="after")
+    def validate_trulens_online_contract(self) -> "Settings":
+        """防止开启在线评测后却没有实际 Trace 采集链路。"""
+
+        if not self.trulens_online_export_enabled or self.environment == "production":
+            return self
+        errors: list[str] = []
+        if not self.trulens_enabled:
+            errors.append("启用 TruLens 在线导出时 AGENT_TRULENS_ENABLED 必须为 true")
+        if self.trulens_capture_mode == "disabled":
+            errors.append("启用 TruLens 在线导出时 AGENT_TRULENS_CAPTURE_MODE 不能为 disabled")
+        if not self.otel_configured:
+            errors.append(
+                "启用 TruLens 在线导出时必须同时提供 AGENT_OTEL_ENABLED 和 OTLP Trace Endpoint"
+            )
+        if not self.trulens_database_url.strip():
+            errors.append("启用 TruLens 在线导出时必须提供 TRULENS_DATABASE_URL")
+        if errors:
+            raise ValueError("TruLens 在线观测契约不完整：" + "；".join(errors))
+        return self
+
+    @model_validator(mode="after")
     def validate_production_authentication_contract(self) -> "Settings":
         """阻止生产环境以本地 HMAC 或空公钥配置启动。
 

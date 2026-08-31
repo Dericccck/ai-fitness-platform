@@ -2085,3 +2085,18 @@ smoke 无法发现的“跨领域多轮上下文或子图权限串域”问题�
 `CREATE` 权限）。脚本现已明确分离源库账号与恢复目标管理员账号，执行模式必须显式提供
 `GATEWAY_MYSQL_RESTORE_USERNAME/PASSWORD`，不会通过给业务账号扩权来“修复”验收。当前演练因此仍等待本地恢复管理员凭证；
 拿到临时凭证后再执行隔离恢复并记录真实 RTO/RPO，不把这次权限拒绝误记为恢复通过。
+
+## 观测评测优化收口（2026-09-01）
+
+本轮一次性收口观测与评测闭环：
+
+- TruLens 在线 OTEL 导出增加成功/失败批次和 Span 数量 Metrics；失败会触发
+  `FitnessAgentTruLensExportFailed`，不再出现“服务正常但评测库实际没有写入”的静默状态。
+- 根 Trace 补齐官方会话标识摘要和最终 outcome；`--traces` 转换现在要求真实的根 Span 输入/输出、
+  `record_id`、`trace_id` 以及代码、Prompt、模型、知识库、图编排五类版本关联，metadata Trace 缺少正文时会
+  明确失败而不是生成空 Record；同时兼容 OTLP `resourceSpans` 数组格式。
+- TruLens CLI 增加 `run_id`、输入文件 SHA-256 数据集版本、案例/领域/状态分布、指标覆盖率、指标平均分和版本覆盖率，
+  可通过 `--report` 保存机器可读报告；缺失指标和非有限分数继续严格阻断门禁。
+- 补充在线导出的配置契约、低基数 Metrics 测试、Trace 数据质量测试和运行级评测汇总测试；Make 目标支持通过 `ARGS` 传入报告路径。
+- 当前本地可验证的观测评测能力已完成；生产仍需外部 OTLP/TruLens 评测库、Alertmanager 值班接收器、访问控制、备份和保留策略的
+  部署证据，不能用本地 SQLite 或 Debug Exporter 代替生产验收。

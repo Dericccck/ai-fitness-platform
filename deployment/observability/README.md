@@ -25,6 +25,11 @@ Prometheus 负责抓取 Metrics；两条链路职责不同，不用 Trace 代替
 固定低基数标签和说明，以及 Prometheus 是否配置 Agent/Worker 抓取任务。启动本地 Prometheus 后，可运行
 `make observability-live-check`，只读调用 Prometheus API 验证规则已经加载。
 
+Agent 开启 TruLens 在线 OTEL 导出后，导出批次成功/失败会进入
+`fitness_agent_trulens_export_batches_total`，失败会触发 `FitnessAgentTruLensExportFailed`；该指标只包含固定
+状态，不包含 Trace ID、用户 ID 或机构 ID。在线导出必须同时打开 OTEL、TruLens 和 metadata/evaluation 采集，且
+评测库必须与业务库、Checkpoint 库分离。
+
 告警表达式的触发和恢复可运行 `make observability-rule-test`。该命令使用 Prometheus `promtool` 的合成时间序列，验证
 Agent 宕机告警在持续异常后触发、恢复后解除，以及 Operations 审计失败告警的计数器窗口逻辑；不会停止本地服务、写入业务
 数据库或发送外部通知。
@@ -49,5 +54,17 @@ Prometheus 时间序列。
 
 当前运行时验收只验证 Prometheus 规则加载，不自动制造故障、不停止服务，也不验证外部 Alertmanager 的收件人路由。
 生产接入 Alertmanager 后，还需要在隔离窗口演练告警触发、抑制、恢复和升级策略。
+
+## TruLens 评测报告
+
+离线确定性评测和 Judge 评测都输出运行级报告，包含 `run_id`、输入文件 SHA-256、案例/领域分布、指标平均分、
+指标覆盖率和代码/Prompt/模型/知识库/图版本覆盖率。可通过 `ARGS` 保存报告：
+
+```bash
+make agent-trulens-eval ARGS="--no-persist --report var/evaluations/trulens-latest.json"
+```
+
+使用 `--traces` 时，输入必须是已脱敏且包含根 Span 输入/输出、`record_id`、`trace_id` 及五类版本关联字段的真实
+Trace；metadata 模式只用于排障，不能伪装成可评测 Record。缺字段会直接失败，不会被静默跳过。
 
 本配置不会自动发送短信、Push 或外部通知，也不会改变健身业务的写入确认流程。

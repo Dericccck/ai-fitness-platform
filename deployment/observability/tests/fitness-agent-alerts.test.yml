@@ -69,3 +69,24 @@ tests:
             exp_annotations:
               summary: "经营查询审计写入失败"
               description: "Operations 查询出现审计失败；系统应保持 fail-closed，需检查 PostgreSQL 和审计表。"
+
+  # TruLens 导出失败必须可观测，避免线上只有空评测库却没有告警。
+  - interval: 1m
+    input_series:
+      - series: 'fitness_agent_trulens_export_batches_total{job="fitness-agent",status="FAILED"}'
+        values: '0 0 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: FitnessAgentTruLensExportFailed
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: FitnessAgentTruLensExportFailed
+        exp_alerts:
+          - exp_labels:
+              job: fitness-agent
+              status: FAILED
+              severity: critical
+              service: fitness-agent
+            exp_annotations:
+              summary: "TruLens 在线评测导出失败"
+              description: "最近 10 分钟存在 TruLens OTEL 批次写入失败；评测库可能缺少真实 Trace，应检查评测库连接、权限和容量。"

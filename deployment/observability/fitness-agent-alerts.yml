@@ -83,3 +83,12 @@ groups:
         annotations:
           summary: "健身 Agent 站内通知投递失败"
           description: "最近 10 分钟存在通知投递失败；请检查通知 Outbox、模板、渠道适配器和重试次数。"
+
+      - alert: FitnessAgentTruLensExportFailed
+        expr: increase(fitness_agent_trulens_export_batches_total{job="fitness-agent",status="FAILED"}[10m]) > 0
+        labels:
+          severity: critical
+          service: fitness-agent
+        annotations:
+          summary: "TruLens 在线评测导出失败"
+          description: "最近 10 分钟存在 TruLens OTEL 批次写入失败；评测库可能缺少真实 Trace，应检查评测库连接、权限和容量。"
