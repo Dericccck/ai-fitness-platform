@@ -39,6 +39,6 @@ public enum OperationsMetric {
                 return metric;
             }
         }
-        throw new IllegalArgumentException("unsupported operations metric");
+        throw new IllegalArgumentException("不支持的经营指标");
     }
 }

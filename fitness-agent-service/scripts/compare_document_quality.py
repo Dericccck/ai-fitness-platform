@@ -16,7 +16,7 @@ def _read_report(path: Path) -> dict[str, Any]:
 
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
-        raise TypeError(f"quality report root must be an object: {path}")
+        raise TypeError(f"质量报告根节点必须是对象：{path}")
     return data
 
 

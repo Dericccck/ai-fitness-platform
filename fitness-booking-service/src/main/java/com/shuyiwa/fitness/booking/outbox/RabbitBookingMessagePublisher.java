@@ -30,8 +30,8 @@ public class RabbitBookingMessagePublisher implements BookingMessagePublisher {
         CorrelationData.Confirm confirm = correlation.getFuture().get(
                 properties.getConfirmTimeoutMs(), TimeUnit.MILLISECONDS);
         if (confirm == null || !confirm.isAck()) {
-            String reason = confirm == null ? "empty broker confirmation" : confirm.getReason();
-            throw new IllegalStateException("RabbitMQ publisher nack: " + reason);
+            String reason = confirm == null ? "消息代理未返回确认信息" : confirm.getReason();
+            throw new IllegalStateException("RabbitMQ 发布器未确认消息：" + reason);
         }
     }
 
@@ -58,7 +58,7 @@ public class RabbitBookingMessagePublisher implements BookingMessagePublisher {
             case "APPOINTMENT_CANCELLED":
                 return "appointment.cancelled";
             default:
-                throw new IllegalArgumentException("unsupported booking event type: " + eventType);
+                throw new IllegalArgumentException("不支持的预约事件类型：" + eventType);
         }
     }
 

@@ -48,7 +48,7 @@ public class CustomerServiceHealthControllerTest {
     public void readyProbeFailsClosedWithoutTokenOrDatabase() {
         JdbcTemplate jdbc = mock(JdbcTemplate.class);
         when(jdbc.queryForObject("SELECT 1", Integer.class))
-                .thenThrow(new IllegalStateException("database unavailable"));
+                .thenThrow(new IllegalStateException("数据库不可用"));
 
         CustomerServiceHealthController.ReadyView result =
                 new CustomerServiceHealthController(jdbc, properties(" ")).ready();

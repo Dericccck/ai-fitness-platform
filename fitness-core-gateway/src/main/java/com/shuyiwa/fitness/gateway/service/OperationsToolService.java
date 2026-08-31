@@ -60,19 +60,19 @@ public class OperationsToolService {
         requireOperationsRole(context);
         if (organizationId == null || organizationId.trim().isEmpty()
                 || !context.canAccessOrganization(organizationId)) {
-            throw new GatewayForbiddenException("organization is outside operations context scope");
+            throw new GatewayForbiddenException("机构不在经营查询上下文授权范围内");
         }
 
         LocalDate end = to == null ? LocalDate.now(BUSINESS_ZONE) : to;
         LocalDate start = from == null ? end.minusDays(30) : from;
         if (start.isAfter(end) || end.toEpochDay() - start.toEpochDay() > 92) {
-            throw new IllegalArgumentException("operations time range must be 0 to 92 days");
+            throw new IllegalArgumentException("经营查询时间范围必须为 0 到 92 天");
         }
         OperationsMetric metric = OperationsMetric.parse(metricCode);
         OperationsTimeBucket bucket = OperationsTimeBucket.parse(bucketCode);
         if (bucket != OperationsTimeBucket.NONE && !supportsTimeBucket(metric)) {
             throw new IllegalArgumentException(
-                    "DAY/WEEK time buckets currently support appointment, completed class, new customer, revenue, course and coach metrics");
+                        "DAY/WEEK 时间桶当前支持预约、完课量、新客量、营收、课程和教练指标");
         }
         int limit = normalizeLimit(requestedLimit);
         Instant fromInstant = start.atStartOfDay(BUSINESS_ZONE).toInstant();
@@ -91,7 +91,7 @@ public class OperationsToolService {
 
     private void requireOperationsRole(AgentContext context) {
         if (!context.isSystemAdmin() && !context.isOrganizationAdmin()) {
-            throw new GatewayForbiddenException("operations metrics require administrator role");
+            throw new GatewayForbiddenException("经营指标查询需要管理员角色");
         }
     }
 
@@ -113,7 +113,7 @@ public class OperationsToolService {
             return DEFAULT_LIMIT;
         }
         if (requestedLimit < 1 || requestedLimit > MAX_LIMIT) {
-            throw new IllegalArgumentException("limit must be between 1 and 100");
+            throw new IllegalArgumentException("limit 必须介于 1 和 100 之间");
         }
         return requestedLimit;
     }

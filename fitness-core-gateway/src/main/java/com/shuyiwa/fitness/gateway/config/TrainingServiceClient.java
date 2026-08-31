@@ -54,7 +54,7 @@ public class TrainingServiceClient {
                 confirmationToken, context, "fitness.training.plan.create_draft.v1",
                 "CREATE_TRAINING_DRAFT", input.getOrganizationId() + ":" + input.getStudentId(), requestId);
         if (!input.getOrganizationId().equals(claims.getOrganizationId())) {
-            throw new GatewayForbiddenException("confirmation organization does not match request");
+            throw new GatewayForbiddenException("确认凭证中的机构与请求不匹配");
         }
         requireOrganization(context, input.getOrganizationId());
         return exchange(context, requestId, claims, HttpMethod.POST,
@@ -101,7 +101,7 @@ public class TrainingServiceClient {
                                                                String confirmationToken,
                                                                TrainingToolInputs.ExecutionInput input) {
         if (input == null || input.getDayId() == null || !dayId.equals(input.getDayId())) {
-            throw new IllegalArgumentException("execution day does not match request path");
+            throw new IllegalArgumentException("训练日与请求路径不匹配");
         }
         ConfirmationTokenClaims claims = confirmationTokenVerifier.verify(
                 confirmationToken, context, "fitness.training.day.record_execution.v1",
@@ -115,7 +115,7 @@ public class TrainingServiceClient {
                                                 ConfirmationTokenClaims confirmationClaims, HttpMethod method,
                                                 String path, Object body) {
         if (properties.getInternalServiceToken().trim().isEmpty()) {
-            throw new IllegalStateException("training service internal token is not configured");
+            throw new IllegalStateException("训练服务内部 Token 未配置");
         }
         HttpHeaders headers = new HttpHeaders();
         headers.set("X-Internal-Service-Token", properties.getInternalServiceToken());
@@ -140,22 +140,22 @@ public class TrainingServiceClient {
                     method, new HttpEntity<>(body, headers), TrainingServiceViews.Plan.class);
             TrainingServiceViews.Plan bodyResponse = response.getBody();
             if (bodyResponse == null) {
-                throw new IllegalStateException("training service returned an empty response");
+                throw new IllegalStateException("训练服务返回空响应");
             }
             return bodyResponse;
         } catch (HttpClientErrorException exception) {
             if (exception.getStatusCode().value() == 403) {
-                throw new GatewayForbiddenException("training resource is outside the authorized scope");
+                throw new GatewayForbiddenException("训练资源不在授权范围内");
             }
             if (exception.getStatusCode().value() == 404) {
-                throw new GatewayResourceNotFoundException("training plan was not found");
+                throw new GatewayResourceNotFoundException("训练计划不存在");
             }
             if (exception.getStatusCode().value() == 409) {
-                throw new GatewayConflictException("training plan was changed by another request");
+                throw new GatewayConflictException("训练计划已被其他请求修改");
             }
-            throw new IllegalArgumentException("training service rejected the request");
+            throw new IllegalArgumentException("训练服务拒绝了请求");
         } catch (RestClientException exception) {
-            throw new IllegalStateException("training service is temporarily unavailable", exception);
+            throw new IllegalStateException("训练服务暂时不可用", exception);
         }
     }
 
@@ -177,7 +177,7 @@ public class TrainingServiceClient {
                                 ConfirmationTokenClaims confirmationClaims, HttpMethod method,
                                 String path, Object body, Class<T> responseType) {
         if (properties.getInternalServiceToken().trim().isEmpty()) {
-            throw new IllegalStateException("training service internal token is not configured");
+            throw new IllegalStateException("训练服务内部 Token 未配置");
         }
         HttpHeaders headers = new HttpHeaders();
         headers.set("X-Internal-Service-Token", properties.getInternalServiceToken());
@@ -199,28 +199,28 @@ public class TrainingServiceClient {
                     properties.getBaseUrl().replaceAll("/$", "") + path,
                     method, new HttpEntity<>(body, headers), responseType);
             if (response.getBody() == null) {
-                throw new IllegalStateException("training service returned an empty response");
+                throw new IllegalStateException("训练服务返回空响应");
             }
             return response.getBody();
         } catch (HttpClientErrorException exception) {
             if (exception.getStatusCode().value() == 403) {
-                throw new GatewayForbiddenException("training resource is outside the authorized scope");
+                throw new GatewayForbiddenException("训练资源不在授权范围内");
             }
             if (exception.getStatusCode().value() == 404) {
-                throw new GatewayResourceNotFoundException("training resource was not found");
+                throw new GatewayResourceNotFoundException("训练资源不存在");
             }
             if (exception.getStatusCode().value() == 409) {
-                throw new GatewayConflictException("training resource was changed by another request");
+                throw new GatewayConflictException("训练资源已被其他请求修改");
             }
-            throw new IllegalArgumentException("training service rejected the request");
+            throw new IllegalArgumentException("训练服务拒绝了请求");
         } catch (RestClientException exception) {
-            throw new IllegalStateException("training service is temporarily unavailable", exception);
+            throw new IllegalStateException("训练服务暂时不可用", exception);
         }
     }
 
     private void requireOrganization(AgentContext context, String organizationId) {
         if (organizationId == null || !context.canAccessOrganization(organizationId)) {
-            throw new GatewayForbiddenException("organization is outside the authorized scope");
+            throw new GatewayForbiddenException("机构不在授权范围内");
         }
     }
 }

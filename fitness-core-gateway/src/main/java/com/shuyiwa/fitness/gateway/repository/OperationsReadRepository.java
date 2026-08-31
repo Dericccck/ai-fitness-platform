@@ -33,6 +33,6 @@ public interface OperationsReadRepository {
         if (bucket == OperationsTimeBucket.NONE) {
             return query(organizationId, metric, from, to, limit);
         }
-        throw new IllegalArgumentException("time bucket is not supported by this repository");
+        throw new IllegalArgumentException("当前仓储不支持该时间桶");
     }
 }

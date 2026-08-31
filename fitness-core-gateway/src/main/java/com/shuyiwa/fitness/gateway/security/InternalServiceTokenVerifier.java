@@ -28,7 +28,7 @@ public class InternalServiceTokenVerifier {
                 || !MessageDigest.isEqual(
                 configuredToken.getBytes(StandardCharsets.UTF_8),
                 presentedToken.getBytes(StandardCharsets.UTF_8))) {
-            throw new GatewaySecurityException("invalid internal service credential");
+            throw new GatewaySecurityException("内部服务凭证无效");
         }
     }
 }

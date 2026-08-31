@@ -89,7 +89,7 @@ public class CustomerServiceClientTest {
                 anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(CustomerServiceViews.Ticket[].class)
         )).thenThrow(clientError(HttpStatus.FORBIDDEN));
 
-        assertFailure(GatewayForbiddenException.class, "outside the authorized scope", () -> client.list(
+        assertFailure(GatewayForbiddenException.class, "授权范围内", () -> client.list(
                 context(), "request-403", "org-1", null, null, 20
         ));
     }
@@ -100,7 +100,7 @@ public class CustomerServiceClientTest {
                 anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(CustomerServiceViews.Ticket.class)
         )).thenThrow(clientError(HttpStatus.NOT_FOUND));
 
-        assertFailure(GatewayResourceNotFoundException.class, "ticket was not found", () -> client.get(
+        assertFailure(GatewayResourceNotFoundException.class, "客服工单不存在", () -> client.get(
                 context(), "request-404", "org-1", "ticket-missing"
         ));
     }
@@ -109,12 +109,12 @@ public class CustomerServiceClientTest {
     public void serverErrorAndNetworkFailureBecomeTemporaryUnavailable() {
         when(restTemplate.exchange(
                 anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(CustomerServiceViews.Ticket[].class)
-        )).thenThrow(serverError()).thenThrow(new ResourceAccessException("connection refused"));
+        )).thenThrow(serverError()).thenThrow(new ResourceAccessException("连接被拒绝"));
 
-        assertFailure(IllegalStateException.class, "temporarily unavailable", () -> client.list(
+        assertFailure(IllegalStateException.class, "暂时不可用", () -> client.list(
                 context(), "request-503", "org-1", null, null, 20
         ));
-        assertFailure(IllegalStateException.class, "temporarily unavailable", () -> client.list(
+        assertFailure(IllegalStateException.class, "暂时不可用", () -> client.list(
                 context(), "request-network", "org-1", null, null, 20
         ));
     }
@@ -125,7 +125,7 @@ public class CustomerServiceClientTest {
                 anyString(), eq(HttpMethod.GET), any(HttpEntity.class), eq(CustomerServiceViews.Ticket[].class)
         )).thenReturn(new ResponseEntity<>(null, HttpStatus.OK));
 
-        assertFailure(IllegalStateException.class, "empty response", () -> client.list(
+        assertFailure(IllegalStateException.class, "空响应", () -> client.list(
                 context(), "request-empty", "org-1", null, null, 20
         ));
     }
@@ -134,7 +134,7 @@ public class CustomerServiceClientTest {
     public void missingInternalTokenFailsBeforeCallingCustomerService() {
         properties.setInternalServiceToken(" ");
 
-        assertFailure(IllegalStateException.class, "internal token is not configured", () -> client.list(
+        assertFailure(IllegalStateException.class, "内部 Token 未配置", () -> client.list(
                 context(), "request-token", "org-1", null, null, 20
         ));
         verifyNoMoreInteractions(restTemplate);

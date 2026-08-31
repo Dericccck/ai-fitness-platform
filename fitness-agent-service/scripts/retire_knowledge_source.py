@@ -28,10 +28,10 @@ def _find_entry(file_name: str) -> dict[str, object]:
     manifest = json.loads(MANIFEST_PATH.read_text(encoding="utf-8"))
     matches = [entry for entry in manifest["entries"] if entry["file_name"] == file_name]
     if len(matches) != 1:
-        raise ValueError(f"manifest must contain exactly one file named {file_name}")
+        raise ValueError(f"清单必须只包含一个名为 {file_name} 的文件")
     entry = matches[0]
     if bool(entry["indexable"]):
-        raise ValueError("only a non-indexable reference source can be retired by this command")
+        raise ValueError("此命令只能下线不可索引的参考来源")
     return entry
 
 

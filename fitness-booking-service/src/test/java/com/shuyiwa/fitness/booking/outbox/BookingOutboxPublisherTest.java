@@ -38,7 +38,7 @@ public class BookingOutboxPublisherTest {
         BookingOutboxRepository.OutboxEvent event = event();
         when(repository.claimPending(anyString())).thenReturn(Collections.singletonList(event));
         when(repository.markFailed(eq(event), anyString(), any(IllegalStateException.class))).thenReturn(true);
-        doThrow(new IllegalStateException("rabbit unavailable")).when(messagePublisher).publish(event);
+        doThrow(new IllegalStateException("RabbitMQ 不可用")).when(messagePublisher).publish(event);
 
         new BookingOutboxPublisher(repository, messagePublisher, properties).publishPending();
 

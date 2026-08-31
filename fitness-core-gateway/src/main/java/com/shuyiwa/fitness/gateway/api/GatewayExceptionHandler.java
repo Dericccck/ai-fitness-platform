@@ -26,25 +26,25 @@ public class GatewayExceptionHandler {
         // 便于按链路定位是服务间 Token、AgentContext 还是确认凭证校验失败。
         LOGGER.warn("gateway_authentication_rejected path={} requestId={} reason={}",
                 request.getRequestURI(), request.getHeader("X-Request-ID"), exception.getMessage());
-        return new ErrorView("UNAUTHORIZED", "authentication required");
+        return new ErrorView("UNAUTHORIZED", "需要身份验证");
     }
 
     @ExceptionHandler(GatewayForbiddenException.class)
     @ResponseStatus(HttpStatus.FORBIDDEN)
     public ErrorView forbidden() {
-        return new ErrorView("FORBIDDEN", "resource is outside the authorized scope");
+        return new ErrorView("FORBIDDEN", "资源不在授权范围内");
     }
 
     @ExceptionHandler(GatewayResourceNotFoundException.class)
     @ResponseStatus(HttpStatus.NOT_FOUND)
     public ErrorView notFound() {
-        return new ErrorView("NOT_FOUND", "fitness resource was not found");
+        return new ErrorView("NOT_FOUND", "健身资源不存在");
     }
 
     @ExceptionHandler(GatewayConflictException.class)
     @ResponseStatus(HttpStatus.CONFLICT)
     public ErrorView conflict() {
-        return new ErrorView("CONFLICT", "fitness resource was changed by another request");
+        return new ErrorView("CONFLICT", "健身资源已被其他请求修改");
     }
 
     @ExceptionHandler(IllegalArgumentException.class)

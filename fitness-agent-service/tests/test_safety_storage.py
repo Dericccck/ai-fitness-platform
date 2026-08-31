@@ -134,7 +134,7 @@ def test_clamav_scanner_fails_closed_when_service_is_unavailable(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     def unavailable(address, timeout):
-        raise OSError("connection refused")
+        raise OSError("连接被拒绝")
 
     monkeypatch.setattr("app.rag.safety.socket.create_connection", unavailable)
 

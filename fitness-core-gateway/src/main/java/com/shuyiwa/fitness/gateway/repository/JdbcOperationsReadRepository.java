@@ -58,7 +58,7 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
         if (bucket != OperationsTimeBucket.NONE) {
             if (!supportsTimeBucket(metric)) {
                 throw new IllegalArgumentException(
-                        "DAY/WEEK time buckets currently support appointment, completed class, new customer, revenue, course and coach metrics");
+                        "DAY/WEEK 时间桶当前支持预约、完课量、新客量、营收、课程和教练指标");
             }
             // 预约、完课、课程和教练指标按课程开始时间归属；新客和营收按合同创建时间归属。
             // 数据表和时间字段都来自固定指标分支，不能由用户或模型传入。
@@ -169,7 +169,7 @@ public class JdbcOperationsReadRepository implements OperationsReadRepository {
                                 + "GROUP BY c.course_id ORDER BY value DESC, dimension ASC LIMIT :limit",
                         parameters, this::mapRow);
             default:
-                throw new IllegalArgumentException("unsupported operations metric");
+                throw new IllegalArgumentException("不支持的经营指标");
         }
     }
 

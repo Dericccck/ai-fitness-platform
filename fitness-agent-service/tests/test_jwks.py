@@ -45,7 +45,7 @@ def test_jwks_provider_parses_rsa_key_and_reuses_cache(monkeypatch: pytest.Monke
 
 def test_jwks_provider_fails_closed_when_refresh_fails(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_get(url: str, timeout: float) -> httpx.Response:
-        raise httpx.ConnectError("issuer unavailable")
+        raise httpx.ConnectError("签发方不可用")
 
     monkeypatch.setattr("app.infrastructure.jwks.httpx.get", fake_get)
     provider = JwksPublicKeyProvider("https://issuer.test/.well-known/jwks.json")
@@ -112,7 +112,7 @@ def test_jwks_provider_fails_closed_when_rotated_kid_refresh_fails(
         calls += 1
         if calls == 1:
             return httpx.Response(200, json=document, request=httpx.Request("GET", url))
-        raise httpx.ConnectError("issuer unavailable")
+        raise httpx.ConnectError("签发方不可用")
 
     monkeypatch.setattr("app.infrastructure.jwks.httpx.get", fake_get)
     provider = JwksPublicKeyProvider("https://issuer.test/.well-known/jwks.json")

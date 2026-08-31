@@ -191,7 +191,7 @@ public class OperationsToolServiceTest {
         } catch (IllegalArgumentException expected) {
             return;
         }
-        throw new AssertionError("unsupported metric bucket must be rejected");
+        throw new AssertionError("不支持的指标时间桶必须被拒绝");
     }
 
     @Test
@@ -204,7 +204,7 @@ public class OperationsToolServiceTest {
         } catch (IllegalArgumentException expected) {
             return;
         }
-        throw new AssertionError("oversized operations range must be rejected");
+        throw new AssertionError("超出范围的经营查询必须被拒绝");
     }
 
     private static void assertForbidden(Runnable action) {
@@ -213,7 +213,7 @@ public class OperationsToolServiceTest {
         } catch (GatewayForbiddenException expected) {
             return;
         }
-        throw new AssertionError("non-admin operations access must be rejected");
+        throw new AssertionError("非管理员经营查询必须被拒绝");
     }
 
     private static AgentContext context(String role) {

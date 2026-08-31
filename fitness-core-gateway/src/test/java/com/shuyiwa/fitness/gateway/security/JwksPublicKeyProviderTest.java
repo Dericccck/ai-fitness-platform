@@ -98,7 +98,7 @@ public class JwksPublicKeyProviderTest {
                         throw new AssertionError(exception);
                     }
                 }
-                throw new GatewaySecurityException("issuer unavailable");
+                throw new GatewaySecurityException("签发方不可用");
             }
         };
 

@@ -156,7 +156,7 @@ public class JwksPublicKeyProvider implements AgentContextPublicKeyProvider {
         } catch (GatewaySecurityException exception) {
             throw exception;
         } catch (Exception exception) {
-            throw new GatewaySecurityException("agent context JWKS is unavailable");
+            throw new GatewaySecurityException("AgentContext 的 JWKS 不可用");
         }
     }
 
@@ -167,14 +167,14 @@ public class JwksPublicKeyProvider implements AgentContextPublicKeyProvider {
 
     private Map<String, PublicKey> parse(String document) {
         if (document == null || document.isEmpty()) {
-            throw new GatewaySecurityException("invalid agent context JWKS");
+            throw new GatewaySecurityException("AgentContext 的 JWKS 无效");
         }
         try {
             JsonNode root = objectMapper.readTree(document);
             JsonNode keysNode = root == null ? null : root.get("keys");
             if (keysNode == null || !keysNode.isArray()
                     || keysNode.size() == 0 || keysNode.size() > MAX_KEYS) {
-                throw new GatewaySecurityException("invalid agent context JWKS");
+                throw new GatewaySecurityException("AgentContext 的 JWKS 无效");
             }
             Map<String, PublicKey> keys = new HashMap<>();
             for (JsonNode keyNode : keysNode) {
@@ -182,7 +182,7 @@ public class JwksPublicKeyProvider implements AgentContextPublicKeyProvider {
                 if (!RSA_KEY_TYPE.equals(text(keyNode, "kty"))
                         || !RSA_SIGNATURE_ALGORITHM.equals(optionalText(keyNode, "alg", RSA_SIGNATURE_ALGORITHM))
                         || !"sig".equals(optionalText(keyNode, "use", "sig"))) {
-                    throw new GatewaySecurityException("invalid agent context JWKS key");
+                    throw new GatewaySecurityException("AgentContext 的 JWKS 密钥无效");
                 }
                 byte[] modulus = Base64.getUrlDecoder().decode(text(keyNode, "n"));
                 byte[] exponent = Base64.getUrlDecoder().decode(text(keyNode, "e"));
@@ -194,7 +194,7 @@ public class JwksPublicKeyProvider implements AgentContextPublicKeyProvider {
                         || modulusValue.bitLength() < MIN_RSA_KEY_BITS
                         || exponentValue.compareTo(BigInteger.valueOf(3L)) < 0
                         || !exponentValue.testBit(0)) {
-                    throw new GatewaySecurityException("invalid agent context RSA key");
+            throw new GatewaySecurityException("AgentContext 的 RSA 密钥无效");
                 }
                 RSAPublicKeySpec spec = new RSAPublicKeySpec(
                         modulusValue, exponentValue
@@ -206,14 +206,14 @@ public class JwksPublicKeyProvider implements AgentContextPublicKeyProvider {
         } catch (GatewaySecurityException exception) {
             throw exception;
         } catch (Exception exception) {
-            throw new GatewaySecurityException("invalid agent context JWKS");
+            throw new GatewaySecurityException("AgentContext 的 JWKS 无效");
         }
     }
 
     private static String text(JsonNode node, String field) {
         JsonNode value = node == null ? null : node.get(field);
         if (value == null || !value.isTextual() || value.asText().trim().isEmpty()) {
-            throw new GatewaySecurityException("invalid agent context JWKS field: " + field);
+            throw new GatewaySecurityException("AgentContext 的 JWKS 字段无效：" + field);
         }
         return value.asText();
     }

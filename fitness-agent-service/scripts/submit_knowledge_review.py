@@ -47,7 +47,7 @@ def _source_path(relative_path: str) -> Path:
     relative = relative_path.removeprefix("fitness-agent-service/")
     path = (SERVICE_ROOT / relative).resolve()
     if SERVICE_ROOT not in path.parents:
-        raise ValueError(f"knowledge source escapes service root: {relative_path}")
+        raise ValueError(f"知识来源路径超出服务根目录：{relative_path}")
     return path
 
 

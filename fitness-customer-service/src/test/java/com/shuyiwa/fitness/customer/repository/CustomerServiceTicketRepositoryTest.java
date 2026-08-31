@@ -98,7 +98,7 @@ public class CustomerServiceTicketRepositoryTest {
                 });
         when(jdbc.queryForObject(anyString(), any(Object[].class), eq(Integer.class))).thenReturn(0);
         when(jdbc.update(anyString(), any(Object[].class)))
-                .thenThrow(new org.springframework.dao.DuplicateKeyException("request race"));
+                .thenThrow(new org.springframework.dao.DuplicateKeyException("请求并发冲突"));
 
         CustomerServiceTicketView result = repository.insert(
                 actor("request-race", "jti-race", "hash-1"), request(), "student-1");

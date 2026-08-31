@@ -66,11 +66,11 @@ public class AgentContextVerifier {
 
     public AgentContext verify(String token) {
         if (token == null || token.isEmpty() || token.length() > MAX_TOKEN_LENGTH) {
-            throw new GatewaySecurityException("invalid agent context");
+            throw new GatewaySecurityException("AgentContext 无效");
         }
         String[] parts = token.split("\\.", -1);
         if (parts.length != 2) {
-            throw new GatewaySecurityException("invalid agent context format");
+            throw new GatewaySecurityException("AgentContext 格式无效");
         }
 
         byte[] payload;
@@ -80,19 +80,19 @@ public class AgentContextVerifier {
             payload = decoder.decode(parts[0]);
             signature = decoder.decode(parts[1]);
         } catch (IllegalArgumentException exception) {
-            throw new GatewaySecurityException("invalid agent context encoding");
+            throw new GatewaySecurityException("AgentContext 编码无效");
         }
 
         JsonNode root;
         try {
             root = objectMapper.readTree(payload);
             if (root == null || !root.isObject()) {
-                throw new GatewaySecurityException("invalid agent context claims");
+                throw new GatewaySecurityException("AgentContext 声明无效");
             }
         } catch (GatewaySecurityException exception) {
             throw exception;
         } catch (Exception exception) {
-            throw new GatewaySecurityException("invalid agent context claims");
+            throw new GatewaySecurityException("AgentContext 声明无效");
         }
 
         // alg/kid 属于签名载荷的一部分，必须在验签前用于选择验证策略；选择失败时直接拒绝，
@@ -102,7 +102,7 @@ public class AgentContextVerifier {
         validateSigningContract(algorithm, keyId);
 
         if (!verifySignature(payload, signature, algorithm, keyId)) {
-            throw new GatewaySecurityException("invalid agent context signature");
+            throw new GatewaySecurityException("AgentContext 签名无效");
         }
 
         try {
@@ -122,7 +122,7 @@ public class AgentContextVerifier {
                     || expiresAt.isAfter(issuedAt.plusSeconds(properties.getMaxContextTtlSeconds()))
                     || issuedAt.isAfter(now.plusSeconds(30))
                     || !expiresAt.isAfter(now)) {
-                throw new GatewaySecurityException("expired or invalid agent context");
+                throw new GatewaySecurityException("AgentContext 已过期或无效");
             }
             return new AgentContext(
                     subject, organizationIds, roles, capabilities, qualifications,
@@ -131,7 +131,7 @@ public class AgentContextVerifier {
         } catch (GatewaySecurityException exception) {
             throw exception;
         } catch (Exception exception) {
-            throw new GatewaySecurityException("invalid agent context claims");
+            throw new GatewaySecurityException("AgentContext 声明无效");
         }
     }
 
@@ -143,20 +143,20 @@ public class AgentContextVerifier {
         if (RSA_TOKEN_ALGORITHM.equals(algorithm)) {
             return verifyRsa(payload, signature, keyId);
         }
-        throw new GatewaySecurityException("unsupported agent context signing contract");
+        throw new GatewaySecurityException("不支持的 AgentContext 签名契约");
     }
 
     private byte[] signHmac(byte[] payload, String keyId) {
         String secret = resolveSigningSecret(keyId);
         if (secret == null || secret.isEmpty()) {
-            throw new GatewaySecurityException("agent context verifier is not configured");
+            throw new GatewaySecurityException("AgentContext 验证器未配置");
         }
         try {
             Mac mac = Mac.getInstance(HMAC_ALGORITHM);
             mac.init(new SecretKeySpec(secret.getBytes(StandardCharsets.UTF_8), HMAC_ALGORITHM));
             return mac.doFinal(payload);
         } catch (Exception exception) {
-            throw new IllegalStateException("cannot initialize agent context verifier", exception);
+            throw new IllegalStateException("无法初始化 AgentContext 验证器", exception);
         }
     }
 
@@ -166,7 +166,7 @@ public class AgentContextVerifier {
             publicKey = publicKeyProvider.getPublicKey(keyId);
         }
         if (publicKey == null) {
-            throw new GatewaySecurityException("agent context verification key is not configured");
+            throw new GatewaySecurityException("AgentContext 验证密钥未配置");
         }
         try {
             Signature verifier = Signature.getInstance("SHA256withRSA");
@@ -175,7 +175,7 @@ public class AgentContextVerifier {
             return verifier.verify(signature);
         } catch (Exception exception) {
             // 公钥格式错误、算法不匹配和验签失败统一 fail-closed，避免泄露密钥配置细节。
-            throw new GatewaySecurityException("invalid agent context verification key");
+            throw new GatewaySecurityException("AgentContext 验证密钥无效");
         }
     }
 
@@ -193,7 +193,7 @@ public class AgentContextVerifier {
             return KeyFactory.getInstance("RSA")
                     .generatePublic(new X509EncodedKeySpec(der));
         } catch (Exception exception) {
-            throw new GatewaySecurityException("invalid agent context verification key");
+            throw new GatewaySecurityException("AgentContext 验证密钥无效");
         }
     }
 
@@ -204,11 +204,11 @@ public class AgentContextVerifier {
                 || RSA_TOKEN_ALGORITHM.equals(configuredAlgorithm))
                 || !algorithm.equals(configuredAlgorithm)
                 || keyId.trim().isEmpty()) {
-            throw new GatewaySecurityException("unsupported agent context signing contract");
+            throw new GatewaySecurityException("不支持的 AgentContext 签名契约");
         }
         String activeKeyId = properties.getContextSigningKeyId();
         if (activeKeyId == null || activeKeyId.trim().isEmpty()) {
-            throw new GatewaySecurityException("agent context key id is not configured");
+            throw new GatewaySecurityException("AgentContext 密钥 ID 未配置");
         }
     }
 
@@ -229,7 +229,7 @@ public class AgentContextVerifier {
             return defaultValue;
         }
         if (!value.isTextual() || value.asText().trim().isEmpty()) {
-            throw new GatewaySecurityException("invalid agent context field: " + field);
+            throw new GatewaySecurityException("AgentContext 字段无效：" + field);
         }
         return value.asText();
     }
@@ -237,7 +237,7 @@ public class AgentContextVerifier {
     private static String requiredText(JsonNode root, String field) {
         JsonNode value = root.get(field);
         if (value == null || !value.isTextual() || value.asText().isEmpty()) {
-            throw new GatewaySecurityException("missing agent context field: " + field);
+            throw new GatewaySecurityException("缺少 AgentContext 字段：" + field);
         }
         return value.asText();
     }
@@ -245,14 +245,14 @@ public class AgentContextVerifier {
     private static Set<String> requiredStringSet(JsonNode root, String field) {
         JsonNode values = root.get(field);
         if (values == null || !values.isArray() || values.size() == 0) {
-            throw new GatewaySecurityException("missing agent context field: " + field);
+            throw new GatewaySecurityException("缺少 AgentContext 字段：" + field);
         }
         Set<String> result = new HashSet<>();
         Iterator<JsonNode> iterator = values.elements();
         while (iterator.hasNext()) {
             JsonNode value = iterator.next();
             if (!value.isTextual() || value.asText().isEmpty()) {
-                throw new GatewaySecurityException("invalid agent context field: " + field);
+                throw new GatewaySecurityException("AgentContext 字段无效：" + field);
             }
             result.add(value.asText());
         }
@@ -265,14 +265,14 @@ public class AgentContextVerifier {
             return new HashSet<>();
         }
         if (!values.isArray()) {
-            throw new GatewaySecurityException("invalid agent context field: " + field);
+            throw new GatewaySecurityException("AgentContext 字段无效：" + field);
         }
         Set<String> result = new HashSet<>();
         Iterator<JsonNode> iterator = values.elements();
         while (iterator.hasNext()) {
             JsonNode value = iterator.next();
             if (!value.isTextual() || value.asText().isEmpty()) {
-                throw new GatewaySecurityException("invalid agent context field: " + field);
+                throw new GatewaySecurityException("AgentContext 字段无效：" + field);
             }
             result.add(value.asText());
         }
@@ -282,7 +282,7 @@ public class AgentContextVerifier {
     private static Instant epochSeconds(JsonNode root, String field) {
         JsonNode value = root.get(field);
         if (value == null || !value.isIntegralNumber()) {
-            throw new GatewaySecurityException("missing agent context field: " + field);
+            throw new GatewaySecurityException("缺少 AgentContext 字段：" + field);
         }
         return Instant.ofEpochSecond(value.asLong());
     }

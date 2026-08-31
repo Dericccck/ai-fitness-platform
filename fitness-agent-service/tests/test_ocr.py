@@ -107,7 +107,7 @@ def test_http_ocr_provider_rejects_missing_confidence_or_region() -> None:
 
 def test_http_ocr_provider_surfaces_transport_unavailability() -> None:
     def handler(request: httpx.Request) -> httpx.Response:
-        raise httpx.ConnectError("connection refused", request=request)
+        raise httpx.ConnectError("连接被拒绝", request=request)
 
     provider = HttpPdfOcrProvider(
         "https://ocr.internal/v1/parse",

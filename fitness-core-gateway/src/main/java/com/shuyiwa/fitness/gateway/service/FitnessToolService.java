@@ -51,13 +51,13 @@ public class FitnessToolService {
 
     public ToolViews.UserView currentUser(AgentContext context) {
         return repository.findUser(context.getSubjectUserId())
-                .orElseThrow(() -> new GatewayResourceNotFoundException("user not found"));
+                .orElseThrow(() -> new GatewayResourceNotFoundException("用户不存在"));
     }
 
     public ToolViews.OrganizationView organization(AgentContext context, String organizationId) {
         requireOrganization(context, organizationId);
         return repository.findOrganization(organizationId)
-                .orElseThrow(() -> new GatewayResourceNotFoundException("organization not found"));
+                .orElseThrow(() -> new GatewayResourceNotFoundException("机构不存在"));
     }
 
     public List<ToolViews.CourseView> courses(AgentContext context, String organizationId, Integer limit) {
@@ -89,7 +89,7 @@ public class FitnessToolService {
         Instant start = from == null ? Instant.now().minus(1, ChronoUnit.DAYS) : from;
         Instant end = to == null ? Instant.now().plus(30, ChronoUnit.DAYS) : to;
         if (!end.isAfter(start) || end.isAfter(start.plus(92, ChronoUnit.DAYS))) {
-            throw new IllegalArgumentException("appointment time range must be 0 to 92 days");
+            throw new IllegalArgumentException("预约时间范围必须为 0 到 92 天");
         }
         return repository.findAppointments(organizationId, userId, start, end, normalizeLimit(limit));
     }
@@ -114,13 +114,13 @@ public class FitnessToolService {
         requireOrganization(context, organizationId);
         String studentId = resolveUserForRead(context, organizationId, requestedStudentId);
         if (coachId == null || coachId.trim().isEmpty() || !repository.isCoachInOrganization(organizationId, coachId)) {
-            throw new GatewayResourceNotFoundException("coach not found in organization");
+            throw new GatewayResourceNotFoundException("机构中不存在该教练");
         }
         if (start == null || end == null || !end.isAfter(start)) {
-            throw new IllegalArgumentException("booking end must be after start");
+            throw new IllegalArgumentException("预约结束时间必须晚于开始时间");
         }
         if (end.isAfter(start.plus(8, ChronoUnit.HOURS))) {
-            throw new IllegalArgumentException("booking duration must not exceed 8 hours");
+            throw new IllegalArgumentException("预约时长不能超过 8 小时");
         }
 
         List<String> reasons = new ArrayList<>();
@@ -163,20 +163,20 @@ public class FitnessToolService {
         }
         if (context.hasRole(AgentContext.ROLE_STUDENT)
                 && !context.getSubjectUserId().equals(userId)) {
-            throw new GatewayForbiddenException("student can only read own fitness data");
+            throw new GatewayForbiddenException("学员只能读取自己的健身数据");
         }
         if (context.hasRole(AgentContext.ROLE_COACH)
                 && !context.getSubjectUserId().equals(userId)
                 && !repository.isCoachForUser(organizationId, context.getSubjectUserId(), userId)) {
-            throw new GatewayForbiddenException("coach is not assigned to this student");
+            throw new GatewayForbiddenException("该教练未负责此学员");
         }
         if (!context.hasRole(AgentContext.ROLE_COACH)
                 && !context.hasRole(AgentContext.ROLE_STUDENT)
                 && !context.getSubjectUserId().equals(userId)) {
-            throw new GatewayForbiddenException("context cannot read another user");
+            throw new GatewayForbiddenException("当前上下文不能读取其他用户的数据");
         }
         if (!repository.isOrganizationMember(organizationId, userId)) {
-            throw new GatewayForbiddenException("user is not a member of this organization");
+            throw new GatewayForbiddenException("用户不是该机构成员");
         }
         return userId;
     }
@@ -184,7 +184,7 @@ public class FitnessToolService {
     private void requireOrganization(AgentContext context, String organizationId) {
         if (organizationId == null || organizationId.trim().isEmpty()
                 || !context.canAccessOrganization(organizationId)) {
-            throw new GatewayForbiddenException("organization is outside agent context scope");
+            throw new GatewayForbiddenException("机构不在 Agent 上下文授权范围内");
         }
     }
 
@@ -193,7 +193,7 @@ public class FitnessToolService {
             return DEFAULT_LIMIT;
         }
         if (requestedLimit < 1 || requestedLimit > MAX_LIMIT) {
-            throw new IllegalArgumentException("limit must be between 1 and " + MAX_LIMIT);
+            throw new IllegalArgumentException("limit 必须介于 1 和 " + MAX_LIMIT + " 之间");
         }
         return requestedLimit;
     }

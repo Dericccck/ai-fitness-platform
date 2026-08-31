@@ -103,7 +103,7 @@ def percentile(values: list[float], ratio: float) -> float:
     """计算最近秩百分位，避免小样本线性插值制造虚假的精度。"""
 
     if not values or not 0 < ratio <= 1:
-        raise ValueError("percentile input is invalid")
+        raise ValueError("百分位输入无效")
     ordered = sorted(values)
     index = max(0, min(len(ordered) - 1, ceil(len(ordered) * ratio) - 1))
     return ordered[index]

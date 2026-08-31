@@ -166,10 +166,10 @@ async def test_invalid_event_is_rejected_to_dead_letter_without_ack() -> None:
 async def test_inbox_transaction_failure_does_not_ack_message() -> None:
     """Inbox 事务失败时不 ACK，让 RabbitMQ 重新投递而不是造成事件丢失。"""
 
-    repository = _FakeConsumerRepository(error=RuntimeError("database unavailable"))
+    repository = _FakeConsumerRepository(error=RuntimeError("数据库不可用"))
     message = _FakeMessage(_event().model_dump_json().encode("utf-8"))
 
-    with pytest.raises(RuntimeError, match="database unavailable"):
+    with pytest.raises(RuntimeError, match="数据库不可用"):
         await _consumer(repository)._consume_one(message)
 
     assert message.ack_count == 0
@@ -263,7 +263,7 @@ async def test_worker_failure_is_retryable_and_restart_can_finish_event() -> Non
         nonlocal process_calls
         process_calls += 1
         if process_calls == 1:
-            raise RuntimeError("notification database temporarily unavailable")
+            raise RuntimeError("通知数据库暂时不可用")
         await original_process_one(record)
 
     worker._process_one = fail_once

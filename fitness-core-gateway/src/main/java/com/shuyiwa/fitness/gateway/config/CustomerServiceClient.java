@@ -79,7 +79,7 @@ public class CustomerServiceClient {
                 confirmationToken, context, "fitness.support.ticket.create.v1",
                 "CREATE_CUSTOMER_SERVICE_TICKET", resource, requestId);
         if (!input.getOrganizationId().equals(claims.getOrganizationId())) {
-            throw new GatewayForbiddenException("confirmation organization does not match request");
+            throw new GatewayForbiddenException("确认凭证中的机构与请求不匹配");
         }
         requireOrganization(context, input.getOrganizationId());
         return exchangePost(properties.getBaseUrl().replaceAll("/$", "")
@@ -89,7 +89,7 @@ public class CustomerServiceClient {
 
     private <T> T exchange(String url, AgentContext context, String requestId, Class<T> responseType) {
         if (properties.getInternalServiceToken().trim().isEmpty()) {
-            throw new IllegalStateException("customer service internal token is not configured");
+            throw new IllegalStateException("客服服务内部 Token 未配置");
         }
         HttpHeaders headers = new HttpHeaders();
         headers.set("X-Internal-Service-Token", properties.getInternalServiceToken());
@@ -101,26 +101,26 @@ public class CustomerServiceClient {
             ResponseEntity<T> response = restTemplate.exchange(
                     url, HttpMethod.GET, new HttpEntity<>(headers), responseType);
             if (response.getBody() == null) {
-                throw new IllegalStateException("customer service returned an empty response");
+                throw new IllegalStateException("客服服务返回空响应");
             }
             return response.getBody();
         } catch (HttpClientErrorException exception) {
             if (exception.getStatusCode().value() == 403) {
-                throw new GatewayForbiddenException("customer service resource is outside the authorized scope");
+                throw new GatewayForbiddenException("客服资源不在授权范围内");
             }
             if (exception.getStatusCode().value() == 404) {
-                throw new GatewayResourceNotFoundException("customer service ticket was not found");
+                throw new GatewayResourceNotFoundException("客服工单不存在");
             }
-            throw new IllegalArgumentException("customer service rejected the request");
+            throw new IllegalArgumentException("客服服务拒绝了请求");
         } catch (RestClientException exception) {
-            throw new IllegalStateException("customer service is temporarily unavailable", exception);
+            throw new IllegalStateException("客服服务暂时不可用", exception);
         }
     }
 
     private <T> T exchangePost(String url, AgentContext context, String requestId,
                                ConfirmationTokenClaims claims, Object body, Class<T> responseType) {
         if (properties.getInternalServiceToken().trim().isEmpty()) {
-            throw new IllegalStateException("customer service internal token is not configured");
+            throw new IllegalStateException("客服服务内部 Token 未配置");
         }
         HttpHeaders headers = baseHeaders(context, requestId);
         headers.set("X-Confirmation-Id", claims.getConfirmationId());
@@ -134,23 +134,23 @@ public class CustomerServiceClient {
             ResponseEntity<T> response = restTemplate.exchange(
                     url, HttpMethod.POST, new HttpEntity<>(body, headers), responseType);
             if (response.getBody() == null) {
-                throw new IllegalStateException("customer service returned an empty response");
+                throw new IllegalStateException("客服服务返回空响应");
             }
             return response.getBody();
         } catch (HttpClientErrorException exception) {
             if (exception.getStatusCode().value() == 403) {
-                throw new GatewayForbiddenException("customer service resource is outside the authorized scope");
+                throw new GatewayForbiddenException("客服资源不在授权范围内");
             }
             if (exception.getStatusCode().value() == 404) {
-                throw new GatewayResourceNotFoundException("customer service ticket was not found");
+                throw new GatewayResourceNotFoundException("客服工单不存在");
             }
             if (exception.getStatusCode().value() == 409) {
                 throw new com.shuyiwa.fitness.gateway.security.GatewayConflictException(
-                        "customer service ticket request conflicts with an existing request");
+                        "客服工单请求与现有请求冲突");
             }
-            throw new IllegalArgumentException("customer service rejected the request");
+            throw new IllegalArgumentException("客服服务拒绝了请求");
         } catch (RestClientException exception) {
-            throw new IllegalStateException("customer service is temporarily unavailable", exception);
+            throw new IllegalStateException("客服服务暂时不可用", exception);
         }
     }
 
@@ -166,7 +166,7 @@ public class CustomerServiceClient {
 
     private void requireOrganization(AgentContext context, String organizationId) {
         if (organizationId == null || !context.canAccessOrganization(organizationId)) {
-            throw new GatewayForbiddenException("organization is outside the authorized scope");
+            throw new GatewayForbiddenException("机构不在授权范围内");
         }
     }
 }

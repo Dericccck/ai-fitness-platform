@@ -66,12 +66,12 @@ public class ConfirmationTokenVerifier {
     public ConfirmationTokenClaims verify(String token, AgentContext context, String toolId,
                                           String action, String resource, String requestId) {
         if (token == null || token.trim().isEmpty()) {
-            throw new GatewaySecurityException("confirmation token is required");
+            throw new GatewaySecurityException("缺少确认凭证");
         }
         try {
             String[] parts = token.split("\\.", -1);
             if (parts.length != 2) {
-                throw new GatewaySecurityException("invalid confirmation token");
+                throw new GatewaySecurityException("确认凭证无效");
             }
             byte[] payloadBytes = Base64.getUrlDecoder().decode(parts[0]);
             byte[] signature = Base64.getUrlDecoder().decode(parts[1]);
@@ -115,7 +115,7 @@ public class ConfirmationTokenVerifier {
             }
             long exp = Long.parseLong(string(payload, "exp"));
             if (exp <= Instant.now().getEpochSecond()) {
-                throw new GatewaySecurityException("confirmation token expired");
+            throw new GatewaySecurityException("确认凭证已过期");
             }
             return new ConfirmationTokenClaims(
                     confirmationId, tokenToolId, tokenAction, subjectUserId, organizationId,
@@ -124,7 +124,7 @@ public class ConfirmationTokenVerifier {
         } catch (GatewaySecurityException exception) {
             throw exception;
         } catch (Exception exception) {
-            throw new GatewaySecurityException("invalid confirmation token");
+            throw new GatewaySecurityException("确认凭证无效");
         }
     }
 
@@ -140,16 +140,16 @@ public class ConfirmationTokenVerifier {
         if (!(HMAC_TOKEN_ALGORITHM.equals(algorithm) || RSA_TOKEN_ALGORITHM.equals(algorithm))
                 || !algorithm.equals(configuredAlgorithm)
                 || keyId.trim().isEmpty()) {
-            throw new GatewaySecurityException("unsupported confirmation token signing contract");
+        throw new GatewaySecurityException("不支持的确认凭证签名契约");
         }
         if (HMAC_TOKEN_ALGORITHM.equals(algorithm)) {
             String secret = resolveSigningSecret(keyId);
             if (secret == null || secret.trim().isEmpty()) {
-                throw new GatewaySecurityException("confirmation signing key is not configured");
+                throw new GatewaySecurityException("确认凭证签名密钥未配置");
             }
             byte[] expected = hmac(payload, secret);
             if (!java.security.MessageDigest.isEqual(expected, signature)) {
-                throw new GatewaySecurityException("invalid confirmation token");
+                throw new GatewaySecurityException("确认凭证无效");
             }
             return;
         }
@@ -159,13 +159,13 @@ public class ConfirmationTokenVerifier {
             publicKey = publicKeyProvider.getPublicKey(keyId);
         }
         if (publicKey == null) {
-            throw new GatewaySecurityException("confirmation verification key is not configured");
+            throw new GatewaySecurityException("确认凭证验证密钥未配置");
         }
         Signature verifier = Signature.getInstance("SHA256withRSA");
         verifier.initVerify(publicKey);
         verifier.update(payload);
         if (!verifier.verify(signature)) {
-            throw new GatewaySecurityException("invalid confirmation token");
+            throw new GatewaySecurityException("确认凭证无效");
         }
     }
 
@@ -191,7 +191,7 @@ public class ConfirmationTokenVerifier {
             return KeyFactory.getInstance("RSA")
                     .generatePublic(new X509EncodedKeySpec(der));
         } catch (Exception exception) {
-            throw new GatewaySecurityException("invalid confirmation verification key");
+            throw new GatewaySecurityException("确认凭证验证密钥无效");
         }
     }
 
@@ -203,12 +203,12 @@ public class ConfirmationTokenVerifier {
     private static String string(Map<String, Object> payload, String key) {
         Object value = payload.get(key);
         if (value == null || value.toString().trim().isEmpty()) {
-            throw new GatewaySecurityException("confirmation token field is missing");
+            throw new GatewaySecurityException("确认凭证缺少字段");
         }
         return value.toString();
     }
 
     private static GatewaySecurityException scopeMismatch(String field) {
-        return new GatewaySecurityException("confirmation token scope mismatch: " + field);
+        return new GatewaySecurityException("确认凭证范围不匹配：" + field);
     }
 }

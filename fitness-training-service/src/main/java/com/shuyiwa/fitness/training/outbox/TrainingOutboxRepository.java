@@ -70,7 +70,7 @@ public class TrainingOutboxRepository {
     }
 
     private static String safeError(Throwable failure) {
-        String message = failure == null ? "unknown outbox publish failure" : failure.toString();
+        String message = failure == null ? "未知的 Outbox 发布失败" : failure.toString();
         return message.length() <= 2000 ? message : message.substring(0, 2000);
     }
 

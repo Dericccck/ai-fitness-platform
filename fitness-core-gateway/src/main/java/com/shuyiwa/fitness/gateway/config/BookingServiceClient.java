@@ -41,16 +41,16 @@ public class BookingServiceClient {
         if (properties.getInternalServiceToken() == null
                 || properties.getInternalServiceToken().trim().isEmpty()) {
             // 预约写服务必须通过内部凭证调用；配置缺失时直接失败，不能退化成无认证内部请求。
-            throw new IllegalStateException("booking service internal token is not configured");
+            throw new IllegalStateException("预约服务内部 Token 未配置");
         }
         ConfirmationTokenClaims claims = tokenVerifier.verify(
                 confirmationToken, context, "fitness.booking.create.v1", "CREATE_APPOINTMENT",
                 input.getContractId(), requestId);
         if (!input.getOrganizationId().equals(claims.getOrganizationId())) {
-            throw new GatewayForbiddenException("confirmation organization does not match request");
+            throw new GatewayForbiddenException("确认凭证中的机构与请求不匹配");
         }
         if (!context.canAccessOrganization(input.getOrganizationId())) {
-            throw new GatewayForbiddenException("organization is outside the authorized scope");
+            throw new GatewayForbiddenException("机构不在授权范围内");
         }
         HttpHeaders headers = new HttpHeaders();
         headers.set("X-Internal-Service-Token", properties.getInternalServiceToken());
@@ -69,16 +69,16 @@ public class BookingServiceClient {
             ResponseEntity<BookingServiceViews.Appointment> response = restTemplate.exchange(
                     properties.getBaseUrl().replaceAll("/$", "") + "/internal/booking/v1/appointments",
                     HttpMethod.POST, new HttpEntity<>(input, headers), BookingServiceViews.Appointment.class);
-            if (response.getBody() == null) throw new IllegalStateException("booking service returned empty response");
+            if (response.getBody() == null) throw new IllegalStateException("预约服务返回空响应");
             return response.getBody().toToolView();
         } catch (HttpClientErrorException exception) {
-            if (exception.getStatusCode().value() == 401) throw new GatewayForbiddenException("booking confirmation required");
-            if (exception.getStatusCode().value() == 403) throw new GatewayForbiddenException("booking resource is outside scope");
-            if (exception.getStatusCode().value() == 404) throw new GatewayResourceNotFoundException("booking resource not found");
-            if (exception.getStatusCode().value() == 409) throw new GatewayConflictException("booking conflicts with current business facts");
-            throw new IllegalArgumentException("booking service rejected the request");
+            if (exception.getStatusCode().value() == 401) throw new GatewayForbiddenException("需要预约确认凭证");
+            if (exception.getStatusCode().value() == 403) throw new GatewayForbiddenException("预约资源不在授权范围内");
+            if (exception.getStatusCode().value() == 404) throw new GatewayResourceNotFoundException("预约资源不存在");
+            if (exception.getStatusCode().value() == 409) throw new GatewayConflictException("预约与当前业务事实冲突");
+            throw new IllegalArgumentException("预约服务拒绝了请求");
         } catch (RestClientException exception) {
-            throw new IllegalStateException("booking service is temporarily unavailable", exception);
+            throw new IllegalStateException("预约服务暂时不可用", exception);
         }
     }
 
@@ -86,14 +86,14 @@ public class BookingServiceClient {
                                                    BookingToolInputs.RescheduleInput input) {
         if (properties.getInternalServiceToken() == null
                 || properties.getInternalServiceToken().trim().isEmpty()) {
-            throw new IllegalStateException("booking service internal token is not configured");
+            throw new IllegalStateException("预约服务内部 Token 未配置");
         }
         ConfirmationTokenClaims claims = tokenVerifier.verify(
                 confirmationToken, context, "fitness.booking.reschedule.v1", "RESCHEDULE_APPOINTMENT",
                 input.getAppointmentId(), requestId);
         if (!input.getOrganizationId().equals(claims.getOrganizationId())
                 || !context.canAccessOrganization(input.getOrganizationId())) {
-            throw new GatewayForbiddenException("reschedule request is outside the authorized scope");
+            throw new GatewayForbiddenException("改约请求不在授权范围内");
         }
         HttpHeaders headers = bookingHeaders(context, requestId, claims);
         try {
@@ -101,16 +101,16 @@ public class BookingServiceClient {
                     properties.getBaseUrl().replaceAll("/$", "") + "/internal/booking/v1/appointments/"
                             + input.getAppointmentId() + "/reschedule",
                     HttpMethod.POST, new HttpEntity<>(input, headers), BookingServiceViews.Appointment.class);
-            if (response.getBody() == null) throw new IllegalStateException("booking service returned empty response");
+            if (response.getBody() == null) throw new IllegalStateException("预约服务返回空响应");
             return response.getBody().toToolView();
         } catch (HttpClientErrorException exception) {
-            if (exception.getStatusCode().value() == 401) throw new GatewayForbiddenException("booking confirmation required");
-            if (exception.getStatusCode().value() == 403) throw new GatewayForbiddenException("booking resource is outside scope");
-            if (exception.getStatusCode().value() == 404) throw new GatewayResourceNotFoundException("booking resource not found");
-            if (exception.getStatusCode().value() == 409) throw new GatewayConflictException("booking conflicts with current business facts");
-            throw new IllegalArgumentException("booking service rejected the request");
+            if (exception.getStatusCode().value() == 401) throw new GatewayForbiddenException("需要预约确认凭证");
+            if (exception.getStatusCode().value() == 403) throw new GatewayForbiddenException("预约资源不在授权范围内");
+            if (exception.getStatusCode().value() == 404) throw new GatewayResourceNotFoundException("预约资源不存在");
+            if (exception.getStatusCode().value() == 409) throw new GatewayConflictException("预约与当前业务事实冲突");
+            throw new IllegalArgumentException("预约服务拒绝了请求");
         } catch (RestClientException exception) {
-            throw new IllegalStateException("booking service is temporarily unavailable", exception);
+            throw new IllegalStateException("预约服务暂时不可用", exception);
         }
     }
 
@@ -118,14 +118,14 @@ public class BookingServiceClient {
                                                 BookingToolInputs.CancelInput input) {
         if (properties.getInternalServiceToken() == null
                 || properties.getInternalServiceToken().trim().isEmpty()) {
-            throw new IllegalStateException("booking service internal token is not configured");
+            throw new IllegalStateException("预约服务内部 Token 未配置");
         }
         ConfirmationTokenClaims claims = tokenVerifier.verify(
                 confirmationToken, context, "fitness.booking.cancel.v1", "CANCEL_APPOINTMENT",
                 input.getAppointmentId(), requestId);
         if (!input.getOrganizationId().equals(claims.getOrganizationId())
                 || !context.canAccessOrganization(input.getOrganizationId())) {
-            throw new GatewayForbiddenException("cancel request is outside the authorized scope");
+            throw new GatewayForbiddenException("取消预约请求不在授权范围内");
         }
         HttpHeaders headers = bookingHeaders(context, requestId, claims);
         try {
@@ -133,16 +133,16 @@ public class BookingServiceClient {
                     properties.getBaseUrl().replaceAll("/$", "") + "/internal/booking/v1/appointments/"
                             + input.getAppointmentId() + "/cancel",
                     HttpMethod.POST, new HttpEntity<>(input, headers), BookingServiceViews.CancelledAppointment.class);
-            if (response.getBody() == null) throw new IllegalStateException("booking service returned empty response");
+            if (response.getBody() == null) throw new IllegalStateException("预约服务返回空响应");
             return response.getBody().toToolView();
         } catch (HttpClientErrorException exception) {
-            if (exception.getStatusCode().value() == 401) throw new GatewayForbiddenException("booking confirmation required");
-            if (exception.getStatusCode().value() == 403) throw new GatewayForbiddenException("booking resource is outside scope");
-            if (exception.getStatusCode().value() == 404) throw new GatewayResourceNotFoundException("booking resource not found");
-            if (exception.getStatusCode().value() == 409) throw new GatewayConflictException("booking cannot be cancelled under current business facts");
-            throw new IllegalArgumentException("booking service rejected the request");
+            if (exception.getStatusCode().value() == 401) throw new GatewayForbiddenException("需要预约确认凭证");
+            if (exception.getStatusCode().value() == 403) throw new GatewayForbiddenException("预约资源不在授权范围内");
+            if (exception.getStatusCode().value() == 404) throw new GatewayResourceNotFoundException("预约资源不存在");
+            if (exception.getStatusCode().value() == 409) throw new GatewayConflictException("当前业务事实不允许取消预约");
+            throw new IllegalArgumentException("预约服务拒绝了请求");
         } catch (RestClientException exception) {
-            throw new IllegalStateException("booking service is temporarily unavailable", exception);
+            throw new IllegalStateException("预约服务暂时不可用", exception);
         }
     }
 

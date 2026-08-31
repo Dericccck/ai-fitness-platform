@@ -30,6 +30,6 @@ public enum OperationsTimeBucket {
                 return bucket;
             }
         }
-        throw new IllegalArgumentException("unsupported operations time bucket");
+        throw new IllegalArgumentException("不支持的经营时间桶");
     }
 }

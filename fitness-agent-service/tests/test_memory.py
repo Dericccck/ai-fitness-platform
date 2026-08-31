@@ -61,7 +61,7 @@ class FakeMemoryRepository:
         for item in self.items.values():
             if item.id == memory_id:
                 return item
-        raise RuntimeError("not found")
+        raise RuntimeError("记录不存在")
 
     async def revoke(self, **kwargs: object) -> FitnessMemory:
         for key, item in self.items.items():
@@ -73,7 +73,7 @@ class FakeMemoryRepository:
                 )
                 self.items[key] = revoked
                 return revoked
-        raise RuntimeError("not found")
+        raise RuntimeError("记录不存在")
 
     async def correct(self, **kwargs: object) -> FitnessMemory:
         request_id = str(kwargs["source_request_id"])
@@ -94,7 +94,7 @@ class FakeMemoryRepository:
                 self.items[key] = corrected
                 self.request_results[request_id] = corrected
                 return corrected
-        raise RuntimeError("not found")
+        raise RuntimeError("记录不存在")
 
     async def expire_due(self, **_: object) -> int:
         return 0
