@@ -2100,3 +2100,13 @@ smoke 无法发现的“跨领域多轮上下文或子图权限串域”问题�
 - 补充在线导出的配置契约、低基数 Metrics 测试、Trace 数据质量测试和运行级评测汇总测试；Make 目标支持通过 `ARGS` 传入报告路径。
 - 当前本地可验证的观测评测能力已完成；生产仍需外部 OTLP/TruLens 评测库、Alertmanager 值班接收器、访问控制、备份和保留策略的
   部署证据，不能用本地 SQLite 或 Debug Exporter 代替生产验收。
+
+本轮继续完成本地正式化评测库验收（2026-09-01）：
+
+- Compose 新增独立 `fitness-agent-trulens-postgres` 服务，使用 5434 端口、独立持久化卷和独立 `fitness_eval` 账号，
+  不复用 Agent 业务/Checkpoint PostgreSQL。
+- 新增 `deployment/environments/agent.trulens.local.env.example`，集中说明 OTEL、TruLens 在线导出、HMAC 摘要和评测库连接配置；
+  新增 `make trulens-infra-up` 与 `make trulens-postgres-check`，避免手工拼接配置。
+- 使用官方 `TruLensOtelSpanExporter` 向独立 PostgreSQL 写入并读取真实合成 Trace，成功发现 `trulens_events`，并执行保留清理检查，
+  本次过期数据删除为 0；相关回归测试 34 项通过。
+- 该结果证明本地在线导出链路可用，不代表生产数据库已经具备高可用、加密备份、最小权限、跨可用区和正式 RTO/RPO 证据。

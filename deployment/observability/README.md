@@ -67,4 +67,17 @@ make agent-trulens-eval ARGS="--no-persist --report var/evaluations/trulens-late
 使用 `--traces` 时，输入必须是已脱敏且包含根 Span 输入/输出、`record_id`、`trace_id` 及五类版本关联字段的真实
 Trace；metadata 模式只用于排障，不能伪装成可评测 Record。缺字段会直接失败，不会被静默跳过。
 
+## 本地独立 TruLens PostgreSQL
+
+本地需要验证在线导出时，可以启动独立评测库，不要复用 `fitness-agent-postgres`：
+
+```bash
+make trulens-infra-up
+TRULENS_DATABASE_URL=postgresql+psycopg://fitness_eval:fitness_eval_local@127.0.0.1:5434/fitness_agent_eval \
+  make trulens-postgres-check ARGS="--execute"
+```
+
+该容器使用独立卷 `fitness-agent-trulens-postgres-data`、5434 端口和 `fitness_eval` 本地验收账号。示例密码只适用于本地，
+生产必须由 Secret Manager 注入并改用独立托管数据库、专用权限账号、加密、备份和访问控制。
+
 本配置不会自动发送短信、Push 或外部通知，也不会改变健身业务的写入确认流程。

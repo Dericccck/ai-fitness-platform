@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: observability-check observability-live-check observability-rule-test observability-alertmanager-check observability-e2e-check
+.PHONY: observability-check observability-live-check observability-rule-test observability-alertmanager-check observability-e2e-check trulens-infra-up trulens-postgres-check
 
 .PHONY: agent-jwks-check agent-jwks-dual-check agent-domain-subgraphs-live-check agent-domain-subgraphs-session-live-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-release-manifest-check agent-migration-check agent-migration-live-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check gateway-it production-config-check production-runtime-config-check
 
@@ -119,6 +119,12 @@ infra-down:
 
 observability-up:
 	docker compose -f $(COMPOSE_FILE) --profile observability up -d agent-prometheus agent-alertmanager agent-otel-collector
+
+trulens-infra-up:
+	docker compose -f $(COMPOSE_FILE) up -d agent-trulens-postgres
+
+trulens-postgres-check:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/trulens_postgres_live_check.py $(ARGS)
 
 observability-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/observability_contract_check.py

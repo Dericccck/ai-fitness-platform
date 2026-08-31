@@ -12,6 +12,26 @@ services:
     volumes:
       - fitness-agent-postgres-data:/var/lib/postgresql/data
 
+  agent-trulens-postgres:
+    # TruLens 评测数据必须与 Agent 业务/Checkpoint 数据库隔离；本服务是本地正式化验收环境。
+    # 生产环境应通过 Secret Manager 覆盖账号密码，并使用独立托管 PostgreSQL 或数据库实例。
+    image: pgvector/pgvector:pg16
+    container_name: fitness-agent-trulens-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${TRULENS_POSTGRES_DB:-fitness_agent_eval}
+      POSTGRES_USER: ${TRULENS_POSTGRES_USER:-fitness_eval}
+      POSTGRES_PASSWORD: ${TRULENS_POSTGRES_PASSWORD:-fitness_eval_local}
+    ports:
+      - "${TRULENS_POSTGRES_PORT:-5434}:5432"
+    volumes:
+      - fitness-agent-trulens-postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
   agent-redis:
     image: redis:7.4-alpine
     container_name: fitness-agent-redis
@@ -143,6 +163,7 @@ services:
 volumes:
   fitness-agent-postgres-data:
   fitness-agent-redis-data:
+  fitness-agent-trulens-postgres-data:
   fitness-agent-minio-data:
   fitness-agent-clamav-data:
   fitness-agent-ocr-models:
