@@ -2111,3 +2111,26 @@ smoke 无法发现的“跨领域多轮上下文或子图权限串域”问题�
   本次过期数据删除为 0；相关回归测试 34 项通过。
 - 已增加 `/health/config` 的脱敏观测配置摘要，以及 `trulens-agent-runtime-check`：可以先验证运行中 Agent 的 OTEL/TruLens/PostgreSQL 配置，再用一次只读 Fitness 请求核对 `trulens_events` 实际增加；脚本不会自动重启 Agent 或改写本地 `.env`。
 - 该结果证明本地在线导出链路可用，不代表生产数据库已经具备高可用、加密备份、最小权限、跨可用区和正式 RTO/RPO 证据。
+
+## 前端第一阶段：三角色共用工作台（2026-09-02）
+
+本轮新增独立 `fitness-web` React + Vite + TypeScript 前端工程，按 `docs/frontend-integration-contract.md`
+接入现有 Agent API。当前前端已完成：
+
+- 通过 `/api/v1/agent/capabilities` 动态读取当前签名身份的能力目录、角色和领域，不在页面硬编码权限列表；
+- 三角色共用的 Agent 对话工作台，保留 `conversation_id`，并为请求自动生成 `X-Request-ID` 和 `X-Trace-ID`；
+- 展示 Fitness、Booking、Operations、Customer Service 等领域路由结果和能力说明；
+- 对 `CONFIRMATION_REQUIRED` 响应展示确定性确认摘要、授权状态、执行状态，并支持批准/拒绝；
+- 统一处理 401、403、409、503 和 Agent 不可达错误，错误提示带请求 ID 便于排查；
+- Vite 本地代理将 `/api`、`/health` 转发到本地 Agent `8090`，生产环境保留由认证服务/BFF 注入短时上下文的边界。
+
+前端当前仍是第一阶段工作台，不宣称替代正式小程序、管理端或教练端；尚未加入短信、Push、人工转接、图片动作标注、复杂训练扩展，
+也没有把长期 AgentContext 固定编译进生产前端。后续前端按优先级补齐：
+
+1. 训练计划审核/发布视图、预约结果和客服工单的结构化展示；
+2. 确认详情刷新、断线恢复、执行状态轮询和幂等决定请求复用；
+3. 管理员 Operations 指标筛选、报表结果和权限空态；
+4. 接入正式认证登录、BFF/网关代理、CSP、审计展示和前端端到端验收。
+
+本轮 `fitness-web` 已通过 `npm run build`；依赖安装生成的 `package-lock.json` 纳入版本控制，
+`node_modules`、`dist`、`.env.local` 和 `.DS_Store` 均被忽略。前端构建通过不等于生产认证和预发布联合验收完成。

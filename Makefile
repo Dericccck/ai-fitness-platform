@@ -1,6 +1,6 @@
 SHELL := /bin/sh
 
-.PHONY: observability-check observability-live-check observability-rule-test observability-alertmanager-check observability-e2e-check trulens-infra-up trulens-postgres-check trulens-agent-runtime-check
+.PHONY: observability-check observability-live-check observability-rule-test observability-alertmanager-check observability-e2e-check trulens-infra-up trulens-postgres-check trulens-agent-runtime-check web-check web-run
 
 .PHONY: agent-jwks-check agent-jwks-dual-check agent-domain-subgraphs-live-check agent-domain-subgraphs-session-live-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-release-manifest-check agent-migration-check agent-migration-live-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check gateway-it production-config-check production-runtime-config-check
 
@@ -9,7 +9,7 @@ UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 OCR_LIVE_TIMEOUT_SECONDS ?= 300
 
-.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-live-check ocr-run ocr-image gateway-check gateway-run gateway-training-role-live-check gateway-training-write-live-check gateway-training-workflow-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check training-check training-run training-role-live-check training-role-visibility-live-check booking-check booking-it booking-run customer-service-check customer-service-run legacy-java-diagnostic release-check check agent-trulens-retention
+.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-live-check ocr-run ocr-image gateway-check gateway-run gateway-training-role-live-check gateway-training-write-live-check gateway-training-workflow-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check training-check training-run training-role-live-check training-role-visibility-live-check booking-check booking-it booking-run customer-service-check customer-service-run legacy-java-diagnostic release-check check agent-trulens-retention web-check web-run
 
 .PHONY: pdf-visual-audit
 
@@ -96,6 +96,8 @@ help:
 	@echo "  customer-service-check Build and test the customer service"
 	@echo "  customer-service-run  Start the customer service locally"
 	@echo "  release-check  Run the complete deterministic release quality gate; no business writes"
+	@echo "  web-check      Run the React frontend typecheck and production build"
+	@echo "  web-run        Start the React frontend development server"
 	@echo "  legacy-java-diagnostic Reproduce the incomplete legacy Java build (expected to fail)"
 	@echo "  check        Run Agent and fitness core Gateway quality gates"
 
@@ -463,6 +465,12 @@ customer-service-run:
 # 也不会执行预约、训练计划、客服工单等任何真实业务写入。真实 HTTP 验收仍必须
 # 使用各业务专用的、显式授权的 live-check 命令，避免把发布检查误当成生产演练。
 release-check: production-config-check agent-check observability-check agent-migration-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check ocr-check gateway-check training-check booking-check customer-service-check
+
+web-check:
+	cd fitness-web && npm run typecheck && npm run build
+
+web-run:
+	cd fitness-web && npm run dev
 
 agent-customer-service-preflight:
 	@test -n "$$AGENT_LIVE_AGENT_CONTEXT" || (echo "请先设置 AGENT_LIVE_AGENT_CONTEXT（认证服务签发的业务用户 Token）"; exit 1)
