@@ -2109,4 +2109,5 @@ smoke 无法发现的“跨领域多轮上下文或子图权限串域”问题�
   新增 `make trulens-infra-up` 与 `make trulens-postgres-check`，避免手工拼接配置。
 - 使用官方 `TruLensOtelSpanExporter` 向独立 PostgreSQL 写入并读取真实合成 Trace，成功发现 `trulens_events`，并执行保留清理检查，
   本次过期数据删除为 0；相关回归测试 34 项通过。
+- 已增加 `/health/config` 的脱敏观测配置摘要，以及 `trulens-agent-runtime-check`：可以先验证运行中 Agent 的 OTEL/TruLens/PostgreSQL 配置，再用一次只读 Fitness 请求核对 `trulens_events` 实际增加；脚本不会自动重启 Agent 或改写本地 `.env`。
 - 该结果证明本地在线导出链路可用，不代表生产数据库已经具备高可用、加密备份、最小权限、跨可用区和正式 RTO/RPO 证据。

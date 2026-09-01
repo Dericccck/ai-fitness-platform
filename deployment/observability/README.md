@@ -80,4 +80,24 @@ TRULENS_DATABASE_URL=postgresql+psycopg://fitness_eval:fitness_eval_local@127.0.
 该容器使用独立卷 `fitness-agent-trulens-postgres-data`、5434 端口和 `fitness_eval` 本地验收账号。示例密码只适用于本地，
 生产必须由 Secret Manager 注入并改用独立托管数据库、专用权限账号、加密、备份和访问控制。
 
+### 验收运行中的 Agent 是否真正写库
+
+`trulens_postgres_live_check.py` 只验证独立数据库和官方 TruLens exporter；它不能证明
+正在运行的 Agent 已经加载了相同配置。Agent 重启后，可先执行不产生业务请求的配置检查：
+
+```bash
+export AGENT_LIVE_AGENT_CONTEXT='认证服务签发的短时 AgentContext'
+make trulens-agent-runtime-check
+```
+
+配置检查通过后，如需执行一次只读 Fitness 请求并核对 `trulens_events` 数量增加：
+
+```bash
+export TRULENS_DATABASE_URL='postgresql+psycopg://fitness_eval:fitness_eval_local@127.0.0.1:5434/fitness_agent_eval'
+make trulens-agent-runtime-check ARGS='--execute'
+```
+
+该脚本只验证当前进程的实际运行配置和一条只读请求；如果当前 Agent 是在补充环境变量
+前启动的，必须先停止并按新的环境变量重启，脚本不会自动重启服务或修改 `.env`。
+
 本配置不会自动发送短信、Push 或外部通知，也不会改变健身业务的写入确认流程。

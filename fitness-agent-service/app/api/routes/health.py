@@ -1,3 +1,5 @@
+from urllib.parse import urlparse
+
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import JSONResponse
 
@@ -88,11 +90,52 @@ async def ready(request: Request, response: Response) -> dict[str, object]:
 
 @router.get("/config")
 async def config(request: Request) -> JSONResponse:
-    """输出经过脱敏的运行配置摘要，便于部署排查模型是否完成配置。"""
+    """输出经过脱敏的运行配置摘要，便于部署排查模型和观测链路是否完成配置。"""
 
+    settings = request.app.state.settings
     return JSONResponse(
         {
-            "environment": request.app.state.settings.environment,
-            "providers": redact_provider_config(request.app.state.settings),
+            "environment": settings.environment,
+            "providers": redact_provider_config(settings),
+            "observability": _redact_observability_config(settings),
         }
     )
+
+
+def _redact_observability_config(settings: object) -> dict[str, object]:
+    """返回可用于联调的 OTEL/TruLens 状态，绝不返回 endpoint 密码或完整连接串。"""
+
+    otel_configured = bool(getattr(settings, "otel_configured", False))
+    database_url = str(getattr(settings, "trulens_database_url", "")).strip()
+    return {
+        "otel": {
+            "configured": otel_configured,
+            "trace_sample_ratio": getattr(settings, "otel_trace_sample_ratio", None),
+        },
+        "trulens": {
+            "enabled": bool(getattr(settings, "trulens_enabled", False)),
+            "capture_mode": getattr(settings, "trulens_capture_mode", "disabled"),
+            "online_export_enabled": bool(
+                getattr(settings, "trulens_online_export_enabled", False)
+            ),
+            "database": _redact_database_target(database_url),
+        },
+    }
+
+
+def _redact_database_target(database_url: str) -> dict[str, object]:
+    """只保留数据库协议、主机、端口和库名，避免健康接口泄露账号和密码。"""
+
+    if not database_url:
+        return {"configured": False}
+    try:
+        parsed = urlparse(database_url)
+        return {
+            "configured": True,
+            "scheme": parsed.scheme,
+            "host": parsed.hostname or "",
+            "port": parsed.port,
+            "database": parsed.path.lstrip("/"),
+        }
+    except ValueError:
+        return {"configured": True, "scheme": "invalid"}
