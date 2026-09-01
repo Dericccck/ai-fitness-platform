@@ -42,8 +42,16 @@ def test_database_target_rejects_non_postgres() -> None:
         _database_target("sqlite:///tmp/trulens.sqlite")
 
 
+def test_database_target_accepts_sqlalchemy_postgres_driver_url() -> None:
+    result = _database_target(
+        "postgresql+psycopg://fitness_eval:secret@127.0.0.1:5434/fitness_agent_eval"
+    )
+    assert result["host"] == "127.0.0.1"
+    assert result["port"] == 5434
+
+
 def test_validate_agent_response_requires_fitness_completion() -> None:
-    _validate_agent_response({"route": "FITNESS_COACHING", "status": "COMPLETED", "answer": "好的"})
+    _validate_agent_response({"route": "FITNESS_COACHING", "answer": "好的"})
     with pytest.raises(TruLensAgentRuntimeCheckError, match="路由"):
         _validate_agent_response({"route": "BOOKING", "status": "COMPLETED", "answer": "好的"})
 

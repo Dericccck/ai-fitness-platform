@@ -82,11 +82,17 @@ def _database_target(database_url: str) -> dict[str, object]:
     if not normalized:
         raise TruLensAgentRuntimeCheckError("--execute 需要 TRULENS_DATABASE_URL")
     parsed = urlparse(normalized)
-    if parsed.scheme not in {"postgresql", "postgres"}:
+    if not _is_postgres_scheme(parsed.scheme):
         raise TruLensAgentRuntimeCheckError("TruLens 在线验收只允许使用 PostgreSQL 数据库")
     if not parsed.hostname or not parsed.path.strip("/"):
         raise TruLensAgentRuntimeCheckError("TRULENS_DATABASE_URL 缺少主机或数据库名")
     return {"url": normalized, "host": parsed.hostname, "port": parsed.port or 5432}
+
+
+def _is_postgres_scheme(scheme: str) -> bool:
+    """兼容 PostgreSQL 原生 URL 与 SQLAlchemy 的 postgresql+driver URL。"""
+
+    return scheme in {"postgresql", "postgres"} or scheme.startswith("postgresql+")
 
 
 def _validate_config(payload: Any) -> dict[str, object]:
@@ -112,7 +118,7 @@ def _validate_config(payload: Any) -> dict[str, object]:
     if trulens.get("capture_mode") not in {"metadata", "evaluation"}:
         raise TruLensAgentRuntimeCheckError("当前 Agent 的 TruLens capture mode 未启用")
     database = trulens.get("database")
-    if not isinstance(database, dict) or database.get("scheme") not in {"postgresql", "postgres"}:
+    if not isinstance(database, dict) or not _is_postgres_scheme(str(database.get("scheme", ""))):
         raise TruLensAgentRuntimeCheckError("当前 Agent 的 TruLens 目标不是 PostgreSQL")
     return {"capture_mode": trulens["capture_mode"], "database": database}
 
@@ -120,7 +126,11 @@ def _validate_config(payload: Any) -> dict[str, object]:
 def _sync_database_url(database_url: str) -> str:
     """把脚本输入统一为 psycopg 可识别的 PostgreSQL URL。"""
 
-    return database_url.replace("postgresql+asyncpg://", "postgresql://", 1).strip()
+    return (
+        database_url.replace("postgresql+asyncpg://", "postgresql://", 1)
+        .replace("postgresql+psycopg://", "postgresql://", 1)
+        .strip()
+    )
 
 
 def _event_count(database_url: str) -> int:
@@ -151,7 +161,9 @@ def _validate_agent_response(payload: Any) -> None:
         raise TruLensAgentRuntimeCheckError(
             f"只读 Fitness 请求未进入 FITNESS_COACHING 路由，实际路由={payload.get('route')!r}"
         )
-    if payload.get("status") != "COMPLETED":
+    # AgentChatResponse 开启了 response_model_exclude_defaults，正常完成时会省略
+    # 默认值为 COMPLETED 的 status；省略字段与显式返回 COMPLETED 语义相同。
+    if payload.get("status", "COMPLETED") != "COMPLETED":
         raise TruLensAgentRuntimeCheckError("只读 Fitness 请求未完成")
     if not isinstance(payload.get("answer"), str) or not payload["answer"].strip():
         raise TruLensAgentRuntimeCheckError("只读 Fitness 请求返回空回答")
