@@ -29,6 +29,15 @@ const domainIcons: Record<string, string> = {
   CUSTOMER_SERVICE: "◌",
 };
 
+const domainQuickActions: Record<string, { title: string; description: string; prompt: string }> = {
+  BUSINESS: { title: "业务资料查询", description: "查询课程、合同和课时等当前业务事实。", prompt: "查询我有权限查看的课程、合同和剩余课时" },
+  BOOKING: { title: "预约工作台", description: "查看预约、可预约时间和课时约束。", prompt: "查询我最近的课程预约和可用课时" },
+  TRAINING: { title: "训练计划工作台", description: "查看已发布计划，或发起训练计划草案。", prompt: "查看我当前已发布的训练计划" },
+  MEMORY: { title: "个人偏好", description: "查看已确认的训练偏好和助手记忆。", prompt: "查看我的已确认训练偏好" },
+  OPERATIONS: { title: "经营分析", description: "查询当前身份可见的固定经营指标。", prompt: "查看本机构本月经营指标" },
+  CUSTOMER_SERVICE: { title: "客服工单", description: "查看本人可见的客服问题和处理状态。", prompt: "查询我最近的客服工单" },
+};
+
 function stableId(prefix: string): string {
   return `${prefix}-${typeof crypto.randomUUID === "function" ? crypto.randomUUID() : Date.now()}`;
 }
@@ -71,7 +80,7 @@ function groupCapabilities(items: Capability[]): [string, Capability[]][] {
 
 function App() {
   const [catalog, setCatalog] = useState<CapabilityCatalog | null>(null);
-  const [activeView, setActiveView] = useState<"chat" | "capabilities">("chat");
+  const [activeView, setActiveView] = useState<"chat" | "workspaces" | "capabilities">("chat");
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: stableId("assistant"),
@@ -133,6 +142,9 @@ function App() {
         <button className={`nav-item ${activeView === "chat" ? "active" : ""}`} onClick={() => setActiveView("chat")}>
           <span>✧</span> Agent 对话
         </button>
+        <button className={`nav-item ${activeView === "workspaces" ? "active" : ""}`} onClick={() => setActiveView("workspaces")}>
+          <span>▦</span> 业务工作台
+        </button>
         <button className={`nav-item ${activeView === "capabilities" ? "active" : ""}`} onClick={() => setActiveView("capabilities")}>
           <span>◫</span> 我的能力
         </button>
@@ -146,7 +158,7 @@ function App() {
 
       <main className="main-area">
         <header className="topbar">
-          <div><span className="eyebrow">AI FITNESS PLATFORM</span><h1>{activeView === "chat" ? "智能健身助手" : "能力目录"}</h1></div>
+          <div><span className="eyebrow">AI FITNESS PLATFORM</span><h1>{activeView === "chat" ? "智能健身助手" : activeView === "workspaces" ? "业务工作台" : "能力目录"}</h1></div>
           <div className="topbar-meta"><span className="live-pill"><i /> Agent 在线</span><span className="role-pill">{roles.map((role) => roleNames[role] ?? role).join(" / ") || "等待身份"}</span></div>
         </header>
 
@@ -164,7 +176,7 @@ function App() {
             </div>
             <aside className="context-panel"><div className="panel-heading compact"><div><span className="panel-kicker">ACCESS</span><h3>当前可用能力</h3></div></div><div className="capability-list">{groups.slice(0, 5).map(([domain, items]) => <div className="capability-group" key={domain}><div className="group-title"><span>{domainIcons[domain] ?? "◇"}</span>{domainNames[domain] ?? domain}<em>{items.length}</em></div><div className="group-items">{items.slice(0, 3).map((item) => <span key={item.id}>{item.display_name}</span>)}</div></div>)}{!catalog && <div className="empty-state">配置 AgentContext 后加载能力目录</div>}</div><button className="text-button" onClick={() => setActiveView("capabilities")}>查看全部能力 <span>→</span></button></aside>
           </section>
-        ) : <CapabilitiesView catalog={catalog} />}
+        ) : activeView === "workspaces" ? <DomainWorkspacesView catalog={catalog} onUsePrompt={(prompt) => { setInput(prompt); setActiveView("chat"); }} /> : <CapabilitiesView catalog={catalog} />}
       </main>
     </div>
   );
@@ -233,6 +245,12 @@ function ConfirmationCard({ response, confirmation, acting, refreshing, onRefres
 function CapabilitiesView({ catalog }: { catalog: CapabilityCatalog | null }) {
   if (!catalog) return <div className="empty-page"><span>◇</span><h2>暂时无法加载能力目录</h2><p>请确认 AgentContext 已配置，并检查 Agent 服务是否在线。</p></div>;
   return <section className="catalog-page"><div className="catalog-intro"><div><span className="panel-kicker">SERVER-DRIVEN ACCESS</span><h2>你可以使用的能力</h2><p>以下目录由后端根据签名角色实时生成。页面只负责展示，真正的权限仍由 Agent、Tool Registry 和 Gateway 再次校验。</p></div><span className="version-badge">{catalog.catalog_version.slice(0, 20)}…</span></div><div className="catalog-grid">{groupCapabilities(catalog.items).map(([domain, items]) => <div className="catalog-card" key={domain}><div className="catalog-card-title"><span>{domainIcons[domain] ?? "◇"}</span><div><h3>{domainNames[domain] ?? domain}</h3><small>{items.length} 项能力</small></div></div>{items.map((item) => <div className="catalog-item" key={item.id}><div><strong>{item.display_name}</strong><p>{item.description}</p></div><div className="item-flags"><span className={item.read_only ? "read-tag" : "write-tag"}>{item.read_only ? "只读" : "写入"}</span>{item.requires_confirmation && <span className="confirm-tag">需确认</span>}</div></div>)}</div>)}</div></section>;
+}
+
+function DomainWorkspacesView({ catalog, onUsePrompt }: { catalog: CapabilityCatalog | null; onUsePrompt: (prompt: string) => void }) {
+  if (!catalog) return <div className="empty-page"><span>▦</span><h2>暂时无法加载业务工作台</h2><p>请先配置 AgentContext，页面会根据服务端权限显示入口。</p></div>;
+  const availableDomains = groupCapabilities(catalog.items).filter(([domain]) => domainQuickActions[domain]);
+  return <section className="workspace-page"><div className="catalog-intro"><div><span className="panel-kicker">DOMAIN WORKSPACES</span><h2>从业务场景开始</h2><p>每个入口都会回到同一个 Agent 会话，由服务端重新校验身份、组织范围和工具权限。写操作仍然需要确认。</p></div><span className="version-badge">{availableDomains.length} 个可用领域</span></div><div className="workspace-grid">{availableDomains.map(([domain, items]) => { const action = domainQuickActions[domain]; return <article className="workspace-card" key={domain}><div className="workspace-card-head"><span>{domainIcons[domain] ?? "◇"}</span><div><h3>{action.title}</h3><small>{items.length} 项能力可用</small></div></div><p>{action.description}</p><div className="workspace-actions"><button className="workspace-primary" onClick={() => onUsePrompt(action.prompt)}>进入查询 <span>→</span></button><span>{items.some((item) => !item.read_only) ? "含受控写入" : "只读查询"}</span></div></article>; })}</div></section>;
 }
 
 export default App;
