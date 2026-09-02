@@ -173,14 +173,34 @@ function App() {
 function MessageBubble({ message, onDecision }: { message: ChatMessage; onDecision: (message: string) => void }) {
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [acting, setActing] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const decisionRequestIds = useMemo(() => ({
     APPROVE: stableId("approve"),
     REJECT: stableId("reject"),
   }), []);
 
+  async function refreshConfirmation() {
+    if (!message.confirmation?.confirmation_id) return;
+    setRefreshing(true);
+    try {
+      setConfirmation(await getConfirmation(message.confirmation.confirmation_id));
+    } catch (reason: unknown) {
+      onDecision(formatError(reason));
+    } finally {
+      setRefreshing(false);
+    }
+  }
+
   useEffect(() => {
-    if (message.confirmation?.confirmation_id) void getConfirmation(message.confirmation.confirmation_id).then(setConfirmation).catch(() => undefined);
-  }, [message.confirmation]);
+    if (message.confirmation?.confirmation_id) void refreshConfirmation();
+  }, [message.confirmation?.confirmation_id]);
+
+  useEffect(() => {
+    if (!confirmation || confirmation.authorization_status !== "APPROVED") return;
+    if (["SUCCEEDED", "FAILED_FINAL"].includes(confirmation.execution_status)) return;
+    const timer = window.setInterval(() => void refreshConfirmation(), 2000);
+    return () => window.clearInterval(timer);
+  }, [confirmation?.authorization_status, confirmation?.execution_status]);
 
   async function decide(decision: "APPROVE" | "REJECT") {
     if (!message.confirmation?.confirmation_id || acting) return;
@@ -200,14 +220,14 @@ function MessageBubble({ message, onDecision }: { message: ChatMessage; onDecisi
     }
   }
 
-  return <div className={`message-row ${message.role}`}><div className={message.role === "assistant" ? "assistant-avatar" : "user-avatar"}>{message.role === "assistant" ? "F" : "我"}</div><div className="message-content">{message.route && <span className="route-tag">{domainNames[message.route] ?? message.route}</span>}<div className="message-bubble">{message.content}</div>{message.confirmation && <ConfirmationCard response={message.confirmation} confirmation={confirmation} acting={acting} onDecision={decide} />}</div></div>;
+  return <div className={`message-row ${message.role}`}><div className={message.role === "assistant" ? "assistant-avatar" : "user-avatar"}>{message.role === "assistant" ? "F" : "我"}</div><div className="message-content">{message.route && <span className="route-tag">{domainNames[message.route] ?? message.route}</span>}<div className="message-bubble">{message.content}</div>{message.confirmation && <ConfirmationCard response={message.confirmation} confirmation={confirmation} acting={acting} refreshing={refreshing} onRefresh={() => void refreshConfirmation()} onDecision={decide} />}</div></div>;
 }
 
-function ConfirmationCard({ response, confirmation, acting, onDecision }: { response: ChatResponse; confirmation: Confirmation | null; acting: boolean; onDecision: (decision: "APPROVE" | "REJECT") => void }) {
+function ConfirmationCard({ response, confirmation, acting, refreshing, onRefresh, onDecision }: { response: ChatResponse; confirmation: Confirmation | null; acting: boolean; refreshing: boolean; onRefresh: () => void; onDecision: (decision: "APPROVE" | "REJECT") => void }) {
   const authorization = confirmation?.authorization_status ?? "PENDING";
   const execution = confirmation?.execution_status ?? "NOT_STARTED";
   const canDecide = authorization === "PENDING" && !acting;
-  return <div className="confirmation-card"><div className="confirmation-head"><span className="shield">✓</span><div><strong>需要你的确认</strong><small>这是一个可能修改业务数据的操作</small></div><span className="risk-tag">受控写入</span></div><div className="confirmation-body"><div><span>动作</span><strong>{response.confirmation_summary?.action ?? confirmation?.action ?? "业务操作"}</strong></div><div><span>资源</span><strong>{response.confirmation_summary?.resource_type ?? confirmation?.resource_type ?? "健身业务"}</strong></div>{response.confirmation_expires_at && <div><span>有效期至</span><strong>{new Date(response.confirmation_expires_at).toLocaleString("zh-CN")}</strong></div>}</div><div className="confirmation-status"><span>授权：<b>{displayStatus(authorization)}</b></span><span>执行：<b>{displayStatus(execution)}</b></span></div>{canDecide ? <div className="confirmation-actions"><button className="reject-button" onClick={() => onDecision("REJECT")}>拒绝</button><button className="approve-button" onClick={() => onDecision("APPROVE")}>{acting ? "处理中…" : "确认执行"}</button></div> : <div className="confirmation-locked">{acting ? "正在处理…" : `当前状态：${displayStatus(authorization)} / ${displayStatus(execution)}`}</div>}</div>;
+  return <div className="confirmation-card"><div className="confirmation-head"><span className="shield">✓</span><div><strong>需要你的确认</strong><small>这是一个可能修改业务数据的操作</small></div><span className="risk-tag">受控写入</span></div><div className="confirmation-body"><div><span>动作</span><strong>{response.confirmation_summary?.action ?? confirmation?.action ?? "业务操作"}</strong></div><div><span>资源</span><strong>{response.confirmation_summary?.resource_type ?? confirmation?.resource_type ?? "健身业务"}</strong></div>{response.confirmation_expires_at && <div><span>有效期至</span><strong>{new Date(response.confirmation_expires_at).toLocaleString("zh-CN")}</strong></div>}</div><div className="confirmation-status"><span>授权：<b>{displayStatus(authorization)}</b></span><span>执行：<b>{displayStatus(execution)}</b></span></div>{canDecide ? <div className="confirmation-actions"><button className="reject-button" onClick={() => onDecision("REJECT")}>拒绝</button><button className="approve-button" onClick={() => onDecision("APPROVE")}>{acting ? "处理中…" : "确认执行"}</button></div> : <div className="confirmation-locked">{acting ? "正在处理…" : `当前状态：${displayStatus(authorization)} / ${displayStatus(execution)}`}</div>}<button className="refresh-button" onClick={onRefresh} disabled={refreshing}>{refreshing ? "刷新中…" : "刷新确认状态"}</button></div>;
 }
 
 function CapabilitiesView({ catalog }: { catalog: CapabilityCatalog | null }) {
