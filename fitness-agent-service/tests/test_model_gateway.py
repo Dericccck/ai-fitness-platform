@@ -156,3 +156,30 @@ async def test_model_gateway_converts_provider_errors_to_stable_response_error()
             [{"role": "user", "content": "查询经营指标"}],
             tools=[{"type": "function", "function": {"name": "fitness_operations_v1"}}],
         )
+
+
+async def test_local_embedding_warmup_runs_minimal_inference(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    gateway = ModelGateway(
+        Settings(
+            _env_file=None,
+            embedding_backend="local",
+            embedding_model_path="/models/bge-m3",
+        )
+    )
+    calls: list[list[str]] = []
+    monkeypatch.setattr(gateway, "_embed_local", lambda texts: calls.append(texts) or [[0.1]])
+
+    await gateway.warmup_local_embedding()
+
+    assert calls == [["健身检索模型预热"]]
+
+
+async def test_remote_embedding_warmup_does_not_call_provider() -> None:
+    gateway = ModelGateway(configured_settings())
+    gateway._embedding.embeddings.create = AsyncMock()
+
+    await gateway.warmup_local_embedding()
+
+    gateway._embedding.embeddings.create.assert_not_awaited()

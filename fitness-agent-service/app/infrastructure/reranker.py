@@ -77,6 +77,18 @@ class RerankerClient:
             for item in raw_results
         ]
 
+    async def warmup_local_model(self) -> None:
+        """预先加载本地 Cross-Encoder，避免首次 RAG 请求承担初始化延迟。"""
+
+        if self.settings.reranker_backend != "local" or not self.settings.reranker_configured:
+            return
+        await asyncio.to_thread(
+            self._rerank_local,
+            "健身重排模型预热",
+            ["健身重排模型预热"],
+            1,
+        )
+
     def _rerank_local(
         self,
         query: str,

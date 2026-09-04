@@ -235,6 +235,11 @@ class Settings(BaseSettings):
     reranker_model_path: str = ""
     reranker_timeout_seconds: float = 15.0
 
+    # 本地模型预热只把原本发生在首个用户请求中的加载成本前移到启动阶段。
+    # 默认关闭以保持测试和轻量开发环境快速启动；需要稳定首请求延迟时显式开启。
+    local_model_warmup_enabled: bool = False
+    local_model_warmup_timeout_seconds: float = Field(default=180.0, gt=0, le=600)
+
     # RAG 限制在服务边界统一约束。对话请求不能通过覆盖这些值增加数据库、
     # Reranker 或 Prompt 成本。
     rag_candidate_limit: int = Field(default=20, ge=1, le=100)

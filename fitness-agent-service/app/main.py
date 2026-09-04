@@ -1,6 +1,9 @@
+import asyncio
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
+from time import perf_counter
 
+import structlog
 from fastapi import FastAPI
 from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.responses import Response
@@ -67,6 +70,7 @@ from app.session_summary import SessionSummaryRepository, SessionSummaryService
 
 runtime_settings = get_settings()
 configure_logging(runtime_settings.log_level)
+logger = structlog.get_logger(__name__)
 http_metrics = HttpMetrics.create(
     service_name=runtime_settings.service_name,
     service_version=runtime_settings.service_version,
@@ -290,6 +294,24 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         # Checkpointer 在服务启动阶段创建官方表结构；如果数据库不可用则拒绝启动，
         # 避免服务看似在线却丢失会话状态。
         await app.state.checkpoint_store.start()
+        if settings.local_model_warmup_enabled:
+            # 预热失败或超时时直接拒绝进入 ready，避免实例看似可用、
+            # 实际把模型缺失或内存问题暴露给第一个用户。
+            warmup_started_at = perf_counter()
+            await asyncio.wait_for(
+                app.state.models.warmup_local_embedding(),
+                timeout=settings.local_model_warmup_timeout_seconds,
+            )
+            await asyncio.wait_for(
+                app.state.reranker.warmup_local_model(),
+                timeout=settings.local_model_warmup_timeout_seconds,
+            )
+            logger.info(
+                "local_models_warmed_up",
+                duration_ms=round((perf_counter() - warmup_started_at) * 1000, 2),
+                embedding_backend=settings.embedding_backend,
+                reranker_backend=settings.reranker_backend,
+            )
         app.state.supervisor = Supervisor(
             app.state.models,
             app.state.tool_registry,

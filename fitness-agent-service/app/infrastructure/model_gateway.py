@@ -247,6 +247,17 @@ class ModelGateway:
         )
         return [item.embedding for item in response.data]
 
+    async def warmup_local_embedding(self) -> None:
+        """在服务接收流量前加载本地 Embedding 并完成一次最小推理。
+
+        远程 Embedding 不做预热，避免启动时产生外部请求和计费。这个方法
+        不改变模型或向量算法，只是将首次加载成本从用户请求移动到启动阶段。
+        """
+
+        if self.settings.embedding_backend != "local" or not self.settings.embedding_configured:
+            return
+        await asyncio.to_thread(self._embed_local, ["健身检索模型预热"])
+
     async def _create_completion(self, request: dict[str, Any], *, kind: str) -> Any:
         """调用供应商一次并发出有界的生成遥测数据。"""
 
