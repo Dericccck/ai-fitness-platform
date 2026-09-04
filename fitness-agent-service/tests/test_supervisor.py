@@ -3,7 +3,7 @@ from typing import Any, cast
 import pytest
 from langgraph.checkpoint.base import CheckpointTuple, empty_checkpoint
 from langgraph.checkpoint.memory import InMemorySaver
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent.supervisor import (
     Supervisor,
@@ -222,6 +222,37 @@ def test_model_tool_schema_hides_context_bound_organization_id() -> None:
     assert "organization_id" not in parameters["properties"]
     assert "organization_id" not in parameters.get("required", [])
     assert "limit" in parameters["properties"]
+
+
+def test_model_tool_schema_removes_non_constraint_metadata() -> None:
+    class Input(BaseModel):
+        count: int = Field(default=5, examples=[3], ge=1, description="返回数量")
+
+    registry = ToolRegistry()
+
+    async def handler(_: BaseModel, __: ToolContext) -> object:
+        return {}
+
+    registry.register(
+        ToolDefinition(
+            tool_id="fitness.booking.availability.check.v1",
+            description="测试工具 Schema 压缩",
+            input_model=Input,
+            handler=handler,
+            allowed_roles=frozenset({"STUDENT"}),
+            read_only=True,
+            requires_confirmation=False,
+        )
+    )
+
+    parameters = _model_tools(registry, "BOOKING")[0]["function"]["parameters"]
+
+    assert "title" not in parameters
+    assert "title" not in parameters["properties"]["count"]
+    assert "default" not in parameters["properties"]["count"]
+    assert "examples" not in parameters["properties"]["count"]
+    assert parameters["properties"]["count"]["minimum"] == 1
+    assert parameters["properties"]["count"]["description"] == "返回数量"
 
 
 async def test_supervisor_uses_session_summary_after_checkpoint_compaction() -> None:

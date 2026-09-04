@@ -1341,12 +1341,31 @@ def _model_tools(registry: ToolRegistry, route: SupervisorRoute) -> list[dict[st
                 "description": spec["description"],
                 # 经营查询参数全部由服务端根据用户原问题和签名身份生成。模型只
                 # 决定是否调用固定指标工具，不接触内部机构 ID、日期或指标参数。
-                "parameters": _model_tool_parameters(spec, route),
+                "parameters": _compact_model_schema(_model_tool_parameters(spec, route)),
             },
         }
         for spec in registry.public_specs()
         if spec["name"] in allowed_tool_ids
     ]
+
+
+def _compact_model_schema(value: Any) -> Any:
+    """移除仅供文档展示、不会改变 Tool Calling 约束的 JSON Schema 元数据。
+
+    Pydantic 仍使用注册表中的完整 Schema 校验真实工具参数；这里只压缩每次发送给
+    模型的副本。``title``、``default`` 和 ``examples`` 不参与 required、类型、枚举、
+    数值范围或 additionalProperties 等约束，却会在每一次模型回合重复消耗 Token。
+    """
+
+    if isinstance(value, dict):
+        return {
+            key: _compact_model_schema(item)
+            for key, item in value.items()
+            if key not in {"title", "default", "examples"}
+        }
+    if isinstance(value, list):
+        return [_compact_model_schema(item) for item in value]
+    return value
 
 
 def _model_tool_parameters(spec: dict[str, Any], route: SupervisorRoute) -> dict[str, Any]:
