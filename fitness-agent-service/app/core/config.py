@@ -138,7 +138,9 @@ class Settings(BaseSettings):
             "GATEWAY_CONTEXT_SIGNING_SECRET", "AGENT_GATEWAY_CONTEXT_SIGNING_SECRET"
         ),
     )
-    gateway_context_max_ttl_seconds: int = Field(default=300, ge=60, le=900)
+    # 生产默认仍限制为 5 分钟。上限只为本地联调保留，必须同时显式
+    # 放宽 Agent 与 Gateway；不设置环境变量时不会改变原有安全边界。
+    gateway_context_max_ttl_seconds: int = Field(default=300, ge=60, le=28_800)
     gateway_context_signing_algorithm: str = Field(
         default="HS256",
         validation_alias=AliasChoices(

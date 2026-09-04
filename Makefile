@@ -46,7 +46,7 @@ help:
 	@echo "  agent-customer-service-live-check Check customer ticket confirmation flow; always rejects and does not write"
 	@echo "  agent-customer-service-write-live-check Run opt-in customer ticket write acceptance with exact cleanup"
 	@echo "  gateway-customer-service-role-live-check Check customer ticket read permissions for admin/coach/student"
-	@echo "  agent-dev-context Sign a 5-minute local-only organization admin AgentContext"
+	@echo "  agent-dev-context Sign a local-only AgentContext (5 minutes by default; DEV_AGENT_CONTEXT_TTL_SECONDS overrides it, up to 8 hours)"
 	@echo "  agent-session-summary-eval Run deterministic session summary security gates"
 	@echo "  agent-jwks-check Verify a real authentication service JWKS URL and kid"
 	@echo "  agent-jwks-dual-check Verify both AgentContext and confirmation credential JWKS sets"
@@ -242,7 +242,8 @@ agent-dev-context:
 	@test -n "$$DEV_AGENT_ORG_ID" || (echo "请先设置 DEV_AGENT_ORG_ID（本地 MySQL 中真实存在的机构 ID）"; exit 1)
 	@cd $(AGENT_DIR) && FITNESS_DEV_CONTEXT_ISSUER=1 UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/issue_dev_agent_context.py \
 		--subject "$${DEV_AGENT_SUBJECT:-local-operations-admin}" \
-		--role "$${DEV_AGENT_ROLE:-ORGANIZATION_ADMIN}"
+		--role "$${DEV_AGENT_ROLE:-ORGANIZATION_ADMIN}" \
+		--ttl-seconds "$${DEV_AGENT_CONTEXT_TTL_SECONDS:-300}"
 
 agent-operations-live-preflight:
 	@test -n "$$AGENT_LIVE_AGENT_CONTEXT" || (echo "请先设置 AGENT_LIVE_AGENT_CONTEXT（认证服务签发的组织管理员 Token）"; exit 1)

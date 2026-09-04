@@ -8,7 +8,7 @@ Agent 和 Java Gateway 后，给经营真实冒烟联调提供一个可验证的
 安全边界：
 1. 必须显式设置 ``FITNESS_DEV_CONTEXT_ISSUER=1`` 才允许运行；
 2. 角色只允许从组织管理员、教练、学员白名单中选择，不能签发系统管理员；
-3. 有效期最多 5 分钟；
+3. 默认有效期仍为 5 分钟，本地联调可显式延长，但最多 8 小时；
 4. 共享签名密钥只从环境变量或本地 ``.env`` 读取，永远不打印；
 5. 标准输出只包含 Token，方便直接赋值给 ``AGENT_LIVE_AGENT_CONTEXT``。
 """
@@ -27,7 +27,8 @@ import time
 from collections.abc import Mapping
 from pathlib import Path
 
-MAX_CONTEXT_TTL_SECONDS = 300
+DEFAULT_CONTEXT_TTL_SECONDS = 300
+MAX_CONTEXT_TTL_SECONDS = 8 * 60 * 60
 DEFAULT_SUBJECT = "local-operations-admin"
 DEFAULT_ROLE = "ORGANIZATION_ADMIN"
 ALLOWED_DEV_ROLES = frozenset({"ORGANIZATION_ADMIN", "COACH", "STUDENT"})
@@ -88,7 +89,7 @@ def issue_token(
     subject: str,
     organization_id: str,
     role: str = DEFAULT_ROLE,
-    ttl_seconds: int = MAX_CONTEXT_TTL_SECONDS,
+    ttl_seconds: int = DEFAULT_CONTEXT_TTL_SECONDS,
     signing_algorithm: str = SUPPORTED_ALGORITHM,
     key_id: str = DEFAULT_KEY_ID,
     now: int | None = None,
@@ -143,8 +144,11 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--ttl-seconds",
         type=int,
-        default=MAX_CONTEXT_TTL_SECONDS,
-        help=f"有效期，最多 {MAX_CONTEXT_TTL_SECONDS} 秒",
+        default=DEFAULT_CONTEXT_TTL_SECONDS,
+        help=(
+            f"有效期，默认 {DEFAULT_CONTEXT_TTL_SECONDS} 秒，"
+            f"本地联调最多 {MAX_CONTEXT_TTL_SECONDS} 秒"
+        ),
     )
     return parser.parse_args()
 

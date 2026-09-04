@@ -73,13 +73,27 @@ def test_issue_token_rejects_role_outside_local_allowlist() -> None:
         )
 
 
-def test_issue_token_rejects_ttl_above_gateway_limit() -> None:
+def test_issue_token_accepts_extended_local_development_ttl() -> None:
+    token = issue_token(
+        secret="local-context-secret",
+        subject="local-admin",
+        organization_id="org-demo",
+        ttl_seconds=28_800,
+        now=1_800_000_000,
+    )
+    payload = token.split(".", 1)[0]
+    claims = json.loads(base64.urlsafe_b64decode(payload + "=="))
+
+    assert claims["exp"] - claims["iat"] == 28_800
+
+
+def test_issue_token_rejects_ttl_above_local_development_limit() -> None:
     with pytest.raises(DevContextIssuerError):
         issue_token(
             secret="local-context-secret",
             subject="local-admin",
             organization_id="org-demo",
-            ttl_seconds=301,
+            ttl_seconds=28_801,
         )
 
 

@@ -384,7 +384,7 @@ sequenceDiagram
     participant G as ModelGateway
     participant TR as ToolRegistry
     participant GC as GatewayClient
-    participant GW as Java Gateway
+    participant GW as Gateway
     participant DB as 核心 MySQL
 
     U->>API: POST /api/v1/agent/chat

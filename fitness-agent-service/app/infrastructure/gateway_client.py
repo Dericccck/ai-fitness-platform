@@ -283,6 +283,10 @@ class GatewayClient:
         self._client = client or httpx.AsyncClient(
             base_url=settings.gateway_base_url.rstrip("/"),
             timeout=httpx.Timeout(settings.gateway_timeout_seconds),
+            # Gateway 是受控的内部服务，不能继承宿主机的 HTTP(S)_PROXY。
+            # 否则 localhost/内网请求可能被系统代理接管并返回空 502，同时还会把
+            # 内部服务 Token 与 AgentContext 发送给非预期代理端点。
+            trust_env=False,
         )
 
     async def get_current_user(self, context: GatewayRequestContext) -> GatewayUser:

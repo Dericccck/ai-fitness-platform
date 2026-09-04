@@ -36,6 +36,20 @@ def context() -> GatewayRequestContext:
     )
 
 
+def test_default_client_does_not_inherit_environment_proxy(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    class FakeAsyncClient:
+        def __init__(self, **kwargs: object) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(httpx, "AsyncClient", FakeAsyncClient)
+
+    GatewayClient(build_settings())
+
+    assert captured["trust_env"] is False
+
+
 async def test_client_sends_service_and_signed_context_headers() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["X-Internal-Service-Token"] == "service-token"

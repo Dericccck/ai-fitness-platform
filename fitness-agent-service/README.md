@@ -192,6 +192,10 @@ make agent-booking-live-check
 `agent-dev-context` 会从 `fitness-agent-service/.env` 读取
 `GATEWAY_CONTEXT_SIGNING_SECRET`，因此 Agent 和 Gateway 必须使用同一份密钥。Token 只应
 保存在当前终端的环境变量中，过期后重新签发；正式环境必须由认证服务签发，不能使用这个脚本。
+默认有效期为 300 秒。需要较长的本地前端联调时，可设置
+`DEV_AGENT_CONTEXT_TTL_SECONDS=28800`，并在重启 Agent 和 Gateway 时同时设置
+`AGENT_GATEWAY_CONTEXT_MAX_TTL_SECONDS=28800` 与 `GATEWAY_MAX_CONTEXT_TTL_SECONDS=28800`。
+该放宽只用于启用了 `FITNESS_DEV_CONTEXT_ISSUER=1` 的本地开发环境，不得带入生产配置。
 
 常用质量检查：
 
