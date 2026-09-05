@@ -37,6 +37,9 @@ class NotificationOutboxRecord:
     published_at: datetime | None
     created_at: datetime
     updated_at: datetime
+    last_replayed_by: str | None = None
+    last_replay_reason: str | None = None
+    replayed_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -278,6 +281,82 @@ class NotificationOutboxRepository:
                 """
             ),
             {"id": outbox_id, "worker_id": worker_id, "reason": reason[:128]},
+        )
+        return int(result.rowcount or 0) == 1
+
+    async def suppress_stale_for_event(
+        self, connection: Any, *, event_type: str, aggregate_id: str, organization_id: str
+    ) -> int:
+        """在终态事件入队时抑制仍未投递的旧待办提醒。"""
+
+        stale_types: tuple[str, ...] = ()
+        if event_type == "APPOINTMENT_CANCELLED":
+            stale_types = ("APPOINTMENT_CREATED", "APPOINTMENT_RESCHEDULED")
+        elif event_type == "TRAINING_PLAN_PUBLISHED":
+            stale_types = ("TRAINING_PLAN_REVIEW_REQUIRED",)
+        if not stale_types:
+            return 0
+        result = await connection.execute(
+            text(
+                """
+                UPDATE agent_notification_outbox
+                SET status = 'SUPPRESSED', suppressed_at = CURRENT_TIMESTAMP,
+                    suppression_reason = 'STALE_AFTER_CURRENT_EVENT', updated_at = CURRENT_TIMESTAMP
+                WHERE organization_id = :organization_id AND aggregate_id = :aggregate_id
+                  AND notification_type IN :stale_types
+                  AND status IN ('PENDING', 'DEFERRED', 'RETRYABLE_FAILED')
+                """
+            ).bindparams(bindparam("stale_types", expanding=True)),
+            {"organization_id": organization_id, "aggregate_id": aggregate_id, "stale_types": stale_types},
+        )
+        return int(result.rowcount or 0)
+
+    async def list_dead(
+        self, connection: Any, *, organization_id: str | None = None, limit: int = 50
+    ) -> list[NotificationOutboxRecord]:
+        if limit < 1 or limit > 100:
+            raise ValueError("DEAD 通知列表限制必须在 1 到 100 之间")
+        rows = (
+            await connection.execute(
+                text(
+                    """
+                    SELECT * FROM agent_notification_outbox
+                    WHERE status = 'DEAD'
+                      AND (CAST(:organization_id AS TEXT) IS NULL OR organization_id = :organization_id)
+                    ORDER BY updated_at DESC, id DESC LIMIT :limit
+                    """
+                ),
+                {"organization_id": organization_id, "limit": limit},
+            )
+        ).mappings().all()
+        return [_from_row(row) for row in rows]
+
+    async def get_by_id(self, connection: Any, *, outbox_id: str) -> NotificationOutboxRecord | None:
+        row = (
+            await connection.execute(
+                text("SELECT * FROM agent_notification_outbox WHERE id = :id"),
+                {"id": outbox_id},
+            )
+        ).mappings().first()
+        return _from_row(row) if row is not None else None
+
+    async def replay_dead(
+        self, connection: Any, *, outbox_id: str, operator_id: str, reason: str
+    ) -> bool:
+        if not outbox_id.strip() or not operator_id.strip() or not reason.strip():
+            raise ValueError("DEAD 重放必须提供事件、处理人和原因")
+        result = await connection.execute(
+            text(
+                """
+                UPDATE agent_notification_outbox
+                SET status = 'PENDING', available_at = CURRENT_TIMESTAMP,
+                    locked_by = NULL, locked_at = NULL, last_error_code = NULL,
+                    last_replayed_by = :operator_id, last_replay_reason = :reason,
+                    replayed_at = CURRENT_TIMESTAMP, updated_at = CURRENT_TIMESTAMP
+                WHERE id = :id AND status = 'DEAD'
+                """
+            ),
+            {"id": outbox_id, "operator_id": operator_id, "reason": reason[:256]},
         )
         return int(result.rowcount or 0) == 1
 
@@ -578,6 +657,9 @@ def _from_row(row: Any) -> NotificationOutboxRecord:
         published_at=_as_utc(row["published_at"]),
         created_at=_required_utc(row["created_at"]),
         updated_at=_required_utc(row["updated_at"]),
+        last_replayed_by=str(row.get("last_replayed_by")) if row.get("last_replayed_by") else None,
+        last_replay_reason=str(row.get("last_replay_reason")) if row.get("last_replay_reason") else None,
+        replayed_at=_as_utc(row.get("replayed_at")),
     )
 
 

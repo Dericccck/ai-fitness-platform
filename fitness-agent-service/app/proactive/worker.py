@@ -104,6 +104,14 @@ class ProactiveEventWorker:
         event = _event_from_record(record)
         targets = notification_targets(event)
         async with self.database.engine.begin() as connection:
+            suppress_stale = getattr(self.notification_repository, "suppress_stale_for_event", None)
+            if suppress_stale is not None:
+                await suppress_stale(
+                    connection,
+                    event_type=event.event_type,
+                    aggregate_id=event.aggregate_id,
+                    organization_id=event.organization_id,
+                )
             for target in targets:
                 await self.notification_repository.enqueue_on_connection(
                     connection,

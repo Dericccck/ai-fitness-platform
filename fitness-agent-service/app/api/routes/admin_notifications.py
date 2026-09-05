@@ -101,6 +101,27 @@ class NotificationDeliveryAttemptResponse(BaseModel):
     finished_at: datetime | None
 
 
+class DeadNotificationResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    notification_type: str
+    organization_id: str
+    status: str
+    attempt_count: int
+    last_error_code: str | None
+    created_at: datetime
+    updated_at: datetime
+    last_replayed_by: str | None
+    replayed_at: datetime | None
+
+
+class DeadNotificationReplayRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=256)
+
+
 @router.post("/templates", response_model=NotificationTemplateResponse)
 async def create_notification_template_draft(
     payload: NotificationTemplateDraftRequest,
@@ -259,6 +280,46 @@ async def list_notification_delivery_attempts(
     return [_to_delivery_attempt_response(attempt) for attempt in attempts]
 
 
+@router.get("/dead", response_model=list[DeadNotificationResponse])
+async def list_dead_notifications(
+    request: Request,
+    organization_id: str | None = Query(default=None, min_length=1, max_length=128),
+    limit: int = Query(default=50, ge=1, le=100),
+    x_agent_context: str | None = Header(default=None),
+) -> list[DeadNotificationResponse]:
+    """查询通知 DEAD 事件摘要，不返回正文或接收人。"""
+
+    _verify_platform_admin(request, x_agent_context)
+    async with request.app.state.database.engine.connect() as connection:
+        records = await _outbox_repository(request).list_dead(
+            connection, organization_id=organization_id, limit=limit
+        )
+    return [_to_dead_response(record) for record in records]
+
+
+@router.post("/dead/{outbox_id}/replay", response_model=DeadNotificationResponse)
+async def replay_dead_notification(
+    payload: DeadNotificationReplayRequest,
+    request: Request,
+    outbox_id: str = Path(min_length=1, max_length=128),
+    x_agent_context: str | None = Header(default=None),
+) -> DeadNotificationResponse:
+    """受控重放 DEAD 事件，保留处理人和原因；重复调用保持幂等。"""
+
+    identity = _verify_platform_admin(request, x_agent_context)
+    async with request.app.state.database.engine.begin() as connection:
+        changed = await _outbox_repository(request).replay_dead(
+            connection, outbox_id=outbox_id, operator_id=identity.subject, reason=payload.reason
+        )
+        if not changed:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="DEAD 事件不存在或已重放")
+    async with request.app.state.database.engine.connect() as connection:
+        record = await _outbox_repository(request).get_by_id(connection, outbox_id=outbox_id)
+    if record is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="DEAD 事件不存在")
+    return _to_dead_response(record)
+
+
 def _repository(request: Request) -> NotificationTemplateRepository:
     return cast(NotificationTemplateRepository, request.app.state.notification_templates)
 
@@ -325,4 +386,19 @@ def _to_delivery_attempt_response(
         provider_message_id=attempt.provider_message_id,
         started_at=attempt.started_at,
         finished_at=attempt.finished_at,
+    )
+
+
+def _to_dead_response(record: object) -> DeadNotificationResponse:
+    return DeadNotificationResponse(
+        id=record.id,  # type: ignore[attr-defined]
+        notification_type=record.notification_type,  # type: ignore[attr-defined]
+        organization_id=record.organization_id,  # type: ignore[attr-defined]
+        status=record.status,  # type: ignore[attr-defined]
+        attempt_count=record.attempt_count,  # type: ignore[attr-defined]
+        last_error_code=record.last_error_code,  # type: ignore[attr-defined]
+        created_at=record.created_at,  # type: ignore[attr-defined]
+        updated_at=record.updated_at,  # type: ignore[attr-defined]
+        last_replayed_by=record.last_replayed_by,  # type: ignore[attr-defined]
+        replayed_at=record.replayed_at,  # type: ignore[attr-defined]
     )
