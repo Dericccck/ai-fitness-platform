@@ -60,6 +60,29 @@ class TrainingPlanGenerationInput(BaseModel):
         return self
 
 
+class GeneratedTrainingItemContent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    exercise_name: str = Field(min_length=1, max_length=128)
+    sort_order: int = Field(ge=1, le=100)
+    sets: int = Field(ge=1, le=8)
+    reps: str = Field(min_length=1, max_length=64)
+    rest_seconds: int | None = Field(default=None, ge=0, le=600)
+    target_weight_kg: float | None = Field(default=None, ge=0, le=1000)
+    target_rpe: float | None = Field(default=None, ge=0, le=10)
+    notes: str | None = Field(default=None, max_length=1000)
+    evidence_ids: list[str] = Field(min_length=1, max_length=10)
+
+
+class GeneratedTrainingDayContent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    day_number: int = Field(ge=1, le=7)
+    title: str = Field(min_length=1, max_length=128)
+    scheduled_date: str | None = None
+    items: list[GeneratedTrainingItemContent] = Field(min_length=1, max_length=8)
+
+
 class GeneratedTrainingPlanContent(BaseModel):
     """模型只允许生成计划内容，不允许生成归属 ID 或审核状态。"""
 
@@ -67,7 +90,7 @@ class GeneratedTrainingPlanContent(BaseModel):
 
     title: str = Field(min_length=1, max_length=128)
     goal_type: str = Field(min_length=1, max_length=32)
-    days: list[dict[str, Any]] = Field(min_length=1, max_length=7)
+    days: list[GeneratedTrainingDayContent] = Field(min_length=1, max_length=7)
     # 模型可声明本次计划依据的稳定证据 ID；服务端会校验其确实来自本次授权检索。
     evidence_ids: list[str] = Field(default_factory=list, max_length=20)
 
@@ -201,6 +224,7 @@ class TrainingPlanGenerationService:
             "citations": citations,
             "context_sources": _context_sources(memories),
             "evidence_ids": tuple(content.evidence_ids),
+            "action_evidence": _action_evidence_map(content),
             "safety_note": "这是基于知识证据生成的结构化草案，不是诊断或治疗建议。",
         }
 
@@ -245,7 +269,11 @@ class TrainingPlanGenerationService:
                 authorized_evidence_ids = {
                     item.citation_id for item in evidence.citations()
                 }
-                if set(content.evidence_ids) - authorized_evidence_ids:
+                declared_evidence_ids = set(content.evidence_ids)
+                for day in content.days:
+                    for item in day.items:
+                        declared_evidence_ids.update(item.evidence_ids)
+                if declared_evidence_ids - authorized_evidence_ids:
                     raise TrainingPlanGenerationError(
                         "生成结果引用了未授权或不存在的知识证据"
                     )
@@ -320,6 +348,7 @@ def _generation_prompt(
                         "target_weight_kg": None,
                         "target_rpe": "0 到 10 的数字或 null",
                         "notes": "动作执行提示或 null",
+                        "evidence_ids": ["至少一个本次授权证据 citation_id"],
                     }
                 ],
             }
@@ -351,8 +380,35 @@ def _build_create_payload(
         "coach_id": request.coach_id,
         "title": request.title or content.title,
         "goal_type": request.goal_type,
-        "days": content.days,
+        "days": [
+            {
+                "day_number": day.day_number,
+                "title": day.title,
+                "scheduled_date": day.scheduled_date,
+                "items": [
+                    item.model_dump(exclude={"evidence_ids"}) for item in day.items
+                ],
+            }
+            for day in content.days
+        ],
     }
+
+
+def _action_evidence_map(
+    content: GeneratedTrainingPlanContent,
+) -> tuple[dict[str, object], ...]:
+    """返回动作级证据关联，不把它混入训练服务的业务处方字段。"""
+
+    return tuple(
+        {
+            "day_number": day.day_number,
+            "sort_order": item.sort_order,
+            "exercise_name": item.exercise_name,
+            "evidence_ids": tuple(item.evidence_ids),
+        }
+        for day in content.days
+        for item in day.items
+    )
 
 
 def _validate_semantic_rules(

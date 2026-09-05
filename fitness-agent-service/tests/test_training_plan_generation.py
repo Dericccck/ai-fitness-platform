@@ -113,10 +113,12 @@ def valid_json() -> str:
         '{"title":"弹力带力量入门","goal_type":"力量","days":['
         '{"day_number":1,"title":"全身力量","scheduled_date":null,"items":['
         '{"exercise_name":"弹力带深蹲","sort_order":1,"sets":3,"reps":"8-10",'
-        '"rest_seconds":90,"target_weight_kg":null,"target_rpe":6,"notes":null}]},'
+        '"rest_seconds":90,"target_weight_kg":null,"target_rpe":6,"notes":null,'
+        '"evidence_ids":["doc-1:1"]}]},'
         '{"day_number":2,"title":"上肢力量","scheduled_date":null,"items":['
         '{"exercise_name":"弹力带划船","sort_order":1,"sets":3,"reps":"10-12",'
-        '"rest_seconds":90,"target_weight_kg":null,"target_rpe":6,"notes":null}]}'
+        '"rest_seconds":90,"target_weight_kg":null,"target_rpe":6,"notes":null,'
+        '"evidence_ids":["doc-1:1"]}]}'
         "]}"
     )
 
@@ -177,6 +179,13 @@ async def test_generation_returns_structured_preview_and_citations() -> None:
     assert isinstance(payload, dict)
     assert payload["organization_id"] == "org-1"
     assert len(payload["days"]) == 2
+    assert "evidence_ids" not in payload["days"][0]["items"][0]
+    assert result["action_evidence"][0] == {
+        "day_number": 1,
+        "sort_order": 1,
+        "exercise_name": "弹力带深蹲",
+        "evidence_ids": ("doc-1:1",),
+    }
     assert result["citations"][0]["source_uri"] == "knowledge://fitness/training/guide"
 
 
@@ -327,10 +336,13 @@ async def test_generation_rejects_non_contiguous_days_without_writing() -> None:
 @pytest.mark.asyncio
 async def test_generation_repairs_semantically_duplicated_actions() -> None:
     duplicated = valid_json().replace(
-        '"rest_seconds":90,"target_weight_kg":null,"target_rpe":6,"notes":null}]},',
-        '"rest_seconds":90,"target_weight_kg":null,"target_rpe":6,"notes":null},'
+        '"rest_seconds":90,"target_weight_kg":null,"target_rpe":6,"notes":null,'
+        '"evidence_ids":["doc-1:1"]}]},',
+        '"rest_seconds":90,"target_weight_kg":null,"target_rpe":6,"notes":null,'
+        '"evidence_ids":["doc-1:1"]},'
         '{"exercise_name":"弹力带深蹲","sort_order":2,"sets":3,"reps":"8-10",'
-        '"rest_seconds":90,"target_weight_kg":null,"target_rpe":6,"notes":null}]},',
+        '"rest_seconds":90,"target_weight_kg":null,"target_rpe":6,"notes":null,'
+        '"evidence_ids":["doc-1:1"]}]},',
         1,
     )
     models = FakeModels([duplicated, valid_json()])
