@@ -380,6 +380,9 @@ def _build_create_payload(
         "coach_id": request.coach_id,
         "title": request.title or content.title,
         "goal_type": request.goal_type,
+        "session_minutes": request.session_minutes,
+        "available_equipment": request.equipment,
+        "constraints": request.constraints,
         "days": [
             {
                 "day_number": day.day_number,

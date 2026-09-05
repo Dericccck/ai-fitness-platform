@@ -353,6 +353,9 @@ class CreateTrainingDraftToolInput(BaseModel):
     )
     title: str = Field(min_length=1, max_length=128)
     goal_type: str = Field(alias="goalType", min_length=1, max_length=32)
+    session_minutes: int = Field(alias="sessionMinutes", ge=20, le=180)
+    available_equipment: list[str] = Field(alias="availableEquipment", max_length=20)
+    constraints: str | None = Field(default=None, max_length=1000)
     days: list[TrainingDayInput] = Field(min_length=1, max_length=31)
 
 

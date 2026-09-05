@@ -17,7 +17,7 @@ import org.springframework.http.HttpStatus;
 import org.junit.Test;
 
 import java.util.Collections;
-import java.util.HashSet;
+import java.util.Optional;
 
 import static org.junit.Assert.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
@@ -36,6 +36,8 @@ public class TrainingPlanServiceTest {
         TrainingPlanService service = new TrainingPlanService(repository);
         when(repository.isOrganizationMember("org-1", "student-1")).thenReturn(true);
         when(repository.isCoachForStudent("org-1", "coach-1", "student-1")).thenReturn(true);
+        when(repository.findActiveExercisePolicy("深蹲")).thenReturn(Optional.of(
+                new TrainingPlanRepository.ExercisePolicy("深蹲", null, "膝痛")));
         when(repository.insertDraft(any(TrainingPlan.class), org.mockito.ArgumentMatchers.eq("req-1"),
                 any(TrainingConfirmation.class)))
                 .thenAnswer(invocation -> invocation.getArgument(0));
@@ -102,6 +104,83 @@ public class TrainingPlanServiceTest {
             return;
         }
         throw new AssertionError("缺少确认凭证时必须拒绝创建草案");
+    }
+
+    @Test
+    public void unknownExerciseIsRejectedBeforeRepositoryWrite() {
+        TrainingPlanRepository repository = authorizedDraftRepository();
+        TrainingPlanService service = new TrainingPlanService(repository);
+
+        expectStatus(HttpStatus.BAD_REQUEST, () -> service.createAgentDraft(
+                draftActor(), validDraftRequest()));
+
+        verify(repository, never()).insertDraft(any(TrainingPlan.class), any(String.class),
+                any(TrainingConfirmation.class));
+    }
+
+    @Test
+    public void exerciseRequiringUnavailableEquipmentIsRejected() {
+        TrainingPlanRepository repository = authorizedDraftRepository();
+        when(repository.findActiveExercisePolicy("弹力带深蹲")).thenReturn(Optional.of(
+                new TrainingPlanRepository.ExercisePolicy("弹力带深蹲", "弹力带", "膝痛")));
+        TrainingPlanRequest request = validDraftRequest();
+        request.getDays().get(0).getItems().get(0).setExerciseName("弹力带深蹲");
+
+        expectStatus(HttpStatus.BAD_REQUEST, () -> new TrainingPlanService(repository)
+                .createAgentDraft(draftActor(), request));
+    }
+
+    @Test
+    public void exerciseConflictingWithStudentConstraintIsRejected() {
+        TrainingPlanRepository repository = authorizedDraftRepository();
+        when(repository.findActiveExercisePolicy("深蹲")).thenReturn(Optional.of(
+                new TrainingPlanRepository.ExercisePolicy("深蹲", null, "膝痛,膝关节术后")));
+        TrainingPlanRequest request = validDraftRequest();
+        request.setConstraints("近期膝痛，避免深屈膝动作");
+
+        expectStatus(HttpStatus.BAD_REQUEST, () -> new TrainingPlanService(repository)
+                .createAgentDraft(draftActor(), request));
+    }
+
+    @Test
+    public void duplicatedExerciseInSameDayIsRejected() {
+        TrainingPlanRepository repository = authorizedDraftRepository();
+        when(repository.findActiveExercisePolicy("深蹲")).thenReturn(Optional.of(
+                new TrainingPlanRepository.ExercisePolicy("深蹲", null, null)));
+        TrainingPlanRequest request = validDraftRequest();
+        TrainingItem duplicate = trainingItem("深蹲", 2, 3, 60, null);
+        request.getDays().get(0).setItems(java.util.Arrays.asList(
+                request.getDays().get(0).getItems().get(0), duplicate));
+
+        expectStatus(HttpStatus.BAD_REQUEST, () -> new TrainingPlanService(repository)
+                .createAgentDraft(draftActor(), request));
+    }
+
+    @Test
+    public void planExceedingSessionCapacityIsRejected() {
+        TrainingPlanRepository repository = authorizedDraftRepository();
+        when(repository.findActiveExercisePolicy("深蹲")).thenReturn(Optional.of(
+                new TrainingPlanRepository.ExercisePolicy("深蹲", null, null)));
+        TrainingPlanRequest request = validDraftRequest();
+        request.setSessionMinutes(20);
+        TrainingItem item = request.getDays().get(0).getItems().get(0);
+        item.setSets(8);
+        item.setRestSeconds(600);
+
+        expectStatus(HttpStatus.BAD_REQUEST, () -> new TrainingPlanService(repository)
+                .createAgentDraft(draftActor(), request));
+    }
+
+    @Test
+    public void prescriptionLanguageIsRejectedAtTrainingBoundary() {
+        TrainingPlanRepository repository = authorizedDraftRepository();
+        when(repository.findActiveExercisePolicy("深蹲")).thenReturn(Optional.of(
+                new TrainingPlanRepository.ExercisePolicy("深蹲", null, null)));
+        TrainingPlanRequest request = validDraftRequest();
+        request.getDays().get(0).getItems().get(0).setNotes("用于治疗膝痛");
+
+        expectStatus(HttpStatus.BAD_REQUEST, () -> new TrainingPlanService(repository)
+                .createAgentDraft(draftActor(), request));
     }
 
     @Test
@@ -351,16 +430,38 @@ public class TrainingPlanServiceTest {
         request.setCoachId("coach-1");
         request.setTitle("基础力量计划");
         request.setGoalType("基础力量");
+        request.setSessionMinutes(45);
+        request.setAvailableEquipment(Collections.emptyList());
         TrainingDay day = new TrainingDay();
         day.setDayNumber(1);
         day.setTitle("下肢训练");
-        TrainingItem item = new TrainingItem();
-        item.setExerciseName("深蹲");
-        item.setSortOrder(1);
-        item.setSets(3);
-        item.setReps("8-10");
+        TrainingItem item = trainingItem("深蹲", 1, 3, null, null);
         day.setItems(Collections.singletonList(item));
         request.setDays(Collections.singletonList(day));
         return request;
+    }
+
+    private TrainingPlanRepository authorizedDraftRepository() {
+        TrainingPlanRepository repository = mock(TrainingPlanRepository.class);
+        when(repository.isOrganizationMember("org-1", "student-1")).thenReturn(true);
+        when(repository.isCoachForStudent("org-1", "coach-1", "student-1")).thenReturn(true);
+        return repository;
+    }
+
+    private TrainingActor draftActor() {
+        return new TrainingActor("coach-1", Collections.singleton(TrainingActor.COACH),
+                Collections.singleton("org-1"), "req-draft", confirmation(
+                "fitness.training.plan.create_draft.v1", "CREATE_TRAINING_DRAFT", "org-1:student-1"));
+    }
+
+    private TrainingItem trainingItem(String name, int order, int sets, Integer restSeconds, String notes) {
+        TrainingItem item = new TrainingItem();
+        item.setExerciseName(name);
+        item.setSortOrder(order);
+        item.setSets(sets);
+        item.setReps("8-10");
+        item.setRestSeconds(restSeconds);
+        item.setNotes(notes);
+        return item;
     }
 }

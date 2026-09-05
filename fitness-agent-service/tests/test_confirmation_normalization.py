@@ -59,6 +59,9 @@ def test_create_draft_summary_contains_complete_payload_and_stable_hash() -> Non
         "coach_id": "coach-1",
         "title": "基础力量",
         "goal_type": "力量",
+        "session_minutes": 45,
+        "available_equipment": [],
+        "constraints": None,
         "days": [
             {
                 "day_number": 1,

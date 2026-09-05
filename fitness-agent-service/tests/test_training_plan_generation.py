@@ -133,6 +133,9 @@ def test_training_draft_payload_uses_java_gateway_field_names() -> None:
             "coach_id": "coach-1",
             "title": "力量入门",
             "goal_type": "力量",
+            "session_minutes": 45,
+            "available_equipment": [],
+            "constraints": None,
             "days": [
                 {
                     "day_number": 1,
@@ -161,6 +164,8 @@ def test_training_draft_payload_uses_java_gateway_field_names() -> None:
     assert payload["studentId"] == "student-1"
     assert payload["coachId"] == "coach-1"
     assert payload["goalType"] == "力量"
+    assert payload["sessionMinutes"] == 45
+    assert payload["availableEquipment"] == []
     assert payload["days"][0]["dayNumber"] == 1  # type: ignore[index]
     assert payload["days"][0]["items"][0]["exerciseName"] == "徒手深蹲"  # type: ignore[index]
     assert "organization_id" not in payload

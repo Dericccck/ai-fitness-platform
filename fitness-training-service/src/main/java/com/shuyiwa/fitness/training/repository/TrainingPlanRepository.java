@@ -39,6 +39,17 @@ public class TrainingPlanRepository {
         this.jdbc = jdbc;
     }
 
+    /** 读取当前启用的受控动作策略；不存在即表示 Agent 不能使用该动作。 */
+    public Optional<ExercisePolicy> findActiveExercisePolicy(String normalizedName) {
+        List<ExercisePolicy> policies = jdbc.query(
+                "SELECT normalized_name, required_equipment, blocked_constraint_keywords "
+                        + "FROM training_exercise_policy WHERE normalized_name = ? AND active = 1",
+                new Object[]{normalizedName}, (rs, rowNum) -> new ExercisePolicy(
+                        rs.getString("normalized_name"), rs.getString("required_equipment"),
+                        rs.getString("blocked_constraint_keywords")));
+        return policies.isEmpty() ? Optional.empty() : Optional.of(policies.get(0));
+    }
+
     @Transactional
     public TrainingPlan insertDraft(TrainingPlan plan, String requestId, TrainingConfirmation confirmation) {
         Optional<TrainingPlan> existing = findByCreateRequestId(requestId);
@@ -203,6 +214,24 @@ public class TrainingPlanRepository {
 
     private static String escapeJson(String value) {
         return value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    /** 动作目录中可供最终业务校验使用的最小策略视图。 */
+    public static final class ExercisePolicy {
+        private final String normalizedName;
+        private final String requiredEquipment;
+        private final String blockedConstraintKeywords;
+
+        public ExercisePolicy(String normalizedName, String requiredEquipment,
+                              String blockedConstraintKeywords) {
+            this.normalizedName = normalizedName;
+            this.requiredEquipment = requiredEquipment;
+            this.blockedConstraintKeywords = blockedConstraintKeywords;
+        }
+
+        public String getNormalizedName() { return normalizedName; }
+        public String getRequiredEquipment() { return requiredEquipment; }
+        public String getBlockedConstraintKeywords() { return blockedConstraintKeywords; }
     }
 
     /** 查询一个计划下已经明确提交的训练日执行记录。未执行训练日不会人为插入空记录。 */

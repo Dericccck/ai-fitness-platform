@@ -54,6 +54,9 @@ class OneWriteModel:
                         "coach_id": "coach-1",
                         "title": "基础力量",
                         "goal_type": "力量",
+                        "session_minutes": 45,
+                        "available_equipment": [],
+                        "constraints": None,
                         "days": [
                             {
                                 "day_number": 1,
@@ -171,6 +174,9 @@ class FakeConfirmationService:
                 "coach_id": "coach-1",
                 "title": "基础力量",
                 "goal_type": "力量",
+                "session_minutes": 45,
+                "available_equipment": [],
+                "constraints": None,
                 "days": [
                     {
                         "day_number": 1,
@@ -326,6 +332,9 @@ async def test_generated_preview_flows_into_confirmation_before_draft_creation()
         "coach_id": "coach-1",
         "title": "证据驱动力量入门",
         "goal_type": "力量",
+        "session_minutes": 45,
+        "available_equipment": ["弹力带"],
+        "constraints": None,
         "days": [
             {
                 "day_number": 1,

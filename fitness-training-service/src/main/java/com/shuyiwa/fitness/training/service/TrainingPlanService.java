@@ -20,6 +20,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 import java.util.stream.Collectors;
 
@@ -53,7 +54,10 @@ public class TrainingPlanService {
         if (!repository.isCoachForStudent(request.getOrganizationId(), request.getCoachId(), request.getStudentId())) {
             throw forbidden("指定教练不是该学员在该机构的有效教练");
         }
-        validatePlanContent(request.getTitle(), request.getGoalType(), request.getDays());
+        TrainingConfirmation confirmation = requireConfirmation(actor,
+                "fitness.training.plan.create_draft.v1", "CREATE_TRAINING_DRAFT",
+                request.getOrganizationId(), request.getOrganizationId() + ":" + request.getStudentId());
+        validatePlanContent(request);
 
         TrainingPlan plan = new TrainingPlan();
         plan.setId(TrainingPlanRepository.newId());
@@ -67,9 +71,6 @@ public class TrainingPlanService {
         plan.setVersion(0);
         plan.setCreatedBy(actor.getUserId());
         plan.setDays(withGeneratedIds(request.getDays()));
-        TrainingConfirmation confirmation = requireConfirmation(actor,
-                "fitness.training.plan.create_draft.v1", "CREATE_TRAINING_DRAFT",
-                request.getOrganizationId(), request.getOrganizationId() + ":" + request.getStudentId());
         TrainingPlan persisted = repository.insertDraft(plan, actor.getRequestId(), confirmation);
         return view(repository.findById(persisted.getId()).orElseThrow(() -> notFound("训练计划不存在")));
     }
@@ -264,36 +265,130 @@ public class TrainingPlanService {
         throw forbidden("只有机构管理员或负责教练可以创建训练计划草案");
     }
 
-    private void validatePlanContent(String title, String goalType, List<TrainingDay> days) {
+    private void validatePlanContent(TrainingPlanRequest request) {
+        String title = request.getTitle();
+        String goalType = request.getGoalType();
+        List<TrainingDay> days = request.getDays();
         if (title.trim().length() > 128 || goalType.trim().length() > 32) {
             throw invalid("计划标题或目标类型长度超限");
         }
-        if (days == null || days.isEmpty() || days.size() > 31) {
-            throw invalid("训练日数量必须在 1 到 31 之间");
+        if (request.getSessionMinutes() == null || request.getSessionMinutes() < 20
+                || request.getSessionMinutes() > 180) {
+            throw invalid("单次训练时长必须在 20 到 180 分钟之间");
         }
+        if (request.getAvailableEquipment() == null || request.getAvailableEquipment().size() > 20
+                || request.getAvailableEquipment().stream().anyMatch(TrainingPlanService::isBlank)) {
+            throw invalid("可用器械列表无效");
+        }
+        if (request.getConstraints() != null && request.getConstraints().trim().length() > 1000) {
+            throw invalid("训练限制长度不能超过 1000 个字符");
+        }
+        if (days == null || days.isEmpty() || days.size() > 7) {
+            throw invalid("训练日数量必须在 1 到 7 之间");
+        }
+        String availableEquipment = normalize(String.join(" ", request.getAvailableEquipment()));
+        String constraints = normalize(request.getConstraints());
         Set<Integer> dayNumbers = new HashSet<>();
+        java.time.LocalDate previousScheduledDate = null;
         for (TrainingDay day : days) {
             if (day == null || day.getDayNumber() == null || day.getDayNumber() < 1
-                    || !dayNumbers.add(day.getDayNumber()) || isBlank(day.getTitle())) {
+                    || day.getDayNumber() > 7 || !dayNumbers.add(day.getDayNumber())
+                    || isBlank(day.getTitle()) || day.getTitle().trim().length() > 128) {
                 throw invalid("训练日必须有唯一的正整数序号和标题");
             }
-            if (day.getItems() == null || day.getItems().isEmpty() || day.getItems().size() > 100) {
-                throw invalid("每个训练日必须包含 1 到 100 个动作");
+            if (day.getDayNumber() != dayNumbers.size()) {
+                throw invalid("训练日序号必须从 1 开始连续递增");
+            }
+            if (day.getScheduledDate() != null) {
+                if (previousScheduledDate != null && !day.getScheduledDate().isAfter(previousScheduledDate)) {
+                    throw invalid("训练日期必须按训练日序号递增");
+                }
+                previousScheduledDate = day.getScheduledDate();
+            }
+            if (day.getItems() == null || day.getItems().isEmpty() || day.getItems().size() > 8) {
+                throw invalid("每个训练日必须包含 1 到 8 个动作");
             }
             Set<Integer> orders = new HashSet<>();
+            Set<String> exerciseNames = new HashSet<>();
+            int totalSets = 0;
+            long estimatedSeconds = 0;
             for (TrainingItem item : day.getItems()) {
                 if (item == null || isBlank(item.getExerciseName()) || item.getSortOrder() == null
                         || item.getSortOrder() < 1 || !orders.add(item.getSortOrder())
-                        || item.getSets() == null || item.getSets() < 1 || item.getSets() > 100
-                        || isBlank(item.getReps())) {
+                        || item.getSets() == null || item.getSets() < 1 || item.getSets() > 8
+                        || isBlank(item.getReps()) || item.getReps().trim().length() > 64) {
                     throw invalid("动作必须有唯一顺序、动作名称、组数和次数目标");
                 }
+                if (item.getSortOrder() != orders.size()) {
+                    throw invalid("动作顺序必须从 1 开始连续递增");
+                }
+                String normalizedName = normalize(item.getExerciseName());
+                if (!exerciseNames.add(normalizedName)) {
+                    throw invalid("同一训练日不能重复安排相同动作");
+                }
+                TrainingPlanRepository.ExercisePolicy policy = repository
+                        .findActiveExercisePolicy(normalizedName)
+                        .orElseThrow(() -> invalid("动作不在当前启用的受控目录中：" + item.getExerciseName()));
+                validateExercisePolicy(policy, availableEquipment, constraints, item.getExerciseName());
                 if (item.getTargetRpe() != null && (item.getTargetRpe().signum() < 0
                         || item.getTargetRpe().doubleValue() > 10)) {
                     throw invalid("目标 RPE 必须在 0 到 10 之间");
                 }
+                if (item.getTargetWeightKg() != null && (item.getTargetWeightKg().signum() < 0
+                        || item.getTargetWeightKg().doubleValue() > 1000)) {
+                    throw invalid("目标重量必须在 0 到 1000 千克之间");
+                }
+                if (item.getRestSeconds() != null && (item.getRestSeconds() < 0
+                        || item.getRestSeconds() > 600)) {
+                    throw invalid("动作间歇必须在 0 到 600 秒之间");
+                }
+                if (item.getNotes() != null && item.getNotes().length() > 1000) {
+                    throw invalid("动作备注长度不能超过 1000 个字符");
+                }
+                rejectPrescriptionText(item.getExerciseName() + " "
+                        + (item.getNotes() == null ? "" : item.getNotes()));
+                totalSets += item.getSets();
+                estimatedSeconds += item.getSets() * 45L
+                        + Math.max(0, item.getSets() - 1) * (item.getRestSeconds() == null ? 0L : item.getRestSeconds());
+            }
+            if (totalSets > 40) {
+                throw invalid("单个训练日总组数不能超过 40 组");
+            }
+            if (estimatedSeconds > request.getSessionMinutes() * 60L * 12L / 10L) {
+                throw invalid("动作组数和休息时间超过单次训练时长容量");
             }
         }
+    }
+
+    private void validateExercisePolicy(TrainingPlanRepository.ExercisePolicy policy,
+                                        String availableEquipment, String constraints,
+                                        String exerciseName) {
+        String requiredEquipment = normalize(policy.getRequiredEquipment());
+        if (!requiredEquipment.isEmpty() && !availableEquipment.contains(requiredEquipment)) {
+            throw invalid("动作需要未声明可用的器械：" + exerciseName);
+        }
+        if (!constraints.isEmpty() && !isBlank(policy.getBlockedConstraintKeywords())) {
+            for (String keyword : policy.getBlockedConstraintKeywords().split(",")) {
+                String normalizedKeyword = normalize(keyword);
+                if (!normalizedKeyword.isEmpty() && constraints.contains(normalizedKeyword)) {
+                    throw invalid("当前训练限制与动作目录中的禁忌规则冲突：" + exerciseName);
+                }
+            }
+        }
+    }
+
+    private void rejectPrescriptionText(String text) {
+        String normalized = normalize(text);
+        String[] forbidden = {"诊断", "治疗", "治愈", "药物", "康复处方"};
+        for (String term : forbidden) {
+            if (normalized.contains(term)) {
+                throw invalid("训练计划不得包含诊断、治疗或药物处方内容");
+            }
+        }
+    }
+
+    private static String normalize(String value) {
+        return value == null ? "" : value.trim().toLowerCase(Locale.ROOT).replaceAll("\\s+", "");
     }
 
     private List<TrainingDay> withGeneratedIds(List<TrainingDay> input) {

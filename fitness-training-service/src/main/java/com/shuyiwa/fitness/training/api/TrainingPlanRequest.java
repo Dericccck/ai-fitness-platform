@@ -17,6 +17,9 @@ public class TrainingPlanRequest {
     private String coachId;
     private String title;
     private String goalType;
+    private Integer sessionMinutes;
+    private List<String> availableEquipment = new ArrayList<>();
+    private String constraints;
     private List<TrainingDay> days = new ArrayList<>();
 
     public String getOrganizationId() { return organizationId; }
@@ -29,6 +32,14 @@ public class TrainingPlanRequest {
     public void setTitle(String title) { this.title = title; }
     public String getGoalType() { return goalType; }
     public void setGoalType(String goalType) { this.goalType = goalType; }
+    public Integer getSessionMinutes() { return sessionMinutes; }
+    public void setSessionMinutes(Integer sessionMinutes) { this.sessionMinutes = sessionMinutes; }
+    public List<String> getAvailableEquipment() { return availableEquipment; }
+    public void setAvailableEquipment(List<String> availableEquipment) {
+        this.availableEquipment = availableEquipment == null ? new ArrayList<>() : availableEquipment;
+    }
+    public String getConstraints() { return constraints; }
+    public void setConstraints(String constraints) { this.constraints = constraints; }
     public List<TrainingDay> getDays() { return days; }
     public void setDays(List<TrainingDay> days) { this.days = days == null ? new ArrayList<>() : days; }
 }
