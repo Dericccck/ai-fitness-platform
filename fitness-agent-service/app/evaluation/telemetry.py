@@ -109,6 +109,10 @@ class TruLensTelemetry:
         self.prompt_version = settings.prompt_version
         self.knowledge_base_version = settings.knowledge_base_version
         self.graph_version = settings.graph_version
+        self.release_id = settings.release_id
+        self.manifest_digest = settings.manifest_digest
+        self.index_build_id = settings.index_build_id
+        self.eval_release_id = settings.eval_release_id
         self.identifier_hash_secret = settings.trulens_identifier_hash_secret
 
     @classmethod
@@ -127,6 +131,10 @@ class TruLensTelemetry:
         instance.prompt_version = "disabled"
         instance.knowledge_base_version = "disabled"
         instance.graph_version = "disabled"
+        instance.release_id = "disabled"
+        instance.manifest_digest = "disabled"
+        instance.index_build_id = "disabled"
+        instance.eval_release_id = "disabled"
         instance.identifier_hash_secret = ""
         return instance
 
@@ -156,6 +164,10 @@ class TruLensTelemetry:
                     "fitness.agent.prompt_version": self.prompt_version,
                     "fitness.agent.knowledge_base_version": self.knowledge_base_version,
                     "fitness.agent.graph_version": self.graph_version,
+                    "fitness.agent.release_id": self.release_id,
+                    "fitness.agent.manifest_digest": self.manifest_digest,
+                    "fitness.agent.index_build_id": self.index_build_id,
+                    "fitness.agent.eval_release_id": self.eval_release_id,
                 },
             )
             self.set_attributes(current, attributes or {})

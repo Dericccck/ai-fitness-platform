@@ -9,8 +9,9 @@ def test_repository_migration_chain_is_single_and_bidirectional() -> None:
     result = validate_migrations(migrations_dir)
 
     assert result.passed is True
-    assert len(result.revisions) == 35
-    assert result.heads == ("20260824_0035",)
+    # 0036：文档来源作用域/发布指纹；0037：上传幂等和活跃来源并发约束。
+    assert len(result.revisions) == 37
+    assert result.heads == ("20260905_0037",)
 
 
 def test_migration_contract_rejects_unknown_parent_and_multiple_heads(tmp_path: Path) -> None:

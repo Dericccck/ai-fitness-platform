@@ -6,6 +6,7 @@ import argparse
 import hashlib
 import json
 import re
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
@@ -18,6 +19,8 @@ SERVICE_NAME = "fitness-agent-service"
 SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 COMMIT_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 CONFIG_KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+SHA256_HEX_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
+SENSITIVE_CONFIG_PATTERN = re.compile(r"(?i)(secret|password|token|api[_-]?key|private[_-]?key)")
 
 
 def read_config_keys(path: Path) -> tuple[str, ...]:
@@ -47,6 +50,95 @@ def config_contract_checksum(keys: tuple[str, ...]) -> str:
 
     payload = ("\n".join(keys) + "\n").encode("utf-8")
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def canonical_digest(value: Any) -> str:
+    """对版本化元数据做确定性摘要；调用方应只传非敏感内容。"""
+
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def prompt_digests(prompts: Mapping[str, str]) -> dict[str, str]:
+    """生成 Prompt 模板摘要，不把用户输入和动态检索正文放入清单。"""
+
+    if not prompts or any(
+        not str(name).strip() or not isinstance(value, str) for name, value in prompts.items()
+    ):
+        raise ReleaseManifestError("Prompt 摘要输入必须是非空名称到字符串模板的映射")
+    return {
+        str(name): canonical_digest(value)
+        for name, value in sorted(prompts.items(), key=lambda item: str(item[0]))
+    }
+
+
+def build_manifest_v2(
+    *,
+    environment: str,
+    source_commit: str,
+    image: str,
+    config_keys: tuple[str, ...],
+    prompts: Mapping[str, str],
+    safe_config: Mapping[str, Any],
+    model_artifacts: Mapping[str, Mapping[str, Any]],
+    tool_schemas: Mapping[str, Any],
+    eval_release_id: str,
+    eval_dataset_digest: str,
+    eval_thresholds_digest: str,
+    index_build_id: str | None = None,
+    service_version: str | None = None,
+) -> dict[str, Any]:
+    """构建可追溯的 v2 清单，明确拒绝把 Secret 当作配置摘要输入。"""
+
+    if any(SENSITIVE_CONFIG_PATTERN.search(str(key)) for key in safe_config):
+        raise ReleaseManifestError("safe_config 包含疑似敏感配置键，不能写入发布清单")
+    if not eval_release_id.strip():
+        raise ReleaseManifestError("eval_release_id 不能为空")
+    for value, name in (
+        (eval_dataset_digest, "eval_dataset_digest"),
+        (eval_thresholds_digest, "eval_thresholds_digest"),
+    ):
+        if not SHA256_HEX_PATTERN.fullmatch(value):
+            raise ReleaseManifestError(f"{name} 必须是 sha256 摘要")
+    normalized_artifacts: dict[str, dict[str, Any]] = {}
+    for name, artifact in sorted(model_artifacts.items(), key=lambda item: str(item[0])):
+        if not isinstance(artifact, Mapping) or not SHA256_HEX_PATTERN.fullmatch(
+            str(artifact.get("digest", ""))
+        ):
+            raise ReleaseManifestError(f"模型制品 {name} 缺少合法 digest")
+        normalized_artifacts[str(name)] = dict(artifact)
+    manifest = {
+        "schema_version": 2,
+        "service": SERVICE_NAME,
+        "environment": environment.strip().lower(),
+        "service_version": (service_version or source_commit).strip(),
+        "source_commit": source_commit.strip().lower(),
+        "image": image.strip(),
+        "config_contract_sha256": config_contract_checksum(config_keys),
+        "required_config": list(config_keys),
+        "components": {
+            "prompt_digests": prompt_digests(prompts),
+            "safe_config_digest": canonical_digest(dict(sorted(safe_config.items()))),
+            "model_artifacts": normalized_artifacts,
+            "tool_schema_digests": {
+                str(name): canonical_digest(schema)
+                for name, schema in sorted(tool_schemas.items(), key=lambda item: str(item[0]))
+            },
+            "evaluation": {
+                "eval_release_id": eval_release_id.strip(),
+                "dataset_digest": eval_dataset_digest,
+                "thresholds_digest": eval_thresholds_digest,
+            },
+            "index_build_id": index_build_id.strip() if index_build_id else None,
+        },
+    }
+    validate_manifest(manifest, expected_config_keys=config_keys)
+    return manifest
 
 
 def build_manifest(
@@ -87,7 +179,8 @@ def validate_manifest(
 
     if not isinstance(manifest, dict):
         raise ReleaseManifestError("发布清单必须是 JSON 对象")
-    if manifest.get("schema_version") != 1:
+    schema_version = manifest.get("schema_version")
+    if schema_version not in {1, 2}:
         raise ReleaseManifestError("不支持的发布清单 schema_version")
     if manifest.get("service") != SERVICE_NAME:
         raise ReleaseManifestError("发布清单 service 不属于 Agent 服务")
@@ -133,6 +226,60 @@ def validate_manifest(
     elif not SHA256_PATTERN.fullmatch(contract_checksum):
         raise ReleaseManifestError("config_contract_sha256 格式非法")
 
+    if schema_version == 2:
+        _validate_v2_components(manifest.get("components"))
+
+
+def _validate_v2_components(components: Any) -> None:
+    """校验 v2 组件摘要完整性，不接受隐式缺省以免清单看似通过。"""
+
+    if not isinstance(components, Mapping):
+        raise ReleaseManifestError("v2 发布清单缺少 components")
+    prompts = components.get("prompt_digests")
+    if not isinstance(prompts, Mapping) or not prompts:
+        raise ReleaseManifestError("v2 发布清单缺少 Prompt 摘要")
+    if any(
+        not isinstance(name, str)
+        or not name.strip()
+        or not isinstance(digest, str)
+        or not SHA256_HEX_PATTERN.fullmatch(digest)
+        for name, digest in prompts.items()
+    ):
+        raise ReleaseManifestError("v2 Prompt 摘要格式非法")
+    if not SHA256_HEX_PATTERN.fullmatch(str(components.get("safe_config_digest", ""))):
+        raise ReleaseManifestError("v2 非敏感配置摘要格式非法")
+    models = components.get("model_artifacts")
+    if not isinstance(models, Mapping) or not models:
+        raise ReleaseManifestError("v2 发布清单缺少模型制品摘要")
+    for name, artifact in models.items():
+        if not isinstance(name, str) or not name.strip() or not isinstance(artifact, Mapping):
+            raise ReleaseManifestError("v2 模型制品摘要格式非法")
+        if not SHA256_HEX_PATTERN.fullmatch(str(artifact.get("digest", ""))):
+            raise ReleaseManifestError(f"v2 模型制品 {name} digest 格式非法")
+    schemas = components.get("tool_schema_digests")
+    if not isinstance(schemas, Mapping) or any(
+        not isinstance(name, str)
+        or not name.strip()
+        or not isinstance(digest, str)
+        or not SHA256_HEX_PATTERN.fullmatch(digest)
+        for name, digest in schemas.items()
+    ):
+        raise ReleaseManifestError("v2 Tool Schema 摘要格式非法")
+    evaluation = components.get("evaluation")
+    if (
+        not isinstance(evaluation, Mapping)
+        or not str(evaluation.get("eval_release_id", "")).strip()
+    ):
+        raise ReleaseManifestError("v2 发布清单缺少 eval_release_id")
+    for key in ("dataset_digest", "thresholds_digest"):
+        if not SHA256_HEX_PATTERN.fullmatch(str(evaluation.get(key, ""))):
+            raise ReleaseManifestError(f"v2 评测 {key} 格式非法")
+    index_build_id = components.get("index_build_id")
+    if index_build_id is not None and (
+        not isinstance(index_build_id, str) or not index_build_id.strip()
+    ):
+        raise ReleaseManifestError("v2 index_build_id 不能为空字符串")
+
 
 def load_manifest(path: Path) -> dict[str, Any]:
     """读取 JSON 发布清单并提供稳定的错误信息。"""
@@ -158,6 +305,42 @@ def write_manifest(path: Path, manifest: dict[str, Any]) -> None:
     )
 
 
+def load_components(path: Path) -> dict[str, Any]:
+    """读取 v2 组件输入并做结构校验；不会在错误信息中回显具体值。"""
+
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ReleaseManifestError(f"无法读取 v2 组件文件：{path}") from exc
+    if not isinstance(payload, dict):
+        raise ReleaseManifestError("v2 组件文件必须是 JSON 对象")
+    required = (
+        "prompts",
+        "safe_config",
+        "model_artifacts",
+        "tool_schemas",
+        "eval_release_id",
+        "eval_dataset_digest",
+        "eval_thresholds_digest",
+    )
+    missing = [key for key in required if key not in payload]
+    if missing:
+        raise ReleaseManifestError("v2 组件文件缺少字段：" + ", ".join(missing))
+    for key in ("prompts", "safe_config", "model_artifacts", "tool_schemas"):
+        if not isinstance(payload[key], Mapping):
+            raise ReleaseManifestError(f"v2 组件 {key} 必须是 JSON 对象")
+    for key in ("eval_release_id", "eval_dataset_digest", "eval_thresholds_digest"):
+        if not isinstance(payload[key], str) or not payload[key].strip():
+            raise ReleaseManifestError(f"v2 组件 {key} 必须是非空字符串")
+    if (
+        "index_build_id" in payload
+        and payload["index_build_id"] is not None
+        and not isinstance(payload["index_build_id"], str)
+    ):
+        raise ReleaseManifestError("v2 组件 index_build_id 必须是字符串或 null")
+    return payload
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构造清单生成和校验命令。"""
 
@@ -171,6 +354,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--expected-environment", default="", help="要求匹配的环境名称")
     parser.add_argument("--build", action="store_true", help="生成清单后立即校验")
+    parser.add_argument(
+        "--schema-version",
+        type=int,
+        choices=(1, 2),
+        default=1,
+        help="生成清单版本；v2 需要 --components",
+    )
+    parser.add_argument(
+        "--components",
+        type=Path,
+        help="v2 组件 JSON；只读取受控 Prompt/非敏感配置/制品和评测摘要输入",
+    )
     parser.add_argument("--environment", default="", help="生成清单的环境")
     parser.add_argument("--source-commit", default="", help="生成清单的 40 位 Git SHA")
     parser.add_argument(
@@ -180,11 +375,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
+def main(argv: list[str] | None = None) -> int:
     """命令行入口；失败时不打印配置值和镜像内部信息。"""
 
     try:
-        args = build_parser().parse_args()
+        args = build_parser().parse_args(argv)
         config_keys = read_config_keys(args.config_contract)
         if args.build:
             required = {
@@ -195,13 +390,33 @@ def main() -> int:
             missing = [name for name, value in required.items() if not str(value).strip()]
             if missing:
                 raise ReleaseManifestError(f"生成清单缺少参数：{', '.join(missing)}")
-            manifest = build_manifest(
-                environment=args.environment,
-                source_commit=args.source_commit,
-                image=args.image,
-                service_version=args.service_version or None,
-                config_keys=config_keys,
-            )
+            if args.schema_version == 2:
+                if args.components is None:
+                    raise ReleaseManifestError("生成 v2 清单必须提供 --components")
+                components = load_components(args.components)
+                manifest = build_manifest_v2(
+                    environment=args.environment,
+                    source_commit=args.source_commit,
+                    image=args.image,
+                    service_version=args.service_version or None,
+                    config_keys=config_keys,
+                    prompts=components["prompts"],
+                    safe_config=components["safe_config"],
+                    model_artifacts=components["model_artifacts"],
+                    tool_schemas=components["tool_schemas"],
+                    eval_release_id=components["eval_release_id"],
+                    eval_dataset_digest=components["eval_dataset_digest"],
+                    eval_thresholds_digest=components["eval_thresholds_digest"],
+                    index_build_id=components.get("index_build_id"),
+                )
+            else:
+                manifest = build_manifest(
+                    environment=args.environment,
+                    source_commit=args.source_commit,
+                    image=args.image,
+                    service_version=args.service_version or None,
+                    config_keys=config_keys,
+                )
             write_manifest(args.manifest, manifest)
         else:
             manifest = load_manifest(args.manifest)

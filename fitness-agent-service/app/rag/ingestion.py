@@ -32,9 +32,10 @@ class DocumentPublicationBlocked(RuntimeError):
     """解析结果仍需要 OCR 或专业视觉审核，禁止生成生产 Embedding。"""
 
 
-# INDEXED 表示已完成清洗、切片、Embedding 和原子发布；SKIPPED_UNCHANGED 表示 checksum
-# 未变化而复用已有版本，不能误报为重新索引成功。
-IngestionResultStatus = Literal["INDEXED", "SKIPPED_UNCHANGED"]
+# INDEXED 表示已完成清洗、切片、Embedding 和原子发布；UPDATED_METADATA 表示正文未变，
+# 但权限/有效期等发布属性已原子更新并复用已有 Embedding；SKIPPED_UNCHANGED 表示正文和
+# 发布属性都未变化而复用已有版本，不能误报为重新索引成功。
+IngestionResultStatus = Literal["INDEXED", "UPDATED_METADATA", "SKIPPED_UNCHANGED"]
 
 
 @dataclass(frozen=True)
@@ -176,9 +177,35 @@ class DocumentIngestionService:
     ) -> IngestionResult:
         """校验版本，并原子发布标准化的子节点/父节点。"""
 
-        current = await self.repository.get_current_document(request.source_uri)
+        current = await self.repository.get_current_document(
+            request.source_uri,
+            organization_id=request.organization_id,
+            owner_user_id=request.owner_user_id,
+            visibility=request.visibility,
+        )
+        publication_fingerprint = build_publication_fingerprint(request)
         if current is not None:
             if current.checksum == checksum and not force:
+                if current.publication_fingerprint != publication_fingerprint:
+                    await self.repository.update_document_publication(
+                        document_id=current.id,
+                        organization_id=request.organization_id,
+                        owner_user_id=request.owner_user_id,
+                        title=request.title,
+                        document_type=request.document_type,
+                        visibility=request.visibility,
+                        allowed_roles=request.allowed_roles,
+                        effective_from=request.effective_from,
+                        effective_to=request.effective_to,
+                        publication_fingerprint=publication_fingerprint,
+                    )
+                    return IngestionResult(
+                        status="UPDATED_METADATA",
+                        document_id=current.id,
+                        checksum=checksum,
+                        version=current.version,
+                        chunk_count=0,
+                    )
                 return IngestionResult(
                     status="SKIPPED_UNCHANGED",
                     document_id=current.id,
@@ -208,6 +235,8 @@ class DocumentIngestionService:
             checksum=checksum,
             effective_from=request.effective_from,
             effective_to=request.effective_to,
+            owner_user_id=request.owner_user_id,
+            publication_fingerprint=publication_fingerprint,
         )
         parents: list[KnowledgeParentInput] = []
         parent_ids: dict[tuple[Any, ...], str] = {}
@@ -555,6 +584,29 @@ def content_checksum(content: str) -> str:
     """返回稳定的 SHA-256 校验和，用于去重和审计记录。"""
 
     return hashlib.sha256(content.encode("utf-8")).hexdigest()
+
+
+def build_publication_fingerprint(request: IngestionRequest) -> str:
+    """对不参与正文 Embedding 的发布属性计算确定性指纹。
+
+    正文 checksum 只表示索引文本是否变化；该指纹覆盖 ACL、生效窗口和文档展示属性，
+    使正文不变但权限收紧时也会触发原子元数据更新，而不是错误返回 SKIPPED_UNCHANGED。
+    """
+
+    payload = {
+        "source_uri": request.source_uri,
+        "title": request.title,
+        "document_type": request.document_type,
+        "organization_id": request.organization_id,
+        "owner_user_id": request.owner_user_id,
+        "visibility": request.visibility,
+        "allowed_roles": sorted(request.allowed_roles),
+        "effective_from": request.effective_from.isoformat(),
+        "effective_to": request.effective_to.isoformat() if request.effective_to else None,
+    }
+    return content_checksum(
+        json.dumps(payload, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    )
 
 
 def _require_publishable_document(

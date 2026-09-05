@@ -16,6 +16,7 @@ from .admin_models import (
     KnowledgeJobNotFound,
     KnowledgeJobTransitionError,
     KnowledgeReviewReportNotFound,
+    KnowledgeUploadConflict,
     job_from_row,
 )
 from .formats import PdfPageProfile
@@ -57,14 +58,15 @@ class KnowledgeIngestionRepository:
                 title, document_type, organization_id, owner_user_id, visibility, allowed_roles,
                 effective_from, effective_to, requested_version, submitted_by, status,
                 attempt_count, max_attempts, content_sha256, safety_status, scanner_name,
-                malware_status, malware_scanner, malware_signature, malware_scanned_at
+                malware_status, malware_scanner, malware_signature, malware_scanned_at,
+                idempotency_key
             ) VALUES (
                 :id, :source_uri, :original_filename, :storage_key, :content_type, :size_bytes,
                 :title, :document_type, :organization_id, :owner_user_id, :visibility,
                 :allowed_roles, :effective_from, :effective_to, :requested_version,
                 :submitted_by, 'PENDING_REVIEW', 0, :max_attempts, :content_sha256,
                 :safety_status, :scanner_name, :malware_status, :malware_scanner,
-                :malware_signature, :malware_scanned_at
+                :malware_signature, :malware_scanned_at, :idempotency_key
             )
             RETURNING *
             """
@@ -89,9 +91,14 @@ class KnowledgeIngestionRepository:
             """
         )
         params = _job_params(job)
-        async with self._database.engine.begin() as connection:
-            row = (await connection.execute(statement, params)).mappings().one()
-            await connection.execute(review_statement, _review_report_params(review_report))
+        try:
+            async with self._database.engine.begin() as connection:
+                row = (await connection.execute(statement, params)).mappings().one()
+                await connection.execute(review_statement, _review_report_params(review_report))
+        except IntegrityError as exc:
+            # 幂等键和活跃 source 作用域都有数据库唯一索引；应用层先查只能优化
+            # 常规路径，真正的并发竞态必须由数据库兜底并转换为稳定的 409 业务错误。
+            raise KnowledgeUploadConflict("同一来源已有并发上传任务，请复用原任务") from exc
         return job_from_row(row)
 
     async def get_latest_review_report(self, job_id: str) -> KnowledgeReviewReport:
@@ -274,14 +281,59 @@ class KnowledgeIngestionRepository:
             raise KnowledgeJobNotFound("未找到知识摄取任务")
         return job_from_row(row)
 
-    async def get_active_job_by_source(self, source_uri: str) -> KnowledgeIngestionJob | None:
-        """查询同一来源是否已有未完成任务，避免批量导入重复提交。"""
+    async def get_job_by_idempotency_key(
+        self,
+        *,
+        submitted_by: str,
+        idempotency_key: str,
+        organization_id: str | None,
+        owner_user_id: str | None,
+        visibility: str,
+    ) -> KnowledgeIngestionJob | None:
+        """按提交者和知识作用域读取幂等任务，防止跨租户探测任务状态。"""
+
+        statement = text(
+            """
+            SELECT *
+            FROM knowledge_ingestion_jobs
+            WHERE submitted_by = :submitted_by
+              AND idempotency_key = :idempotency_key
+              AND visibility = :visibility
+              AND organization_id IS NOT DISTINCT FROM :organization_id
+              AND owner_user_id IS NOT DISTINCT FROM :owner_user_id
+            ORDER BY created_at DESC
+            LIMIT 1
+            """
+        )
+        params = {
+            "submitted_by": submitted_by,
+            "idempotency_key": idempotency_key,
+            "organization_id": organization_id,
+            "owner_user_id": owner_user_id,
+            "visibility": visibility,
+        }
+        async with self._database.engine.connect() as connection:
+            row = (await connection.execute(statement, params)).mappings().first()
+        return job_from_row(row) if row is not None else None
+
+    async def get_active_job_by_source(
+        self,
+        source_uri: str,
+        *,
+        organization_id: str | None,
+        owner_user_id: str | None,
+        visibility: str,
+    ) -> KnowledgeIngestionJob | None:
+        """按完整来源作用域查询未完成任务，避免并发上传重复提交。"""
 
         statement = text(
             """
             SELECT *
             FROM knowledge_ingestion_jobs
             WHERE source_uri = :source_uri
+              AND visibility = :visibility
+              AND organization_id IS NOT DISTINCT FROM :organization_id
+              AND owner_user_id IS NOT DISTINCT FROM :owner_user_id
               AND status IN ('PENDING_REVIEW', 'QUEUED', 'INDEXING')
             ORDER BY created_at DESC
             LIMIT 1
@@ -289,7 +341,19 @@ class KnowledgeIngestionRepository:
         )
         async with self._database.engine.connect() as connection:
             row = (
-                (await connection.execute(statement, {"source_uri": source_uri})).mappings().first()
+                (
+                    await connection.execute(
+                        statement,
+                        {
+                            "source_uri": source_uri,
+                            "organization_id": organization_id,
+                            "owner_user_id": owner_user_id,
+                            "visibility": visibility,
+                        },
+                    )
+                )
+                .mappings()
+                .first()
             )
         return job_from_row(row) if row is not None else None
 
@@ -512,6 +576,7 @@ def _job_params(job: KnowledgeIngestionJob) -> dict[str, Any]:
         "malware_scanner": job.malware_scanner,
         "malware_signature": job.malware_signature,
         "malware_scanned_at": job.malware_scanned_at,
+        "idempotency_key": job.idempotency_key,
     }
 
 

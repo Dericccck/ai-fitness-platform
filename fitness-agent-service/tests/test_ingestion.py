@@ -9,6 +9,7 @@ from app.rag.ingestion import (
     DocumentPublicationBlocked,
     IngestionConflictError,
     IngestionRequest,
+    build_publication_fingerprint,
     chunk_markdown,
     chunk_parsed_blocks,
     clean_markdown,
@@ -20,9 +21,20 @@ from app.rag.models import KnowledgeDocumentInput, KnowledgeDocumentSnapshot
 class FakeRepository:
     def __init__(self, current: KnowledgeDocumentSnapshot | None = None) -> None:
         self.current = current
+        self.publication_updates: list[dict[str, Any]] = []
 
-    async def get_current_document(self, source_uri: str) -> KnowledgeDocumentSnapshot | None:
+    async def get_current_document(
+        self,
+        source_uri: str,
+        *,
+        organization_id: str | None,
+        owner_user_id: str | None,
+        visibility: str,
+    ) -> KnowledgeDocumentSnapshot | None:
         return self.current
+
+    async def update_document_publication(self, **kwargs: Any) -> None:
+        self.publication_updates.append(kwargs)
 
 
 class FakeRagService:
@@ -77,6 +89,7 @@ async def test_ingestion_skips_unchanged_content_without_calling_embedding() -> 
         checksum=content_checksum(clean_markdown(raw_content)),
         version=3,
         status="PUBLISHED",
+        publication_fingerprint=build_publication_fingerprint(request(raw_content, version=3)),
     )
     repository = FakeRepository(current)
     rag = FakeRagService()
@@ -87,6 +100,37 @@ async def test_ingestion_skips_unchanged_content_without_calling_embedding() -> 
     assert result.status == "SKIPPED_UNCHANGED"
     assert result.document_id == "existing"
     assert result.version == 3
+    assert rag.calls == []
+
+
+async def test_ingestion_updates_acl_metadata_without_regenerating_embedding() -> None:
+    raw_content = "# 热身\n\n准备身体。"
+    old_request = request(raw_content, version=3)
+    current = KnowledgeDocumentSnapshot(
+        id="existing",
+        source_uri=old_request.source_uri,
+        checksum=content_checksum(clean_markdown(raw_content)),
+        version=3,
+        status="PUBLISHED",
+        publication_fingerprint=build_publication_fingerprint(old_request),
+    )
+    repository = FakeRepository(current)
+    rag = FakeRagService()
+    service = DocumentIngestionService(repository, rag)
+
+    changed = request(raw_content, version=4)
+    changed = IngestionRequest(
+        **{
+            **changed.__dict__,
+            "allowed_roles": ("COACH",),
+            "effective_to": datetime(2027, 1, 1, tzinfo=UTC),
+        }
+    )
+    result = await service.ingest(changed)
+
+    assert result.status == "UPDATED_METADATA"
+    assert result.document_id == "existing"
+    assert repository.publication_updates[0]["allowed_roles"] == ("COACH",)
     assert rag.calls == []
 
 

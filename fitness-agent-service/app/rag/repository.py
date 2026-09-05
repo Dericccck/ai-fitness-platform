@@ -31,21 +31,45 @@ class KnowledgeRepository:
     def __init__(self, database: Database) -> None:
         self._database = database
 
-    async def get_current_document(self, source_uri: str) -> KnowledgeDocumentSnapshot | None:
-        """返回不可变来源 URI 当前发布的版本。"""
+    async def get_current_document(
+        self,
+        source_uri: str,
+        *,
+        organization_id: str | None,
+        owner_user_id: str | None,
+        visibility: str,
+    ) -> KnowledgeDocumentSnapshot | None:
+        """返回指定租户/所有者来源当前发布的版本。"""
 
         statement = text(
             """
-            SELECT id, source_uri, checksum, version, status
+            SELECT id, source_uri, checksum, version, status,
+                   organization_id, owner_user_id, visibility, publication_fingerprint
             FROM knowledge_documents
-            WHERE source_uri = :source_uri AND status = 'PUBLISHED'
+            WHERE source_uri = :source_uri
+              AND status = 'PUBLISHED'
+              AND visibility = :visibility
+              AND organization_id IS NOT DISTINCT FROM :organization_id
+              AND owner_user_id IS NOT DISTINCT FROM :owner_user_id
             ORDER BY version DESC
             LIMIT 1
             """
         )
         async with self._database.engine.connect() as connection:
             row = (
-                (await connection.execute(statement, {"source_uri": source_uri})).mappings().first()
+                (
+                    await connection.execute(
+                        statement,
+                        {
+                            "source_uri": source_uri,
+                            "organization_id": organization_id,
+                            "owner_user_id": owner_user_id,
+                            "visibility": visibility,
+                        },
+                    )
+                )
+                .mappings()
+                .first()
             )
         if row is None:
             return None
@@ -55,16 +79,37 @@ class KnowledgeRepository:
             checksum=str(row["checksum"]),
             version=int(row["version"]),
             status=str(row["status"]),
+            organization_id=(
+                str(row["organization_id"]) if row["organization_id"] is not None else None
+            ),
+            owner_user_id=(str(row["owner_user_id"]) if row["owner_user_id"] is not None else None),
+            visibility=str(row["visibility"]),
+            publication_fingerprint=(
+                str(row["publication_fingerprint"])
+                if row["publication_fingerprint"] is not None
+                else None
+            ),
         )
 
-    async def archive_source(self, source_uri: str) -> tuple[int, int, int]:
-        """下线一个来源并删除其派生父子节点，保留文档版本审计记录。"""
+    async def archive_source(
+        self,
+        source_uri: str,
+        *,
+        organization_id: str | None,
+        owner_user_id: str | None,
+        visibility: str,
+    ) -> tuple[int, int, int]:
+        """下线一个有界来源并删除其派生父子节点，保留文档版本审计记录。"""
 
         select_statement = text(
             """
             SELECT id
             FROM knowledge_documents
-            WHERE source_uri = :source_uri AND status = 'PUBLISHED'
+            WHERE source_uri = :source_uri
+              AND visibility = :visibility
+              AND organization_id IS NOT DISTINCT FROM :organization_id
+              AND owner_user_id IS NOT DISTINCT FROM :owner_user_id
+              AND status = 'PUBLISHED'
             FOR UPDATE
             """
         )
@@ -72,7 +117,15 @@ class KnowledgeRepository:
             document_ids = [
                 str(row["id"])
                 for row in (
-                    await connection.execute(select_statement, {"source_uri": source_uri})
+                    await connection.execute(
+                        select_statement,
+                        {
+                            "source_uri": source_uri,
+                            "organization_id": organization_id,
+                            "owner_user_id": owner_user_id,
+                            "visibility": visibility,
+                        },
+                    )
                 ).mappings()
             ]
             if not document_ids:
@@ -140,6 +193,73 @@ class KnowledgeRepository:
         async with self._database.engine.begin() as connection:
             await connection.execute(statement, params)
 
+    async def update_document_publication(
+        self,
+        *,
+        document_id: str,
+        organization_id: str | None,
+        owner_user_id: str | None,
+        title: str,
+        document_type: str,
+        visibility: str,
+        allowed_roles: Sequence[str],
+        effective_from: Any,
+        effective_to: Any,
+        publication_fingerprint: str,
+    ) -> None:
+        """原子更新正文未变文档的发布属性，并同步子节点 ACL。
+
+        权限和生效时间同时复制在 Chunk 上，是因为向量/关键词检索的 SQL 会直接过滤
+        Chunk 元数据。该路径不触碰 Embedding 和父节点正文。
+        """
+
+        document_statement = text(
+            """
+            UPDATE knowledge_documents
+            SET organization_id = :organization_id,
+                owner_user_id = :owner_user_id,
+                title = :title,
+                document_type = :document_type,
+                visibility = :visibility,
+                applicable_roles = :allowed_roles,
+                publication_fingerprint = :publication_fingerprint,
+                effective_from = :effective_from,
+                effective_to = :effective_to,
+                updated_at = CURRENT_TIMESTAMP
+            WHERE id = :document_id AND status = 'PUBLISHED'
+            """
+        )
+        chunk_statement = text(
+            """
+            UPDATE knowledge_chunks
+            SET organization_id = :organization_id,
+                owner_user_id = :owner_user_id,
+                visibility = :visibility,
+                allowed_roles = :allowed_roles,
+                document_type = :document_type,
+                effective_from = :effective_from,
+                effective_to = :effective_to
+            WHERE document_id = :document_id
+            """
+        )
+        params = {
+            "document_id": document_id,
+            "organization_id": organization_id,
+            "owner_user_id": owner_user_id,
+            "title": title,
+            "document_type": document_type,
+            "visibility": visibility,
+            "allowed_roles": list(allowed_roles),
+            "publication_fingerprint": publication_fingerprint,
+            "effective_from": effective_from,
+            "effective_to": effective_to,
+        }
+        async with self._database.engine.begin() as connection:
+            result = await connection.execute(document_statement, params)
+            if result.rowcount != 1:
+                raise ValueError("当前文档不存在或已不再是 PUBLISHED")
+            await connection.execute(chunk_statement, params)
+
     async def replace_document(
         self,
         document: KnowledgeDocumentInput,
@@ -163,11 +283,12 @@ class KnowledgeRepository:
             """
             INSERT INTO knowledge_documents (
                 id, organization_id, title, source_uri, document_type, visibility,
-                applicable_roles, version, status, checksum, effective_from, effective_to
+                applicable_roles, version, status, checksum, effective_from, effective_to,
+                owner_user_id, publication_fingerprint
             ) VALUES (
                 :id, :organization_id, :title, :source_uri, :document_type,
                 :visibility, :applicable_roles, :version, :status, :checksum,
-                :effective_from, :effective_to
+                :effective_from, :effective_to, :owner_user_id, :publication_fingerprint
             )
             ON CONFLICT (id) DO UPDATE SET
                 organization_id = EXCLUDED.organization_id,
@@ -179,6 +300,8 @@ class KnowledgeRepository:
                 version = EXCLUDED.version,
                 status = EXCLUDED.status,
                 checksum = EXCLUDED.checksum,
+                owner_user_id = EXCLUDED.owner_user_id,
+                publication_fingerprint = EXCLUDED.publication_fingerprint,
                 effective_from = EXCLUDED.effective_from,
                 effective_to = EXCLUDED.effective_to,
                 updated_at = CURRENT_TIMESTAMP
@@ -207,7 +330,22 @@ class KnowledgeRepository:
             SET status = 'ARCHIVED', updated_at = CURRENT_TIMESTAMP
             WHERE source_uri = :source_uri
               AND id <> :document_id
+              AND visibility = :visibility
+              AND organization_id IS NOT DISTINCT FROM :organization_id
+              AND owner_user_id IS NOT DISTINCT FROM :owner_user_id
               AND status = 'PUBLISHED'
+            """
+        )
+        version_guard_statement = text(
+            """
+            SELECT id, checksum, publication_fingerprint, status
+            FROM knowledge_documents
+            WHERE source_uri = :source_uri
+              AND visibility = :visibility
+              AND organization_id IS NOT DISTINCT FROM :organization_id
+              AND owner_user_id IS NOT DISTINCT FROM :owner_user_id
+              AND version = :version
+            FOR UPDATE
             """
         )
         chunk_statement = text(
@@ -235,15 +373,48 @@ class KnowledgeRepository:
             "version": document.version,
             "status": document.status,
             "checksum": document.checksum,
+            "owner_user_id": document.owner_user_id,
+            "publication_fingerprint": document.publication_fingerprint,
             "effective_from": document.effective_from,
             "effective_to": document.effective_to,
         }
         async with self._database.engine.begin() as connection:
+            # 应用层的 current/version 检查只负责快速失败；最终一致性必须在写事务内
+            # 再锁一次。同一来源作用域和版本号如果已经被不同内容/发布属性占用，晚到
+            # 的任务必须失败，不能用 ON CONFLICT 覆盖先完成的发布。
+            existing_version = (
+                (
+                    await connection.execute(
+                        version_guard_statement,
+                        {
+                            "source_uri": document.source_uri,
+                            "organization_id": document.organization_id,
+                            "owner_user_id": document.owner_user_id,
+                            "visibility": document.visibility,
+                            "version": document.version,
+                        },
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if existing_version is not None and (
+                str(existing_version["id"]) != document.id
+                or str(existing_version["checksum"]) != document.checksum
+                or existing_version["publication_fingerprint"] != document.publication_fingerprint
+            ):
+                raise ValueError("同一来源版本已经由另一份内容或发布属性占用")
             # 同一来源同时只能有一个版本可检索。该操作与新版本写入处于同一事务，
             # 因此 Embedding 写入失败不会隐藏此前已发布的版本。
             await connection.execute(
                 archive_statement,
-                {"source_uri": document.source_uri, "document_id": document.id},
+                {
+                    "source_uri": document.source_uri,
+                    "document_id": document.id,
+                    "organization_id": document.organization_id,
+                    "owner_user_id": document.owner_user_id,
+                    "visibility": document.visibility,
+                },
             )
             await connection.execute(document_statement, document_params)
             await connection.execute(delete_chunks_statement, {"document_id": document.id})

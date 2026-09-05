@@ -63,6 +63,8 @@ class KnowledgeIngestionJob:
     malware_scanner: str = "not-configured"
     malware_signature: str | None = None
     malware_scanned_at: datetime | None = None
+    # 客户端重试令牌：同一提交者和同一知识作用域内必须只对应一个任务。
+    idempotency_key: str | None = None
 
 
 @dataclass(frozen=True)
@@ -180,6 +182,10 @@ class KnowledgeReviewReportNotFound(KnowledgeAdminError):
     """上传任务尚未生成可审计的解析审核报告。"""
 
 
+class KnowledgeUploadConflict(KnowledgeAdminError):
+    """上传与已有幂等任务或进行中的同来源任务不一致。"""
+
+
 def job_from_row(row: Any) -> KnowledgeIngestionJob:
     """将数据库映射转换为类型化任务，不向上层暴露 SQL 行。"""
 
@@ -220,6 +226,7 @@ def job_from_row(row: Any) -> KnowledgeIngestionJob:
         malware_scanner=str(row.get("malware_scanner") or "unknown"),
         malware_signature=str(row["malware_signature"]) if row.get("malware_signature") else None,
         malware_scanned_at=row.get("malware_scanned_at"),
+        idempotency_key=(str(row["idempotency_key"]) if row.get("idempotency_key") else None),
     )
 
 

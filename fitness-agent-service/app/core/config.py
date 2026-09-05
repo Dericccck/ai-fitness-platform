@@ -49,6 +49,24 @@ class Settings(BaseSettings):
         default="supervisor-domain-subgraphs-v1",
         validation_alias=AliasChoices("GRAPH_VERSION", "AGENT_GRAPH_VERSION"),
     )
+    # 发布清单和索引构建是可回退制品的关联键；为空表示本地旧运行模式，不能冒充
+    # 已完成生产发布治理。它们只记录 ID/摘要，不记录密钥、用户正文或原始参数。
+    release_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("RELEASE_ID", "AGENT_RELEASE_ID"),
+    )
+    manifest_digest: str = Field(
+        default="",
+        validation_alias=AliasChoices("MANIFEST_DIGEST", "AGENT_MANIFEST_DIGEST"),
+    )
+    index_build_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("INDEX_BUILD_ID", "AGENT_INDEX_BUILD_ID"),
+    )
+    eval_release_id: str = Field(
+        default="",
+        validation_alias=AliasChoices("EVAL_RELEASE_ID", "AGENT_EVAL_RELEASE_ID"),
+    )
     log_level: str = "INFO"
     api_docs_enabled: bool = True
 

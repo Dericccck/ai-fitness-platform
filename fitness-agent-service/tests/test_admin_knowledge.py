@@ -8,6 +8,7 @@ from app.infrastructure.agent_context import AgentIdentity
 from app.rag.admin_models import (
     KnowledgeAdminForbidden,
     KnowledgeIngestionJob,
+    KnowledgeUploadConflict,
     KnowledgeUploadMetadata,
 )
 from app.rag.admin_service import KnowledgeAdminService
@@ -43,7 +44,14 @@ def metadata(**overrides: Any) -> KnowledgeUploadMetadata:
 
 
 class FakeKnowledgeRepository:
-    async def get_current_document(self, source_uri: str) -> None:
+    async def get_current_document(
+        self,
+        source_uri: str,
+        *,
+        organization_id: str | None,
+        owner_user_id: str | None,
+        visibility: str,
+    ) -> None:
         return None
 
 
@@ -51,6 +59,49 @@ class FakeJobs:
     def __init__(self) -> None:
         self.created: list[KnowledgeIngestionJob] = []
         self.reports: dict[str, KnowledgeReviewReport] = {}
+
+    async def get_job_by_idempotency_key(
+        self,
+        *,
+        submitted_by: str,
+        idempotency_key: str,
+        organization_id: str | None,
+        owner_user_id: str | None,
+        visibility: str,
+    ) -> KnowledgeIngestionJob | None:
+        return next(
+            (
+                job
+                for job in self.created
+                if job.submitted_by == submitted_by
+                and job.idempotency_key == idempotency_key
+                and job.organization_id == organization_id
+                and job.owner_user_id == owner_user_id
+                and job.visibility == visibility
+            ),
+            None,
+        )
+
+    async def get_active_job_by_source(
+        self,
+        source_uri: str,
+        *,
+        organization_id: str | None,
+        owner_user_id: str | None,
+        visibility: str,
+    ) -> KnowledgeIngestionJob | None:
+        return next(
+            (
+                job
+                for job in reversed(self.created)
+                if job.source_uri == source_uri
+                and job.organization_id == organization_id
+                and job.owner_user_id == owner_user_id
+                and job.visibility == visibility
+                and job.status in {"PENDING_REVIEW", "QUEUED", "INDEXING"}
+            ),
+            None,
+        )
 
     async def create_job(
         self,
@@ -138,6 +189,66 @@ async def test_gateway_system_admin_role_can_submit_global_knowledge(tmp_path: P
     )
 
     assert job.status == "PENDING_REVIEW"
+
+
+async def test_upload_idempotency_reuses_existing_task(tmp_path: Path) -> None:
+    service, jobs = build_service(tmp_path)
+    kwargs = {
+        "identity": identity("ADMIN"),
+        "file_name": "warmup.md",
+        "content_type": "text/markdown",
+        "content": b"# Warmup\n\nPrepare the hips.",
+        "metadata": metadata(),
+        "idempotency_key": "upload-warmup-1",
+    }
+
+    first = await service.submit_upload(**kwargs)
+    second = await service.submit_upload(**kwargs)
+
+    assert second.id == first.id
+    assert len(jobs.created) == 1
+
+
+async def test_upload_idempotency_rejects_reuse_for_different_content(tmp_path: Path) -> None:
+    service, _ = build_service(tmp_path)
+    await service.submit_upload(
+        identity("ADMIN"),
+        file_name="warmup.md",
+        content_type="text/markdown",
+        content=b"# Warmup\n\nPrepare the hips.",
+        metadata=metadata(),
+        idempotency_key="upload-warmup-2",
+    )
+
+    with pytest.raises(KnowledgeUploadConflict):
+        await service.submit_upload(
+            identity("ADMIN"),
+            file_name="warmup.md",
+            content_type="text/markdown",
+            content=b"# Warmup\n\nDifferent content.",
+            metadata=metadata(),
+            idempotency_key="upload-warmup-2",
+        )
+
+
+async def test_concurrent_source_upload_with_different_content_is_rejected(tmp_path: Path) -> None:
+    service, _ = build_service(tmp_path)
+    await service.submit_upload(
+        identity("ADMIN"),
+        file_name="warmup.md",
+        content_type="text/markdown",
+        content=b"# Warmup\n\nPrepare the hips.",
+        metadata=metadata(),
+    )
+
+    with pytest.raises(KnowledgeUploadConflict):
+        await service.submit_upload(
+            identity("ADMIN"),
+            file_name="warmup.md",
+            content_type="text/markdown",
+            content=b"# Warmup\n\nDifferent content.",
+            metadata=metadata(),
+        )
 
 
 async def test_organization_scope_defaults_to_signed_single_organization(tmp_path: Path) -> None:

@@ -14,6 +14,7 @@ from .admin_models import (
     KnowledgeIngestionJob,
     KnowledgeJobTransitionError,
     KnowledgeReviewReportNotFound,
+    KnowledgeUploadConflict,
     KnowledgeUploadMetadata,
 )
 from .admin_repository import KnowledgeIngestionRepository
@@ -29,6 +30,7 @@ from .storage import DocumentStorage
 ADMIN_ROLES = frozenset({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "ADMIN", "ORG_ADMIN", "SUPER_ADMIN"})
 PLATFORM_ADMIN_ROLES = frozenset({"SYSTEM_ADMIN", "ADMIN", "SUPER_ADMIN"})
 _SAFE_TEXT = re.compile(r"^[^\r\n]{1,256}$")
+_SAFE_IDEMPOTENCY_KEY = re.compile(r"^[A-Za-z0-9._:-]{1,128}$")
 
 
 class KnowledgeAdminService:
@@ -69,25 +71,79 @@ class KnowledgeAdminService:
         content_type: str | None,
         content: bytes,
         metadata: KnowledgeUploadMetadata,
+        idempotency_key: str | None = None,
     ) -> KnowledgeIngestionJob:
         """校验管理员上传，私有暂存文件并创建审核任务。"""
 
         self.require_admin(identity)
         self._validate_metadata(identity, metadata)
+        self._validate_idempotency_key(idempotency_key)
         if not content:
             raise ValueError("上传文档不能为空")
         if len(content) > self.max_source_bytes:
             raise ValueError("上传文档超过配置的大小限制")
+
+        # 作用域必须在查询当前版本和任务去重之前确定。否则同一个 source_uri
+        # 可能把不同机构或不同 PRIVATE 所有者误判为同一份文档。
+        organization_id = metadata.organization_id
+        if metadata.visibility == "ORGANIZATION" and organization_id is None:
+            organization_id = next(iter(identity.organization_ids))
+        owner_user_id = identity.subject if metadata.visibility == "PRIVATE" else None
         safety_result = self.safety_scanner.scan(file_name, content)
+
+        # 幂等键解决客户端超时重试；同来源锁解决两个不同请求同时上传同一作用域。
+        # 两条查询都带完整作用域，避免以任务存在性泄露其他租户信息。
+        if idempotency_key is not None:
+            existing = await self.jobs.get_job_by_idempotency_key(
+                submitted_by=identity.subject,
+                idempotency_key=idempotency_key,
+                organization_id=organization_id,
+                owner_user_id=owner_user_id,
+                visibility=metadata.visibility,
+            )
+            if existing is not None:
+                if not self._same_upload(
+                    existing,
+                    file_name=file_name,
+                    content_type=content_type,
+                    content_sha256=safety_result.sha256,
+                    metadata=metadata,
+                    organization_id=organization_id,
+                    owner_user_id=owner_user_id,
+                ):
+                    raise KnowledgeUploadConflict("幂等键已用于另一份上传请求")
+                return existing
+
+        active = await self.jobs.get_active_job_by_source(
+            metadata.source_uri,
+            organization_id=organization_id,
+            owner_user_id=owner_user_id,
+            visibility=metadata.visibility,
+        )
+        if active is not None:
+            if not self._same_upload(
+                active,
+                file_name=file_name,
+                content_type=content_type,
+                content_sha256=safety_result.sha256,
+                metadata=metadata,
+                organization_id=organization_id,
+                owner_user_id=owner_user_id,
+            ):
+                raise KnowledgeUploadConflict("同一来源已有不同内容的上传任务正在处理")
+            return active
+
         # 在信任边界处先解析一次。后续 Worker 会重新解析不可变字节，
         # 避免损坏文件长期停留在审核队列中而无人发现。
         parsed = self.parser_registry.parse(content, file_name=file_name)
 
-        current = await self.knowledge_repository.get_current_document(metadata.source_uri)
+        current = await self.knowledge_repository.get_current_document(
+            metadata.source_uri,
+            organization_id=organization_id,
+            owner_user_id=owner_user_id,
+            visibility=metadata.visibility,
+        )
         requested_version = 1 if current is None else current.version + 1
-        organization_id = metadata.organization_id
-        if metadata.visibility == "ORGANIZATION" and organization_id is None:
-            organization_id = next(iter(identity.organization_ids))
         job_id = token_hex(16)
         report = self.review_report_builder.build(
             report_id=token_hex(16),
@@ -115,7 +171,7 @@ class KnowledgeAdminService:
             title=metadata.title,
             document_type=metadata.document_type,
             organization_id=organization_id,
-            owner_user_id=identity.subject if metadata.visibility == "PRIVATE" else None,
+            owner_user_id=owner_user_id,
             visibility=metadata.visibility,
             allowed_roles=metadata.allowed_roles,
             effective_from=metadata.effective_from,
@@ -132,6 +188,7 @@ class KnowledgeAdminService:
             malware_scanner=safety_result.malware_scanner,
             malware_signature=safety_result.malware_signature,
             malware_scanned_at=safety_result.malware_scanned_at,
+            idempotency_key=idempotency_key,
         )
         return await self.jobs.create_job(job=job, review_report=report)
 
@@ -277,6 +334,41 @@ class KnowledgeAdminService:
 
         if not ADMIN_ROLES.intersection(identity.roles):
             raise KnowledgeAdminForbidden("需要管理员角色")
+
+    @staticmethod
+    def _validate_idempotency_key(idempotency_key: str | None) -> None:
+        if idempotency_key is not None and not _SAFE_IDEMPOTENCY_KEY.fullmatch(idempotency_key):
+            raise ValueError(
+                "Idempotency-Key 只能包含字母、数字、点、下划线、冒号或连字符，长度 1-128"
+            )
+
+    @staticmethod
+    def _same_upload(
+        job: KnowledgeIngestionJob,
+        *,
+        file_name: str,
+        content_type: str | None,
+        content_sha256: str,
+        metadata: KnowledgeUploadMetadata,
+        organization_id: str | None,
+        owner_user_id: str | None,
+    ) -> bool:
+        """比较可证明的请求身份，不比较任务状态或自动分配的版本号。"""
+
+        return (
+            job.source_uri == metadata.source_uri
+            and job.original_filename == file_name
+            and job.content_type == (content_type or "application/octet-stream")
+            and job.content_sha256 == content_sha256
+            and job.title == metadata.title
+            and job.document_type == metadata.document_type
+            and job.organization_id == organization_id
+            and job.owner_user_id == owner_user_id
+            and job.visibility == metadata.visibility
+            and job.allowed_roles == metadata.allowed_roles
+            and job.effective_from == metadata.effective_from
+            and job.effective_to == metadata.effective_to
+        )
 
     async def _get_scoped_job(self, identity: AgentIdentity, job_id: str) -> KnowledgeIngestionJob:
         """在返回或转换任务前应用任务范围校验。"""

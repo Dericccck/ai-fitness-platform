@@ -39,6 +39,10 @@ class TruLensCase:
     model_version: str = ""
     knowledge_base_version: str = ""
     graph_version: str = ""
+    release_id: str = ""
+    manifest_digest: str = ""
+    index_build_id: str = ""
+    eval_release_id: str = ""
 
 
 def case_from_mapping(data: dict[str, Any]) -> TruLensCase:
@@ -67,6 +71,10 @@ def case_from_mapping(data: dict[str, Any]) -> TruLensCase:
         model_version=str(data.get("model_version", "")),
         knowledge_base_version=str(data.get("knowledge_base_version", "")),
         graph_version=str(data.get("graph_version", "")),
+        release_id=str(data.get("release_id", "")),
+        manifest_digest=str(data.get("manifest_digest", "")),
+        index_build_id=str(data.get("index_build_id", "")),
+        eval_release_id=str(data.get("eval_release_id", "")),
     )
 
 
@@ -216,6 +224,12 @@ def trace_to_case(
         "knowledge_base": text_attribute("fitness.agent.knowledge_base_version"),
         "graph": text_attribute("fitness.agent.graph_version"),
     }
+    linkage = {
+        "release_id": text_attribute("fitness.agent.release_id"),
+        "manifest_digest": text_attribute("fitness.agent.manifest_digest"),
+        "index_build_id": text_attribute("fitness.agent.index_build_id"),
+        "eval_release_id": text_attribute("fitness.agent.eval_release_id"),
+    }
     missing_versions = [name for name, value in versions.items() if not value]
     if missing_versions:
         raise TruLensEvaluationError("Trace 缺少版本关联字段：" + ", ".join(missing_versions))
@@ -234,6 +248,10 @@ def trace_to_case(
         model_version=versions["model"],
         knowledge_base_version=versions["knowledge_base"],
         graph_version=versions["graph"],
+        release_id=linkage["release_id"],
+        manifest_digest=linkage["manifest_digest"],
+        index_build_id=linkage["index_build_id"],
+        eval_release_id=linkage["eval_release_id"],
     )
 
 
@@ -426,6 +444,10 @@ class TruLensEvaluator:
                 "model_version": case.model_version,
                 "knowledge_base_version": case.knowledge_base_version,
                 "graph_version": case.graph_version,
+                "release_id": case.release_id,
+                "manifest_digest": case.manifest_digest,
+                "index_build_id": case.index_build_id,
+                "eval_release_id": case.eval_release_id,
             },
         )
         if self._session is not None:
@@ -443,6 +465,10 @@ class TruLensEvaluator:
                 "model": case.model_version,
                 "knowledge_base": case.knowledge_base_version,
                 "graph": case.graph_version,
+                "release_id": case.release_id,
+                "manifest_digest": case.manifest_digest,
+                "index_build_id": case.index_build_id,
+                "eval_release_id": case.eval_release_id,
             },
             "metrics": {
                 name: {"score": score, "explanation": None, "error": None}

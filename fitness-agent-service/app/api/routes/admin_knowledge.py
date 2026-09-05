@@ -27,6 +27,7 @@ from app.rag.admin_models import (
     KnowledgeReindexJob,
     KnowledgeReindexNotFound,
     KnowledgeReviewReportNotFound,
+    KnowledgeUploadConflict,
     KnowledgeUploadMetadata,
 )
 from app.rag.ocr import OcrServiceUnavailable
@@ -72,6 +73,7 @@ class KnowledgeJobResponse(BaseModel):
     reviewed_at: datetime | None
     started_at: datetime | None
     finished_at: datetime | None
+    idempotency_key: str | None
 
 
 class RejectRequest(BaseModel):
@@ -199,6 +201,7 @@ async def upload_document(
     effective_from: datetime = Form(...),  # noqa: B008
     effective_to: datetime | None = Form(default=None),  # noqa: B008
     x_agent_context: str | None = Header(default=None),
+    idempotency_key: str | None = Header(default=None, alias="Idempotency-Key"),
 ) -> KnowledgeJobResponse:
     """暂存一个文件，并将其置于待审核状态。"""
 
@@ -223,6 +226,7 @@ async def upload_document(
             content_type=file.content_type,
             content=content,
             metadata=metadata,
+            idempotency_key=idempotency_key,
         )
     except KnowledgeAdminForbidden as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(exc)) from exc
@@ -236,6 +240,8 @@ async def upload_document(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="OCR 服务暂时不可用",
         ) from exc
+    except KnowledgeUploadConflict as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)
@@ -526,6 +532,7 @@ def _to_response(job: KnowledgeIngestionJob) -> KnowledgeJobResponse:
         reviewed_at=job.reviewed_at,
         started_at=job.started_at,
         finished_at=job.finished_at,
+        idempotency_key=job.idempotency_key,
     )
 
 

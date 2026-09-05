@@ -73,6 +73,10 @@ class KnowledgeDocumentInput:
     checksum: str
     effective_from: datetime
     effective_to: datetime | None
+    # 文档主记录保存所有者，避免 PRIVATE 来源只靠子节点才能确定身份。
+    owner_user_id: str | None = None
+    # 正文 checksum 与发布属性指纹分离；权限/有效期变化可以复用 Embedding。
+    publication_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)
@@ -84,6 +88,10 @@ class KnowledgeDocumentSnapshot:
     checksum: str
     version: int
     status: str
+    organization_id: str | None = None
+    owner_user_id: str | None = None
+    visibility: str | None = None
+    publication_fingerprint: str | None = None
 
 
 @dataclass(frozen=True)
