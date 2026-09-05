@@ -9,7 +9,7 @@
 
 | 项目 | 当前证据 | 下一步 |
 | --- | --- | --- |
-| 发布清单 | `scripts/release_manifest_check.py` 已兼容 v1，并可生成/校验 v2 组件摘要；TruLens 已使用正式评测发布描述校验数据集/阈值摘要 | 接入流水线实际模型制品、索引构建 ID 和正式 v2 Manifest |
+| 发布清单 | `scripts/release_manifest_check.py` 已兼容 v1，并可生成/校验 v2 组件摘要；`scripts/build_release_components.py` 已能从真实模型文件、Prompt 和 Tool Schema 生成组件摘要；TruLens 已使用正式评测发布描述校验数据集/阈值摘要 | 接入流水线实际模型制品、索引构建 ID 和正式 v2 Manifest |
 | Trace 版本 | `app/evaluation/telemetry.py` 已记录代码、Prompt、图、知识库及 release/Manifest/build/eval 关联键 | 绑定实际内容摘要与索引构建 ID，并补真实 Trace 验收 |
 | TruLens | 路线图已有 2026-09-01 独立 PostgreSQL 真实导出验收记录 | 复验当前运行配置、写入读取和账号权限；历史成功不等于本轮通过 |
 | 文档去重 | `ingestion.py` 先按 source_uri 查已发布文档，再比较 checksum | 拆分内容变化、发布元数据变化和索引策略变化 |
@@ -50,7 +50,7 @@
 - 对 Supervisor、四领域 Prompt 模板及实际影响行为的静态指令生成确定性摘要；保留人工可读版本名。
   用户输入和动态检索正文不进入公共 Prompt 摘要。
 - 配置摘要只包含经过白名单审核的非敏感有效参数，并规范化默认值；密钥不保存值或普通 SHA，使用 Secret 引用版本/kid。
-- 本地 Embedding/Reranker 制品摘要覆盖模型权重、Tokenizer、模型配置和预处理设置；在制品准备/构建时生成并核验，不能每个请求遍历大文件。
+- 本地 Embedding/Reranker 制品摘要覆盖模型权重、Tokenizer、模型配置和预处理设置；`build_release_components.py` 在制品准备/构建时一次性遍历并核验目录，输出只含摘要、文件数和字节数，不能每个请求遍历大文件。
 - 记录工具 Schema 摘要及兼容测试。不兼容修改才升级工具主版本，不为“补版本”盲目将所有 v1 改成 v2。
 - 固定 eval_release_id，绑定评测集、阈值、评分器代码、Judge Prompt、Judge 模型/参数；当前已有 `evals/trulens_smoke.release.json` 和 Judge 发布描述，CLI 会校验路径及 SHA-256 摘要；缺失必需指标应失败，不能自动通过。
 - Manifest 关联代码、依赖锁、镜像、图、Prompt、非敏感参数、模型、工具和评测制品；索引构建 ID 先预留，待第 3 批接入。

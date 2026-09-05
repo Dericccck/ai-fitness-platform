@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 import re
 from collections.abc import Mapping
 from pathlib import Path
@@ -62,6 +63,50 @@ def canonical_digest(value: Any) -> str:
         separators=(",", ":"),
     ).encode("utf-8")
     return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+
+def artifact_tree_digest(path: Path) -> tuple[str, int, int]:
+    """计算模型目录的确定性摘要、文件数和字节数。
+
+    摘要只包含相对文件名、文件内容摘要和大小，不包含机器绝对路径。
+    符号链接只允许指向文件，并按目标文件内容计算；目录链接和悬空链接
+    直接失败，避免把构建范围悄悄扩展到工作区之外。
+    """
+
+    if not path.exists():
+        raise ReleaseManifestError(f"模型制品不存在：{path}")
+    if path.is_file():
+        digest = hashlib.sha256(path.read_bytes()).hexdigest()
+        return f"sha256:{digest}", 1, path.stat().st_size
+    if not path.is_dir():
+        raise ReleaseManifestError(f"模型制品不是文件或目录：{path}")
+
+    records: list[str] = []
+    file_count = 0
+    byte_count = 0
+    for root, directories, files in os.walk(path, followlinks=False):
+        directories[:] = sorted(
+            directory for directory in directories if not (Path(root) / directory).is_symlink()
+        )
+        for filename in sorted(files):
+            item = Path(root) / filename
+            if item.is_symlink():
+                target = item.resolve()
+                if not target.exists() or target.is_dir():
+                    raise ReleaseManifestError(f"模型制品包含无效文件链接：{item}")
+                source = target
+            else:
+                source = item
+            data = source.read_bytes()
+            relative = item.relative_to(path).as_posix()
+            digest = hashlib.sha256(data).hexdigest()
+            records.append(f"{relative}\t{len(data)}\t{digest}\n")
+            file_count += 1
+            byte_count += len(data)
+    if not records:
+        raise ReleaseManifestError(f"模型制品目录为空：{path}")
+    tree_digest = hashlib.sha256("".join(records).encode("utf-8")).hexdigest()
+    return f"sha256:{tree_digest}", file_count, byte_count
 
 
 def prompt_digests(prompts: Mapping[str, str]) -> dict[str, str]:
