@@ -32,7 +32,7 @@ public class BookingOutboxRepository {
         Timestamp leaseExpiredAt = Timestamp.from(
                 Instant.now().minusSeconds(properties.getClaimLeaseSeconds()));
         List<OutboxEvent> events = jdbc.query(
-                "SELECT id, event_key, event_type, aggregate_id, organization_id, payload, attempt_count "
+                "SELECT id, event_key, event_type, aggregate_id, organization_id, payload, attempt_count, created_at "
                         + "FROM agent_booking_outbox WHERE status = 'PENDING' "
                         + "AND (next_attempt_at IS NULL OR next_attempt_at <= CURRENT_TIMESTAMP) "
                         + "AND (claimed_at IS NULL OR claimed_at < ?) "
@@ -41,7 +41,8 @@ public class BookingOutboxRepository {
                 (rs, rowNum) -> new OutboxEvent(
                         rs.getLong("id"), rs.getString("event_key"), rs.getString("event_type"),
                         rs.getString("aggregate_id"), rs.getString("organization_id"),
-                        rs.getString("payload"), rs.getInt("attempt_count"))
+                        rs.getString("payload"), rs.getInt("attempt_count"),
+                        rs.getTimestamp("created_at").toInstant())
         );
         for (OutboxEvent event : events) {
             jdbc.update("UPDATE agent_booking_outbox SET claimed_at = CURRENT_TIMESTAMP, claimed_by = ? "
@@ -85,9 +86,10 @@ public class BookingOutboxRepository {
         public final String organizationId;
         public final String payload;
         public final int attemptCount;
+        public final Instant occurredAt;
 
         public OutboxEvent(long id, String eventKey, String eventType, String aggregateId,
-                           String organizationId, String payload, int attemptCount) {
+                           String organizationId, String payload, int attemptCount, Instant occurredAt) {
             this.id = id;
             this.eventKey = eventKey;
             this.eventType = eventType;
@@ -95,6 +97,13 @@ public class BookingOutboxRepository {
             this.organizationId = organizationId;
             this.payload = payload;
             this.attemptCount = attemptCount;
+            this.occurredAt = occurredAt;
+        }
+
+        /** 兼容单元测试及旧适配器；生产读取始终使用 Outbox 的 created_at。 */
+        public OutboxEvent(long id, String eventKey, String eventType, String aggregateId,
+                           String organizationId, String payload, int attemptCount) {
+            this(id, eventKey, eventType, aggregateId, organizationId, payload, attemptCount, Instant.EPOCH);
         }
     }
 

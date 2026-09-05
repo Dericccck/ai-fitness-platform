@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
+from datetime import datetime
 from typing import Any
 
 from pydantic import AliasChoices, BaseModel, ConfigDict, Field, ValidationError
@@ -54,6 +55,9 @@ class ProactiveEventMessage(BaseModel):
         max_length=128,
         validation_alias=AliasChoices("organization_id", "organizationId"),
     )
+    contract_version: int = Field(default=1, ge=1, le=100, validation_alias=AliasChoices("contract_version", "contractVersion"))
+    aggregate_version: int | None = Field(default=None, ge=1, validation_alias=AliasChoices("aggregate_version", "aggregateVersion"))
+    occurred_at: datetime | None = Field(default=None, validation_alias=AliasChoices("occurred_at", "occurredAt"))
     payload: dict[str, Any]
 
     @classmethod

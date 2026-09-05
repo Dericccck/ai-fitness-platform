@@ -22,8 +22,8 @@ ConfirmationDecision = Literal["APPROVE", "REJECT"]
 
 # 执行状态描述“已批准动作实际执行到哪一步”。批准不会自动变成执行成功。
 # NOT_STARTED 未领取执行权；RUNNING 执行中；SUCCEEDED 成功；
-# FAILED_RETRYABLE 可重试失败；FAILED_FINAL 不可自动重试的最终失败。
-ExecutionStatus = Literal["NOT_STARTED", "RUNNING", "SUCCEEDED", "FAILED_RETRYABLE", "FAILED_FINAL"]
+# UNKNOWN 结果未知，必须经过下游查询或人工对账后才能收敛。
+ExecutionStatus = Literal["NOT_STARTED", "RUNNING", "SUCCEEDED", "FAILED_RETRYABLE", "FAILED_FINAL", "UNKNOWN"]
 
 # 不可变事件用于审计时间线；事件不是可编辑的当前状态，顺序由数据库时间和自增 ID 确定。
 ConfirmationEventType = Literal[
@@ -38,6 +38,7 @@ ConfirmationEventType = Literal[
     "REQUEUED",  # 可重试失败重新排队，旧 JTI 已失效
     "EXECUTION_SUCCEEDED",  # 业务工具真实执行成功
     "EXECUTION_FAILED",  # 业务工具真实执行失败
+    "EXECUTION_UNKNOWN",  # 业务结果尚未对账
 ]
 
 
@@ -244,6 +245,18 @@ class ConfirmationRecord:
             execution_status="FAILED_RETRYABLE" if retryable else "FAILED_FINAL",
             finished_at=now,
             last_error_code=error_code,
+            version=self.version + 1,
+        )
+
+    def mark_unknown(self, now: datetime) -> ConfirmationRecord:
+        """把超时/进程中断的 RUNNING 标为结果未知，禁止直接当作失败重试。"""
+
+        if self.execution_status != "RUNNING":
+            raise ConfirmationStateError("只有执行中的操作才能标记为结果未知")
+        return self._replace(
+            execution_status="UNKNOWN",
+            finished_at=now,
+            last_error_code="EXECUTION_RESULT_UNKNOWN",
             version=self.version + 1,
         )
 

@@ -33,6 +33,11 @@ public class RabbitBookingMessagePublisher implements BookingMessagePublisher {
             String reason = confirm == null ? "消息代理未返回确认信息" : confirm.getReason();
             throw new IllegalStateException("RabbitMQ 发布器未确认消息：" + reason);
         }
+        // Publisher ACK 只表示 broker 接受了发布请求；mandatory Return 才能说明
+        // 消息至少被路由到一个队列。不可路由消息也可能收到 ACK，不能把 Outbox 标成 PUBLISHED。
+        if (correlation.getReturnedMessage() != null) {
+            throw new IllegalStateException("RabbitMQ 消息不可路由（publisher return）");
+        }
     }
 
     /**
@@ -46,7 +51,8 @@ public class RabbitBookingMessagePublisher implements BookingMessagePublisher {
                 + "\",\"source\":\"booking\",\"eventType\":\""
                 + escape(event.eventType) + "\",\"aggregateId\":\""
                 + escape(event.aggregateId) + "\",\"organizationId\":\""
-                + escape(event.organizationId) + "\",\"payload\":" + event.payload + "}";
+                + escape(event.organizationId) + "\",\"contractVersion\":1,\"occurredAt\":\""
+                + event.occurredAt.toString() + "\",\"payload\":" + event.payload + "}";
     }
 
     private static String routingKey(String eventType) {

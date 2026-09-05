@@ -177,6 +177,13 @@ class ConfirmationService:
             retryable=retryable,
         )
 
+    async def mark_execution_unknown(
+        self, confirmation_id: str, *, trace_id: str | None = None
+    ) -> ConfirmationRecord:
+        """供受控对账任务使用；结果未知时不直接重试或判失败。"""
+
+        return await self.repository.mark_unknown(confirmation_id, datetime.now(UTC), trace_id)
+
     async def get_for_subject(
         self, confirmation_id: str, identity: AgentIdentity
     ) -> ConfirmationRecord:

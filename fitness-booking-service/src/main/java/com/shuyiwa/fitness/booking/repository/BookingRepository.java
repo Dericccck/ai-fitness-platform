@@ -11,6 +11,8 @@ import com.shuyiwa.fitness.booking.security.BookingConfirmation;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.http.HttpStatus;
 import org.springframework.jdbc.core.JdbcTemplate;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.stereotype.Repository;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -171,6 +173,21 @@ public class BookingRepository {
                 (rs, rowNum) -> mapAppointment(rs));
     }
 
+    public List<BookingAppointmentView> findStudentConflicts(
+            String organizationId, String studentId, Instant start, Instant end, String excludeAppointmentId
+    ) {
+        return jdbc.query(
+                "SELECT id, organization_id, user_id, coach_id, course_id, course_name, course_start_time, "
+                        + "course_end_time, status, contract_id, NULL AS remaining_class_hours FROM appointment "
+                        + "WHERE organization_id = ? AND deleted = 0 AND user_id = ? "
+                        + "AND status IN (0, 1, 3, 4, 5) AND course_start_time < ? "
+                        + "AND (course_end_time IS NULL OR course_end_time > ? ) "
+                        + "AND (? IS NULL OR id <> ?) ORDER BY course_start_time FOR UPDATE",
+                new Object[]{organizationId, studentId, Timestamp.from(end), Timestamp.from(start),
+                        excludeAppointmentId, excludeAppointmentId},
+                (rs, rowNum) -> mapAppointment(rs));
+    }
+
     public List<LocalDate> findNonBusinessDays(String organizationId, LocalDate from, LocalDate to) {
         List<LocalDate> result = new ArrayList<>();
         jdbc.query("SELECT body FROM system_settings WHERE organization_id = ? AND type = 'Nonbusiness_Day'",
@@ -214,7 +231,7 @@ public class BookingRepository {
     }
 
     public void releaseRequestLock(String requestId) {
-        jdbc.queryForObject("SELECT RELEASE_LOCK(?)", new Object[]{lockName("req", requestId)}, Integer.class);
+        deferNamedLockRelease(lockName("req", requestId));
     }
 
     public void acquireCoachDayLock(String organizationId, String coachId, LocalDate date) {
@@ -227,6 +244,32 @@ public class BookingRepository {
 
     public void releaseCoachDayLock(String organizationId, String coachId, LocalDate date) {
         String lockName = lockName("coach", organizationId + ":" + coachId + ":" + date);
+        deferNamedLockRelease(lockName);
+    }
+
+    public void acquireStudentDayLock(String organizationId, String studentId, LocalDate date) {
+        String lockName = lockName("student", organizationId + ":" + studentId + ":" + date);
+        Integer locked = jdbc.queryForObject("SELECT GET_LOCK(?, 5)", new Object[]{lockName}, Integer.class);
+        if (locked == null || locked != 1) {
+            throw new BookingApiException(HttpStatus.CONFLICT, "学员预约资源正被其他请求处理，请稍后重试");
+        }
+    }
+
+    public void releaseStudentDayLock(String organizationId, String studentId, LocalDate date) {
+        deferNamedLockRelease(lockName("student", organizationId + ":" + studentId + ":" + date));
+    }
+
+    /** MySQL 命名锁不随事务提交释放；在事务同步回调中释放，避免 finally 早于 commit。 */
+    private void deferNamedLockRelease(String lockName) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCompletion(int status) {
+                    jdbc.queryForObject("SELECT RELEASE_LOCK(?)", new Object[]{lockName}, Integer.class);
+                }
+            });
+            return;
+        }
         jdbc.queryForObject("SELECT RELEASE_LOCK(?)", new Object[]{lockName}, Integer.class);
     }
 

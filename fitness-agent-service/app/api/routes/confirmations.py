@@ -48,6 +48,14 @@ class ConfirmationRevocationRequest(BaseModel):
     )
 
 
+class ConfirmationReconcileRequest(BaseModel):
+    """人工对账入口目前只允许把 RUNNING 明确标为 UNKNOWN。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    reason: str = Field(min_length=1, max_length=256)
+
+
 class ConfirmationResponse(BaseModel):
     """供确认卡片和页面刷新使用的脱敏确认单状态。"""
 
@@ -178,6 +186,33 @@ async def revoke_confirmation(
     except (ConfirmationStateError, ValueError) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return _to_response(record)
+
+
+@router.post("/{confirmation_id}/reconcile", response_model=ConfirmationResponse)
+async def reconcile_confirmation(
+    confirmation_id: str,
+    payload: ConfirmationReconcileRequest,
+    request: Request,
+    x_agent_context: str | None = Header(default=None),
+    x_trace_id: str | None = Header(default=None),
+) -> ConfirmationResponse:
+    """受控人工入口：结果未核实前只能标记 UNKNOWN，禁止伪造成功或失败。"""
+
+    identity = _verify_identity(request, x_agent_context)
+    if not ({"SYSTEM_ADMIN", "ORGANIZATION_ADMIN"} & identity.roles):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="只有管理员可以执行对账")
+    try:
+        record = await request.app.state.confirmation_service.get_for_subject(
+            confirmation_id, identity
+        )
+        if record.execution_status != "RUNNING":
+            return _to_response(record)
+        reconciled = await request.app.state.confirmation_service.mark_execution_unknown(
+            confirmation_id, trace_id=x_trace_id or payload.reason
+        )
+    except (ConfirmationNotFound, ConfirmationStateError) as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="确认单当前不可对账") from exc
+    return _to_response(reconciled)
 
 
 def _verify_identity(request: Request, token: str | None) -> AgentIdentity:

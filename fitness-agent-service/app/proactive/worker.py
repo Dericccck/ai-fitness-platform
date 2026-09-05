@@ -118,6 +118,9 @@ class ProactiveEventWorker:
                     payload={
                         "event_id": event.event_id,
                         "recipient_role": target.role,
+                        "contract_version": event.contract_version,
+                        "aggregate_version": event.aggregate_version,
+                        "occurred_at": event.occurred_at.isoformat() if event.occurred_at else None,
                     },
                 )
             processed = await self.event_repository.mark_processed(
@@ -138,6 +141,9 @@ def _event_from_record(record: ProactiveEventRecord) -> ProactiveEventMessage:
                 "event_type": record.event_type,
                 "aggregate_id": record.aggregate_id,
                 "organization_id": record.organization_id,
+                "contract_version": record.contract_version,
+                "aggregate_version": record.aggregate_version,
+                "occurred_at": record.occurred_at,
                 "payload": record.payload,
             }
         )

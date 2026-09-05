@@ -321,6 +321,21 @@ class ConfirmationRepository:
             )
             return finished
 
+    async def mark_unknown(
+        self, confirmation_id: str, now: datetime, trace_id: str | None
+    ) -> ConfirmationRecord:
+        """对账任务将长时间 RUNNING 标为 UNKNOWN，不自动判定业务失败。"""
+
+        async with self._database.engine.begin() as connection:
+            row = await self._select_for_update_unscoped(connection, confirmation_id)
+            record = _record_from_row(row)
+            unknown = record.mark_unknown(now)
+            await self._update_record(connection, unknown, expected_version=record.version)
+            await self._insert_event(
+                connection, _event_for(unknown, "EXECUTION_UNKNOWN", None, trace_id=trace_id)
+            )
+            return unknown
+
     async def list_events(self, confirmation_id: str) -> list[ConfirmationEvent]:
         """返回确认单事件，不包含 Token 或精确执行参数。"""
 

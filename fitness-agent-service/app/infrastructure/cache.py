@@ -1,3 +1,4 @@
+import asyncio
 from collections.abc import AsyncIterator, Awaitable
 from contextlib import asynccontextmanager
 from typing import Any, cast
@@ -8,6 +9,25 @@ from redis.asyncio import Redis
 
 class SessionLockUnavailable(RuntimeError):
     """同一会话已有请求执行，当前请求不能并发修改会话状态。"""
+
+
+class SessionLockLost(RuntimeError):
+    """会话租约已失效，调用方必须停止后续状态写入。"""
+
+
+class SessionLockLease:
+    def __init__(self, manager: "SessionLockManager", key: str, owner: str) -> None:
+        self._manager = manager
+        self._key = key
+        self._owner = owner
+        self._lost = False
+
+    def ensure_owned(self) -> None:
+        if self._lost:
+            raise SessionLockLost("会话锁租约已失效")
+
+    def mark_lost(self) -> None:
+        self._lost = True
 
 
 class SessionLockManager:
@@ -25,20 +45,56 @@ class SessionLockManager:
     return 0
     """
 
+    _RENEW_SCRIPT = """
+    if redis.call('get', KEYS[1]) == ARGV[1] then
+        return redis.call('expire', KEYS[1], ARGV[2])
+    end
+    return 0
+    """
+
     def __init__(self, client: Redis, *, ttl_seconds: int = 60) -> None:
         self.client = client
         self.ttl_seconds = ttl_seconds
 
     @asynccontextmanager
-    async def hold(self, thread_id: str) -> AsyncIterator[None]:
+    async def hold(self, thread_id: str) -> AsyncIterator[SessionLockLease]:
         key = f"fitness:agent:session-lock:{thread_id}"
         owner = str(uuid4())
         acquired = await self.client.set(key, owner, nx=True, ex=self.ttl_seconds)
         if not acquired:
             raise SessionLockUnavailable("会话正在处理中")
+        lease = SessionLockLease(self, key, owner)
+        stop = asyncio.Event()
+
+        async def renew() -> None:
+            interval = max(1.0, self.ttl_seconds / 3)
+            while not stop.is_set():
+                try:
+                    await asyncio.wait_for(stop.wait(), timeout=interval)
+                    continue
+                except asyncio.TimeoutError:
+                    pass
+                try:
+                    renewed = await cast(
+                        Awaitable[Any],
+                        self.client.eval(
+                            self._RENEW_SCRIPT, 1, key, owner, str(self.ttl_seconds)
+                        ),
+                    )
+                except Exception:
+                    lease.mark_lost()
+                    return
+                if int(renewed or 0) != 1:
+                    lease.mark_lost()
+                    return
+
+        renew_task = asyncio.create_task(renew())
         try:
-            yield
+            yield lease
         finally:
+            stop.set()
+            renew_task.cancel()
+            await asyncio.gather(renew_task, return_exceptions=True)
             await cast(Awaitable[Any], self.client.eval(self._RELEASE_SCRIPT, 1, key, owner))
 
 

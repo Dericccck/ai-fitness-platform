@@ -13,7 +13,7 @@ from app.infrastructure.agent_context import (
     AgentIdentity,
     conversation_thread_id,
 )
-from app.infrastructure.cache import SessionLockManager, SessionLockUnavailable
+from app.infrastructure.cache import SessionLockLost, SessionLockManager, SessionLockUnavailable
 
 
 def signed_context(secret: str, **overrides: Any) -> str:
@@ -127,6 +127,17 @@ async def test_session_lock_rejects_concurrent_owner_and_releases_safely() -> No
 
     assert redis.values == {}
     assert redis.eval_calls
+
+
+@pytest.mark.asyncio
+async def test_session_lock_lease_rejects_writes_after_ownership_loss() -> None:
+    redis = FakeRedis()
+    manager = SessionLockManager(redis, ttl_seconds=60)
+
+    async with manager.hold("thread-1") as lease:
+        lease.mark_lost()
+        with pytest.raises(SessionLockLost):
+            lease.ensure_owned()
 
 
 def test_checkpoint_store_uses_psycopg_connection_scheme() -> None:

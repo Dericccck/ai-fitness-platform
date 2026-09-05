@@ -28,6 +28,9 @@ class ProactiveEventRecord:
     available_at: datetime
     locked_by: str | None
     locked_at: datetime | None
+    contract_version: int = 1
+    aggregate_version: int | None = None
+    occurred_at: datetime | None = None
 
 
 class ProactiveEventRepository:
@@ -45,10 +48,11 @@ class ProactiveEventRepository:
             text(
                 """
                 INSERT INTO agent_proactive_event_inbox (
-                    event_id, source, event_type, aggregate_id, organization_id, payload
+                    event_id, source, event_type, aggregate_id, organization_id, payload,
+                    contract_version, aggregate_version, occurred_at
                 ) VALUES (
                     :event_id, :source, :event_type, :aggregate_id, :organization_id,
-                    CAST(:payload AS JSONB)
+                    CAST(:payload AS JSONB), :contract_version, :aggregate_version, :occurred_at
                 )
                 ON CONFLICT (event_id) DO NOTHING
                 """
@@ -59,7 +63,10 @@ class ProactiveEventRepository:
                 "event_type": event.event_type,
                 "aggregate_id": event.aggregate_id,
                 "organization_id": event.organization_id,
-                "payload": json.dumps(event.payload, ensure_ascii=False),
+            "payload": json.dumps(event.payload, ensure_ascii=False),
+            "contract_version": event.contract_version,
+            "aggregate_version": event.aggregate_version,
+            "occurred_at": event.occurred_at,
             },
         )
         return int(result.rowcount or 0) == 1
@@ -182,6 +189,9 @@ def _from_row(row: Any) -> ProactiveEventRecord:
         available_at=_required_utc(row["available_at"]),
         locked_by=str(row["locked_by"]) if row["locked_by"] else None,
         locked_at=_as_utc(row["locked_at"]),
+        contract_version=int(row.get("contract_version") or 1),
+        aggregate_version=int(row["aggregate_version"]) if row.get("aggregate_version") is not None else None,
+        occurred_at=_as_utc(row.get("occurred_at")),
     )
 
 

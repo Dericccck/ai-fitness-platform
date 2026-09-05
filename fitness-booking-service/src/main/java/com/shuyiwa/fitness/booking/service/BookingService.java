@@ -66,6 +66,7 @@ public class BookingService {
         // 请求锁解决同一 request_id 的并发重试；教练日期锁解决不同请求的冲突竞态。
         repository.acquireRequestLock(actor.getRequestId());
         boolean coachLocked = false;
+        boolean studentLocked = false;
         LocalDate bookingDate = request.getStartTime().atZone(BUSINESS_ZONE).toLocalDate();
         try {
             BookingAppointmentView applied = repository.findByRequestId(actor.getRequestId()).orElse(null);
@@ -74,6 +75,8 @@ public class BookingService {
             }
             repository.acquireCoachDayLock(request.getOrganizationId(), request.getCoachId(), bookingDate);
             coachLocked = true;
+            repository.acquireStudentDayLock(request.getOrganizationId(), request.getStudentId(), bookingDate);
+            studentLocked = true;
 
             BookingRepository.ContractRecord contract = repository.findContractForUpdate(
                     request.getOrganizationId(), request.getStudentId(), request.getContractId());
@@ -107,6 +110,10 @@ public class BookingService {
                     request.getStartTime(), request.getEndTime()).isEmpty()) {
                 throw new BookingApiException(HttpStatus.CONFLICT, "教练该时间段已有预约");
             }
+            if (!repository.findStudentConflicts(request.getOrganizationId(), request.getStudentId(),
+                    request.getStartTime(), request.getEndTime(), null).isEmpty()) {
+                throw new BookingApiException(HttpStatus.CONFLICT, "学员该时间段已有预约");
+            }
             return repository.insertBooking(
                     request,
                     new BookingRepository.BookingActorData(actor.getUserId(), actor.getRequestId()),
@@ -120,6 +127,9 @@ public class BookingService {
             if (coachLocked) {
                 repository.releaseCoachDayLock(request.getOrganizationId(), request.getCoachId(), bookingDate);
             }
+            if (studentLocked) {
+                repository.releaseStudentDayLock(request.getOrganizationId(), request.getStudentId(), bookingDate);
+            }
             repository.releaseRequestLock(actor.getRequestId());
         }
     }
@@ -131,6 +141,8 @@ public class BookingService {
         requireRescheduleConfirmation(actor, request);
         repository.acquireRequestLock(actor.getRequestId());
         boolean coachLocked = false;
+        boolean studentLocked = false;
+        String lockedStudentId = null;
         LocalDate bookingDate = request.getStartTime().atZone(BUSINESS_ZONE).toLocalDate();
         try {
             BookingAppointmentView applied = repository.findByRescheduleRequestId(actor.getRequestId())
@@ -140,6 +152,7 @@ public class BookingService {
             BookingAppointmentView current = repository.findAppointmentForUpdate(
                     request.getOrganizationId(), request.getAppointmentId()).orElseThrow(
                     () -> new BookingApiException(HttpStatus.NOT_FOUND, "预约不存在或不属于当前机构"));
+            lockedStudentId = current.getUserId();
             if (!AppointmentStatusCodes.canReschedule(current.getStatus())) {
                 throw new BookingApiException(HttpStatus.CONFLICT, "当前预约状态不允许改约");
             }
@@ -156,6 +169,8 @@ public class BookingService {
 
             repository.acquireCoachDayLock(request.getOrganizationId(), request.getCoachId(), bookingDate);
             coachLocked = true;
+            repository.acquireStudentDayLock(request.getOrganizationId(), current.getUserId(), bookingDate);
+            studentLocked = true;
             BookingRepository.ContractRecord contract = repository.findContractForUpdate(
                     request.getOrganizationId(), current.getUserId(), current.getContractId());
             if (contract.status != CONTRACT_NORMAL) {
@@ -183,12 +198,19 @@ public class BookingService {
                     request.getStartTime(), request.getEndTime(), request.getAppointmentId()).isEmpty()) {
                 throw new BookingApiException(HttpStatus.CONFLICT, "教练该时间段已有预约");
             }
+            if (!repository.findStudentConflicts(request.getOrganizationId(), current.getUserId(),
+                    request.getStartTime(), request.getEndTime(), request.getAppointmentId()).isEmpty()) {
+                throw new BookingApiException(HttpStatus.CONFLICT, "学员该时间段已有预约");
+            }
             return repository.rescheduleBooking(request,
                     new BookingRepository.BookingActorData(actor.getUserId(), actor.getRequestId()),
                     actor.getConfirmation());
         } finally {
             if (coachLocked) {
                 repository.releaseCoachDayLock(request.getOrganizationId(), request.getCoachId(), bookingDate);
+            }
+            if (studentLocked) {
+                repository.releaseStudentDayLock(request.getOrganizationId(), lockedStudentId, bookingDate);
             }
             repository.releaseRequestLock(actor.getRequestId());
         }
@@ -201,6 +223,7 @@ public class BookingService {
         requireCancelConfirmation(actor, request);
         repository.acquireRequestLock(actor.getRequestId());
         boolean coachLocked = false;
+        boolean studentLocked = false;
         String lockedCoachId = null;
         LocalDate lockedDate = null;
         try {
@@ -230,6 +253,8 @@ public class BookingService {
             lockedDate = bookingDate;
             repository.acquireCoachDayLock(request.getOrganizationId(), lockedCoachId, lockedDate);
             coachLocked = true;
+            repository.acquireStudentDayLock(request.getOrganizationId(), observed.getUserId(), lockedDate);
+            studentLocked = true;
             // 创建/改约先拿教练日期锁再锁业务行；取消也遵循同样顺序，避免锁顺序反转造成死锁。
             BookingAppointmentView current = repository.findAppointmentForUpdate(
                     request.getOrganizationId(), request.getAppointmentId()).orElseThrow(
@@ -251,6 +276,9 @@ public class BookingService {
             // 取消会释放教练时间段，同时恢复课时；需要与创建/改约共用同一业务日期锁。
             if (coachLocked && lockedCoachId != null && lockedDate != null) {
                 repository.releaseCoachDayLock(request.getOrganizationId(), lockedCoachId, lockedDate);
+            }
+            if (studentLocked && lockedDate != null) {
+                repository.releaseStudentDayLock(request.getOrganizationId(), observed.getUserId(), lockedDate);
             }
             repository.releaseRequestLock(actor.getRequestId());
         }

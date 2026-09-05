@@ -8,7 +8,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any
+from typing import Any, Protocol
 
 import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
@@ -67,6 +67,16 @@ class GeneratedTrainingPlanContent(BaseModel):
     title: str = Field(min_length=1, max_length=128)
     goal_type: str = Field(min_length=1, max_length=32)
     days: list[dict[str, Any]] = Field(min_length=1, max_length=7)
+    # 模型可声明本次计划依据的稳定证据 ID；服务端会校验其确实来自本次授权检索。
+    evidence_ids: list[str] = Field(default_factory=list, max_length=20)
+
+
+class StudentTrainingContextReader(Protocol):
+    """业务 Gateway 的受控学员训练上下文读取入口。"""
+
+    async def read_training_context(
+        self, *, actor_id: str, student_id: str, organization_id: str
+    ) -> list[Any]: ...
 
 
 class TrainingPlanGenerationService:
@@ -83,6 +93,7 @@ class TrainingPlanGenerationService:
         rag_service: RagService,
         *,
         memory_service: MemoryService | None = None,
+        student_context_reader: StudentTrainingContextReader | None = None,
         max_repair_attempts: int = 1,
         max_output_tokens: int | None = None,
     ) -> None:
@@ -91,6 +102,7 @@ class TrainingPlanGenerationService:
         self.models = models
         self.rag_service = rag_service
         self.memory_service = memory_service
+        self.student_context_reader = student_context_reader
         self.max_repair_attempts = max_repair_attempts
         self.max_output_tokens = max_output_tokens
 
@@ -116,8 +128,9 @@ class TrainingPlanGenerationService:
         if not evidence.chunks:
             raise TrainingPlanGenerationError("没有检索到已发布且有权限的健身知识，无法生成草案")
 
-        memories = []
-        if self.memory_service is not None:
+        memories: list[Any] = []
+        # 本人计划才读取本人 Memory；教练代学员生成必须使用受控上下文入口。
+        if request.student_id == identity.subject and self.memory_service is not None:
             try:
                 memories = await self.memory_service.list_active(
                     identity=identity, organization_id=request.organization_id
@@ -126,8 +139,21 @@ class TrainingPlanGenerationService:
                 # Memory 是增强上下文，不应把已授权的知识检索降级成不可用；同时不能
                 # 静默把读取异常当成“没有记忆”，所以对外返回可定位的稳定错误。
                 raise TrainingPlanGenerationError("读取已确认健身 Memory 失败，未生成草案") from exc
+        elif request.student_id != identity.subject and self.student_context_reader is not None:
+            try:
+                memories = await self.student_context_reader.read_training_context(
+                    actor_id=identity.subject,
+                    student_id=request.student_id,
+                    organization_id=request.organization_id,
+                )
+            except Exception as exc:
+                raise TrainingPlanGenerationError("读取学员训练上下文失败，未生成草案") from exc
 
         content = await self._generate_content(request, evidence, memories)
+        authorized_evidence_ids = {item.citation_id for item in evidence.citations()}
+        unknown_evidence_ids = set(content.evidence_ids) - authorized_evidence_ids
+        if unknown_evidence_ids:
+            raise TrainingPlanGenerationError("生成结果引用了未授权或不存在的知识证据")
         payload = _build_create_payload(request, content)
         validated = CreateTrainingDraftToolInput.model_validate(payload)
         _validate_semantic_rules(validated, request)
@@ -138,6 +164,8 @@ class TrainingPlanGenerationService:
             "requires_coach_review": True,
             "payload": validated.model_dump(mode="json"),
             "citations": citations,
+            "context_sources": _context_sources(memories),
+            "evidence_ids": tuple(content.evidence_ids),
             "safety_note": "这是基于知识证据生成的结构化草案，不是诊断或治疗建议。",
         }
 
@@ -219,6 +247,7 @@ def _generation_prompt(
     schema = {
         "title": "字符串，计划标题",
         "goal_type": "字符串，必须与输入目标一致",
+        "evidence_ids": ["可选，填写已授权证据的 citation_id，不得伪造"],
         "days": [
             {
                 "day_number": "1 到训练日总数，连续且不重复",
@@ -309,6 +338,20 @@ def _citation_dict(citation: Any) -> dict[str, object]:
         "snippet": citation.snippet,
         "score": citation.score,
     }
+
+
+def _context_sources(memories: list[Any]) -> tuple[dict[str, object], ...]:
+    """只保留训练上下文的来源与版本，不回显私人正文。"""
+
+    return tuple(
+        {
+            "type": "TRAINING_CONTEXT",
+            "id": getattr(memory, "id", None),
+            "version": getattr(memory, "version", None),
+            "source_type": getattr(memory, "source_type", None),
+        }
+        for memory in memories
+    )
 
 
 def _safe_error_text(error: Exception) -> str:
