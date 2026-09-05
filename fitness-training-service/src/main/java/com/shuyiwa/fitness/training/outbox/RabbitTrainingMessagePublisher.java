@@ -6,7 +6,7 @@ import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import java.util.concurrent.TimeUnit;
 
-/** RabbitMQ 训练事件发布适配器；只有 broker publisher confirm 成功才完成 Outbox。 */
+/** RabbitMQ 训练事件发布适配器；只有 broker ACK 且消息可路由才完成 Outbox。 */
 public class RabbitTrainingMessagePublisher implements TrainingMessagePublisher {
     private final RabbitTemplate rabbitTemplate;
     private final TrainingOutboxProperties properties;
@@ -26,6 +26,11 @@ public class RabbitTrainingMessagePublisher implements TrainingMessagePublisher 
         if (confirm == null || !confirm.isAck()) {
             String reason = confirm == null ? "消息代理未返回确认信息" : confirm.getReason();
             throw new IllegalStateException("RabbitMQ 发布器未确认消息：" + reason);
+        }
+        // mandatory 发布中，ACK 只说明 Exchange 接收了消息。没有匹配绑定时 broker
+        // 仍可能 ACK 并通过 Return 退回，因此必须在同一 CorrelationData 上同时检查。
+        if (correlation.getReturnedMessage() != null) {
+            throw new IllegalStateException("RabbitMQ 消息不可路由（publisher return）");
         }
     }
 
