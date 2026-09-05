@@ -1,6 +1,6 @@
 # Agent 与 RAG 版本治理优化计划
 
-更新：2026-09-05。状态：第 1 批 P0 已实现、迁移已应用并通过本地回归；第 2 批已补 v2 Manifest/Trace 关联基础，并已要求预发布/生产清单绑定索引构建版本；真实流水线接入和真实评测库验收仍未完成。
+更新：2026-09-05。状态：第 1—5 批可在本地完成的代码、回归、观测评测、备份恢复、迁移、限流、容量和安全门禁已完成；第 2 批 v2 Manifest/Trace 关联基础已接入。当前只剩真实预发布/生产环境证据，以及本机 DeepSeek 网络恢复后的真实 Agent Smoke。
 
 目标：修复知识发布正确性，建立可追溯、可评测、可回退的发布组合，再用真实数据优化响应速度、Token 和存储开销。
 本计划以当前代码核对结果为准；此前讨论中的建议不自动视为已实现功能或已经证实的线上故障。
@@ -11,7 +11,7 @@
 | --- | --- | --- |
 | 发布清单 | `scripts/release_manifest_check.py` 已兼容 v1，并可生成/校验 v2 组件摘要；`scripts/build_release_components.py` 可从显式输入生成摘要，`scripts/build_runtime_release_components.py` 已从运行时代码导出四领域 Prompt 和全部 Tool Schema；TruLens 已使用正式评测发布描述校验数据集/阈值摘要；预发布/生产 v2 清单缺少 `index_build_id` 时会失败即停 | 在受控 Runner 提供真实模型制品目录和索引构建 ID 后启用 CI v2 Manifest 门禁 |
 | Trace 版本 | `app/evaluation/telemetry.py` 已记录代码、Prompt、图、知识库及 release/Manifest/build/eval 关联键 | 绑定实际内容摘要与索引构建 ID，并补真实 Trace 验收 |
-| TruLens | 路线图已有 2026-09-01 独立 PostgreSQL 真实导出验收记录 | 复验当前运行配置、写入读取和账号权限；历史成功不等于本轮通过 |
+| TruLens | 当前独立 PostgreSQL 在线 OTEL 导出已真实写入；2026-09-05 本地验收发现导出批次 `SUCCEEDED` | 生产仍需独立账号最小权限、备份/保留和访问控制证据 |
 | 文档去重 | `ingestion.py` 先按 source_uri 查已发布文档，再比较 checksum | 拆分内容变化、发布元数据变化和索引策略变化 |
 | 来源身份 | 已增加文档 owner、机构/可见范围条件及来源作用域索引；旧 PRIVATE 数据可无歧义回填 | 仍需真实 PostgreSQL 碰撞/并发验收和稳定来源 ID 设计 |
 | 重建 | `reindex_service.py` 从原件重解析，force=True，按文档原地替换 | 增加不可变构建、全库切换和恢复能力 |
@@ -141,5 +141,7 @@
 开发可在本地完成；正式认证、生产负载和生产回滚的证据仍需要对应环境，不能因本地验收成功标记生产验收通过。
 Linux/GPU OCR、短信、Push、人工转接、图片动作框选和复杂训练扩展继续按用户决定排除。
 
-当前下一步固定为第 2 批剩余工作：在受控 Runner 配置真实模型制品目录和索引构建 ID，执行 CI 可选 v2 路径并保存 Manifest 制品；同时补 TruLens 在线接收/Trace 到 Record 的真实验收。评测发布号已通过描述文件接入 CLI/Makefile/CI，预发布/生产缺少索引构建版本时已失败即停。第 1 批的真实 PostgreSQL 并发场景随后补齐。
+当前本地收口结果（2026-09-05）：`make agent-check` 为 531 passed、8 skipped；ClamAV EICAR fail-closed、安全门禁、TruLens PostgreSQL 在线导出、PostgreSQL 备份恢复、迁移升级/回滚、Redis 限流、健康接口容量和恢复检查均已真实通过。两次真实 Agent 对话未通过，Trace 明确为 `fitness.agent.generation_status=failed`，而 TruLens 导出仍成功；直接检查 `api.deepseek.com` 得到 TLS `SSL_ERROR_SYSCALL`/HTTP 000，故当前根因是本机到 DeepSeek 的网络/TLS 不可达，不是 Gateway、业务数据库或评测库。
+
+本轮新增模型失败低基数指标 `fitness_agent_model_requests_total` 和安全诊断日志（异常类型、状态码、request-id 是否存在），对外仍统一返回 503。待网络恢复后先运行真实只读四领域 Smoke，再保存 Trace 到 Record 的完整证据。预发布/生产仍需在受控 Runner 提供真实模型制品目录和 `index_build_id`，执行 CI v2 Manifest 路径；生产还需正式认证 JWKS、最小权限账号、对象存储加密/WAL/PITR、企业值班接收器、联合压测和灰度回滚。
 第 1—5 批达到门禁即结束本轮核心优化；第 6 批按数据量和保留政策安排，不无限扩展业务功能。

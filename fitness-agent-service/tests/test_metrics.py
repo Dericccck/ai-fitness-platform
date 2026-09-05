@@ -79,4 +79,18 @@ def test_trulens_export_metrics_are_low_cardinality() -> None:
     exposition = generate_latest(metrics.registry).decode()
     assert 'status="SUCCEEDED"' in exposition
     assert 'status="FAILED"' in exposition
+
+
+def test_model_request_metrics_are_low_cardinality() -> None:
+    _, metrics = build_test_app()
+    metrics.record_model_request("tool_calling", "SUCCEEDED")
+    metrics.record_model_request("tool_calling", "FAILED")
+
+    exposition = generate_latest(metrics.registry).decode()
+
+    assert (
+        'fitness_agent_model_requests_total{kind="tool_calling",status="SUCCEEDED"}' in exposition
+    )
+    assert 'fitness_agent_model_requests_total{kind="tool_calling",status="FAILED"}' in exposition
+    assert "request_id" not in exposition
     assert "trace_id" not in exposition

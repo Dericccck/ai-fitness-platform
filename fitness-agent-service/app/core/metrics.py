@@ -27,6 +27,7 @@ class HttpMetrics:
     session_summary_tokens_total: Counter
     session_summary_chars: Histogram
     operations_query_events_total: Counter
+    model_requests_total: Counter
     trulens_export_batches_total: Counter
     trulens_export_spans_total: Counter
 
@@ -136,6 +137,13 @@ class HttpMetrics:
                 namespace="fitness_agent",
                 registry=target_registry,
             ),
+            model_requests_total=Counter(
+                "model_requests_total",
+                "模型供应商请求结果；标签仅使用回合类型和固定状态。",
+                labelnames=("kind", "status"),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
             trulens_export_batches_total=Counter(
                 "trulens_export_batches_total",
                 "TruLens OTEL 在线导出批次结果；status 只允许 SUCCEEDED 或 FAILED。",
@@ -179,6 +187,14 @@ class HttpMetrics:
 
         if count > 0:
             self.operations_query_events_total.labels(event=event).inc(count)
+
+    def record_model_request(self, kind: str, status: str, count: int = 1) -> None:
+        """记录模型请求结果；禁止把模型名、请求 ID 或供应商错误正文作为标签。"""
+
+        if status not in {"SUCCEEDED", "FAILED"}:
+            raise ValueError("模型请求状态必须为 SUCCEEDED 或 FAILED")
+        if count > 0:
+            self.model_requests_total.labels(kind=kind, status=status).inc(count)
 
     def record_trulens_export(self, status: str, span_count: int) -> None:
         """记录 TruLens 导出结果；不记录 Trace、记录或用户标识。"""

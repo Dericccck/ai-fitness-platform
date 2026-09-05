@@ -2167,5 +2167,6 @@ Memory 候选批准/拒绝使用按候选固定的决定请求 ID，通知标记
 
 当前已验证两项低风险优化：启动阶段预热本地 Embedding/Reranker；移除不参与校验的 Tool Schema 展示元数据；RAG 仍保留 Top-K、
 服务端 ACL 和 Reranker，只对超长父章节围绕命中 chunk 做有界截取。固定只读问题的开发机实测由约 19.22 秒降至约 8.53 秒，
-输入 Token 由约 18,908 降至约 10,685；该结果是性能基线，不代表生产 SLO 承诺。完整 `agent-check` 和 RAG 离线评测通过，
-需要本机 ClamAV/TruLens PostgreSQL 网络权限的真实门禁仍需在权限恢复后补跑。
+输入 Token 由约 18,908 降至约 10,685；该结果是性能基线，不代表生产 SLO 承诺。完整 `agent-check` 和 RAG 离线评测通过。
+2026-09-05 已真实补跑本地 ClamAV、TruLens PostgreSQL、备份恢复、迁移、限流、容量和恢复门禁；真实 Agent Smoke 暂受 DeepSeek TLS 网络不可达阻塞，
+详见 [`docs/agent-rag-versioning-optimization-plan.md`](agent-rag-versioning-optimization-plan.md)。

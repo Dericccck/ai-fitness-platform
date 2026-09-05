@@ -81,9 +81,7 @@ def create_app(
             raise HTTPException(status_code=504, detail="OCR 推理超时") from exc
         except (OcrEngineUnavailable, OcrEngineError) as exc:
             logger.exception("OCR 请求失败")
-            raise HTTPException(
-                status_code=503, detail="OCR 引擎处理文档失败"
-            ) from exc
+            raise HTTPException(status_code=503, detail="OCR 引擎处理文档失败") from exc
 
     app.state.ocr = AppState(resolved_settings, resolved_engine)
     return app

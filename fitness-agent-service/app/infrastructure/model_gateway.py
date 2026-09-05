@@ -3,10 +3,14 @@ import json
 from dataclasses import dataclass
 from typing import Any
 
+import structlog
 from openai import AsyncOpenAI, OpenAIError
 
 from app.core.config import Settings
+from app.core.metrics import HttpMetrics
 from app.evaluation.telemetry import TruLensTelemetry
+
+_logger = structlog.get_logger("agent.model_gateway")
 
 
 class ModelConfigurationError(RuntimeError):
@@ -45,6 +49,13 @@ class JsonModelTurn:
     output_tokens: int | None = None
 
 
+def _provider_status_code(error: OpenAIError) -> int | None:
+    """提取供应商 HTTP 状态码；异常对象不一定携带该字段。"""
+
+    value = getattr(error, "status_code", None)
+    return value if isinstance(value, int) and 100 <= value <= 599 else None
+
+
 class ModelGateway:
     """DeepSeek LLM 与 Embedding 的统一模型网关。
 
@@ -56,9 +67,15 @@ class ModelGateway:
     结构化输出的响应格式稳定。
     """
 
-    def __init__(self, settings: Settings, telemetry: TruLensTelemetry | None = None) -> None:
+    def __init__(
+        self,
+        settings: Settings,
+        telemetry: TruLensTelemetry | None = None,
+        metrics: HttpMetrics | None = None,
+    ) -> None:
         self.settings = settings
         self.telemetry = telemetry or TruLensTelemetry.disabled()
+        self.metrics = metrics
 
         # AsyncOpenAI 构造时要求非空密钥，因此未配置环境使用不可用占位值完成
         # 对象装配。chat/embed 会在任何网络请求发生前检查 configured 并明确抛错，
@@ -273,11 +290,25 @@ class ModelGateway:
             try:
                 response = await self._llm.chat.completions.create(**request)
             except OpenAIError as exc:
+                if self.metrics is not None:
+                    self.metrics.record_model_request(kind, "FAILED")
                 self.telemetry.set_attributes(
                     generation_span,
                     {"fitness.agent.generation_status": "failed"},
                 )
+                # 只记录稳定、低敏感度的供应商故障元数据。异常正文可能包含 URL、请求
+                # 片段或供应商回显，因此禁止直接写入日志；对外 API 仍只返回统一 503。
+                _logger.warning(
+                    "model_provider_request_failed",
+                    generation_kind=kind,
+                    model=self.settings.llm_model,
+                    provider_error_type=type(exc).__name__,
+                    provider_status_code=_provider_status_code(exc),
+                    provider_request_id_present=bool(getattr(exc, "request_id", None)),
+                )
                 raise ModelResponseError("LLM 服务请求失败") from exc
+            if self.metrics is not None:
+                self.metrics.record_model_request(kind, "SUCCEEDED")
             usage = getattr(response, "usage", None)
             self.telemetry.set_attributes(
                 generation_span,

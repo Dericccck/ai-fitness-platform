@@ -110,7 +110,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             timeout_seconds=settings.gateway_context_verification_jwks_timeout_seconds,
         ),
     )
-    app.state.models = ModelGateway(settings, telemetry=app.state.trulens_telemetry)
+    app.state.models = ModelGateway(
+        settings,
+        telemetry=app.state.trulens_telemetry,
+        metrics=http_metrics,
+    )
     app.state.reranker = RerankerClient(settings)
     app.state.knowledge_repository = KnowledgeRepository(app.state.database)
     parser_registry = DocumentParserRegistry(

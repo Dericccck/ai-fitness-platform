@@ -53,10 +53,14 @@ git switch -c codex/agent-perf-baseline-check agent-perf-baseline-20260904
 
 正式环境由发布系统切回上一份不可变镜像和配置版本，并重新执行健康检查、Smoke、权限和数据兼容性检查。回退完成后继续保留失败版本的 Trace 与评测记录，用于定位是延迟、Token、召回还是答案质量导致拒绝发布。
 
+## 2026-09-05 本地收口记录
+
+本轮本地可执行门禁已真实补跑：ClamAV 安全扫描、独立 TruLens PostgreSQL 在线 OTEL 导出、PostgreSQL 逻辑备份恢复、迁移升级/回滚、Redis 固定窗口限流、健康接口容量和 Agent/Redis/RabbitMQ/Checkpoint 恢复检查均通过；完整 `make agent-check` 为 `531 passed, 8 skipped`。
+
+真实 Agent 对话仍受外部网络阻塞：Trace 中生成 Span 明确为 `generation_status=failed`，TruLens 导出批次为 `SUCCEEDED`，直接访问当前 `.env` 的 DeepSeek 地址得到 TLS `SSL_ERROR_SYSCALL`（HTTP 000）。这说明 503 不是评测库、Gateway 或业务数据库故障。Model Gateway 现记录低基数 `fitness_agent_model_requests_total` 和不含正文/密钥的供应商异常类型、状态码、request-id 存在性，方便网络恢复后快速定位。
+
 ## 当前未完成项
 
 2026-09-05 后续优化统一按 [Agent 与 RAG 版本治理优化计划](agent-rag-versioning-optimization-plan.md) 推进。
 发布和权限正确性第 1 批已实现；TruLens 评测发布描述已接入 CLI/Makefile/CI，v2 组件摘要生成器已完成，且预发布/生产 v2 清单已强制要求 `index_build_id`；当前继续把组件生成器接入预发布流水线，再开展独立索引切换和性能实验。
-下文网络受限记录是当时验收状态；TruLens 已有更早的本地导出成功记录，本轮仍须重新验证。
-
-本轮本地代码、RAG 离线评测和完整 Agent 回归已经通过；`agent-security-check` 与 TruLens 在线评测需要访问本机 ClamAV/PostgreSQL，当前执行环境拒绝该网络权限，因此仍需在本机权限恢复后补跑并记录结果。
+预发布/生产仍需真实模型制品与索引构建 ID、认证服务 JWKS、生产最小权限数据库账号、对象存储加密/WAL/PITR、企业值班接收器、联合压测和灰度回滚证据；Linux/GPU OCR 依用户决定继续忽略。DeepSeek 网络恢复后还需重新运行真实只读 Agent Smoke，不能用本地配置就绪替代模型可用性验收。

@@ -3,12 +3,15 @@ from unittest.mock import AsyncMock
 
 import pytest
 from openai import OpenAIError
+from prometheus_client import generate_latest
 
 from app.core.config import Settings
+from app.core.metrics import HttpMetrics
 from app.infrastructure.model_gateway import (
     ModelConfigurationError,
     ModelGateway,
     ModelResponseError,
+    _provider_status_code,
 )
 
 
@@ -148,7 +151,8 @@ async def test_model_gateway_does_not_call_provider_when_unconfigured() -> None:
 
 
 async def test_model_gateway_converts_provider_errors_to_stable_response_error() -> None:
-    gateway = ModelGateway(configured_settings())
+    metrics = HttpMetrics.create(service_name="test", service_version="test", environment="test")
+    gateway = ModelGateway(configured_settings(), metrics=metrics)
     gateway._llm.chat.completions.create = AsyncMock(side_effect=OpenAIError("provider failed"))
 
     with pytest.raises(ModelResponseError, match="LLM 服务请求失败"):
@@ -156,6 +160,13 @@ async def test_model_gateway_converts_provider_errors_to_stable_response_error()
             [{"role": "user", "content": "查询经营指标"}],
             tools=[{"type": "function", "function": {"name": "fitness_operations_v1"}}],
         )
+
+    exposition = generate_latest(metrics.registry).decode()
+    assert 'kind="tool_calling",status="FAILED"' in exposition
+
+
+def test_model_gateway_only_exposes_valid_provider_status_codes() -> None:
+    assert _provider_status_code(OpenAIError("failed")) is None
 
 
 async def test_local_embedding_warmup_runs_minimal_inference(
