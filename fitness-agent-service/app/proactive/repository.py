@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-from sqlalchemy import text
+from sqlalchemy import bindparam, text
 
 from .events import ProactiveEventMessage
 
@@ -137,6 +137,39 @@ class ProactiveEventRepository:
             {"event_id": event_id, "worker_id": worker_id},
         )
         return int(result.rowcount or 0) == 1
+
+    async def has_newer_superseding_event(
+        self,
+        connection: Any,
+        *,
+        organization_id: str,
+        aggregate_id: str,
+        aggregate_version: int | None,
+        superseding_types: tuple[str, ...],
+    ) -> bool:
+        """判断当前待办是否已被更高业务版本取代；无版本事件保持历史兼容。"""
+
+        if aggregate_version is None or not superseding_types:
+            return False
+        count = await connection.scalar(
+            text(
+                """
+                SELECT COUNT(1)
+                FROM agent_proactive_event_inbox
+                WHERE organization_id = :organization_id
+                  AND aggregate_id = :aggregate_id
+                  AND aggregate_version > :aggregate_version
+                  AND event_type IN :superseding_types
+                """
+            ).bindparams(bindparam("superseding_types", expanding=True)),
+            {
+                "organization_id": organization_id,
+                "aggregate_id": aggregate_id,
+                "aggregate_version": aggregate_version,
+                "superseding_types": superseding_types,
+            },
+        )
+        return int(count or 0) > 0
 
     async def mark_retry(
         self,

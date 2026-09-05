@@ -53,6 +53,8 @@ public final class BookingDatabaseSchema {
      */
     private static void ensureOutboxColumns(JdbcTemplate jdbc) {
         List<ColumnDefinition> columns = Arrays.asList(
+                new ColumnDefinition("aggregate_version",
+                        "BIGINT NOT NULL DEFAULT 1 AFTER organization_id"),
                 new ColumnDefinition("attempt_count",
                         "INT NOT NULL DEFAULT 0 AFTER status"),
                 new ColumnDefinition("next_attempt_at",

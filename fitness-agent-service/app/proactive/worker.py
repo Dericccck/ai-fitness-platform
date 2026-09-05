@@ -102,8 +102,22 @@ class ProactiveEventWorker:
 
     async def _process_one(self, record: ProactiveEventRecord) -> None:
         event = _event_from_record(record)
-        targets = notification_targets(event)
         async with self.database.engine.begin() as connection:
+            superseding_types = _superseding_event_types(event.event_type)
+            if await self.event_repository.has_newer_superseding_event(
+                connection,
+                organization_id=event.organization_id,
+                aggregate_id=event.aggregate_id,
+                aggregate_version=event.aggregate_version,
+                superseding_types=superseding_types,
+            ):
+                processed = await self.event_repository.mark_processed(
+                    connection, event_id=record.event_id, worker_id=self.worker_id
+                )
+                if not processed:
+                    raise RuntimeError("抑制过期主动事件时丢失了主动事件锁")
+                return
+            targets = notification_targets(event)
             suppress_stale = getattr(self.notification_repository, "suppress_stale_for_event", None)
             if suppress_stale is not None:
                 await suppress_stale(
@@ -138,6 +152,18 @@ class ProactiveEventWorker:
             )
             if not processed:
                 raise RuntimeError("处理主动事件时丢失了主动事件锁")
+
+
+def _superseding_event_types(event_type: str) -> tuple[str, ...]:
+    """只抑制已失效的当前待办，不把所有较旧历史事件一概丢弃。"""
+
+    if event_type == "APPOINTMENT_CREATED":
+        return ("APPOINTMENT_RESCHEDULED", "APPOINTMENT_CANCELLED")
+    if event_type == "APPOINTMENT_RESCHEDULED":
+        return ("APPOINTMENT_RESCHEDULED", "APPOINTMENT_CANCELLED")
+    if event_type == "TRAINING_PLAN_REVIEW_REQUIRED":
+        return ("TRAINING_PLAN_PUBLISHED",)
+    return ()
 
 
 def _event_from_record(record: ProactiveEventRecord) -> ProactiveEventMessage:

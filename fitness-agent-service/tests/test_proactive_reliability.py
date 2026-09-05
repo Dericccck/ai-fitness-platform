@@ -177,8 +177,9 @@ async def test_inbox_transaction_failure_does_not_ack_message() -> None:
 
 
 class _FakeProactiveRepository:
-    def __init__(self, record: ProactiveEventRecord) -> None:
+    def __init__(self, record: ProactiveEventRecord, *, superseded: bool = False) -> None:
         self.record = record
+        self.superseded = superseded
         self.claim_count = 0
         self.retry_events: list[str] = []
         self.processed_events: list[str] = []
@@ -204,6 +205,9 @@ class _FakeProactiveRepository:
     async def mark_processed(self, connection: Any, *, event_id: str, worker_id: str) -> bool:
         self.processed_events.append(event_id)
         return True
+
+    async def has_newer_superseding_event(self, connection: Any, **kwargs: Any) -> bool:
+        return self.superseded
 
 
 class _FakeNotificationRepository:
@@ -239,6 +243,7 @@ def _record() -> ProactiveEventRecord:
         available_at=now,
         locked_by="worker-1",
         locked_at=now,
+        aggregate_version=1,
     )
 
 
@@ -282,3 +287,21 @@ async def test_worker_failure_is_retryable_and_restart_can_finish_event() -> Non
     ]
     assert event_repository.processed_events == ["appointment-created:appointment-1"]
     assert notification_repository.enqueued_targets == ["student-1", "coach-1"]
+
+
+@pytest.mark.asyncio
+async def test_out_of_order_old_todo_is_processed_without_notification() -> None:
+    """更高版本取消事件已入 Inbox 时，迟到的创建提醒不能再投递。"""
+
+    database = _FakeDatabase()
+    event_repository = _FakeProactiveRepository(_record(), superseded=True)
+    notification_repository = _FakeNotificationRepository()
+    worker = ProactiveEventWorker(
+        database, event_repository, notification_repository, worker_id="worker-1"
+    )
+
+    result = await worker.run_once()
+
+    assert result.processed == 1
+    assert event_repository.processed_events == ["appointment-created:appointment-1"]
+    assert notification_repository.enqueued_targets == []

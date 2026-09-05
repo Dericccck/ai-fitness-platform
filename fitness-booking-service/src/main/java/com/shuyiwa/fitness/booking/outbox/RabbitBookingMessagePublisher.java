@@ -46,12 +46,13 @@ public class RabbitBookingMessagePublisher implements BookingMessagePublisher {
      * <p>原始 payload 只包含预约业务字段，Agent 还需要事件 ID、机构和事件类型完成
      * 幂等、权限范围和通知路由，因此不能直接把原始 JSON 当作消息体发送。</p>
      */
-    private static String envelope(BookingOutboxRepository.OutboxEvent event) {
+    static String envelope(BookingOutboxRepository.OutboxEvent event) {
         return "{\"eventId\":\"" + escape(event.eventKey)
                 + "\",\"source\":\"booking\",\"eventType\":\""
                 + escape(event.eventType) + "\",\"aggregateId\":\""
                 + escape(event.aggregateId) + "\",\"organizationId\":\""
-                + escape(event.organizationId) + "\",\"contractVersion\":1,\"occurredAt\":\""
+                + escape(event.organizationId) + "\",\"contractVersion\":1,\"aggregateVersion\":"
+                + event.aggregateVersion + ",\"occurredAt\":\""
                 + event.occurredAt.toString() + "\",\"payload\":" + event.payload + "}";
     }
 

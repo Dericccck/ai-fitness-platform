@@ -4,6 +4,7 @@ import com.shuyiwa.fitness.booking.config.BookingOutboxProperties;
 import org.junit.Test;
 
 import java.util.Collections;
+import java.time.Instant;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -15,6 +16,21 @@ import static org.mockito.Mockito.when;
 
 /** 验证 Outbox 发布器的成功确认和失败重试分支，不连接真实 RabbitMQ。 */
 public class BookingOutboxPublisherTest {
+
+    @Test
+    public void envelopeCarriesBusinessAggregateVersion() {
+        BookingOutboxRepository.OutboxEvent event = new BookingOutboxRepository.OutboxEvent(
+                1L, "appointment-rescheduled:event-1", "APPOINTMENT_RESCHEDULED",
+                "appointment-1", "org-1", 4L,
+                "{\"appointmentId\":\"appointment-1\"}", 0,
+                Instant.parse("2026-09-06T02:03:04Z"));
+
+        String envelope = RabbitBookingMessagePublisher.envelope(event);
+
+        org.junit.Assert.assertTrue(envelope.contains("\"contractVersion\":1"));
+        org.junit.Assert.assertTrue(envelope.contains("\"aggregateVersion\":4"));
+        org.junit.Assert.assertTrue(envelope.contains("\"occurredAt\":\"2026-09-06T02:03:04Z\""));
+    }
 
     @Test
     public void marksEventPublishedOnlyAfterMessagePublisherReturns() throws Exception {

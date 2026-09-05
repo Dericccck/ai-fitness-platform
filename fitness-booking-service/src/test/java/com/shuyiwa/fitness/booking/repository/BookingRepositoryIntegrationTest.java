@@ -94,6 +94,7 @@ public class BookingRepositoryIntegrationTest {
                                     Instant.parse("2026-09-01T05:00:00Z"))));
             assertEquals(first.getId(), rescheduled.getId());
             assertEquals(Instant.parse("2026-09-01T04:00:00Z"), rescheduled.getStartTime());
+            assertEquals(2L, maxAggregateVersion(jdbc, first.getId()));
             assertEquals(1, remainingHours(jdbc, fixture.contractId));
 
             // 第二个预约用于验证取消第一个预约时，旧系统后续预约的 amount 快照同步加回 1。
@@ -113,6 +114,7 @@ public class BookingRepositoryIntegrationTest {
             assertEquals(1, countActiveAppointments(jdbc, fixture.contractId, fixture.studentId));
             assertEquals("1", appointmentAmount(jdbc, second.getId()));
             assertEquals(1, countOutboxEvents(jdbc, "APPOINTMENT_CANCELLED", rescheduled.getId()));
+            assertEquals(3L, maxAggregateVersion(jdbc, rescheduled.getId()));
 
             // 相同 request_id 重试取消只复用第一次结果，不会再次退回课时。
             BookingCancelledView cancelRetry = transaction.execute(status ->
@@ -156,6 +158,13 @@ public class BookingRepositoryIntegrationTest {
                 "SELECT COUNT(1) FROM agent_booking_outbox WHERE event_type = ? AND aggregate_id = ?",
                 Integer.class, eventType, aggregateId);
         return value == null ? 0 : value;
+    }
+
+    private static long maxAggregateVersion(JdbcTemplate jdbc, String aggregateId) {
+        Long value = jdbc.queryForObject(
+                "SELECT MAX(aggregate_version) FROM agent_booking_outbox WHERE aggregate_id = ?",
+                Long.class, aggregateId);
+        return value == null ? 0L : value;
     }
 
     private static Set<String> set(String value) {

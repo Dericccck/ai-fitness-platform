@@ -312,7 +312,8 @@ public class BookingRepository {
                 actor.requestId);
         String eventKey = "appointment-created:" + appointmentId;
         jdbc.update("INSERT INTO agent_booking_outbox "
-                        + "(event_key, event_type, aggregate_id, organization_id, payload) VALUES (?, 'APPOINTMENT_CREATED', ?, ?, ?)",
+                        + "(event_key, event_type, aggregate_id, organization_id, aggregate_version, payload) "
+                        + "VALUES (?, 'APPOINTMENT_CREATED', ?, ?, 1, ?)",
                 eventKey, appointmentId, request.getOrganizationId(),
                 "{\"appointmentId\":\"" + escapeJson(appointmentId) + "\",\"studentId\":\""
                         + escapeJson(request.getStudentId()) + "\",\"coachId\":\"" + escapeJson(request.getCoachId()) + "\"}");
@@ -342,16 +343,19 @@ public class BookingRepository {
         jdbc.update("INSERT INTO agent_booking_audit (appointment_id, organization_id, action, actor_id, request_id) "
                         + "VALUES (?, ?, 'RESCHEDULE_APPOINTMENT', ?, ?)", request.getAppointmentId(),
                 request.getOrganizationId(), actor.userId, actor.requestId);
+        BookingAppointmentView updatedAppointment = findByAppointmentId(request.getAppointmentId()).orElseThrow(
+                () -> new IllegalStateException("改约写入后无法读取"));
         String eventKey = "appointment-rescheduled:" + UUID.randomUUID().toString().replace("-", "");
         jdbc.update("INSERT INTO agent_booking_outbox "
-                        + "(event_key, event_type, aggregate_id, organization_id, payload) VALUES "
-                        + "(?, 'APPOINTMENT_RESCHEDULED', ?, ?, ?)", eventKey, request.getAppointmentId(),
-                request.getOrganizationId(), "{\"appointmentId\":\"" + escapeJson(request.getAppointmentId())
+                        + "(event_key, event_type, aggregate_id, organization_id, aggregate_version, payload) VALUES "
+                        + "(?, 'APPOINTMENT_RESCHEDULED', ?, ?, ?, ?)", eventKey, request.getAppointmentId(),
+                request.getOrganizationId(), nextAggregateVersion(request.getAppointmentId()),
+                "{\"appointmentId\":\"" + escapeJson(request.getAppointmentId())
+                        + "\",\"studentId\":\"" + escapeJson(updatedAppointment.getUserId())
                         + "\",\"coachId\":\"" + escapeJson(request.getCoachId())
                         + "\",\"startTime\":\"" + request.getStartTime()
                         + "\",\"endTime\":\"" + request.getEndTime() + "\"}");
-        return findByAppointmentId(request.getAppointmentId()).orElseThrow(
-                () -> new IllegalStateException("改约写入后无法读取"));
+        return updatedAppointment;
     }
 
     @Transactional
@@ -390,16 +394,28 @@ public class BookingRepository {
         jdbc.update("INSERT INTO agent_booking_audit (appointment_id, organization_id, action, actor_id, request_id) "
                         + "VALUES (?, ?, 'CANCEL_APPOINTMENT', ?, ?)", request.getAppointmentId(),
                 request.getOrganizationId(), actor.userId, actor.requestId);
+        BookingCancelledView cancelledAppointment = findCancelledByAppointmentId(request.getAppointmentId())
+                .orElseThrow(() -> new IllegalStateException("取消预约写入后无法读取"));
         String eventKey = "appointment-cancelled:" + UUID.randomUUID().toString().replace("-", "");
         jdbc.update("INSERT INTO agent_booking_outbox "
-                        + "(event_key, event_type, aggregate_id, organization_id, payload) VALUES "
-                        + "(?, 'APPOINTMENT_CANCELLED', ?, ?, ?)", eventKey, request.getAppointmentId(),
-                request.getOrganizationId(), "{\"appointmentId\":\""
+                        + "(event_key, event_type, aggregate_id, organization_id, aggregate_version, payload) VALUES "
+                        + "(?, 'APPOINTMENT_CANCELLED', ?, ?, ?, ?)", eventKey, request.getAppointmentId(),
+                request.getOrganizationId(), nextAggregateVersion(request.getAppointmentId()),
+                "{\"appointmentId\":\""
                         + escapeJson(request.getAppointmentId()) + "\",\"contractId\":\""
                         + escapeJson(contract.id) + "\",\"remainingClassHours\":"
-                        + (contract.remainingClassHours + 1) + "}");
-        return findCancelledByAppointmentId(request.getAppointmentId()).orElseThrow(
-                () -> new IllegalStateException("取消预约写入后无法读取"));
+                        + (contract.remainingClassHours + 1) + ",\"studentId\":\""
+                        + escapeJson(cancelledAppointment.getUserId()) + "\",\"coachId\":\""
+                        + escapeJson(cancelledAppointment.getCoachId()) + "\"}");
+        return cancelledAppointment;
+    }
+
+    private long nextAggregateVersion(String appointmentId) {
+        Long next = jdbc.queryForObject(
+                "SELECT COALESCE(MAX(aggregate_version), 0) + 1 FROM agent_booking_outbox "
+                        + "WHERE aggregate_id = ?",
+                new Object[]{appointmentId}, Long.class);
+        return next == null ? 1L : next;
     }
 
     private Optional<BookingAppointmentView> findByAppointmentId(String appointmentId) {
