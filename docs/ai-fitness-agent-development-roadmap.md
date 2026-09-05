@@ -2152,3 +2152,15 @@ Memory 候选批准/拒绝使用按候选固定的决定请求 ID，通知标记
 `total_documents/processed_documents/succeeded_documents/skipped_documents/failed_documents`，不再读取不存在的旧 `*_items` 字段。
 前端仍不接入短信、Push、人工转接、图片动作标注、复杂训练扩展和 Linux/GPU OCR；训练计划、预约、客服的业务结果继续通过 Agent 对话和确认单展示，避免在后端尚未提供稳定结构化 Schema 前制造错误数据模型。
 本轮 `make web-check` 通过（TypeScript 类型检查、Vite 生产构建和 `git diff --check`）；生产认证/BFF、预发布联合验收和真实浏览器端到端验收仍需部署环境完成。
+
+## 性能优化与回退基线（2026-09-04）
+
+性能优化改为独立提交、固定问题复测和质量门禁流程，详细记录见
+[`docs/agent-performance-optimization.md`](agent-performance-optimization.md)。优化前基线已保存为 Git 标签
+`agent-perf-baseline-20260904`（提交 `98dbad2`），后续如果检索召回、答案完整性、安全性或工具选择下降，直接拒绝采用该版本，
+并通过 `git revert` 或发布系统切回上一份不可变版本。
+
+当前已验证两项低风险优化：启动阶段预热本地 Embedding/Reranker；移除不参与校验的 Tool Schema 展示元数据；RAG 仍保留 Top-K、
+服务端 ACL 和 Reranker，只对超长父章节围绕命中 chunk 做有界截取。固定只读问题的开发机实测由约 19.22 秒降至约 8.53 秒，
+输入 Token 由约 18,908 降至约 10,685；该结果是性能基线，不代表生产 SLO 承诺。完整 `agent-check` 和 RAG 离线评测通过，
+需要本机 ClamAV/TruLens PostgreSQL 网络权限的真实门禁仍需在权限恢复后补跑。
