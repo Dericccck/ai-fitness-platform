@@ -366,6 +366,36 @@ class MemoryRepository:
             )
         return [memory_from_row(row) for row in rows]
 
+    async def list_training_context_for_authorized_subject(
+        self, *, subject_user_id: str, organization_id: str
+    ) -> list[FitnessMemory]:
+        """读取已由 Gateway 授权的目标学员训练白名单，不包含沟通等无关偏好。"""
+
+        if not subject_user_id.strip() or not organization_id.strip():
+            raise ValueError("目标学员和机构不能为空")
+        statement = text(
+            """
+            SELECT * FROM agent_memories
+            WHERE subject_user_id = :subject_user_id
+              AND organization_id = :organization_id
+              AND memory_type IN (
+                  'TRAINING_GOAL', 'TRAINING_PREFERENCE',
+                  'EQUIPMENT_AVAILABILITY', 'SCHEDULE_PREFERENCE'
+              )
+              AND status = 'ACTIVE'
+              AND (expires_at IS NULL OR expires_at > CURRENT_TIMESTAMP)
+            ORDER BY memory_type, memory_key, updated_at DESC
+            """
+        )
+        async with self._database.engine.connect() as connection:
+            rows = (
+                await connection.execute(
+                    statement,
+                    {"subject_user_id": subject_user_id, "organization_id": organization_id},
+                )
+            ).mappings().all()
+        return [memory_from_row(row) for row in rows]
+
     async def revoke(
         self,
         *,

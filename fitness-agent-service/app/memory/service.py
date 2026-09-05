@@ -150,6 +150,18 @@ class MemoryService:
         validate_memory_owner(identity, organization_id)
         return await self.repository.list_active(identity=identity, organization_id=organization_id)
 
+    async def list_authorized_student_training_context(
+        self, *, student_id: str, organization_id: str
+    ) -> list[FitnessMemory]:
+        """仅供 Gateway 已批准的代读流程使用，不接受伪造 AgentIdentity。"""
+
+        if not student_id.strip() or not organization_id.strip():
+            raise MemoryValidationError("目标学员和机构不能为空")
+        return await self.repository.list_training_context_for_authorized_subject(
+            subject_user_id=student_id,
+            organization_id=organization_id,
+        )
+
     async def get_for_subject(self, *, identity: AgentIdentity, memory_id: str) -> FitnessMemory:
         """读取本人 Memory 的完整领域对象，机构由数据库主体范围决定。"""
 

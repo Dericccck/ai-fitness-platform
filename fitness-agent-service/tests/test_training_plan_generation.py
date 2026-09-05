@@ -10,6 +10,7 @@ from app.agent.training_plan_generation import (
     TrainingPlanGenerationService,
 )
 from app.infrastructure.agent_context import AgentIdentity
+from app.infrastructure.gateway_client import GatewayRequestContext
 from app.memory.models import FitnessMemory
 from app.rag.models import KnowledgeChunk
 from app.rag.service import RagSearchResult
@@ -95,8 +96,14 @@ class FakeStudentContext:
     calls: list[tuple[str, str, str]]
 
     async def read_training_context(
-        self, *, actor_id: str, student_id: str, organization_id: str
+        self,
+        *,
+        actor_id: str,
+        student_id: str,
+        organization_id: str,
+        gateway_context: GatewayRequestContext,
     ) -> list[FitnessMemory]:
+        assert gateway_context.signed_context == "signed-context"
         self.calls.append((actor_id, student_id, organization_id))
         return self.memories
 
@@ -287,7 +294,9 @@ async def test_generation_uses_controlled_student_context_reader() -> None:
         models, FakeRag(evidence()), student_context_reader=reader  # type: ignore[arg-type]
     )
 
-    result = await service.generate(request(), IDENTITY)
+    result = await service.generate(
+        request(), IDENTITY, GatewayRequestContext(signed_context="signed-context")
+    )
 
     assert reader.calls == [("coach-1", "student-1", "org-1")]
     assert result["context_sources"][0]["version"] == 3

@@ -14,6 +14,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.infrastructure.agent_context import AgentIdentity
+from app.infrastructure.gateway_client import GatewayClient, GatewayRequestContext
 from app.infrastructure.model_gateway import ModelGateway, ModelResponseError
 from app.memory.service import MemoryService
 from app.rag.models import RetrievalScope
@@ -31,9 +32,9 @@ class TrainingPlanGenerationError(RuntimeError):
 class TrainingPlanGenerationInput(BaseModel):
     """生成草案所需的目标和业务归属。
 
-    organization_id、student_id、coach_id 只用于形成后续草案预览，不在 Python Agent
-    中承担授权职责。它们最终必须由现有创建草案工具再次提交 Java Gateway，由 Gateway
-    根据签名 AgentContext、资源关系和角色做最终校验。
+    organization_id、student_id、coach_id 用于形成后续草案预览；跨主体读取训练上下文
+    时会先交给 Java Gateway 校验机构和教练学员关系。真正创建草案时仍由 Gateway
+    根据签名 AgentContext、资源关系和角色再次完成写入授权。
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -75,8 +76,42 @@ class StudentTrainingContextReader(Protocol):
     """业务 Gateway 的受控学员训练上下文读取入口。"""
 
     async def read_training_context(
-        self, *, actor_id: str, student_id: str, organization_id: str
+        self,
+        *,
+        actor_id: str,
+        student_id: str,
+        organization_id: str,
+        gateway_context: GatewayRequestContext,
     ) -> list[Any]: ...
+
+
+class GatewayStudentTrainingContextReader:
+    """先由 Java 校验关系，再从 Agent 仓储读取目标学员的训练白名单。"""
+
+    def __init__(self, gateway: GatewayClient, memory_service: MemoryService) -> None:
+        self.gateway = gateway
+        self.memory_service = memory_service
+
+    async def read_training_context(
+        self,
+        *,
+        actor_id: str,
+        student_id: str,
+        organization_id: str,
+        gateway_context: GatewayRequestContext,
+    ) -> list[Any]:
+        access = await self.gateway.authorize_student_training_context(
+            gateway_context, organization_id, student_id
+        )
+        if (
+            access.actor_id != actor_id
+            or access.student_id != student_id
+            or access.organization_id != organization_id
+        ):
+            raise TrainingPlanGenerationError("Gateway 返回的学员训练上下文授权范围不匹配")
+        return await self.memory_service.list_authorized_student_training_context(
+            student_id=student_id, organization_id=organization_id
+        )
 
 
 class TrainingPlanGenerationService:
@@ -110,6 +145,7 @@ class TrainingPlanGenerationService:
         self,
         request: TrainingPlanGenerationInput,
         identity: AgentIdentity,
+        gateway_context: GatewayRequestContext | None = None,
     ) -> dict[str, object]:
         """生成只读草案预览，并返回可追溯的知识引用。"""
 
@@ -140,11 +176,14 @@ class TrainingPlanGenerationService:
                 # 静默把读取异常当成“没有记忆”，所以对外返回可定位的稳定错误。
                 raise TrainingPlanGenerationError("读取已确认健身 Memory 失败，未生成草案") from exc
         elif request.student_id != identity.subject and self.student_context_reader is not None:
+            if gateway_context is None:
+                raise TrainingPlanGenerationError("代学员生成计划需要当前签名 GatewayContext")
             try:
                 memories = await self.student_context_reader.read_training_context(
                     actor_id=identity.subject,
                     student_id=request.student_id,
                     organization_id=request.organization_id,
+                    gateway_context=gateway_context,
                 )
             except Exception as exc:
                 raise TrainingPlanGenerationError("读取学员训练上下文失败，未生成草案") from exc

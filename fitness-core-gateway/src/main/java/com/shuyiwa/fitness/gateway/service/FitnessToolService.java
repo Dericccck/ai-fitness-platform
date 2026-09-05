@@ -95,6 +95,26 @@ public class FitnessToolService {
     }
 
     /**
+     * 校验操作者能否读取目标学员的白名单训练上下文。返回值只是一张授权收据，
+     * Memory 正文仍由 Agent 自己的受控仓储读取，避免 Gateway 接触私人文本。
+     */
+    public ToolViews.StudentTrainingContextAccessView studentTrainingContextAccess(
+            AgentContext context, String organizationId, String requestedStudentId
+    ) {
+        requireOrganization(context, organizationId);
+        String studentId = resolveUserForRead(context, organizationId, requestedStudentId);
+        if (!repository.isOrganizationMember(organizationId, studentId)) {
+            throw new GatewayForbiddenException("目标学员不是当前机构成员");
+        }
+        String accessType = context.getSubjectUserId().equals(studentId)
+                ? "SELF"
+                : context.hasRole(AgentContext.ROLE_COACH) ? "ASSIGNED_COACH" : "ADMIN";
+        return new ToolViews.StudentTrainingContextAccessView(
+                organizationId, context.getSubjectUserId(), studentId, accessType
+        );
+    }
+
+    /**
      * 预约写入前的只读预检。
      *
      * <p>预检包含组织、学员、教练、时间范围、教练冲突和非营业日判断。它不会锁定

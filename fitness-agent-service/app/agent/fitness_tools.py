@@ -974,7 +974,9 @@ def build_fitness_tool_registry(
         if context.identity is None:
             raise TrainingPlanGenerationError("生成训练计划需要已验证的 AgentContext")
         return await plan_generator.generate(
-            cast(TrainingPlanGenerationInput, raw), context.identity
+            cast(TrainingPlanGenerationInput, raw),
+            context.identity,
+            context.gateway_context,
         )
 
     async def list_memories(raw: BaseModel, context: ToolContext) -> object:

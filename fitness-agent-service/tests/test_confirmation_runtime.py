@@ -121,7 +121,10 @@ class FakePlanGenerator:
         self.payload = payload
         self.identities: list[str] = []
 
-    async def generate(self, request: Any, identity: AgentIdentity) -> dict[str, object]:
+    async def generate(
+        self, request: Any, identity: AgentIdentity, gateway_context: GatewayRequestContext
+    ) -> dict[str, object]:
+        assert gateway_context.signed_context == "signed-context"
         self.identities.append(identity.subject)
         return {
             "status": "DRAFT_PREVIEW",

@@ -79,6 +79,34 @@ async def test_client_sends_service_and_signed_context_headers() -> None:
     assert user.id == "user-1"
 
 
+async def test_client_requests_scoped_student_training_context_access() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/internal/agent-tools/v1/training-context-access"
+        assert request.url.params["organizationId"] == "org-1"
+        assert request.url.params["studentId"] == "student-1"
+        assert request.headers["X-Agent-Context"] == "signed-context"
+        return httpx.Response(
+            200,
+            json={
+                "organizationId": "org-1",
+                "actorId": "coach-1",
+                "studentId": "student-1",
+                "accessType": "ASSIGNED_COACH",
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://gateway.test"
+    ) as http_client:
+        client = GatewayClient(build_settings(), http_client)
+        access = await client.authorize_student_training_context(
+            context(), "org-1", "student-1"
+        )
+
+    assert access.actor_id == "coach-1"
+    assert access.access_type == "ASSIGNED_COACH"
+
+
 async def test_client_retries_transient_gateway_failures() -> None:
     calls = 0
 

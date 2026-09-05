@@ -100,6 +100,13 @@ class GatewayOrganization(_GatewayModel):
     organization_type: str | None = Field(default=None, alias="organizationType")
 
 
+class GatewayStudentTrainingContextAccess(_GatewayModel):
+    organization_id: str = Field(alias="organizationId")
+    actor_id: str = Field(alias="actorId")
+    student_id: str = Field(alias="studentId")
+    access_type: Literal["SELF", "ASSIGNED_COACH", "ADMIN"] = Field(alias="accessType")
+
+
 class GatewayCourse(_GatewayModel):
     id: str
     name: str | None = None
@@ -387,6 +394,21 @@ class GatewayClient:
                 "excludeAppointmentId": exclude_appointment_id,
             },
             GatewayBookingAvailability,
+        )
+
+    async def authorize_student_training_context(
+        self,
+        context: GatewayRequestContext,
+        organization_id: str,
+        student_id: str,
+    ) -> GatewayStudentTrainingContextAccess:
+        """由 Java Gateway 按当前签名身份校验目标学员关系。"""
+
+        return await self._get(
+            "/internal/agent-tools/v1/training-context-access",
+            context,
+            {"organizationId": organization_id, "studentId": student_id},
+            GatewayStudentTrainingContextAccess,
         )
 
     async def query_operations_metric(

@@ -11,7 +11,10 @@ from starlette.responses import Response
 from app.agent.fitness_tools import build_fitness_tool_registry
 from app.agent.operations_audit import OperationsAuditRepository
 from app.agent.supervisor import Supervisor
-from app.agent.training_plan_generation import TrainingPlanGenerationService
+from app.agent.training_plan_generation import (
+    GatewayStudentTrainingContextReader,
+    TrainingPlanGenerationService,
+)
 from app.api.middleware.request_context import RequestContextMiddleware
 from app.api.routes.admin_knowledge import router as admin_knowledge_router
 from app.api.routes.admin_notifications import router as admin_notifications_router
@@ -227,6 +230,9 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.models,
         app.state.rag_service,
         memory_service=app.state.memory_service,
+        student_context_reader=GatewayStudentTrainingContextReader(
+            app.state.gateway, app.state.memory_service
+        ),
         max_output_tokens=settings.training_plan_max_output_tokens,
     )
     app.state.tool_registry = build_fitness_tool_registry(

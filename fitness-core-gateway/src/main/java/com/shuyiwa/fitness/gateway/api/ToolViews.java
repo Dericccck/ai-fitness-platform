@@ -529,4 +529,25 @@ public final class ToolViews {
         public Instant getCreatedAt() { return createdAt; }
         public Instant getUpdatedAt() { return updatedAt; }
     }
+
+    /** 受控学员训练上下文读取授权；不包含 Memory 正文。 */
+    public static final class StudentTrainingContextAccessView {
+        private final String organizationId;
+        private final String actorId;
+        private final String studentId;
+        private final String accessType;
+
+        public StudentTrainingContextAccessView(String organizationId, String actorId,
+                                                String studentId, String accessType) {
+            this.organizationId = organizationId;
+            this.actorId = actorId;
+            this.studentId = studentId;
+            this.accessType = accessType;
+        }
+
+        public String getOrganizationId() { return organizationId; }
+        public String getActorId() { return actorId; }
+        public String getStudentId() { return studentId; }
+        public String getAccessType() { return accessType; }
+    }
 }

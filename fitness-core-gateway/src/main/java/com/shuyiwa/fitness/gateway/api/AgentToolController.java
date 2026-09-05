@@ -86,6 +86,15 @@ public class AgentToolController {
         return service.appointments(context, organizationId, userId, from, to, limit);
     }
 
+    @GetMapping("/training-context-access")
+    public ToolViews.StudentTrainingContextAccessView trainingContextAccess(
+            AgentContext context,
+            @RequestParam String organizationId,
+            @RequestParam String studentId
+    ) {
+        return service.studentTrainingContextAccess(context, organizationId, studentId);
+    }
+
     @GetMapping("/customer-service/tickets")
     public List<ToolViews.CustomerServiceTicketView> customerServiceTickets(
             AgentContext context,

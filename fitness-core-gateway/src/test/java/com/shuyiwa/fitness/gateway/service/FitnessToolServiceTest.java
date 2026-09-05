@@ -60,6 +60,38 @@ public class FitnessToolServiceTest {
     }
 
     @Test
+    public void coachMustBeAssignedBeforeReadingStudentTrainingContext() {
+        AgentContext context = context("coach-1", AgentContext.ROLE_COACH);
+        when(repository.isCoachForUser("org-1", "coach-1", "student-1")).thenReturn(false);
+
+        assertForbidden(() -> service.studentTrainingContextAccess(context, "org-1", "student-1"));
+    }
+
+    @Test
+    public void assignedCoachReceivesScopedTrainingContextAccessReceipt() {
+        AgentContext context = context("coach-1", AgentContext.ROLE_COACH);
+        when(repository.isCoachForUser("org-1", "coach-1", "student-1")).thenReturn(true);
+        when(repository.isOrganizationMember("org-1", "student-1")).thenReturn(true);
+
+        ToolViews.StudentTrainingContextAccessView result =
+                service.studentTrainingContextAccess(context, "org-1", "student-1");
+
+        assertEquals("coach-1", result.getActorId());
+        assertEquals("student-1", result.getStudentId());
+        assertEquals("ASSIGNED_COACH", result.getAccessType());
+    }
+
+    @Test
+    public void administratorCannotReadTrainingContextForNonMember() {
+        AgentContext context = context("admin-1", AgentContext.ROLE_ORGANIZATION_ADMIN);
+        when(repository.isOrganizationMember("org-1", "student-outside")).thenReturn(false);
+
+        assertForbidden(() -> service.studentTrainingContextAccess(
+                context, "org-1", "student-outside"
+        ));
+    }
+
+    @Test
     public void studentCannotReadOrganizationOutsideSignedScope() {
         AgentContext context = context("user-1", AgentContext.ROLE_STUDENT);
 
