@@ -22,6 +22,15 @@ def identity(subject: str = "coach-1") -> AgentIdentity:
 
 class FakeVerifier:
     def verify(self, token: str) -> AgentIdentity:
+        if token == "admin-context":
+            base = identity()
+            return AgentIdentity(
+                subject=base.subject,
+                organization_ids=base.organization_ids,
+                roles=frozenset({"ORGANIZATION_ADMIN"}),
+                issued_at=base.issued_at,
+                expires_at=base.expires_at,
+            )
         if token != "signed-context":
             raise ValueError("invalid token")
         return identity()
@@ -77,6 +86,16 @@ class FakeConfirmationService:
     async def revoke(self, confirmation_id: str, **kwargs: Any) -> ConfirmationRecord:
         assert confirmation_id == self.current.id
         self.current = self.current.cancel(datetime.now(UTC), kwargs["revocation_request_id"])
+        return self.current
+
+    async def reconcile_execution(self, confirmation_id: str, **kwargs: Any) -> ConfirmationRecord:
+        assert confirmation_id == self.current.id
+        self.reconcile_calls = getattr(self, "reconcile_calls", 0) + 1
+        return self.current
+
+    async def mark_execution_unknown(self, confirmation_id: str, **kwargs: Any) -> ConfirmationRecord:
+        assert confirmation_id == self.current.id
+        self.current = self.current.mark_unknown(datetime.now(UTC))
         return self.current
 
 
@@ -178,3 +197,24 @@ async def test_confirmation_revocation_rejects_extra_fields() -> None:
         )
 
     assert response.status_code == 422
+
+
+async def test_unknown_confirmation_can_be_reconciled_again() -> None:
+    service = FakeConfirmationService()
+    service.current = service.current.approve(datetime.now(UTC), "decision-1")
+    service.current = service.current.issue_credential("jti-1", datetime.now(UTC))
+    service.current = service.current.claim_execution(datetime.now(UTC))
+    service.current = service.current.mark_unknown(datetime.now(UTC))
+    app = build_app(service)
+    transport = ASGITransport(app=app)
+
+    async with AsyncClient(transport=transport, base_url="http://test") as client:
+        response = await client.post(
+            "/api/v1/agent/confirmations/confirmation-1/reconcile",
+            headers={"X-Agent-Context": "admin-context", "X-Trace-ID": "trace-reconcile"},
+            json={"reason": "再次查询下游操作结果"},
+        )
+
+    assert response.status_code == 200
+    assert response.json()["execution_status"] == "UNKNOWN"
+    assert service.reconcile_calls == 1

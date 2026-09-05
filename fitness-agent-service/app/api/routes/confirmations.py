@@ -49,7 +49,7 @@ class ConfirmationRevocationRequest(BaseModel):
 
 
 class ConfirmationReconcileRequest(BaseModel):
-    """人工对账入口目前只允许把 RUNNING 明确标为 UNKNOWN。"""
+    """人工对账入口会用稳定 operation_id 重查 RUNNING/UNKNOWN。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -205,7 +205,7 @@ async def reconcile_confirmation(
         record = await request.app.state.confirmation_service.get_for_subject(
             confirmation_id, identity
         )
-        if record.execution_status != "RUNNING":
+        if record.execution_status not in {"RUNNING", "UNKNOWN"}:
             return _to_response(record)
         # 先查下游稳定操作 ID；只有确认下游成功才补写 SUCCEEDED。
         reconciled = await request.app.state.confirmation_service.reconcile_execution(
@@ -220,9 +220,10 @@ async def reconcile_confirmation(
         )
         if reconciled.execution_status == "SUCCEEDED":
             return _to_response(reconciled)
-        reconciled = await request.app.state.confirmation_service.mark_execution_unknown(
-            confirmation_id, trace_id=x_trace_id or payload.reason
-        )
+        if reconciled.execution_status == "RUNNING":
+            reconciled = await request.app.state.confirmation_service.mark_execution_unknown(
+                confirmation_id, trace_id=x_trace_id or payload.reason
+            )
     except (ConfirmationNotFound, ConfirmationStateError) as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="确认单当前不可对账") from exc
     return _to_response(reconciled)
