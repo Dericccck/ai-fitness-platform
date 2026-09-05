@@ -184,6 +184,30 @@ class ConfirmationService:
 
         return await self.repository.mark_unknown(confirmation_id, datetime.now(UTC), trace_id)
 
+    async def reconcile_execution(
+        self,
+        confirmation_id: str,
+        *,
+        identity: AgentIdentity,
+        gateway_context: GatewayRequestContext,
+        trace_id: str | None = None,
+    ) -> ConfirmationRecord:
+        """查询下游预约操作；成功才补写确认结果，查不到仍保持 UNKNOWN/RUNNING。"""
+
+        record = await self.get_for_subject(confirmation_id, identity)
+        if record.execution_status not in {"RUNNING", "UNKNOWN"}:
+            return record
+        if not record.tool_id.startswith("fitness.booking."):
+            return record
+        operation = await self.gateway.query_booking_operation(
+            gateway_context, record.request_id
+        )
+        if operation.status == "SUCCEEDED":
+            return await self.finish_execution(
+                confirmation_id, success=True, trace_id=trace_id
+            )
+        return record
+
     async def get_for_subject(
         self, confirmation_id: str, identity: AgentIdentity
     ) -> ConfirmationRecord:

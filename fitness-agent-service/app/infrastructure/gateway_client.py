@@ -209,6 +209,12 @@ class GatewayBookingCancelled(GatewayBookingCreated):
     cancelled: bool
 
 
+class GatewayBookingOperation(_GatewayModel):
+    operation_id: str = Field(alias="operationId")
+    status: Literal["SUCCEEDED", "PROCESSING", "FAILED", "UNKNOWN"]
+    appointment: GatewayBookingCreated | None = None
+
+
 class GatewayTrainingItem(_GatewayModel):
     id: str
     exercise_name: str = Field(alias="exerciseName")
@@ -464,6 +470,18 @@ class GatewayClient:
     ) -> GatewayBookingCreated:
         return await self._post(
             "/internal/agent-tools/v1/appointments", context, payload, GatewayBookingCreated
+        )
+
+    async def query_booking_operation(
+        self, context: GatewayRequestContext, operation_id: str
+    ) -> GatewayBookingOperation:
+        if not operation_id.strip():
+            raise GatewayBadRequestError("操作 ID 不能为空")
+        return await self._get(
+            f"/internal/agent-tools/v1/booking/operations/{operation_id}",
+            context,
+            {},
+            GatewayBookingOperation,
         )
 
     async def reschedule_booking(

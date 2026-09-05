@@ -3,6 +3,7 @@ package com.shuyiwa.fitness.booking.api;
 import com.shuyiwa.fitness.booking.security.BookingActor;
 import com.shuyiwa.fitness.booking.service.BookingService;
 import org.springframework.web.bind.annotation.PathVariable;
+import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PostMapping;
 import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
@@ -37,5 +38,10 @@ public class BookingController {
         // 路径 ID 是唯一资源来源，避免请求体中的预约 ID 与 URL 不一致。
         request.setAppointmentId(appointmentId);
         return service.cancel(actor, request);
+    }
+
+    @GetMapping("/operations/{operationId}")
+    public BookingOperationView queryOperation(BookingActor actor, @PathVariable String operationId) {
+        return service.queryOperation(actor, operationId);
     }
 }

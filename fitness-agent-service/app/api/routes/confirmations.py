@@ -207,6 +207,19 @@ async def reconcile_confirmation(
         )
         if record.execution_status != "RUNNING":
             return _to_response(record)
+        # 先查下游稳定操作 ID；只有确认下游成功才补写 SUCCEEDED。
+        reconciled = await request.app.state.confirmation_service.reconcile_execution(
+            confirmation_id,
+            identity=identity,
+            gateway_context=GatewayRequestContext(
+                signed_context=x_agent_context or "",
+                request_id=record.request_id,
+                trace_id=x_trace_id,
+            ),
+            trace_id=x_trace_id,
+        )
+        if reconciled.execution_status == "SUCCEEDED":
+            return _to_response(reconciled)
         reconciled = await request.app.state.confirmation_service.mark_execution_unknown(
             confirmation_id, trace_id=x_trace_id or payload.reason
         )

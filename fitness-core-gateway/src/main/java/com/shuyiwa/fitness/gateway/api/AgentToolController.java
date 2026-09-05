@@ -168,6 +168,13 @@ public class AgentToolController {
         return bookingServiceClient.cancel(context, requestId, confirmationToken, input);
     }
 
+    @GetMapping("/booking/operations/{operationId}")
+    public ToolViews.BookingOperationView bookingOperation(
+            AgentContext context, @PathVariable String operationId
+    ) {
+        return bookingServiceClient.queryOperation(context, operationId);
+    }
+
     @GetMapping("/operations/metrics")
     public OperationsViews.MetricView operationsMetric(
             AgentContext context,

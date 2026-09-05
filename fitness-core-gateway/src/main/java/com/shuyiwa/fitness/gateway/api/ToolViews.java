@@ -178,6 +178,22 @@ public final class ToolViews {
         public String getContractId() { return contractId; }
     }
 
+    public static final class BookingOperationView {
+        private final String operationId;
+        private final String status;
+        private final BookingCreatedView appointment;
+
+        public BookingOperationView(String operationId, String status, BookingCreatedView appointment) {
+            this.operationId = operationId;
+            this.status = status;
+            this.appointment = appointment;
+        }
+
+        public String getOperationId() { return operationId; }
+        public String getStatus() { return status; }
+        public BookingCreatedView getAppointment() { return appointment; }
+    }
+
     /**
      * 客服工单稳定视图。
      *

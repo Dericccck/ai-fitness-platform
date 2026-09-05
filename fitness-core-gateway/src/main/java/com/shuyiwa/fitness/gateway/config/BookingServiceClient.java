@@ -82,6 +82,32 @@ public class BookingServiceClient {
         }
     }
 
+    public ToolViews.BookingOperationView queryOperation(AgentContext context, String operationId) {
+        if (properties.getInternalServiceToken() == null
+                || properties.getInternalServiceToken().trim().isEmpty()) {
+            throw new IllegalStateException("预约服务内部 Token 未配置");
+        }
+        HttpHeaders headers = new HttpHeaders();
+        headers.set("X-Internal-Service-Token", properties.getInternalServiceToken());
+        headers.set("X-Actor-User-Id", context.getSubjectUserId());
+        headers.set("X-Actor-Roles", String.join(",", context.getRoles()));
+        headers.set("X-Actor-Organization-Ids", String.join(",", context.getOrganizationIds()));
+        try {
+            ResponseEntity<BookingServiceViews.Operation> response = restTemplate.exchange(
+                    properties.getBaseUrl().replaceAll("/$", "") + "/internal/booking/v1/operations/" + operationId,
+                    HttpMethod.GET, new HttpEntity<>(headers), BookingServiceViews.Operation.class);
+            BookingServiceViews.Operation body = response.getBody();
+            if (body == null) throw new IllegalStateException("预约服务返回空响应");
+            ToolViews.BookingCreatedView appointment = body.appointment == null ? null : body.appointment.toToolView();
+            return new ToolViews.BookingOperationView(body.operationId, body.status, appointment);
+        } catch (HttpClientErrorException exception) {
+            if (exception.getStatusCode().value() == 403) throw new GatewayForbiddenException("操作不在授权范围内");
+            throw new GatewayResourceNotFoundException("未找到预约操作");
+        } catch (RestClientException exception) {
+            throw new IllegalStateException("预约服务暂时不可用", exception);
+        }
+    }
+
     public ToolViews.BookingCreatedView reschedule(AgentContext context, String requestId, String confirmationToken,
                                                    BookingToolInputs.RescheduleInput input) {
         if (properties.getInternalServiceToken() == null

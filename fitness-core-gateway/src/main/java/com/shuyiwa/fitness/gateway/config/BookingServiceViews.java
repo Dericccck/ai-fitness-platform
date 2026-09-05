@@ -46,4 +46,10 @@ final class BookingServiceViews {
                     courseName, startTime, endTime, status, contractId, remainingClassHours, cancelled);
         }
     }
+
+    static class Operation {
+        public String operationId;
+        public String status;
+        public Appointment appointment;
+    }
 }

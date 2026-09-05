@@ -2,6 +2,7 @@ package com.shuyiwa.fitness.booking.service;
 
 import com.shuyiwa.fitness.booking.api.BookingApiException;
 import com.shuyiwa.fitness.booking.api.BookingAppointmentView;
+import com.shuyiwa.fitness.booking.api.BookingOperationView;
 import com.shuyiwa.fitness.booking.api.BookingCancelRequest;
 import com.shuyiwa.fitness.booking.api.BookingCancelledView;
 import com.shuyiwa.fitness.booking.api.BookingCreateRequest;
@@ -49,6 +50,35 @@ public class BookingService {
     BookingService(BookingRepository repository, Clock clock) {
         this.repository = repository;
         this.clock = clock;
+    }
+
+    @Transactional(readOnly = true)
+    public BookingOperationView queryOperation(BookingActor actor, String operationId) {
+        if (operationId == null || operationId.trim().isEmpty()) {
+            throw new BookingApiException(HttpStatus.BAD_REQUEST, "操作 ID 不能为空");
+        }
+        BookingAppointmentView appointment = repository.findByRequestId(operationId).orElse(null);
+        if (appointment == null) {
+            appointment = repository.findByRescheduleRequestId(operationId).orElse(null);
+        }
+        if (appointment == null) {
+            // 取消操作的结果视图字段不同，但其 request_id 仍然是稳定业务操作 ID；
+            // 查询接口只需告诉对账器“已成功”，不泄露额外业务明细。
+            BookingCancelledView cancelled =
+                    repository.findByCancelRequestId(operationId).orElse(null);
+            if (cancelled != null) {
+                if (!actor.canAccessOrganization(cancelled.getOrganizationId())) {
+                    throw new BookingApiException(HttpStatus.FORBIDDEN, "操作不在当前主体授权范围内");
+                }
+                return new BookingOperationView(operationId, "SUCCEEDED", null);
+            }
+            // 明确返回 UNKNOWN：未查到不等于原请求没有执行，调用方应继续核实。
+            return new BookingOperationView(operationId, "UNKNOWN", null);
+        }
+        if (!actor.canAccessOrganization(appointment.getOrganizationId())) {
+            throw new BookingApiException(HttpStatus.FORBIDDEN, "操作不在当前主体授权范围内");
+        }
+        return new BookingOperationView(operationId, "SUCCEEDED", appointment);
     }
 
     @Transactional
