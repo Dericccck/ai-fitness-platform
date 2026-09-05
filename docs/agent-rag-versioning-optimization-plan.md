@@ -9,7 +9,7 @@
 
 | 项目 | 当前证据 | 下一步 |
 | --- | --- | --- |
-| 发布清单 | `scripts/release_manifest_check.py` 已兼容 v1，并可生成/校验 v2 组件摘要；`scripts/build_release_components.py` 已能从真实模型文件、Prompt 和 Tool Schema 生成组件摘要；TruLens 已使用正式评测发布描述校验数据集/阈值摘要；预发布/生产 v2 清单缺少 `index_build_id` 时会失败即停 | 将组件生成器接入流水线，注入实际模型制品、索引构建 ID 并生成正式 v2 Manifest |
+| 发布清单 | `scripts/release_manifest_check.py` 已兼容 v1，并可生成/校验 v2 组件摘要；`scripts/build_release_components.py` 可从显式输入生成摘要，`scripts/build_runtime_release_components.py` 已从运行时代码导出四领域 Prompt 和全部 Tool Schema；TruLens 已使用正式评测发布描述校验数据集/阈值摘要；预发布/生产 v2 清单缺少 `index_build_id` 时会失败即停 | 在受控 Runner 提供真实模型制品目录和索引构建 ID 后启用 CI v2 Manifest 门禁 |
 | Trace 版本 | `app/evaluation/telemetry.py` 已记录代码、Prompt、图、知识库及 release/Manifest/build/eval 关联键 | 绑定实际内容摘要与索引构建 ID，并补真实 Trace 验收 |
 | TruLens | 路线图已有 2026-09-01 独立 PostgreSQL 真实导出验收记录 | 复验当前运行配置、写入读取和账号权限；历史成功不等于本轮通过 |
 | 文档去重 | `ingestion.py` 先按 source_uri 查已发布文档，再比较 checksum | 拆分内容变化、发布元数据变化和索引策略变化 |
@@ -53,7 +53,7 @@
 - 本地 Embedding/Reranker 制品摘要覆盖模型权重、Tokenizer、模型配置和预处理设置；`build_release_components.py` 在制品准备/构建时一次性遍历并核验目录，输出只含摘要、文件数和字节数，不能每个请求遍历大文件。
 - 记录工具 Schema 摘要及兼容测试。不兼容修改才升级工具主版本，不为“补版本”盲目将所有 v1 改成 v2。
 - 固定 eval_release_id，绑定评测集、阈值、评分器代码、Judge Prompt、Judge 模型/参数；当前已有 `evals/trulens_smoke.release.json` 和 Judge 发布描述，CLI 会校验路径及 SHA-256 摘要；缺失必需指标应失败，不能自动通过。
-- Manifest 关联代码、依赖锁、镜像、图、Prompt、非敏感参数、模型、工具和评测制品；索引构建 ID 先预留，待第 3 批接入。
+- Manifest 关联代码、依赖锁、镜像、图、Prompt、非敏感参数、模型、工具和评测制品；运行时代码组件导出器已接入 CI 的可选 v2 路径，组织级变量 `AGENT_RELEASE_MODEL_ARTIFACT_ROOT` 和 `AGENT_RELEASE_INDEX_BUILD_ID` 任一出现但不完整时会失败；两者均配置后才生成并校验正式 v2 Manifest。普通 CI 在没有真实模型制品时继续使用 v1，不能用假摘要替代。
 - Trace 根节点及评测 Record 关联 release_id/manifest_digest；模型 Span 记录实际模型，检索 Span 记录实际 build_id、文档 ID 与版本。
   只有文档版本数字“1/2”不足以唯一定位引用；大清单存制品库，避免每个 Span 重复附加。
 
@@ -141,5 +141,5 @@
 开发可在本地完成；正式认证、生产负载和生产回滚的证据仍需要对应环境，不能因本地验收成功标记生产验收通过。
 Linux/GPU OCR、短信、Push、人工转接、图片动作框选和复杂训练扩展继续按用户决定排除。
 
-当前下一步固定为第 2 批剩余工作：把真实流水线模型制品摘要、索引构建 ID 和正式 v2 Manifest 接入部署产物，并补 TruLens 在线接收/Trace 到 Record 的真实验收；评测发布号已通过描述文件接入 CLI/Makefile/CI，预发布/生产缺少索引构建版本时已失败即停。第 1 批的真实 PostgreSQL 并发场景随后补齐。
+当前下一步固定为第 2 批剩余工作：在受控 Runner 配置真实模型制品目录和索引构建 ID，执行 CI 可选 v2 路径并保存 Manifest 制品；同时补 TruLens 在线接收/Trace 到 Record 的真实验收。评测发布号已通过描述文件接入 CLI/Makefile/CI，预发布/生产缺少索引构建版本时已失败即停。第 1 批的真实 PostgreSQL 并发场景随后补齐。
 第 1—5 批达到门禁即结束本轮核心优化；第 6 批按数据量和保留政策安排，不无限扩展业务功能。

@@ -108,6 +108,36 @@ jobs:
             --image "fitness-agent-service@${IMAGE_DIGEST}" \
             --expected-environment staging
 
+      # GitHub 托管 Runner 默认没有真实 Embedding/Reranker 权重，因此不生成伪造的
+      # v2 模型摘要。配置组织级变量后（通常由带制品挂载的受控 Runner 提供），才启用
+      # 运行时代码导出、真实模型制品摘要、索引构建 ID 和 v2 Manifest 的完整门禁。
+      - name: Build and validate v2 release manifest when inputs are configured
+        if: ${{ vars.AGENT_RELEASE_MODEL_ARTIFACT_ROOT != '' || vars.AGENT_RELEASE_INDEX_BUILD_ID != '' }}
+        env:
+          MODEL_ARTIFACT_ROOT: ${{ vars.AGENT_RELEASE_MODEL_ARTIFACT_ROOT }}
+          INDEX_BUILD_ID: ${{ vars.AGENT_RELEASE_INDEX_BUILD_ID }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          test -d "$MODEL_ARTIFACT_ROOT/embedding"
+          test -d "$MODEL_ARTIFACT_ROOT/reranker"
+          uv run python scripts/build_runtime_release_components.py \
+            --output "$RUNNER_TEMP/agent-release.components.json" \
+            --eval-release evals/trulens_smoke.release.json \
+            --model-artifact "embedding=$MODEL_ARTIFACT_ROOT/embedding" \
+            --model-artifact "reranker=$MODEL_ARTIFACT_ROOT/reranker" \
+            --index-build-id "$INDEX_BUILD_ID"
+          IMAGE_DIGEST="$(docker image inspect fitness-agent-service:${SOURCE_COMMIT} --format '{{.Id}}')"
+          uv run python scripts/release_manifest_check.py \
+            --build \
+            --manifest "$RUNNER_TEMP/agent-release-v2.manifest.json" \
+            --config-contract ../deployment/environments/agent.staging.env.example \
+            --schema-version 2 \
+            --components "$RUNNER_TEMP/agent-release.components.json" \
+            --environment staging \
+            --source-commit "$SOURCE_COMMIT" \
+            --image "fitness-agent-service@${IMAGE_DIGEST}" \
+            --expected-environment staging
+
   fitness-core-gateway:
     name: Fitness Core Tool Gateway
     runs-on: ubuntu-latest

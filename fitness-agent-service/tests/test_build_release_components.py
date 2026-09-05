@@ -1,6 +1,7 @@
 import json
 
 from scripts.build_release_components import main
+from scripts.build_runtime_release_components import main as runtime_main
 from scripts.release_manifest_check import artifact_tree_digest
 
 
@@ -61,4 +62,58 @@ def test_build_components_hashes_model_files_without_machine_path(tmp_path) -> N
     assert payload["eval_release_id"] == "eval-test-v1"
     assert payload["index_build_id"] == "kb-build-test-1"
     assert payload["model_artifacts"]["embedding"]["file_count"] == 2
+    assert str(tmp_path) not in output.read_text(encoding="utf-8")
+
+
+def test_runtime_components_export_actual_prompts_and_tool_schemas(tmp_path) -> None:
+    cases = tmp_path / "cases.json"
+    cases.write_text("[]\n", encoding="utf-8")
+    thresholds = tmp_path / "thresholds.json"
+    thresholds.write_text('{"answer_non_empty": 1.0}\n', encoding="utf-8")
+    cases_digest, _, _ = artifact_tree_digest(cases)
+    thresholds_digest, _, _ = artifact_tree_digest(thresholds)
+    release = tmp_path / "release.json"
+    release.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "eval_release_id": "eval-runtime-v1",
+                "dataset_path": cases.name,
+                "dataset_digest": cases_digest,
+                "thresholds_path": thresholds.name,
+                "thresholds_digest": thresholds_digest,
+            }
+        ),
+        encoding="utf-8",
+    )
+    model = tmp_path / "embedding"
+    model.mkdir()
+    (model / "config.json").write_text('{"dim": 1024}\n', encoding="utf-8")
+    output = tmp_path / "runtime-components.json"
+
+    assert (
+        runtime_main(
+            [
+                "--output",
+                str(output),
+                "--eval-release",
+                str(release),
+                "--model-artifact",
+                f"embedding={model}",
+                "--index-build-id",
+                "kb-runtime-test-1",
+            ]
+        )
+        == 0
+    )
+    payload = json.loads(output.read_text(encoding="utf-8"))
+    assert set(payload["prompts"]) == {
+        "fitness_agent",
+        "booking_agent",
+        "operations_agent",
+        "customer_service_agent",
+    }
+    assert "fitness.user.get_current.v1" in payload["tool_schemas"]
+    assert payload["index_build_id"] == "kb-runtime-test-1"
+    assert "llm_api_key" not in json.dumps(payload)
     assert str(tmp_path) not in output.read_text(encoding="utf-8")
