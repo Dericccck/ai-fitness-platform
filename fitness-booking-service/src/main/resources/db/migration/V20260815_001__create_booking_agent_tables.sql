@@ -52,3 +52,12 @@ CREATE TABLE IF NOT EXISTS agent_booking_outbox (
     UNIQUE KEY uk_agent_booking_outbox_event (event_key),
     KEY idx_agent_booking_outbox_status (status, created_at)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='预约创建事件 Outbox，供通知或消息适配器异步消费';
+
+CREATE TABLE IF NOT EXISTS agent_booking_resource_lock (
+    organization_id VARCHAR(32) NOT NULL,
+    resource_type VARCHAR(16) NOT NULL,
+    resource_id VARCHAR(64) NOT NULL,
+    resource_date DATE NOT NULL,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    PRIMARY KEY (organization_id, resource_type, resource_id, resource_date)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COMMENT='预约资源日期锁记录，行锁随事务释放';

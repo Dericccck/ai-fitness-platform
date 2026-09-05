@@ -36,7 +36,7 @@ import java.security.NoSuchAlgorithmException;
  * 预约写服务的显式 SQL 仓储。
  *
  * <p>所有会修改旧业务表的语句都在一个 InnoDB 事务中执行。合同行先锁定，再校验和扣减
- * 课时；教练日期使用 MySQL 命名锁串行化，避免两个不同请求同时通过冲突检查。</p>
+ * 课时；教练/学员日期使用资源锁记录的行锁串行化，锁会随事务提交或回滚释放。</p>
  */
 @Repository
 public class BookingRepository {
@@ -235,28 +235,37 @@ public class BookingRepository {
     }
 
     public void acquireCoachDayLock(String organizationId, String coachId, LocalDate date) {
-        String lockName = lockName("coach", organizationId + ":" + coachId + ":" + date);
-        Integer locked = jdbc.queryForObject("SELECT GET_LOCK(?, 5)", new Object[]{lockName}, Integer.class);
-        if (locked == null || locked != 1) {
-            throw new BookingApiException(HttpStatus.CONFLICT, "教练预约资源正被其他请求处理，请稍后重试");
-        }
+        acquireResourceRowLock(organizationId, "COACH", coachId, date,
+                "教练预约资源正被其他请求处理，请稍后重试");
     }
 
     public void releaseCoachDayLock(String organizationId, String coachId, LocalDate date) {
-        String lockName = lockName("coach", organizationId + ":" + coachId + ":" + date);
-        deferNamedLockRelease(lockName);
+        // 行锁由当前事务提交/回滚自动释放；保留方法以兼容现有业务编排。
     }
 
     public void acquireStudentDayLock(String organizationId, String studentId, LocalDate date) {
-        String lockName = lockName("student", organizationId + ":" + studentId + ":" + date);
-        Integer locked = jdbc.queryForObject("SELECT GET_LOCK(?, 5)", new Object[]{lockName}, Integer.class);
-        if (locked == null || locked != 1) {
-            throw new BookingApiException(HttpStatus.CONFLICT, "学员预约资源正被其他请求处理，请稍后重试");
-        }
+        acquireResourceRowLock(organizationId, "STUDENT", studentId, date,
+                "学员预约资源正被其他请求处理，请稍后重试");
     }
 
     public void releaseStudentDayLock(String organizationId, String studentId, LocalDate date) {
-        deferNamedLockRelease(lockName("student", organizationId + ":" + studentId + ":" + date));
+        // 行锁由当前事务提交/回滚自动释放；保留方法以兼容现有业务编排。
+    }
+
+    private void acquireResourceRowLock(String organizationId, String resourceType,
+                                        String resourceId, LocalDate date, String conflictMessage) {
+        try {
+            jdbc.update("INSERT IGNORE INTO agent_booking_resource_lock "
+                            + "(organization_id, resource_type, resource_id, resource_date) VALUES (?, ?, ?, ?)",
+                    organizationId, resourceType, resourceId, Date.valueOf(date));
+            Integer locked = jdbc.queryForObject(
+                    "SELECT 1 FROM agent_booking_resource_lock WHERE organization_id = ? "
+                            + "AND resource_type = ? AND resource_id = ? AND resource_date = ? FOR UPDATE",
+                    new Object[]{organizationId, resourceType, resourceId, Date.valueOf(date)}, Integer.class);
+            if (locked == null || locked != 1) throw new BookingApiException(HttpStatus.CONFLICT, conflictMessage);
+        } catch (org.springframework.dao.DataAccessException exception) {
+            throw new BookingApiException(HttpStatus.CONFLICT, conflictMessage);
+        }
     }
 
     /** MySQL 命名锁不随事务提交释放；在事务同步回调中释放，避免 finally 早于 commit。 */
