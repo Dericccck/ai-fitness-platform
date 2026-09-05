@@ -57,6 +57,13 @@ public class BookingService {
         if (operationId == null || operationId.trim().isEmpty()) {
             throw new BookingApiException(HttpStatus.BAD_REQUEST, "操作 ID 不能为空");
         }
+        BookingRepository.OperationScope scope = repository.findOperationScope(operationId).orElse(null);
+        if (scope == null) {
+            return new BookingOperationView(operationId, "UNKNOWN", null, null, null);
+        }
+        if (!actor.canAccessOrganization(scope.organizationId)) {
+            throw new BookingApiException(HttpStatus.FORBIDDEN, "操作不在当前主体授权范围内");
+        }
         BookingAppointmentView appointment = repository.findByRequestId(operationId).orElse(null);
         if (appointment == null) {
             appointment = repository.findByRescheduleRequestId(operationId).orElse(null);
@@ -67,18 +74,15 @@ public class BookingService {
             BookingCancelledView cancelled =
                     repository.findByCancelRequestId(operationId).orElse(null);
             if (cancelled != null) {
-                if (!actor.canAccessOrganization(cancelled.getOrganizationId())) {
-                    throw new BookingApiException(HttpStatus.FORBIDDEN, "操作不在当前主体授权范围内");
-                }
-                return new BookingOperationView(operationId, "SUCCEEDED", null);
+                return new BookingOperationView(operationId, "SUCCEEDED", scope.organizationId,
+                        scope.actorId, null);
             }
             // 明确返回 UNKNOWN：未查到不等于原请求没有执行，调用方应继续核实。
-            return new BookingOperationView(operationId, "UNKNOWN", null);
+            return new BookingOperationView(operationId, "UNKNOWN", scope.organizationId,
+                    scope.actorId, null);
         }
-        if (!actor.canAccessOrganization(appointment.getOrganizationId())) {
-            throw new BookingApiException(HttpStatus.FORBIDDEN, "操作不在当前主体授权范围内");
-        }
-        return new BookingOperationView(operationId, "SUCCEEDED", appointment);
+        return new BookingOperationView(operationId, "SUCCEEDED", scope.organizationId,
+                scope.actorId, appointment);
     }
 
     @Transactional

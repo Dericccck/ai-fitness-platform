@@ -53,3 +53,29 @@ async def test_reconciliation_continues_when_one_record_fails() -> None:
     assert result.scanned == 2
     assert result.marked_unknown == 1
     assert repository.marked == [("c-2", "reconciliation-worker")]
+
+
+@pytest.mark.asyncio
+async def test_unknown_booking_is_automatically_queried_until_success() -> None:
+    record = type(
+        "Record",
+        (),
+        {"id": "c-1", "execution_status": "UNKNOWN", "tool_id": "fitness.booking.create.v1"},
+    )()
+
+    class UnknownRepository(_Repository):
+        async def list_stale_running(self, *, older_than_seconds: int, limit: int):
+            return [record]
+
+    class Reconciler:
+        async def reconcile_stored_execution(self, current, *, trace_id: str):
+            assert current is record
+            assert trace_id == "reconciliation-worker"
+            return type("Result", (), {"execution_status": "SUCCEEDED"})()
+
+    result = await ConfirmationReconciliationWorker(
+        UnknownRepository(), reconciler=Reconciler()
+    ).run_once()
+
+    assert result.marked_unknown == 0
+    assert result.reconciled == 1

@@ -50,6 +50,8 @@ final class BookingServiceViews {
     static class Operation {
         public String operationId;
         public String status;
+        public String organizationId;
+        public String actorId;
         public Appointment appointment;
     }
 }

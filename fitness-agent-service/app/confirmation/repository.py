@@ -339,14 +339,14 @@ class ConfirmationRepository:
     async def list_stale_running(
         self, *, older_than_seconds: int = 300, limit: int = 100
     ) -> list[ConfirmationRecord]:
-        """列出长时间 RUNNING 的确认单，供对账任务逐条查询下游结果。"""
+        """列出长时间 RUNNING/UNKNOWN 的确认单，供对账任务持续查询下游结果。"""
 
         if older_than_seconds < 1 or limit < 1 or limit > 500:
             raise ValueError("对账扫描参数无效")
         statement = text(
             """
             SELECT * FROM agent_action_confirmations
-            WHERE execution_status = 'RUNNING'
+            WHERE execution_status IN ('RUNNING', 'UNKNOWN')
               AND execution_started_at <= CURRENT_TIMESTAMP - (:age * INTERVAL '1 second')
             ORDER BY execution_started_at, id
             LIMIT :limit

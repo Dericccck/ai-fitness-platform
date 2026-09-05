@@ -228,19 +228,20 @@ class ConfirmationRecord:
     def finish_success(self, now: datetime) -> ConfirmationRecord:
         """记录业务工具真实返回成功。"""
 
-        if self.execution_status != "RUNNING":
-            raise ConfirmationStateError("只有执行中的操作才能标记为成功")
+        if self.execution_status not in {"RUNNING", "UNKNOWN"}:
+            raise ConfirmationStateError("只有执行中或结果未知的操作才能标记为成功")
         return self._replace(
             execution_status="SUCCEEDED",
             finished_at=now,
+            last_error_code=None,
             version=self.version + 1,
         )
 
     def finish_failure(self, now: datetime, error_code: str, retryable: bool) -> ConfirmationRecord:
         """记录执行失败；可重试失败不会篡改原始批准决定。"""
 
-        if self.execution_status != "RUNNING":
-            raise ConfirmationStateError("只有执行中的操作才能标记为失败")
+        if self.execution_status not in {"RUNNING", "UNKNOWN"}:
+            raise ConfirmationStateError("只有执行中或结果未知的操作才能标记为失败")
         return self._replace(
             execution_status="FAILED_RETRYABLE" if retryable else "FAILED_FINAL",
             finished_at=now,

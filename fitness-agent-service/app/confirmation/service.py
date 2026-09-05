@@ -206,6 +206,43 @@ class ConfirmationService:
             return await self.finish_execution(
                 confirmation_id, success=True, trace_id=trace_id
             )
+        if operation.status == "FAILED":
+            return await self.finish_execution(
+                confirmation_id,
+                success=False,
+                trace_id=trace_id,
+                error_code="DOWNSTREAM_OPERATION_FAILED",
+            )
+        return record
+
+    async def reconcile_stored_execution(
+        self, record: ConfirmationRecord, *, trace_id: str | None = None
+    ) -> ConfirmationRecord:
+        """后台对账使用服务身份，仍将结果绑定到确认单的机构和原始操作者。"""
+
+        if record.execution_status not in {"RUNNING", "UNKNOWN"}:
+            return record
+        if not record.tool_id.startswith("fitness.booking."):
+            return record
+        operation = await self.gateway.reconcile_booking_operation(
+            operation_id=record.request_id,
+            organization_id=record.organization_id,
+            actor_id=record.subject_user_id,
+        )
+        if operation.organization_id is not None and (
+            operation.organization_id != record.organization_id
+            or operation.actor_id != record.subject_user_id
+        ):
+            raise ConfirmationStateError("下游操作结果与确认单授权范围不匹配")
+        if operation.status == "SUCCEEDED":
+            return await self.finish_execution(record.id, success=True, trace_id=trace_id)
+        if operation.status == "FAILED":
+            return await self.finish_execution(
+                record.id,
+                success=False,
+                trace_id=trace_id,
+                error_code="DOWNSTREAM_OPERATION_FAILED",
+            )
         return record
 
     async def get_for_subject(

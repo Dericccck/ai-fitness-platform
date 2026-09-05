@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
 
 import structlog
 
@@ -16,6 +17,7 @@ _logger = structlog.get_logger("agent.confirmation_reconciliation")
 class ConfirmationReconciliationRunResult:
     scanned: int
     marked_unknown: int
+    reconciled: int
 
 
 class ConfirmationReconciliationWorker:
@@ -25,8 +27,16 @@ class ConfirmationReconciliationWorker:
     仍使用确认单保存的稳定 request_id 查询下游。
     """
 
-    def __init__(self, repository: ConfirmationRepository, *, older_than_seconds: int = 300, batch_size: int = 100) -> None:
+    def __init__(
+        self,
+        repository: ConfirmationRepository,
+        *,
+        reconciler: Any | None = None,
+        older_than_seconds: int = 300,
+        batch_size: int = 100,
+    ) -> None:
         self.repository = repository
+        self.reconciler = reconciler
         self.older_than_seconds = older_than_seconds
         self.batch_size = batch_size
 
@@ -35,12 +45,24 @@ class ConfirmationReconciliationWorker:
             older_than_seconds=self.older_than_seconds, limit=self.batch_size
         )
         marked = 0
+        reconciled = 0
         for record in records:
             try:
-                await self.repository.mark_unknown(
-                    record.id, datetime.now(UTC), "reconciliation-worker"
-                )
-                marked += 1
+                current = record
+                if getattr(record, "execution_status", "RUNNING") == "RUNNING":
+                    updated = await self.repository.mark_unknown(
+                        record.id, datetime.now(UTC), "reconciliation-worker"
+                    )
+                    current = updated or record
+                    marked += 1
+                if self.reconciler is not None:
+                    result = await self.reconciler.reconcile_stored_execution(
+                        current, trace_id="reconciliation-worker"
+                    )
+                    if getattr(result, "execution_status", None) == "SUCCEEDED":
+                        reconciled += 1
             except Exception:
                 _logger.exception("confirmation_reconciliation_failed", confirmation_id=record.id)
-        return ConfirmationReconciliationRunResult(scanned=len(records), marked_unknown=marked)
+        return ConfirmationReconciliationRunResult(
+            scanned=len(records), marked_unknown=marked, reconciled=reconciled
+        )

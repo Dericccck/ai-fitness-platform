@@ -29,8 +29,8 @@ from app.api.routes.memory_candidates import router as memory_candidates_router
 from app.api.routes.notifications import router as notifications_router
 from app.api.routes.rag import router as rag_router
 from app.confirmation.cipher import AesGcmPayloadCipher
-from app.confirmation.repository import ConfirmationRepository
 from app.confirmation.reconciliation_worker import ConfirmationReconciliationWorker
+from app.confirmation.repository import ConfirmationRepository
 from app.confirmation.service import ConfirmationService
 from app.confirmation.token import ConfirmationTokenIssuer
 from app.core.config import Settings, get_settings
@@ -288,6 +288,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     app.state.confirmation_reconciliation_worker = ConfirmationReconciliationWorker(
         app.state.confirmation_service.repository,
+        reconciler=app.state.confirmation_service,
         older_than_seconds=max(60, settings.confirmation_ttl_seconds // 2),
     )
     # 短期会话摘要只用于压缩当前 thread 的上下文，不读取或写入长期 Memory，也不

@@ -80,6 +80,19 @@ public class BookingRepository {
         return result.stream().findFirst();
     }
 
+    /** 对账只返回业务操作绑定的机构和原始操作者，不读取确认正文。 */
+    public Optional<OperationScope> findOperationScope(String requestId) {
+        List<OperationScope> result = jdbc.query(
+                "SELECT organization_id, actor_id FROM ("
+                        + "SELECT request_id, organization_id, actor_id FROM agent_booking_operation "
+                        + "UNION ALL SELECT request_id, organization_id, actor_id FROM agent_booking_reschedule_operation "
+                        + "UNION ALL SELECT request_id, organization_id, actor_id FROM agent_booking_cancel_operation"
+                        + ") operation_scope WHERE request_id = ? LIMIT 1",
+                new Object[]{requestId}, (rs, rowNum) -> new OperationScope(
+                        rs.getString("organization_id"), rs.getString("actor_id")));
+        return result.stream().findFirst();
+    }
+
     public Optional<BookingAppointmentView> findAppointmentForUpdate(
             String organizationId, String appointmentId
     ) {
@@ -494,6 +507,16 @@ public class BookingRepository {
 
     private static String escapeJson(String value) {
         return value == null ? "" : value.replace("\\", "\\\\").replace("\"", "\\\"");
+    }
+
+    public static final class OperationScope {
+        public final String organizationId;
+        public final String actorId;
+
+        public OperationScope(String organizationId, String actorId) {
+            this.organizationId = organizationId;
+            this.actorId = actorId;
+        }
     }
 
     /** MySQL GET_LOCK 名称长度有限，使用固定长度摘要避免用户 ID 组合超出数据库限制。 */

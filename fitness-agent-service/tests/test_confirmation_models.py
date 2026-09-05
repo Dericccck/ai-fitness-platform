@@ -99,6 +99,16 @@ def test_retryable_failure_can_be_requeued_without_changing_approval() -> None:
     assert requeued.credential_consumed_at is None
 
 
+def test_unknown_execution_can_converge_after_downstream_reconciliation() -> None:
+    now = datetime.now(UTC)
+    running = record().approve(now, "decision-1").issue_credential("jti-1", now).claim_execution(now)
+
+    succeeded = running.mark_unknown(now).finish_success(now)
+
+    assert succeeded.execution_status == "SUCCEEDED"
+    assert succeeded.last_error_code is None
+
+
 def test_confirmation_can_be_revoked_before_execution() -> None:
     now = datetime.now(UTC)
     approved = record().approve(now, "decision-1")

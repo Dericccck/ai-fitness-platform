@@ -107,6 +107,35 @@ async def test_client_requests_scoped_student_training_context_access() -> None:
     assert access.access_type == "ASSIGNED_COACH"
 
 
+async def test_background_reconciliation_uses_service_identity_and_bound_scope() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.method == "POST"
+        assert request.url.path == "/internal/agent-reconciliation/v1/booking/operations/op-1"
+        assert request.headers["X-Internal-Service-Token"] == "service-token"
+        assert "X-Agent-Context" not in request.headers
+        assert request.content == b'{"organizationId":"org-1","actorId":"coach-1"}'
+        return httpx.Response(
+            200,
+            json={
+                "operationId": "op-1",
+                "status": "SUCCEEDED",
+                "organizationId": "org-1",
+                "actorId": "coach-1",
+                "appointment": None,
+            },
+        )
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://gateway.test"
+    ) as http_client:
+        operation = await GatewayClient(build_settings(), http_client).reconcile_booking_operation(
+            operation_id="op-1", organization_id="org-1", actor_id="coach-1"
+        )
+
+    assert operation.status == "SUCCEEDED"
+    assert operation.actor_id == "coach-1"
+
+
 async def test_client_retries_transient_gateway_failures() -> None:
     calls = 0
 

@@ -17,6 +17,9 @@ import org.springframework.web.client.HttpClientErrorException;
 import org.springframework.web.client.RestClientException;
 import org.springframework.web.client.RestTemplate;
 
+import java.time.Instant;
+import java.util.Collections;
+
 /**
  * Gateway 到预约写服务的固定客户端。
  *
@@ -99,13 +102,32 @@ public class BookingServiceClient {
             BookingServiceViews.Operation body = response.getBody();
             if (body == null) throw new IllegalStateException("预约服务返回空响应");
             ToolViews.BookingCreatedView appointment = body.appointment == null ? null : body.appointment.toToolView();
-            return new ToolViews.BookingOperationView(body.operationId, body.status, appointment);
+            return new ToolViews.BookingOperationView(body.operationId, body.status,
+                    body.organizationId, body.actorId, appointment);
         } catch (HttpClientErrorException exception) {
             if (exception.getStatusCode().value() == 403) throw new GatewayForbiddenException("操作不在授权范围内");
             throw new GatewayResourceNotFoundException("未找到预约操作");
         } catch (RestClientException exception) {
             throw new IllegalStateException("预约服务暂时不可用", exception);
         }
+    }
+
+    /** 后台对账专用：使用服务角色查询，再与确认单保存的机构和原始操作者双重绑定。 */
+    public ToolViews.BookingOperationView queryOperationForReconciliation(
+            String operationId, String expectedOrganizationId, String expectedActorId) {
+        Instant now = Instant.now();
+        AgentContext serviceContext = new AgentContext(
+                "agent-reconciliation-worker",
+                Collections.singleton(expectedOrganizationId),
+                Collections.singleton(AgentContext.ROLE_SYSTEM_ADMIN),
+                now, now.plusSeconds(60), "reconciliation");
+        ToolViews.BookingOperationView operation = queryOperation(serviceContext, operationId);
+        if (operation.getOrganizationId() != null
+                && (!expectedOrganizationId.equals(operation.getOrganizationId())
+                || !expectedActorId.equals(operation.getActorId()))) {
+            throw new GatewayForbiddenException("操作对账范围与确认单不匹配");
+        }
+        return operation;
     }
 
     public ToolViews.BookingCreatedView reschedule(AgentContext context, String requestId, String confirmationToken,

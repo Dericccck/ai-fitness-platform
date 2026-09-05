@@ -219,6 +219,8 @@ class GatewayBookingCancelled(GatewayBookingCreated):
 class GatewayBookingOperation(_GatewayModel):
     operation_id: str = Field(alias="operationId")
     status: Literal["SUCCEEDED", "PROCESSING", "FAILED", "UNKNOWN"]
+    organization_id: str | None = Field(default=None, alias="organizationId")
+    actor_id: str | None = Field(default=None, alias="actorId")
     appointment: GatewayBookingCreated | None = None
 
 
@@ -506,6 +508,22 @@ class GatewayClient:
             GatewayBookingOperation,
         )
 
+    async def reconcile_booking_operation(
+        self, *, operation_id: str, organization_id: str, actor_id: str
+    ) -> GatewayBookingOperation:
+        """后台服务身份对账；Gateway 会将返回范围与确认单机构、操作者绑定。"""
+
+        if not operation_id.strip() or not organization_id.strip() or not actor_id.strip():
+            raise GatewayBadRequestError("操作对账范围不能为空")
+        response_json = await self._service_request(
+            f"/internal/agent-reconciliation/v1/booking/operations/{operation_id}",
+            {"organizationId": organization_id, "actorId": actor_id},
+        )
+        try:
+            return GatewayBookingOperation.model_validate(response_json)
+        except ValidationError as exc:
+            raise GatewayProtocolError("Gateway 对账响应不符合工具契约") from exc
+
     async def reschedule_booking(
         self,
         context: GatewayRequestContext,
@@ -708,6 +726,43 @@ class GatewayClient:
                 ) from exc
 
         raise GatewayUnavailableError("健身核心 Gateway 请求失败") from last_error
+
+    async def _service_request(self, path: str, json_body: dict[str, Any]) -> Any:
+        """仅供无用户请求上下文的后台任务调用受限服务端点。"""
+
+        if not self.settings.gateway_configured:
+            raise GatewayConfigurationError("健身核心 Gateway 未配置")
+        headers = {
+            "X-Internal-Service-Token": self.settings.gateway_internal_service_token,
+            "X-Request-ID": str(uuid.uuid4()),
+        }
+        last_error: Exception | None = None
+        for attempt in range(self.settings.gateway_max_retries + 1):
+            try:
+                response = await self._client.request(
+                    "POST", path, headers=headers, json=json_body
+                )
+            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+                last_error = exc
+                if attempt < self.settings.gateway_max_retries:
+                    await self._sleep_before_retry(attempt)
+                    continue
+                raise GatewayUnavailableError("健身核心 Gateway 对账请求失败") from exc
+            if response.status_code in {408, 429} or response.status_code >= 500:
+                last_error = GatewayUnavailableError("健身核心 Gateway 对账暂时不可用")
+                if attempt < self.settings.gateway_max_retries:
+                    await self._sleep_before_retry(attempt)
+                    continue
+                raise last_error
+            if response.status_code in {401, 403}:
+                raise GatewayForbiddenError("Gateway 拒绝操作对账范围")
+            if response.status_code >= 400:
+                raise GatewayBadRequestError("Gateway 拒绝操作对账请求")
+            try:
+                return response.json()
+            except ValueError as exc:
+                raise GatewayProtocolError("Gateway 对账响应不是 JSON") from exc
+        raise GatewayUnavailableError("健身核心 Gateway 对账请求失败") from last_error
 
     async def _sleep_before_retry(self, attempt: int) -> None:
         delay = self.settings.gateway_retry_backoff_seconds * (2**attempt)

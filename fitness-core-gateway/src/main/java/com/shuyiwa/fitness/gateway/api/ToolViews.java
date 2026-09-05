@@ -181,16 +181,23 @@ public final class ToolViews {
     public static final class BookingOperationView {
         private final String operationId;
         private final String status;
+        private final String organizationId;
+        private final String actorId;
         private final BookingCreatedView appointment;
 
-        public BookingOperationView(String operationId, String status, BookingCreatedView appointment) {
+        public BookingOperationView(String operationId, String status, String organizationId,
+                                    String actorId, BookingCreatedView appointment) {
             this.operationId = operationId;
             this.status = status;
+            this.organizationId = organizationId;
+            this.actorId = actorId;
             this.appointment = appointment;
         }
 
         public String getOperationId() { return operationId; }
         public String getStatus() { return status; }
+        public String getOrganizationId() { return organizationId; }
+        public String getActorId() { return actorId; }
         public BookingCreatedView getAppointment() { return appointment; }
     }
 

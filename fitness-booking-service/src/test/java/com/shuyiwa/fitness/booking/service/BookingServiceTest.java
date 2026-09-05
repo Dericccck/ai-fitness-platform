@@ -5,6 +5,7 @@ import com.shuyiwa.fitness.booking.api.BookingCancelRequest;
 import com.shuyiwa.fitness.booking.api.BookingCancelledView;
 import com.shuyiwa.fitness.booking.api.BookingCreateRequest;
 import com.shuyiwa.fitness.booking.api.BookingRescheduleRequest;
+import com.shuyiwa.fitness.booking.api.BookingOperationView;
 import com.shuyiwa.fitness.booking.repository.BookingRepository;
 import com.shuyiwa.fitness.booking.security.BookingActor;
 import com.shuyiwa.fitness.booking.security.BookingConfirmation;
@@ -31,6 +32,23 @@ public class BookingServiceTest {
     // 固定在测试数据之前，避免真实系统日期推进后 2026-08-20/21 的夹具失效。
     private final BookingService service = new BookingService(repository,
             Clock.fixed(Instant.parse("2026-08-19T00:00:00Z"), ZoneOffset.UTC));
+
+    @Test
+    public void operationQueryReturnsImmutableOrganizationAndActorScope() {
+        when(repository.findOperationScope("operation-1")).thenReturn(Optional.of(
+                new BookingRepository.OperationScope("org-1", "student-1")));
+        BookingAppointmentView appointment = new BookingAppointmentView(
+                "appointment-1", "org-1", "student-1", "coach-1", "course-1", "力量训练",
+                Instant.parse("2026-08-20T10:00:00Z"), Instant.parse("2026-08-20T11:00:00Z"),
+                1, "contract-1", 1);
+        when(repository.findByRequestId("operation-1")).thenReturn(Optional.of(appointment));
+
+        BookingOperationView result = service.queryOperation(studentActor(), "operation-1");
+
+        assertEquals("SUCCEEDED", result.getStatus());
+        assertEquals("org-1", result.getOrganizationId());
+        assertEquals("student-1", result.getActorId());
+    }
 
     @Test
     public void studentCanCreateOwnBookingAfterFinalRuleCheck() {

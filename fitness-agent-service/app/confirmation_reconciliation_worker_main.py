@@ -22,6 +22,7 @@ async def run() -> None:
     async with lifespan(app):
         worker = ConfirmationReconciliationWorker(
             app.state.confirmation_service.repository,
+            reconciler=app.state.confirmation_service,
             older_than_seconds=max(60, settings.confirmation_ttl_seconds // 2),
             batch_size=settings.confirmation_reconciliation_batch_size,
         )
