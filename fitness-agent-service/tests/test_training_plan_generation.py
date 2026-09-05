@@ -305,7 +305,9 @@ async def test_generation_uses_controlled_student_context_reader() -> None:
 @pytest.mark.asyncio
 async def test_generation_rejects_forged_evidence_id() -> None:
     forged = valid_json().replace('"goal_type":"力量"', '"goal_type":"力量","evidence_ids":["forged"]')
-    service = TrainingPlanGenerationService(FakeModels([forged]), FakeRag(evidence()))
+    service = TrainingPlanGenerationService(
+        FakeModels([forged]), FakeRag(evidence()), max_repair_attempts=0
+    )
 
     with pytest.raises(TrainingPlanGenerationError, match="未授权或不存在"):
         await service.generate(request(), IDENTITY)
@@ -314,7 +316,38 @@ async def test_generation_rejects_forged_evidence_id() -> None:
 @pytest.mark.asyncio
 async def test_generation_rejects_non_contiguous_days_without_writing() -> None:
     broken = valid_json().replace('"day_number":2', '"day_number":3')
-    service = TrainingPlanGenerationService(FakeModels([broken]), FakeRag(evidence()))
+    service = TrainingPlanGenerationService(
+        FakeModels([broken]), FakeRag(evidence()), max_repair_attempts=0
+    )
 
     with pytest.raises(TrainingPlanGenerationError, match="训练日编号"):
         await service.generate(request(), IDENTITY)
+
+
+@pytest.mark.asyncio
+async def test_generation_repairs_semantically_duplicated_actions() -> None:
+    duplicated = valid_json().replace(
+        '"rest_seconds":90,"target_weight_kg":null,"target_rpe":6,"notes":null}]},',
+        '"rest_seconds":90,"target_weight_kg":null,"target_rpe":6,"notes":null},'
+        '{"exercise_name":"弹力带深蹲","sort_order":2,"sets":3,"reps":"8-10",'
+        '"rest_seconds":90,"target_weight_kg":null,"target_rpe":6,"notes":null}]},',
+        1,
+    )
+    models = FakeModels([duplicated, valid_json()])
+    service = TrainingPlanGenerationService(models, FakeRag(evidence()))
+
+    result = await service.generate(request(), IDENTITY)
+
+    assert result["status"] == "DRAFT_PREVIEW"
+    assert len(models.calls) == 2
+    assert "不能重复安排相同动作" in models.calls[1][-1]["content"]
+
+
+@pytest.mark.asyncio
+async def test_generation_rejects_action_requiring_unavailable_equipment() -> None:
+    service = TrainingPlanGenerationService(
+        FakeModels([valid_json()]), FakeRag(evidence()), max_repair_attempts=0
+    )
+
+    with pytest.raises(TrainingPlanGenerationError, match="未声明可用的器械"):
+        await service.generate(request().model_copy(update={"equipment": []}), IDENTITY)

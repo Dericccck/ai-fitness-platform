@@ -189,10 +189,6 @@ class TrainingPlanGenerationService:
                 raise TrainingPlanGenerationError("读取学员训练上下文失败，未生成草案") from exc
 
         content = await self._generate_content(request, evidence, memories)
-        authorized_evidence_ids = {item.citation_id for item in evidence.citations()}
-        unknown_evidence_ids = set(content.evidence_ids) - authorized_evidence_ids
-        if unknown_evidence_ids:
-            raise TrainingPlanGenerationError("生成结果引用了未授权或不存在的知识证据")
         payload = _build_create_payload(request, content)
         validated = CreateTrainingDraftToolInput.model_validate(payload)
         _validate_semantic_rules(validated, request)
@@ -216,6 +212,7 @@ class TrainingPlanGenerationService:
     ) -> GeneratedTrainingPlanContent:
         prompt = _generation_prompt(request, evidence, memories)
         last_error = ""
+        last_semantic_error: str | None = None
         for attempt in range(self.max_repair_attempts + 1):
             messages = [
                 {
@@ -241,9 +238,28 @@ class TrainingPlanGenerationService:
                     max_output_tokens=self.max_output_tokens,
                 )
                 content = GeneratedTrainingPlanContent.model_validate(json.loads(raw))
+                validated = CreateTrainingDraftToolInput.model_validate(
+                    _build_create_payload(request, content)
+                )
+                _validate_semantic_rules(validated, request)
+                authorized_evidence_ids = {
+                    item.citation_id for item in evidence.citations()
+                }
+                if set(content.evidence_ids) - authorized_evidence_ids:
+                    raise TrainingPlanGenerationError(
+                        "生成结果引用了未授权或不存在的知识证据"
+                    )
                 return content
-            except (json.JSONDecodeError, ValidationError, ModelResponseError) as exc:
+            except (
+                json.JSONDecodeError,
+                ValidationError,
+                ModelResponseError,
+                TrainingPlanGenerationError,
+            ) as exc:
                 last_error = _safe_error_text(exc)
+                last_semantic_error = (
+                    last_error if isinstance(exc, TrainingPlanGenerationError) else None
+                )
                 # 只记录模型输出未通过哪类程序校验，不记录 Prompt、模型原文或完整
                 # 用户上下文。该事件用于定位真实供应商输出与本地 Schema 的契约漂移，
                 # 也让最终对外的稳定 503 能通过 request_id 找到可修复的具体原因。
@@ -255,6 +271,8 @@ class TrainingPlanGenerationService:
                 )
                 if attempt >= self.max_repair_attempts:
                     break
+        if last_semantic_error is not None:
+            raise TrainingPlanGenerationError(last_semantic_error)
         raise TrainingPlanGenerationError("模型生成的训练计划未通过结构化校验")
 
 
@@ -356,6 +374,56 @@ def _validate_semantic_rules(
             raise TrainingPlanGenerationError("同一训练日的动作顺序必须从 1 开始连续递增")
         if any(item.rest_seconds is not None and item.rest_seconds > 600 for item in day.items):
             raise TrainingPlanGenerationError("动作间歇不能超过 10 分钟")
+        normalized_names = ["".join(item.exercise_name.lower().split()) for item in day.items]
+        if len(set(normalized_names)) != len(normalized_names):
+            raise TrainingPlanGenerationError("同一训练日不能重复安排相同动作")
+        total_sets = sum(item.sets for item in day.items)
+        if total_sets > 40:
+            raise TrainingPlanGenerationError("单个训练日总组数不能超过 40 组")
+        estimated_seconds = sum(
+            item.sets * 45 + max(0, item.sets - 1) * (item.rest_seconds or 0)
+            for item in day.items
+        )
+        if estimated_seconds > request.session_minutes * 60 * 1.2:
+            raise TrainingPlanGenerationError("动作组数和休息时间超过单次训练时长容量")
+        _validate_equipment(day.items, request.equipment)
+        _validate_generated_safety_text(day.items)
+
+
+_EQUIPMENT_KEYWORDS = (
+    "弹力带",
+    "哑铃",
+    "杠铃",
+    "壶铃",
+    "拉力器",
+    "跑步机",
+    "划船机",
+    "跳绳",
+    "瑜伽垫",
+)
+_UNSAFE_PRESCRIPTION_TERMS = ("诊断", "治疗", "治愈", "药物", "康复处方")
+
+
+def _validate_equipment(items: list[Any], available_equipment: list[str]) -> None:
+    available = " ".join(item.lower() for item in available_equipment)
+    for item in items:
+        exercise = item.exercise_name.lower()
+        missing = [
+            equipment
+            for equipment in _EQUIPMENT_KEYWORDS
+            if equipment in exercise and equipment.lower() not in available
+        ]
+        if missing:
+            raise TrainingPlanGenerationError(
+                f"动作需要未声明可用的器械：{missing[0]}"
+            )
+
+
+def _validate_generated_safety_text(items: list[Any]) -> None:
+    for item in items:
+        text_value = f"{item.exercise_name} {item.notes or ''}"
+        if any(term in text_value for term in _UNSAFE_PRESCRIPTION_TERMS):
+            raise TrainingPlanGenerationError("训练计划不得生成诊断、治疗或药物处方内容")
 
 
 def _citation_dict(citation: Any) -> dict[str, object]:
