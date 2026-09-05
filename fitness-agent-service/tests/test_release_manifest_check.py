@@ -119,6 +119,27 @@ def test_manifest_v2_rejects_sensitive_config_key() -> None:
         )
 
 
+def test_manifest_v2_requires_index_build_for_staging() -> None:
+    digest = "sha256:" + "1" * 64
+    manifest = build_manifest_v2(
+        environment="local",
+        source_commit="a" * 40,
+        image=f"registry.example.com/fitness-agent@{digest}",
+        config_keys=_keys(),
+        prompts={"supervisor": "route"},
+        safe_config={"agent_max_tool_steps": 4},
+        model_artifacts={"embedding": {"digest": digest}},
+        tool_schemas={},
+        eval_release_id="eval-staging-v1",
+        eval_dataset_digest=digest,
+        eval_thresholds_digest=digest,
+    )
+    manifest["environment"] = "staging"
+
+    with pytest.raises(ReleaseManifestError, match="index_build_id"):
+        validate_manifest(manifest, expected_config_keys=_keys(), expected_environment="staging")
+
+
 def test_manifest_cli_builds_v2_from_component_file(tmp_path) -> None:
     config_file = tmp_path / "agent.env.example"
     config_file.write_text("AGENT_SERVICE_VERSION=0.1.0\n", encoding="utf-8")
@@ -134,6 +155,7 @@ def test_manifest_cli_builds_v2_from_component_file(tmp_path) -> None:
                 "eval_release_id": "eval-cli-v1",
                 "eval_dataset_digest": digest,
                 "eval_thresholds_digest": digest,
+                "index_build_id": "kb-build-cli-1",
             }
         ),
         encoding="utf-8",

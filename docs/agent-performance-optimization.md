@@ -56,7 +56,7 @@ git switch -c codex/agent-perf-baseline-check agent-perf-baseline-20260904
 ## 当前未完成项
 
 2026-09-05 后续优化统一按 [Agent 与 RAG 版本治理优化计划](agent-rag-versioning-optimization-plan.md) 推进。
-发布和权限正确性第 1 批已实现；TruLens 评测发布描述已接入 CLI/Makefile/CI，v2 组件摘要生成器已完成，当前继续把它接入预发布流水线并补真实索引构建版本，再开展独立索引切换和性能实验。
+发布和权限正确性第 1 批已实现；TruLens 评测发布描述已接入 CLI/Makefile/CI，v2 组件摘要生成器已完成，且预发布/生产 v2 清单已强制要求 `index_build_id`；当前继续把组件生成器接入预发布流水线，再开展独立索引切换和性能实验。
 下文网络受限记录是当时验收状态；TruLens 已有更早的本地导出成功记录，本轮仍须重新验证。
 
 本轮本地代码、RAG 离线评测和完整 Agent 回归已经通过；`agent-security-check` 与 TruLens 在线评测需要访问本机 ClamAV/PostgreSQL，当前执行环境拒绝该网络权限，因此仍需在本机权限恢复后补跑并记录结果。

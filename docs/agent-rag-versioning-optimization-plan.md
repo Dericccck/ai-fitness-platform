@@ -1,6 +1,6 @@
 # Agent 与 RAG 版本治理优化计划
 
-更新：2026-09-05。状态：第 1 批 P0 已实现、迁移已应用并通过本地回归；第 2 批已补 v2 Manifest/Trace 关联基础，索引构建/真实评测库验收仍未完成。
+更新：2026-09-05。状态：第 1 批 P0 已实现、迁移已应用并通过本地回归；第 2 批已补 v2 Manifest/Trace 关联基础，并已要求预发布/生产清单绑定索引构建版本；真实流水线接入和真实评测库验收仍未完成。
 
 目标：修复知识发布正确性，建立可追溯、可评测、可回退的发布组合，再用真实数据优化响应速度、Token 和存储开销。
 本计划以当前代码核对结果为准；此前讨论中的建议不自动视为已实现功能或已经证实的线上故障。
@@ -9,7 +9,7 @@
 
 | 项目 | 当前证据 | 下一步 |
 | --- | --- | --- |
-| 发布清单 | `scripts/release_manifest_check.py` 已兼容 v1，并可生成/校验 v2 组件摘要；`scripts/build_release_components.py` 已能从真实模型文件、Prompt 和 Tool Schema 生成组件摘要；TruLens 已使用正式评测发布描述校验数据集/阈值摘要 | 接入流水线实际模型制品、索引构建 ID 和正式 v2 Manifest |
+| 发布清单 | `scripts/release_manifest_check.py` 已兼容 v1，并可生成/校验 v2 组件摘要；`scripts/build_release_components.py` 已能从真实模型文件、Prompt 和 Tool Schema 生成组件摘要；TruLens 已使用正式评测发布描述校验数据集/阈值摘要；预发布/生产 v2 清单缺少 `index_build_id` 时会失败即停 | 将组件生成器接入流水线，注入实际模型制品、索引构建 ID 并生成正式 v2 Manifest |
 | Trace 版本 | `app/evaluation/telemetry.py` 已记录代码、Prompt、图、知识库及 release/Manifest/build/eval 关联键 | 绑定实际内容摘要与索引构建 ID，并补真实 Trace 验收 |
 | TruLens | 路线图已有 2026-09-01 独立 PostgreSQL 真实导出验收记录 | 复验当前运行配置、写入读取和账号权限；历史成功不等于本轮通过 |
 | 文档去重 | `ingestion.py` 先按 source_uri 查已发布文档，再比较 checksum | 拆分内容变化、发布元数据变化和索引策略变化 |
@@ -141,5 +141,5 @@
 开发可在本地完成；正式认证、生产负载和生产回滚的证据仍需要对应环境，不能因本地验收成功标记生产验收通过。
 Linux/GPU OCR、短信、Push、人工转接、图片动作框选和复杂训练扩展继续按用户决定排除。
 
-当前下一步固定为第 2 批剩余工作：把真实流水线模型制品摘要和索引构建 ID 接入部署产物，并补 TruLens 在线接收/Trace 到 Record 的真实验收；评测发布号已通过描述文件接入 CLI/Makefile/CI。第 1 批的真实 PostgreSQL 并发场景随后补齐。
+当前下一步固定为第 2 批剩余工作：把真实流水线模型制品摘要、索引构建 ID 和正式 v2 Manifest 接入部署产物，并补 TruLens 在线接收/Trace 到 Record 的真实验收；评测发布号已通过描述文件接入 CLI/Makefile/CI，预发布/生产缺少索引构建版本时已失败即停。第 1 批的真实 PostgreSQL 并发场景随后补齐。
 第 1—5 批达到门禁即结束本轮核心优化；第 6 批按数据量和保留政策安排，不无限扩展业务功能。

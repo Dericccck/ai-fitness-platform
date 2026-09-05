@@ -272,10 +272,10 @@ def validate_manifest(
         raise ReleaseManifestError("config_contract_sha256 格式非法")
 
     if schema_version == 2:
-        _validate_v2_components(manifest.get("components"))
+        _validate_v2_components(manifest.get("components"), environment=environment)
 
 
-def _validate_v2_components(components: Any) -> None:
+def _validate_v2_components(components: Any, *, environment: str = "local") -> None:
     """校验 v2 组件摘要完整性，不接受隐式缺省以免清单看似通过。"""
 
     if not isinstance(components, Mapping):
@@ -324,6 +324,8 @@ def _validate_v2_components(components: Any) -> None:
         not isinstance(index_build_id, str) or not index_build_id.strip()
     ):
         raise ReleaseManifestError("v2 index_build_id 不能为空字符串")
+    if environment in {"staging", "production"} and not index_build_id:
+        raise ReleaseManifestError("预发布和生产的 v2 Manifest 必须绑定 index_build_id")
 
 
 def load_manifest(path: Path) -> dict[str, Any]:
