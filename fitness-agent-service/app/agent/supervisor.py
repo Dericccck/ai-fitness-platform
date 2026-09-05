@@ -23,6 +23,7 @@ from app.confirmation.service import ConfirmationService
 from app.evaluation.telemetry import TruLensTelemetry
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.cache import SessionLockLost, SessionLockManager, SessionLockUnavailable
+from app.infrastructure.database import StaleCheckpointWriter
 from app.infrastructure.gateway_client import (
     GatewayClientError,
     GatewayRequestContext,
@@ -419,11 +420,15 @@ class Supervisor:
                 final_state = await run_with_persisted_history()
             else:
                 async with self.session_lock.hold(thread_id) as lease:
+                    config["configurable"]["fencing_token"] = lease.fencing_token
+                    activate_fence = getattr(self._checkpointer, "activate_fence", None)
+                    if activate_fence is not None:
+                        await activate_fence(thread_id, lease.fencing_token)
                     final_state = await run_with_persisted_history()
                     lease.ensure_owned()
         except SessionLockUnavailable as exc:
             raise SupervisorSessionBusy("会话正在处理中") from exc
-        except SessionLockLost as exc:
+        except (SessionLockLost, StaleCheckpointWriter) as exc:
             raise SupervisorRuntimeError("会话锁租约失效，操作未确认完成") from exc
         except (
             GatewayClientError,
@@ -559,6 +564,10 @@ class Supervisor:
                 )
             else:
                 async with self.session_lock.hold(thread_id) as lease:
+                    config["configurable"]["fencing_token"] = lease.fencing_token
+                    activate_fence = getattr(self._checkpointer, "activate_fence", None)
+                    if activate_fence is not None:
+                        await activate_fence(thread_id, lease.fencing_token)
                     final_state = await self._graph.ainvoke(
                         Command(resume={"confirmation_id": confirmation_id}),
                         config=config,
@@ -571,7 +580,7 @@ class Supervisor:
                     lease.ensure_owned()
         except SessionLockUnavailable as exc:
             raise SupervisorSessionBusy("会话正在处理中") from exc
-        except SessionLockLost as exc:
+        except (SessionLockLost, StaleCheckpointWriter) as exc:
             raise SupervisorRuntimeError("会话锁租约失效，操作未确认完成") from exc
         except (
             ConfirmationStateError,

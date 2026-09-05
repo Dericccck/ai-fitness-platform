@@ -9,9 +9,9 @@ def test_repository_migration_chain_is_single_and_bidirectional() -> None:
     result = validate_migrations(migrations_dir)
 
     assert result.passed is True
-    # 0036/0037：知识库约束；0038：主动事件版本；0039：确认结果未知状态；0040：通知重放审计。
-    assert len(result.revisions) == 40
-    assert result.heads == ("20260905_0040",)
+    # 0038：主动事件版本；0039：确认结果未知；0040：通知重放；0041：会话 fencing。
+    assert len(result.revisions) == 41
+    assert result.heads == ("20260905_0041",)
 
 
 def test_migration_contract_rejects_unknown_parent_and_multiple_heads(tmp_path: Path) -> None:

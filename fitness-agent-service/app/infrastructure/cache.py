@@ -16,10 +16,13 @@ class SessionLockLost(RuntimeError):
 
 
 class SessionLockLease:
-    def __init__(self, manager: "SessionLockManager", key: str, owner: str) -> None:
+    def __init__(
+        self, manager: "SessionLockManager", key: str, owner_value: str, fencing_token: int
+    ) -> None:
         self._manager = manager
         self._key = key
-        self._owner = owner
+        self._owner_value = owner_value
+        self.fencing_token = fencing_token
         self._lost = False
 
     def ensure_owned(self) -> None:
@@ -36,6 +39,19 @@ class SessionLockManager:
     LangGraph Checkpoint 是持久化事实，但同一 thread 的两个请求同时读写仍可能造成
     消息顺序和 checkpoint 父子关系混乱。因此这里使用短租约锁；释放时通过 Lua 原子
     比较 owner，避免旧请求超时后误删新请求刚取得的锁。
+    """
+
+    _ACQUIRE_SCRIPT = """
+    if redis.call('exists', KEYS[1]) == 1 then
+        return 0
+    end
+    local token = redis.call('incr', KEYS[2])
+    local owner_value = ARGV[1] .. ':' .. tostring(token)
+    local acquired = redis.call('set', KEYS[1], owner_value, 'NX', 'EX', ARGV[2])
+    if acquired then
+        return token
+    end
+    return 0
     """
 
     _RELEASE_SCRIPT = """
@@ -59,11 +75,18 @@ class SessionLockManager:
     @asynccontextmanager
     async def hold(self, thread_id: str) -> AsyncIterator[SessionLockLease]:
         key = f"fitness:agent:session-lock:{thread_id}"
+        counter_key = f"fitness:agent:session-fence:{thread_id}"
         owner = str(uuid4())
-        acquired = await self.client.set(key, owner, nx=True, ex=self.ttl_seconds)
-        if not acquired:
+        fencing_token = await cast(
+            Awaitable[Any],
+            self.client.eval(
+                self._ACQUIRE_SCRIPT, 2, key, counter_key, owner, str(self.ttl_seconds)
+            ),
+        )
+        if int(fencing_token or 0) < 1:
             raise SessionLockUnavailable("会话正在处理中")
-        lease = SessionLockLease(self, key, owner)
+        owner_value = f"{owner}:{int(fencing_token)}"
+        lease = SessionLockLease(self, key, owner_value, int(fencing_token))
         stop = asyncio.Event()
 
         async def renew() -> None:
@@ -78,7 +101,7 @@ class SessionLockManager:
                     renewed = await cast(
                         Awaitable[Any],
                         self.client.eval(
-                            self._RENEW_SCRIPT, 1, key, owner, str(self.ttl_seconds)
+                            self._RENEW_SCRIPT, 1, key, owner_value, str(self.ttl_seconds)
                         ),
                     )
                 except Exception:
@@ -95,7 +118,9 @@ class SessionLockManager:
             stop.set()
             renew_task.cancel()
             await asyncio.gather(renew_task, return_exceptions=True)
-            await cast(Awaitable[Any], self.client.eval(self._RELEASE_SCRIPT, 1, key, owner))
+            await cast(
+                Awaitable[Any], self.client.eval(self._RELEASE_SCRIPT, 1, key, owner_value)
+            )
 
 
 class Cache:
