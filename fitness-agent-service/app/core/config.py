@@ -245,6 +245,10 @@ class Settings(BaseSettings):
     rag_candidate_limit: int = Field(default=20, ge=1, le=100)
     rag_keyword_candidate_limit: int = Field(default=20, ge=1, le=100)
     rag_top_k: int = Field(default=5, ge=1, le=20)
+    # 保留 Top-K 召回结果，只限制最终注入 Prompt 的父文档长度。长章节围绕命中
+    # chunk 截取，避免同一份无关章节在每个模型回合重复消耗大量 Token。
+    rag_prompt_max_total_chars: int = Field(default=10_000, ge=2_000, le=100_000)
+    rag_prompt_max_evidence_chars: int = Field(default=1_800, ge=200, le=20_000)
     rag_embedding_batch_size: int = Field(default=32, ge=1, le=128)
     rag_chunk_max_chars: int = Field(default=1200, ge=400, le=4000)
     rag_chunk_overlap_chars: int = Field(default=120, ge=0, le=500)

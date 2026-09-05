@@ -182,6 +182,43 @@ def test_rag_prompt_context_expands_each_parent_only_once() -> None:
     assert "命中片段 B" in context
 
 
+def test_rag_prompt_context_bounds_long_parent_around_hit() -> None:
+    hit = "深蹲前先进行髋关节动态热身"
+    item = chunk("a", hit)
+    item = KnowledgeChunk(
+        **{
+            **item.__dict__,
+            "parent_id": "parent-long",
+            "parent_content": f"{'无关前文' * 200}{hit}{'无关后文' * 200}",
+        }
+    )
+
+    context = RagSearchResult(
+        (item,),
+        prompt_max_total_chars=500,
+        prompt_max_evidence_chars=240,
+    ).as_prompt_context()
+
+    assert hit in context
+    assert len(context) <= 500
+    assert context.count("无关前文") < 200
+    assert context.count("无关后文") < 200
+
+
+def test_rag_prompt_context_keeps_all_ranked_evidence_under_total_budget() -> None:
+    items = tuple(chunk(chr(97 + index), f"命中片段 {index}" * 100) for index in range(5))
+
+    context = RagSearchResult(
+        items,
+        prompt_max_total_chars=2_000,
+        prompt_max_evidence_chars=1_800,
+    ).as_prompt_context()
+
+    assert len(context) <= 2_000
+    for index in range(1, 6):
+        assert f"[证据{index}]" in context
+
+
 def test_rag_citation_preserves_parser_coordinates() -> None:
     item = KnowledgeChunk(
         **{

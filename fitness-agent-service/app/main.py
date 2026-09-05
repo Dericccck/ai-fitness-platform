@@ -131,6 +131,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         candidate_limit=settings.rag_candidate_limit,
         keyword_candidate_limit=settings.rag_keyword_candidate_limit,
         top_k=settings.rag_top_k,
+        prompt_max_total_chars=settings.rag_prompt_max_total_chars,
+        prompt_max_evidence_chars=settings.rag_prompt_max_evidence_chars,
         embedding_batch_size=settings.rag_embedding_batch_size,
         embedding_dimensions=settings.embedding_dimensions,
         vector_weight=settings.rag_vector_weight,
