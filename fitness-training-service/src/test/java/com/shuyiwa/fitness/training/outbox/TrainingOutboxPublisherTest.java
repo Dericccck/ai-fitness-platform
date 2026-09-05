@@ -8,6 +8,7 @@ import org.springframework.amqp.rabbit.connection.CorrelationData;
 import org.springframework.amqp.rabbit.core.RabbitTemplate;
 
 import java.util.Collections;
+import java.time.Instant;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -32,6 +33,15 @@ public class TrainingOutboxPublisherTest {
                 any(CorrelationData.class));
 
         new RabbitTrainingMessagePublisher(template, enabledProperties()).publish(event());
+    }
+
+    @Test
+    public void trainingEnvelopeCarriesContractAggregateVersionAndOccurredAt() {
+        String envelope = RabbitTrainingMessagePublisher.envelope(event());
+
+        org.junit.Assert.assertTrue(envelope.contains("\"contractVersion\":1"));
+        org.junit.Assert.assertTrue(envelope.contains("\"aggregateVersion\":3"));
+        org.junit.Assert.assertTrue(envelope.contains("\"occurredAt\":\"2026-09-06T01:02:03Z\""));
     }
 
     @Test
@@ -93,6 +103,7 @@ public class TrainingOutboxPublisherTest {
         return new TrainingOutboxRepository.OutboxEvent(
                 1L, "training-plan-training_plan_published:plan-1:request-1",
                 "TRAINING_PLAN_PUBLISHED", "plan-1", "org-1",
-                "{\"planId\":\"plan-1\",\"studentId\":\"student-1\"}", 0);
+                3, "{\"planId\":\"plan-1\",\"studentId\":\"student-1\"}", 0,
+                Instant.parse("2026-09-06T01:02:03Z"));
     }
 }

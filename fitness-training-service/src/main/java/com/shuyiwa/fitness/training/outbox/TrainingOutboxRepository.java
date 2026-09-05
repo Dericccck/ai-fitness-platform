@@ -31,7 +31,8 @@ public class TrainingOutboxRepository {
         Timestamp leaseExpiredAt = Timestamp.from(
                 Instant.now().minusSeconds(properties.getClaimLeaseSeconds()));
         List<OutboxEvent> events = jdbc.query(
-                "SELECT id, event_key, event_type, aggregate_id, organization_id, payload, attempt_count "
+                "SELECT id, event_key, event_type, aggregate_id, organization_id, aggregate_version, "
+                        + "payload, attempt_count, created_at "
                         + "FROM agent_training_outbox WHERE status = 'PENDING' "
                         + "AND (next_attempt_at IS NULL OR next_attempt_at <= CURRENT_TIMESTAMP) "
                         + "AND (claimed_at IS NULL OR claimed_at < ?) ORDER BY created_at, id LIMIT ? FOR UPDATE",
@@ -39,7 +40,8 @@ public class TrainingOutboxRepository {
                 (rs, rowNum) -> new OutboxEvent(
                         rs.getLong("id"), rs.getString("event_key"), rs.getString("event_type"),
                         rs.getString("aggregate_id"), rs.getString("organization_id"),
-                        rs.getString("payload"), rs.getInt("attempt_count"))
+                        rs.getInt("aggregate_version"), rs.getString("payload"),
+                        rs.getInt("attempt_count"), rs.getTimestamp("created_at").toInstant())
         );
         for (OutboxEvent event : events) {
             jdbc.update("UPDATE agent_training_outbox SET claimed_at = CURRENT_TIMESTAMP, claimed_by = ? "
@@ -80,18 +82,23 @@ public class TrainingOutboxRepository {
         public final String eventType;
         public final String aggregateId;
         public final String organizationId;
+        public final int aggregateVersion;
         public final String payload;
         public final int attemptCount;
+        public final Instant occurredAt;
 
         public OutboxEvent(long id, String eventKey, String eventType, String aggregateId,
-                           String organizationId, String payload, int attemptCount) {
+                           String organizationId, int aggregateVersion, String payload,
+                           int attemptCount, Instant occurredAt) {
             this.id = id;
             this.eventKey = eventKey;
             this.eventType = eventType;
             this.aggregateId = aggregateId;
             this.organizationId = organizationId;
+            this.aggregateVersion = aggregateVersion;
             this.payload = payload;
             this.attemptCount = attemptCount;
+            this.occurredAt = occurredAt;
         }
     }
 

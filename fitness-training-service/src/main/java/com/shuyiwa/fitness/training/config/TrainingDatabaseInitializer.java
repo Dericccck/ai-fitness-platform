@@ -40,6 +40,7 @@ public class TrainingDatabaseInitializer {
         applyIfNeeded("V20260813_003", "db/migration/V20260813_003__add_confirmation_consumption.sql");
         applyIfNeeded("V20260814_004", "db/migration/V20260814_004__create_training_day_execution.sql");
         applyIfNeeded("V20260824_005", "db/migration/V20260824_005__create_training_outbox.sql");
+        applyIfNeeded("V20260906_006", "db/migration/V20260906_006__add_outbox_aggregate_version.sql");
     }
 
     private void applyIfNeeded(String version, String resourcePath) {

@@ -35,12 +35,14 @@ public class RabbitTrainingMessagePublisher implements TrainingMessagePublisher 
     }
 
     /** 将训练 Outbox 行包装为 Agent 可校验、可幂等消费的统一事件信封。 */
-    private static String envelope(TrainingOutboxRepository.OutboxEvent event) {
+    static String envelope(TrainingOutboxRepository.OutboxEvent event) {
         return "{\"eventId\":\"" + escape(event.eventKey)
                 + "\",\"source\":\"training\",\"eventType\":\""
                 + escape(event.eventType) + "\",\"aggregateId\":\""
                 + escape(event.aggregateId) + "\",\"organizationId\":\""
-                + escape(event.organizationId) + "\",\"payload\":" + event.payload + "}";
+                + escape(event.organizationId) + "\",\"contractVersion\":1,\"aggregateVersion\":"
+                + event.aggregateVersion + ",\"occurredAt\":\"" + event.occurredAt.toString()
+                + "\",\"payload\":" + event.payload + "}";
     }
 
     private static String routingKey(String eventType) {

@@ -170,7 +170,7 @@ public class TrainingPlanRepository {
                         + "VALUES (?, ?, ?, ?, ?, ?, ?)",
                 plan.getId(), action, actorId,
                 requestId, plan.getStatus().name(), target.name(), comment);
-        insertProactiveEvent(plan, target, requestId);
+        insertProactiveEvent(plan, target, requestId, plan.getVersion() + 1);
         return true;
     }
 
@@ -181,7 +181,8 @@ public class TrainingPlanRepository {
      * 出现“页面显示已发布但 Agent 永远收不到通知”的双写不一致。请求 ID 进入 event_key，
      * 因此同一次状态转换重试不会重复生成事件。</p>
      */
-    private void insertProactiveEvent(TrainingPlan plan, TrainingPlanStatus target, String requestId) {
+    private void insertProactiveEvent(TrainingPlan plan, TrainingPlanStatus target, String requestId,
+                                      int aggregateVersion) {
         String eventType;
         if (target == TrainingPlanStatus.PENDING_REVIEW) {
             eventType = "TRAINING_PLAN_REVIEW_REQUIRED";
@@ -195,9 +196,9 @@ public class TrainingPlanRepository {
                 + "\",\"studentId\":\"" + escapeJson(plan.getStudentId())
                 + "\",\"coachId\":\"" + escapeJson(plan.getCoachId()) + "\"}";
         jdbc.update("INSERT INTO agent_training_outbox "
-                        + "(event_key, event_type, aggregate_id, organization_id, payload) "
-                        + "VALUES (?, ?, ?, ?, ?)",
-                eventKey, eventType, plan.getId(), plan.getOrganizationId(), payload);
+                        + "(event_key, event_type, aggregate_id, organization_id, aggregate_version, payload) "
+                        + "VALUES (?, ?, ?, ?, ?, ?)",
+                eventKey, eventType, plan.getId(), plan.getOrganizationId(), aggregateVersion, payload);
     }
 
     private static String escapeJson(String value) {
