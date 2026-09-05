@@ -294,6 +294,15 @@ async def test_generation_uses_controlled_student_context_reader() -> None:
 
 
 @pytest.mark.asyncio
+async def test_generation_rejects_forged_evidence_id() -> None:
+    forged = valid_json().replace('"goal_type":"力量"', '"goal_type":"力量","evidence_ids":["forged"]')
+    service = TrainingPlanGenerationService(FakeModels([forged]), FakeRag(evidence()))
+
+    with pytest.raises(TrainingPlanGenerationError, match="未授权或不存在"):
+        await service.generate(request(), IDENTITY)
+
+
+@pytest.mark.asyncio
 async def test_generation_rejects_non_contiguous_days_without_writing() -> None:
     broken = valid_json().replace('"day_number":2', '"day_number":3')
     service = TrainingPlanGenerationService(FakeModels([broken]), FakeRag(evidence()))

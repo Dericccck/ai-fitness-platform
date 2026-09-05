@@ -292,6 +292,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         retention_days=settings.session_summary_retention_days,
         metrics=http_metrics,
     )
+    # Memory 撤销/纠正后立即失效同一主体的派生会话摘要，避免旧偏好继续注入模型。
+    app.state.memory_service.summary_repository = app.state.session_summary_service.repository
     app.state.session_lock = SessionLockManager(
         app.state.cache.client,
         ttl_seconds=settings.session_lock_ttl_seconds,

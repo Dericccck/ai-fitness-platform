@@ -46,8 +46,9 @@ _FORBIDDEN_TERMS = (
 class MemoryService:
     """只处理用户明确提供的低敏、可撤销长期偏好。"""
 
-    def __init__(self, repository: MemoryRepository) -> None:
+    def __init__(self, repository: MemoryRepository, summary_repository: Any | None = None) -> None:
         self.repository = repository
+        self.summary_repository = summary_repository
 
     async def save(
         self,
@@ -122,7 +123,7 @@ class MemoryService:
             unit=unit,
             expires_at=expires_at,
         )
-        return await self.repository.correct(
+        result = await self.repository.correct(
             identity=identity,
             organization_id=organization_id,
             memory_id=memory_id,
@@ -132,6 +133,8 @@ class MemoryService:
             source_request_id=source_request_id,
             request_id=request_id,
         )
+        await self._invalidate_derived_context(identity.subject)
+        return result
 
     async def list_active(
         self, *, identity: AgentIdentity, organization_id: str
@@ -165,7 +168,7 @@ class MemoryService:
             raise MemoryValidationError(
                 "必须提供 memory id、正数 expected_version 和 source_request_id"
             )
-        return await self.repository.revoke(
+        result = await self.repository.revoke(
             identity=identity,
             organization_id=organization_id,
             memory_id=memory_id,
@@ -173,6 +176,22 @@ class MemoryService:
             source_request_id=source_request_id,
             request_id=request_id,
         )
+        await self._invalidate_derived_context(identity.subject)
+        return result
+
+    async def _invalidate_derived_context(self, subject_user_id: str) -> None:
+        if self.summary_repository is None:
+            return
+        try:
+            await self.summary_repository.invalidate_for_subject(subject_user_id)
+        except Exception:
+            # Memory 已经完成撤销；摘要清理失败必须可观测，但不能让用户重试造成
+            # 版本冲突。后续请求也会在摘要读取失败时安全降级为不使用摘要。
+            import structlog
+
+            structlog.get_logger("memory.lifecycle").exception(
+                "derived_context_invalidation_failed", subject_user_id=subject_user_id
+            )
 
     async def list_events(
         self, *, identity: AgentIdentity, memory_id: str, limit: int = 50

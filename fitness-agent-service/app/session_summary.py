@@ -170,6 +170,18 @@ class SessionSummaryRepository:
             result = await connection.execute(statement, {"limit": limit})
         return result.rowcount or 0
 
+    async def invalidate_for_subject(self, subject_user_id: str) -> int:
+        """授权上下文撤销后删除该主体的摘要，避免旧派生内容继续注入模型。"""
+
+        if not subject_user_id.strip():
+            raise ValueError("主体 ID 不能为空")
+        async with self._database.engine.begin() as connection:
+            result = await connection.execute(
+                text("DELETE FROM agent_session_summaries WHERE subject_user_id = :subject_user_id"),
+                {"subject_user_id": subject_user_id},
+            )
+        return int(result.rowcount or 0)
+
 
 class SessionSummaryService:
     """生成、解密和压缩短期会话摘要。"""
