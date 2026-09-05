@@ -130,6 +130,11 @@ class Settings(BaseSettings):
     # 管理的同一密钥，不能通过浏览器或模型传入。
     confirmation_signing_secret: str = ""
     confirmation_token_ttl_seconds: int = Field(default=120, ge=30, le=600)
+    # 长时间 RUNNING 的确认单由独立对账进程扫描；UNKNOWN 只表示尚未确认结果，
+    # 不会被当作业务失败，后续可通过管理接口继续核实或补写成功。
+    confirmation_reconciliation_batch_size: int = Field(default=100, ge=1, le=500)
+    confirmation_reconciliation_poll_seconds: float = Field(default=60.0, ge=5, le=3600)
+    confirmation_reconciliation_worker_metrics_port: int = Field(default=8097, ge=1, le=65535)
     confirmation_signing_algorithm: str = Field(
         default="HS256",
         validation_alias=AliasChoices(

@@ -1,3 +1,4 @@
+from collections.abc import Sequence
 from typing import Any
 
 from sqlalchemy import text
@@ -59,6 +60,27 @@ class CheckpointStore:
         """关闭 Checkpointer 连接池。"""
 
         await self._pool.close()
+
+    async def delete_threads(self, thread_ids: Sequence[str]) -> int:
+        """删除指定会话的 Checkpoint 派生状态。
+
+        只接受由授权生命周期仓储发现的 thread_id，且使用参数化查询；不提供按
+        通配符或全表删除入口。LangGraph 官方 Postgres Saver 当前使用三张 thread
+        关联表，删除顺序遵循外键依赖。
+        """
+
+        ids = [thread_id for thread_id in thread_ids if thread_id and thread_id.strip()]
+        if not ids:
+            return 0
+        deleted = 0
+        async with self._pool.connection() as connection, connection.transaction():
+            async with connection.cursor() as cursor:
+                for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+                    await cursor.execute(
+                        f"DELETE FROM {table} WHERE thread_id = ANY(%s)", (ids,)
+                    )
+                    deleted += cursor.rowcount or 0
+        return deleted
 
 
 class Database:

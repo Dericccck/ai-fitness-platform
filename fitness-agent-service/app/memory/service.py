@@ -46,9 +46,15 @@ _FORBIDDEN_TERMS = (
 class MemoryService:
     """只处理用户明确提供的低敏、可撤销长期偏好。"""
 
-    def __init__(self, repository: MemoryRepository, summary_repository: Any | None = None) -> None:
+    def __init__(
+        self,
+        repository: MemoryRepository,
+        summary_repository: Any | None = None,
+        checkpoint_cleaner: Any | None = None,
+    ) -> None:
         self.repository = repository
         self.summary_repository = summary_repository
+        self.checkpoint_cleaner = checkpoint_cleaner
 
     async def save(
         self,
@@ -183,7 +189,10 @@ class MemoryService:
         if self.summary_repository is None:
             return
         try:
+            thread_ids = await self.summary_repository.list_thread_ids_for_subject(subject_user_id)
             await self.summary_repository.invalidate_for_subject(subject_user_id)
+            if self.checkpoint_cleaner is not None and thread_ids:
+                await self.checkpoint_cleaner.delete_threads(thread_ids)
         except Exception:
             # Memory 已经完成撤销；摘要清理失败必须可观测，但不能让用户重试造成
             # 版本冲突。后续请求也会在摘要读取失败时安全降级为不使用摘要。

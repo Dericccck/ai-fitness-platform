@@ -35,6 +35,8 @@ public final class BookingDatabaseSchema {
                 "db/migration/V20260815_001__create_booking_agent_tables.sql"));
         populator.addScript(new ClassPathResource(
                 "db/migration/V20260815_002__create_booking_operation_tables.sql"));
+        populator.addScript(new ClassPathResource(
+                "db/migration/V20260905_003__create_outbox_replay_audit.sql"));
         populator.setSqlScriptEncoding(StandardCharsets.UTF_8.name());
         populator.setContinueOnError(false);
         populator.execute(dataSource);
@@ -60,7 +62,13 @@ public final class BookingDatabaseSchema {
                 new ColumnDefinition("claimed_at",
                         "TIMESTAMP NULL AFTER last_error"),
                 new ColumnDefinition("claimed_by",
-                        "VARCHAR(128) NULL AFTER claimed_at")
+                        "VARCHAR(128) NULL AFTER claimed_at"),
+                new ColumnDefinition("replay_count",
+                        "INT NOT NULL DEFAULT 0 AFTER claimed_by"),
+                new ColumnDefinition("last_replayed_by",
+                        "VARCHAR(128) NULL AFTER replay_count"),
+                new ColumnDefinition("last_replayed_at",
+                        "TIMESTAMP NULL AFTER last_replayed_by")
         );
         for (ColumnDefinition column : columns) {
             Integer count = jdbc.queryForObject(

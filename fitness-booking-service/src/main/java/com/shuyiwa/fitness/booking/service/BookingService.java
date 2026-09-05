@@ -255,6 +255,7 @@ public class BookingService {
         boolean coachLocked = false;
         boolean studentLocked = false;
         String lockedCoachId = null;
+        String lockedStudentId = null;
         LocalDate lockedDate = null;
         try {
             BookingCancelledView applied = repository.findByCancelRequestId(actor.getRequestId())
@@ -280,6 +281,7 @@ public class BookingService {
 
             LocalDate bookingDate = observed.getStartTime().atZone(BUSINESS_ZONE).toLocalDate();
             lockedCoachId = observed.getCoachId();
+            lockedStudentId = observed.getUserId();
             lockedDate = bookingDate;
             repository.acquireCoachDayLock(request.getOrganizationId(), lockedCoachId, lockedDate);
             coachLocked = true;
@@ -308,7 +310,7 @@ public class BookingService {
                 repository.releaseCoachDayLock(request.getOrganizationId(), lockedCoachId, lockedDate);
             }
             if (studentLocked && lockedDate != null) {
-                repository.releaseStudentDayLock(request.getOrganizationId(), observed.getUserId(), lockedDate);
+                repository.releaseStudentDayLock(request.getOrganizationId(), lockedStudentId, lockedDate);
             }
             repository.releaseRequestLock(actor.getRequestId());
         }

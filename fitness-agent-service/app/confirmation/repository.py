@@ -336,6 +336,26 @@ class ConfirmationRepository:
             )
             return unknown
 
+    async def list_stale_running(
+        self, *, older_than_seconds: int = 300, limit: int = 100
+    ) -> list[ConfirmationRecord]:
+        """列出长时间 RUNNING 的确认单，供对账任务逐条查询下游结果。"""
+
+        if older_than_seconds < 1 or limit < 1 or limit > 500:
+            raise ValueError("对账扫描参数无效")
+        statement = text(
+            """
+            SELECT * FROM agent_action_confirmations
+            WHERE execution_status = 'RUNNING'
+              AND execution_started_at <= CURRENT_TIMESTAMP - (:age * INTERVAL '1 second')
+            ORDER BY execution_started_at, id
+            LIMIT :limit
+            """
+        )
+        async with self._database.engine.connect() as connection:
+            rows = (await connection.execute(statement, {"age": older_than_seconds, "limit": limit})).mappings().all()
+        return [_record_from_row(row) for row in rows]
+
     async def list_events(self, confirmation_id: str) -> list[ConfirmationEvent]:
         """返回确认单事件，不包含 Token 或精确执行参数。"""
 

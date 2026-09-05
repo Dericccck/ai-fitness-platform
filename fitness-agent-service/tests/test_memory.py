@@ -238,3 +238,34 @@ async def test_memory_correction_preserves_stable_key_and_increments_version() -
     assert corrected.version == item.version + 1
     assert corrected.memory_key == "preferred_style"
     assert corrected.content == {"key": "preferred_style", "value": "自重训练"}
+
+
+@pytest.mark.asyncio
+async def test_memory_revocation_clears_summaries_and_checkpoints() -> None:
+    class SummaryRepository:
+        async def list_thread_ids_for_subject(self, subject_user_id: str) -> list[str]:
+            assert subject_user_id == IDENTITY.subject
+            return ["thread-a", "thread-b"]
+
+        async def invalidate_for_subject(self, subject_user_id: str) -> int:
+            assert subject_user_id == IDENTITY.subject
+            return 2
+
+    class CheckpointCleaner:
+        def __init__(self) -> None:
+            self.thread_ids: list[str] = []
+
+        async def delete_threads(self, thread_ids: list[str]) -> int:
+            self.thread_ids = thread_ids
+            return len(thread_ids)
+
+    cleaner = CheckpointCleaner()
+    service = MemoryService(
+        FakeMemoryRepository(),  # type: ignore[arg-type]
+        summary_repository=SummaryRepository(),
+        checkpoint_cleaner=cleaner,
+    )
+
+    await service._invalidate_derived_context(IDENTITY.subject)
+
+    assert cleaner.thread_ids == ["thread-a", "thread-b"]

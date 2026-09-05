@@ -27,6 +27,7 @@ from app.api.routes.notifications import router as notifications_router
 from app.api.routes.rag import router as rag_router
 from app.confirmation.cipher import AesGcmPayloadCipher
 from app.confirmation.repository import ConfirmationRepository
+from app.confirmation.reconciliation_worker import ConfirmationReconciliationWorker
 from app.confirmation.service import ConfirmationService
 from app.confirmation.token import ConfirmationTokenIssuer
 from app.core.config import Settings, get_settings
@@ -279,6 +280,10 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.confirmation_token_issuer,
         ttl_seconds=settings.confirmation_ttl_seconds,
     )
+    app.state.confirmation_reconciliation_worker = ConfirmationReconciliationWorker(
+        app.state.confirmation_service.repository,
+        older_than_seconds=max(60, settings.confirmation_ttl_seconds // 2),
+    )
     # 短期会话摘要只用于压缩当前 thread 的上下文，不读取或写入长期 Memory，也不
     # 参与权限判断。它复用同一个密钥管理边界，但使用独立表和 thread AAD 做隔离。
     app.state.session_summary_service = SessionSummaryService(
@@ -294,6 +299,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     )
     # Memory 撤销/纠正后立即失效同一主体的派生会话摘要，避免旧偏好继续注入模型。
     app.state.memory_service.summary_repository = app.state.session_summary_service.repository
+    app.state.memory_service.checkpoint_cleaner = app.state.checkpoint_store
     app.state.session_lock = SessionLockManager(
         app.state.cache.client,
         ttl_seconds=settings.session_lock_ttl_seconds,
