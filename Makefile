@@ -8,6 +8,10 @@ AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
 COMPOSE_FILE := deployment/docker-compose.agent-infra.yml
 OCR_LIVE_TIMEOUT_SECONDS ?= 300
+TRULENS_EVAL_RELEASE_ID ?= trulens-smoke-20260905-v1
+TRULENS_EVAL_RELEASE_FILE ?= evals/trulens_smoke.release.json
+TRULENS_JUDGE_EVAL_RELEASE_ID ?= trulens-judge-20260905-v1
+TRULENS_JUDGE_EVAL_RELEASE_FILE ?= evals/trulens_judge.release.json
 
 .PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-live-check ocr-run ocr-image gateway-check gateway-run gateway-training-role-live-check gateway-training-write-live-check gateway-training-workflow-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check training-check training-run training-role-live-check training-role-visibility-live-check booking-check booking-it booking-run customer-service-check customer-service-run legacy-java-diagnostic release-check check agent-trulens-retention web-check web-run
 
@@ -170,13 +174,15 @@ agent-eval:
 
 agent-trulens-eval:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --extra eval python -m app.evaluation.trulens_cli \
-		--cases evals/trulens_smoke.json --thresholds evals/trulens_thresholds.json $(ARGS)
+		--cases evals/trulens_smoke.json --thresholds evals/trulens_thresholds.json \
+		--release $(TRULENS_EVAL_RELEASE_FILE) --eval-release-id $(TRULENS_EVAL_RELEASE_ID) $(ARGS)
 
 agent-trulens-judge:
 	@test -n "$$TRULENS_JUDGE_API_KEY" || (echo "请先设置 TRULENS_JUDGE_API_KEY（仅用于受控离线评测）"; exit 1)
 	cd $(AGENT_DIR) && TRULENS_JUDGE_API_KEY=$(TRULENS_JUDGE_API_KEY) UV_CACHE_DIR=$(UV_CACHE_DIR) \
 		uv run --extra eval python -m app.evaluation.trulens_cli --judge \
-		--cases evals/trulens_smoke.json --thresholds evals/trulens_judge_thresholds.json $(ARGS)
+		--cases evals/trulens_smoke.json --thresholds evals/trulens_judge_thresholds.json \
+		--release $(TRULENS_JUDGE_EVAL_RELEASE_FILE) --eval-release-id $(TRULENS_JUDGE_EVAL_RELEASE_ID) $(ARGS)
 
 agent-trulens-retention:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/trulens_retention.py $(ARGS)

@@ -1,9 +1,14 @@
+import json
+
 import pytest
 
 from app.evaluation.trulens_eval import (
     TruLensCase,
+    bind_eval_release,
     deterministic_case_metrics,
     evaluation_run_summary,
+    file_fingerprint,
+    load_eval_release,
     trace_to_case,
     validate_thresholds,
 )
@@ -81,6 +86,73 @@ def test_trace_without_spans_is_rejected() -> None:
         trace_to_case({"spans": []})
 
 
+def test_eval_release_binds_input_and_threshold_digests(tmp_path) -> None:
+    cases_path = tmp_path / "cases.json"
+    thresholds_path = tmp_path / "thresholds.json"
+    cases_path.write_text("[]\n", encoding="utf-8")
+    thresholds_path.write_text('{"answer_non_empty": 1.0}\n', encoding="utf-8")
+    release_path = tmp_path / "release.json"
+    release_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "eval_release_id": "eval-test-v1",
+                "dataset_path": cases_path.name,
+                "dataset_digest": file_fingerprint(cases_path),
+                "thresholds_path": thresholds_path.name,
+                "thresholds_digest": file_fingerprint(thresholds_path),
+                "scorer_version": "trulens-scorer-v2",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    release = load_eval_release(
+        release_path,
+        input_path=cases_path,
+        thresholds_path=thresholds_path,
+    )
+
+    assert release["eval_release_id"] == "eval-test-v1"
+
+
+def test_eval_release_rejects_changed_thresholds(tmp_path) -> None:
+    cases_path = tmp_path / "cases.json"
+    thresholds_path = tmp_path / "thresholds.json"
+    cases_path.write_text("[]\n", encoding="utf-8")
+    thresholds_path.write_text('{"answer_non_empty": 1.0}\n', encoding="utf-8")
+    release_path = tmp_path / "release.json"
+    release_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "eval_release_id": "eval-test-v1",
+                "dataset_path": cases_path.name,
+                "dataset_digest": file_fingerprint(cases_path),
+                "thresholds_path": thresholds_path.name,
+                "thresholds_digest": "sha256:" + "0" * 64,
+                "scorer_version": "trulens-scorer-v2",
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(Exception, match="阈值摘要"):
+        load_eval_release(release_path, input_path=cases_path, thresholds_path=thresholds_path)
+
+
+def test_bind_eval_release_rejects_mismatched_case_release() -> None:
+    case = TruLensCase(
+        case_id="case-1",
+        question="问题",
+        answer="答案",
+        eval_release_id="eval-old-v1",
+    )
+
+    with pytest.raises(Exception, match="不一致"):
+        bind_eval_release([case], "eval-new-v1")
+
+
 def test_trace_without_content_or_version_linkage_is_rejected() -> None:
     with pytest.raises(Exception, match="可评测的输入或输出"):
         trace_to_case(
@@ -126,3 +198,4 @@ def test_evaluation_run_summary_contains_coverage_and_counts() -> None:
     assert summary["case_count"] == 1
     assert summary["metric_coverage"] == {"answer_non_empty": 1}
     assert summary["version_coverage"]["graph"] == 1
+    assert summary["eval_release_id"] == ""

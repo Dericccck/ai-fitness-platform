@@ -6,8 +6,9 @@ import hashlib
 import json
 import math
 import os
+import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -18,6 +19,9 @@ from app.evaluation.telemetry import redact_text
 
 class TruLensEvaluationError(RuntimeError):
     """可选 TruLens 评估环境不完整或输入不符合契约时抛出。"""
+
+
+SHA256_PATTERN = re.compile(r"^sha256:[0-9a-f]{64}$")
 
 
 @dataclass(frozen=True)
@@ -529,6 +533,76 @@ def load_trace_cases(path: Path) -> list[TruLensCase]:
     return traces_to_cases(raw)
 
 
+def load_eval_release(
+    path: Path,
+    *,
+    input_path: Path,
+    thresholds_path: Path,
+) -> dict[str, Any]:
+    """读取并校验正式评测发布描述。
+
+    发布号本身不是可信证据：必须同时核对它声明的评测输入和阈值文件摘要，
+    并确认本次命令实际读取的文件就是描述中登记的文件。这样可以避免只改
+    文件名、保留同一个 ``eval_release_id`` 却悄悄替换评测集或门禁阈值。
+    """
+
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise TruLensEvaluationError(f"无法加载评测发布描述 {path}：{exc}") from exc
+    if not isinstance(raw, dict):
+        raise TruLensEvaluationError("评测发布描述必须是 JSON 对象")
+    required = (
+        "schema_version",
+        "eval_release_id",
+        "dataset_path",
+        "dataset_digest",
+        "thresholds_path",
+        "thresholds_digest",
+        "scorer_version",
+    )
+    missing = [key for key in required if key not in raw]
+    if missing:
+        raise TruLensEvaluationError("评测发布描述缺少字段：" + ", ".join(missing))
+    if raw.get("schema_version") != 1:
+        raise TruLensEvaluationError("不支持的评测发布描述 schema_version")
+    for key in ("eval_release_id", "dataset_path", "thresholds_path", "scorer_version"):
+        if not isinstance(raw[key], str) or not raw[key].strip():
+            raise TruLensEvaluationError(f"评测发布描述 {key} 必须是非空字符串")
+    for key in ("dataset_digest", "thresholds_digest"):
+        value = raw[key]
+        if not isinstance(value, str) or not SHA256_PATTERN.fullmatch(value):
+            raise TruLensEvaluationError(f"评测发布描述 {key} 必须是 sha256 摘要")
+
+    release_dir = path.parent.resolve()
+    dataset_path = (release_dir / str(raw["dataset_path"])).resolve()
+    release_thresholds_path = (release_dir / str(raw["thresholds_path"])).resolve()
+    actual_input_path = input_path.resolve()
+    actual_thresholds_path = thresholds_path.resolve()
+    if dataset_path != actual_input_path:
+        raise TruLensEvaluationError("实际评测输入文件与发布描述不一致")
+    if release_thresholds_path != actual_thresholds_path:
+        raise TruLensEvaluationError("实际阈值文件与发布描述不一致")
+    if file_fingerprint(dataset_path) != raw["dataset_digest"]:
+        raise TruLensEvaluationError("评测集摘要与发布描述不一致，请重新生成评测发布号")
+    if file_fingerprint(release_thresholds_path) != raw["thresholds_digest"]:
+        raise TruLensEvaluationError("阈值摘要与发布描述不一致，请重新生成评测发布号")
+    return raw
+
+
+def bind_eval_release(cases: list[TruLensCase], eval_release_id: str) -> list[TruLensCase]:
+    """把正式评测发布号写入案例，并拒绝案例自带的错误发布号。"""
+
+    if not eval_release_id.strip():
+        raise TruLensEvaluationError("eval_release_id 不能为空")
+    bound: list[TruLensCase] = []
+    for case in cases:
+        if case.eval_release_id and case.eval_release_id != eval_release_id:
+            raise TruLensEvaluationError(f"案例 {case.case_id} 的 eval_release_id 与本次评测不一致")
+        bound.append(replace(case, eval_release_id=eval_release_id))
+    return bound
+
+
 def load_thresholds(path: Path) -> dict[str, float]:
     try:
         raw = json.loads(path.read_text(encoding="utf-8"))
@@ -575,6 +649,7 @@ def evaluation_run_summary(
     source: str,
     dataset_version: str,
     run_id: str,
+    eval_release_id: str = "",
 ) -> dict[str, Any]:
     """生成一次评测运行的机器可读汇总。
 
@@ -617,6 +692,7 @@ def evaluation_run_summary(
         "run_id": run_id,
         "source": source,
         "dataset_version": dataset_version,
+        "eval_release_id": eval_release_id,
         "generated_at": datetime.now(UTC).isoformat(),
         "case_count": len(results),
         "status_counts": status_counts,

@@ -88,7 +88,7 @@ jobs:
         run: uv run python -m app.agent.operations_policy_evaluation --cases evals/operations_policy_smoke.json --thresholds evals/operations_policy_thresholds.json
 
       - name: TruLens deterministic evaluation contract
-        run: uv run --extra eval python -m app.evaluation.trulens_cli --no-persist --cases evals/trulens_smoke.json --thresholds evals/trulens_thresholds.json
+        run: uv run --extra eval python -m app.evaluation.trulens_cli --no-persist --cases evals/trulens_smoke.json --thresholds evals/trulens_thresholds.json --release evals/trulens_smoke.release.json --eval-release-id trulens-smoke-20260905-v1
 
       - name: Build production container image
         run: docker build --file Dockerfile --tag fitness-agent-service:${{ github.sha }} .

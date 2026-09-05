@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "eval_release_id": "trulens-smoke-20260905-v1",
+  "dataset_path": "trulens_smoke.json",
+  "dataset_digest": "sha256:8997d0c7494f98f2d4062206ede0a065e5fa67fe2076be81a1c50b33bf14bc0d",
+  "thresholds_path": "trulens_thresholds.json",
+  "thresholds_digest": "sha256:cfe0dade017adea31d2ec42871024b85128124e69246a2d50aa7c482678f6440",
+  "scorer_version": "trulens-deterministic-scorer-v2",
+  "judge": {
+    "enabled": false,
+    "model": ""
+  }
+}

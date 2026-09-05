@@ -1,0 +1,13 @@
+{
+  "schema_version": 1,
+  "eval_release_id": "trulens-judge-20260905-v1",
+  "dataset_path": "trulens_smoke.json",
+  "dataset_digest": "sha256:8997d0c7494f98f2d4062206ede0a065e5fa67fe2076be81a1c50b33bf14bc0d",
+  "thresholds_path": "trulens_judge_thresholds.json",
+  "thresholds_digest": "sha256:27203ae11327a58412a23cb191515ab2a64e228691ba8a13561c2ae9cc664fbb",
+  "scorer_version": "trulens-judge-scorer-v1",
+  "judge": {
+    "enabled": true,
+    "model": "configured-at-runtime"
+  }
+}
