@@ -415,6 +415,20 @@ def run(config: CheckConfig) -> int:
             "20260824_0034",
             label="升级到带数据验收基线版本",
         )
+        # 旧版 CheckpointStore 会在 Alembic 0041 之前先创建 fencing 表；真实升级必须
+        # 兼容该既有状态，不能只验证全新空库。
+        _psql(
+            config,
+            database,
+            """
+            CREATE TABLE agent_session_fences (
+                thread_id TEXT PRIMARY KEY,
+                fencing_token BIGINT NOT NULL CHECK (fencing_token > 0),
+                updated_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
+            )
+            """,
+            label="模拟旧运行时预建会话 fencing 表",
+        )
         _psql(
             config,
             database,

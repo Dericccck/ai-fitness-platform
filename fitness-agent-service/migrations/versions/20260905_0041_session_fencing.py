@@ -12,6 +12,10 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
+    # 0041 之前的 CheckpointStore 启动逻辑已经会创建同结构表。升级既有环境时必须
+    # 接纳这张运行时遗留表，否则迁移会因 DuplicateTableError 整体回滚。
+    if sa.inspect(op.get_bind()).has_table("agent_session_fences"):
+        return
     op.create_table(
         "agent_session_fences",
         sa.Column("thread_id", sa.Text(), primary_key=True),

@@ -386,6 +386,9 @@ def _start_worker(config: LiveCheckConfig, queue_name: str) -> Popen[Any]:
         "AGENT_PROACTIVE_RABBITMQ_ROUTING_KEY": config.routing_key,
         "AGENT_PROACTIVE_WORKER_BATCH_SIZE": "10",
         "AGENT_PROACTIVE_WORKER_POLL_SECONDS": "0.2",
+        # 该 Worker 只验证事件收件箱与通知 Outbox，不执行 RAG。关闭本地大模型预热，
+        # 避免验收超时被模型加载时间污染，也不改变正常服务进程的生产配置。
+        "AGENT_LOCAL_MODEL_WARMUP_ENABLED": "false",
         # 让临时 Worker 不与现有 Worker 的 Prometheus 端口冲突。
         "AGENT_PROACTIVE_WORKER_METRICS_PORT": str(20_000 + uuid.uuid4().int % 20_000),
     }

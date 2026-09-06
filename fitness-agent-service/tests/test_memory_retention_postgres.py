@@ -136,7 +136,7 @@ async def test_memory_retention_redacts_content_but_keeps_audit() -> None:
         assert [event.event_type for event in memory_events][-1] == "REDACTED"
         candidate_events = await candidate_repository.list_events(candidate.id, identity=identity)
         assert [event.event_type for event in candidate_events][-1] == "REDACTED"
-        with pytest.raises(MemoryCandidateStateError, match="redacted"):
+        with pytest.raises(MemoryCandidateStateError, match="已脱敏"):
             await candidate_repository.get_for_subject(candidate.id, identity=identity)
     finally:
         async with database.engine.begin() as connection:
