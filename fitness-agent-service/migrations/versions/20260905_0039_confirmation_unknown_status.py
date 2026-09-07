@@ -11,13 +11,19 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.drop_constraint("ck_agent_confirmation_execution_status", "agent_action_confirmations", type_="check")
+    op.drop_constraint(
+        "ck_agent_confirmation_execution_status", "agent_action_confirmations", type_="check"
+    )
     op.create_check_constraint(
         "ck_agent_confirmation_execution_status",
         "agent_action_confirmations",
         "execution_status IN ('NOT_STARTED', 'RUNNING', 'SUCCEEDED', 'FAILED_RETRYABLE', 'FAILED_FINAL', 'UNKNOWN')",
     )
-    op.drop_constraint("ck_agent_confirmation_event_execution_status", "agent_action_confirmation_events", type_="check")
+    op.drop_constraint(
+        "ck_agent_confirmation_event_execution_status",
+        "agent_action_confirmation_events",
+        type_="check",
+    )
     op.create_check_constraint(
         "ck_agent_confirmation_event_execution_status",
         "agent_action_confirmation_events",
@@ -26,13 +32,19 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
-    op.drop_constraint("ck_agent_confirmation_event_execution_status", "agent_action_confirmation_events", type_="check")
+    op.drop_constraint(
+        "ck_agent_confirmation_event_execution_status",
+        "agent_action_confirmation_events",
+        type_="check",
+    )
     op.create_check_constraint(
         "ck_agent_confirmation_event_execution_status",
         "agent_action_confirmation_events",
         "execution_status IN ('NOT_STARTED', 'RUNNING', 'SUCCEEDED', 'FAILED_RETRYABLE', 'FAILED_FINAL')",
     )
-    op.drop_constraint("ck_agent_confirmation_execution_status", "agent_action_confirmations", type_="check")
+    op.drop_constraint(
+        "ck_agent_confirmation_execution_status", "agent_action_confirmations", type_="check"
+    )
     op.create_check_constraint(
         "ck_agent_confirmation_execution_status",
         "agent_action_confirmations",

@@ -63,10 +63,10 @@ class ProactiveEventRepository:
                 "event_type": event.event_type,
                 "aggregate_id": event.aggregate_id,
                 "organization_id": event.organization_id,
-            "payload": json.dumps(event.payload, ensure_ascii=False),
-            "contract_version": event.contract_version,
-            "aggregate_version": event.aggregate_version,
-            "occurred_at": event.occurred_at,
+                "payload": json.dumps(event.payload, ensure_ascii=False),
+                "contract_version": event.contract_version,
+                "aggregate_version": event.aggregate_version,
+                "occurred_at": event.occurred_at,
             },
         )
         return int(result.rowcount or 0) == 1
@@ -223,7 +223,9 @@ def _from_row(row: Any) -> ProactiveEventRecord:
         locked_by=str(row["locked_by"]) if row["locked_by"] else None,
         locked_at=_as_utc(row["locked_at"]),
         contract_version=int(row.get("contract_version") or 1),
-        aggregate_version=int(row["aggregate_version"]) if row.get("aggregate_version") is not None else None,
+        aggregate_version=int(row["aggregate_version"])
+        if row.get("aggregate_version") is not None
+        else None,
         occurred_at=_as_utc(row.get("occurred_at")),
     )
 

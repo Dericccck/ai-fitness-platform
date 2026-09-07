@@ -173,7 +173,7 @@ class _AsyncContext:
     async def __aenter__(self) -> Any:
         return self.value
 
-    async def __aexit__(self, *_: Any) -> None:
+    async def __aexit__(self, *_: object) -> None:
         return None
 
 

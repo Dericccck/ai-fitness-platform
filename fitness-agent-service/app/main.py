@@ -10,6 +10,7 @@ from starlette.responses import Response
 
 from app.agent.fitness_tools import build_fitness_tool_registry
 from app.agent.operations_audit import OperationsAuditRepository
+from app.agent.routing import HybridIntentRouter
 from app.agent.supervisor import Supervisor
 from app.agent.training_plan_generation import (
     GatewayStudentTrainingContextReader,
@@ -344,6 +345,15 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             memory_candidate_service=app.state.memory_candidate_service,
             session_summary_service=app.state.session_summary_service,
             telemetry=app.state.trulens_telemetry,
+            intent_router=HybridIntentRouter(
+                app.state.models,
+                mode=settings.router_mode,
+                min_confidence=settings.router_min_confidence,
+                timeout_seconds=settings.router_timeout_seconds,
+                max_output_tokens=settings.router_max_output_tokens,
+                context_messages=settings.router_context_messages,
+                metrics=http_metrics,
+            ),
         )
         yield
     finally:

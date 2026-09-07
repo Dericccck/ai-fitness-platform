@@ -312,7 +312,9 @@ async def replay_dead_notification(
             connection, outbox_id=outbox_id, operator_id=identity.subject, reason=payload.reason
         )
         if not changed:
-            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="DEAD 事件不存在或已重放")
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT, detail="DEAD 事件不存在或已重放"
+            )
     async with request.app.state.database.engine.connect() as connection:
         record = await _outbox_repository(request).get_by_id(connection, outbox_id=outbox_id)
     if record is None:

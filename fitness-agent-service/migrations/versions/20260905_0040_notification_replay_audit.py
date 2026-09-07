@@ -12,9 +12,16 @@ depends_on: str | Sequence[str] | None = None
 
 
 def upgrade() -> None:
-    op.add_column("agent_notification_outbox", sa.Column("last_replayed_by", sa.Text(), nullable=True))
-    op.add_column("agent_notification_outbox", sa.Column("last_replay_reason", sa.Text(), nullable=True))
-    op.add_column("agent_notification_outbox", sa.Column("replayed_at", sa.DateTime(timezone=True), nullable=True))
+    op.add_column(
+        "agent_notification_outbox", sa.Column("last_replayed_by", sa.Text(), nullable=True)
+    )
+    op.add_column(
+        "agent_notification_outbox", sa.Column("last_replay_reason", sa.Text(), nullable=True)
+    )
+    op.add_column(
+        "agent_notification_outbox",
+        sa.Column("replayed_at", sa.DateTime(timezone=True), nullable=True),
+    )
 
 
 def downgrade() -> None:

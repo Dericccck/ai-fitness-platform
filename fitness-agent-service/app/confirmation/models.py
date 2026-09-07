@@ -23,7 +23,9 @@ ConfirmationDecision = Literal["APPROVE", "REJECT"]
 # 执行状态描述“已批准动作实际执行到哪一步”。批准不会自动变成执行成功。
 # NOT_STARTED 未领取执行权；RUNNING 执行中；SUCCEEDED 成功；
 # UNKNOWN 结果未知，必须经过下游查询或人工对账后才能收敛。
-ExecutionStatus = Literal["NOT_STARTED", "RUNNING", "SUCCEEDED", "FAILED_RETRYABLE", "FAILED_FINAL", "UNKNOWN"]
+ExecutionStatus = Literal[
+    "NOT_STARTED", "RUNNING", "SUCCEEDED", "FAILED_RETRYABLE", "FAILED_FINAL", "UNKNOWN"
+]
 
 # 不可变事件用于审计时间线；事件不是可编辑的当前状态，顺序由数据库时间和自增 ID 确定。
 ConfirmationEventType = Literal[

@@ -266,17 +266,13 @@ class TrainingPlanGenerationService:
                     _build_create_payload(request, content)
                 )
                 _validate_semantic_rules(validated, request)
-                authorized_evidence_ids = {
-                    item.citation_id for item in evidence.citations()
-                }
+                authorized_evidence_ids = {item.citation_id for item in evidence.citations()}
                 declared_evidence_ids = set(content.evidence_ids)
                 for day in content.days:
                     for item in day.items:
                         declared_evidence_ids.update(item.evidence_ids)
                 if declared_evidence_ids - authorized_evidence_ids:
-                    raise TrainingPlanGenerationError(
-                        "生成结果引用了未授权或不存在的知识证据"
-                    )
+                    raise TrainingPlanGenerationError("生成结果引用了未授权或不存在的知识证据")
                 return content
             except (
                 json.JSONDecodeError,
@@ -388,9 +384,7 @@ def _build_create_payload(
                 "day_number": day.day_number,
                 "title": day.title,
                 "scheduled_date": day.scheduled_date,
-                "items": [
-                    item.model_dump(exclude={"evidence_ids"}) for item in day.items
-                ],
+                "items": [item.model_dump(exclude={"evidence_ids"}) for item in day.items],
             }
             for day in content.days
         ],
@@ -440,8 +434,7 @@ def _validate_semantic_rules(
         if total_sets > 40:
             raise TrainingPlanGenerationError("单个训练日总组数不能超过 40 组")
         estimated_seconds = sum(
-            item.sets * 45 + max(0, item.sets - 1) * (item.rest_seconds or 0)
-            for item in day.items
+            item.sets * 45 + max(0, item.sets - 1) * (item.rest_seconds or 0) for item in day.items
         )
         if estimated_seconds > request.session_minutes * 60 * 1.2:
             raise TrainingPlanGenerationError("动作组数和休息时间超过单次训练时长容量")
@@ -473,9 +466,7 @@ def _validate_equipment(items: list[Any], available_equipment: list[str]) -> Non
             if equipment in exercise and equipment.lower() not in available
         ]
         if missing:
-            raise TrainingPlanGenerationError(
-                f"动作需要未声明可用的器械：{missing[0]}"
-            )
+            raise TrainingPlanGenerationError(f"动作需要未声明可用的器械：{missing[0]}")
 
 
 def _validate_generated_safety_text(items: list[Any]) -> None:

@@ -278,7 +278,10 @@ async def test_generation_reads_memory_only_for_student_actor() -> None:
         expires_at=2,
     )
 
-    await service.generate(request().model_copy(update={"student_id": "student-1", "coach_id": "coach-1"}), student_identity)
+    await service.generate(
+        request().model_copy(update={"student_id": "student-1", "coach_id": "coach-1"}),
+        student_identity,
+    )
 
     assert "available_equipment" in models.calls[0][-1]["content"]
     assert "弹力带" in models.calls[0][-1]["content"]
@@ -305,7 +308,9 @@ async def test_generation_uses_controlled_student_context_reader() -> None:
     reader = FakeStudentContext([memory], [])
     models = FakeModels([valid_json()])
     service = TrainingPlanGenerationService(
-        models, FakeRag(evidence()), student_context_reader=reader  # type: ignore[arg-type]
+        models,
+        FakeRag(evidence()),
+        student_context_reader=reader,  # type: ignore[arg-type]
     )
 
     result = await service.generate(
@@ -318,7 +323,9 @@ async def test_generation_uses_controlled_student_context_reader() -> None:
 
 @pytest.mark.asyncio
 async def test_generation_rejects_forged_evidence_id() -> None:
-    forged = valid_json().replace('"goal_type":"力量"', '"goal_type":"力量","evidence_ids":["forged"]')
+    forged = valid_json().replace(
+        '"goal_type":"力量"', '"goal_type":"力量","evidence_ids":["forged"]'
+    )
     service = TrainingPlanGenerationService(
         FakeModels([forged]), FakeRag(evidence()), max_repair_attempts=0
     )

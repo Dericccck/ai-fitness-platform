@@ -93,7 +93,9 @@ class FakeConfirmationService:
         self.reconcile_calls = getattr(self, "reconcile_calls", 0) + 1
         return self.current
 
-    async def mark_execution_unknown(self, confirmation_id: str, **kwargs: Any) -> ConfirmationRecord:
+    async def mark_execution_unknown(
+        self, confirmation_id: str, **kwargs: Any
+    ) -> ConfirmationRecord:
         assert confirmation_id == self.current.id
         self.current = self.current.mark_unknown(datetime.now(UTC))
         return self.current

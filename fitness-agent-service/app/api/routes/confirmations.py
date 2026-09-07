@@ -225,7 +225,9 @@ async def reconcile_confirmation(
                 confirmation_id, trace_id=x_trace_id or payload.reason
             )
     except (ConfirmationNotFound, ConfirmationStateError) as exc:
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="确认单当前不可对账") from exc
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="确认单当前不可对账"
+        ) from exc
     return _to_response(reconciled)
 
 

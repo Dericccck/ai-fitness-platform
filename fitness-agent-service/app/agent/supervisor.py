@@ -63,9 +63,17 @@ from .operations_tools import (
     build_authorized_operations_tool_input,
     operations_prompt_hint,
 )
+from .routing import (
+    IntentRouter,
+    RuleIntentRouter,
+    deterministic_route_decision,
+    forced_tool_for_intent,
+    intent_allowed_tool_ids,
+    intent_display_name,
+)
 from .tool_registry import ToolContext, ToolRegistry, ToolRegistryError
 
-SupervisorRunStatus = Literal["COMPLETED", "CONFIRMATION_REQUIRED"]
+SupervisorRunStatus = Literal["COMPLETED", "CONFIRMATION_REQUIRED", "CLARIFICATION_REQUIRED"]
 _logger = structlog.get_logger("agent.supervisor")
 
 
@@ -117,6 +125,7 @@ class SupervisorRuntimeContext:
     thread_id: str | None = None
     # 当前问题只传给需要做查询前策略校验的工具，不进入 State 或 Checkpoint。
     user_message: str | None = None
+    locale: str = "zh-CN"
 
 
 @dataclass(frozen=True)
@@ -124,7 +133,7 @@ class SupervisorResponse:
     """对外返回的稳定响应，不暴露 LangGraph 或供应商对象。"""
 
     answer: str
-    route: SupervisorRoute
+    route: str
     tool_steps: int
     input_tokens: int | None
     output_tokens: int | None
@@ -132,16 +141,21 @@ class SupervisorResponse:
     confirmation_id: str | None = None
     confirmation_summary: dict[str, Any] | None = None
     confirmation_expires_at: str | None = None
+    intent: str | None = None
+    routes: tuple[str, ...] = ()
+    route_source: str | None = None
+    route_confidence: float | None = None
 
 
 class SupervisorState(TypedDict, total=False):
-    # graph_version=2 表示请求由顶层 Supervisor 路由到领域子图。旧 Checkpoint 没有
-    # 该字段，仍可通过父图保留的 legacy 节点完成已经暂停的确认，不会在升级时丢单。
+    # graph_version=3 表示路由在父图内结合会话上下文完成，并支持最多两个意图顺序
+    # 执行。旧 v1/v2 Checkpoint 仍可通过保留节点恢复，不会在升级时丢失待确认操作。
     graph_version: int
     active_domain: str
     messages: list[dict[str, Any]]
     route: SupervisorRoute
     tool_steps: int
+    current_tool_steps: int
     final_answer: str
     input_tokens: int
     output_tokens: int
@@ -149,6 +163,19 @@ class SupervisorState(TypedDict, total=False):
     model_tool_calls: list[ModelToolCall]
     # 只保存确认单 ID；精确参数保存在加密确认单，绝不进入 Checkpoint。
     pending_confirmation_id: str | None
+    intent: str
+    route_plan: list[dict[str, Any]]
+    route_index: int
+    route_source: str
+    route_confidence: float
+    route_reason_code: str
+    router_version: str
+    routing_terminal: bool
+    clarification_required: bool
+    partial_answers: list[dict[str, str]]
+    memory_candidates_prepared: bool
+    previous_route: str
+    continue_domain: bool
 
 
 class Supervisor:
@@ -170,6 +197,7 @@ class Supervisor:
         # Service，因为它还负责跨请求持久化和用户批准/拒绝。
         memory_candidate_extractor: MemoryCandidateExtractionService | None = None,
         telemetry: TruLensTelemetry | None = None,
+        intent_router: IntentRouter | None = None,
     ) -> None:
         self.models = models
         self.tools = tools
@@ -182,6 +210,8 @@ class Supervisor:
         self.session_summary_service = session_summary_service
         self.memory_candidate_extractor = memory_candidate_extractor
         self.telemetry = telemetry or TruLensTelemetry.disabled()
+        # 测试和离线装配默认保持无供应商调用；正式应用显式注入 HybridIntentRouter。
+        self.intent_router = intent_router or RuleIntentRouter()
         self._domain_graphs: dict[SupervisorRoute, Any] = {}
         self._graph = self._build_graph()
 
@@ -203,6 +233,9 @@ class Supervisor:
                 request_span,
                 {
                     "fitness.agent.route": response.route,
+                    "fitness.agent.intent": response.intent,
+                    "fitness.agent.route_source": response.route_source,
+                    "fitness.agent.route_confidence": response.route_confidence,
                     "fitness.agent.tool_steps": response.tool_steps,
                     "fitness.agent.input_tokens": response.input_tokens,
                     "fitness.agent.output_tokens": response.output_tokens,
@@ -214,124 +247,42 @@ class Supervisor:
             return response
 
     async def _invoke(self, request: SupervisorRequest) -> SupervisorResponse:
-        """执行一次可恢复的 Supervisor 状态图。"""
+        """执行一次可恢复、上下文感知且支持双意图的 Supervisor 状态图。"""
 
-        route = classify_route(request.user_message)
-        if route == "UNSUPPORTED_LEGACY":
-            raise UnsupportedLegacyRequest("赛事、作品和活动运营不属于当前健身 Agent 的业务范围")
-        domain_spec = domain_agent_spec(route)
-
-        restricted_answer = _customer_service_restricted_answer(request.user_message)
-        if route == "CUSTOMER_SERVICE" and restricted_answer is not None:
-            # 医疗、退款和争议问题不能交给模型自由发挥，也不能因为后续新增工具而
-            # 意外进入写操作链路。固定回复只表达当前系统边界，不写入业务库或 Memory。
-            return SupervisorResponse(
-                answer=restricted_answer,
-                route=route,
-                tool_steps=0,
-                input_tokens=None,
-                output_tokens=None,
-            )
-
-        # API 传入的 thread_id 已经由 conversation_thread_id 脱敏；候选仓储只保存这个
-        # 稳定标识，不接触原始会话 ID。没有显式 thread 时的单测回退不代表生产路径。
+        # API 传入的 thread_id 已由签名身份和 conversation_id 派生并脱敏。路由现在
+        # 放在同一 Redis 会话锁内，确保“读取旧上下文→判定意图→执行→写 Checkpoint”
+        # 看到一致的会话历史。
         thread_id = request.thread_id or request.conversation_id
-
-        knowledge_context = ""
-        if (
-            domain_spec.uses_rag
-            and (
-                route != "CUSTOMER_SERVICE"
-                or _looks_like_customer_service_knowledge_question(request.user_message)
-            )
-            and self.rag_service is not None
-            and request.identity
-        ):
-            try:
-                rag_result = await self.rag_service.search(
-                    request.user_message,
-                    RetrievalScope(
-                        subject=request.identity.subject,
-                        organization_ids=request.identity.organization_ids,
-                        roles=request.identity.roles,
-                    ),
-                )
-                knowledge_context = rag_result.as_prompt_context()
-            except RagSearchError as exc:
-                # 检索失败必须对调用方可见；模型不能收到未标记或伪造的回退上下文。
-                raise SupervisorRuntimeError("知识检索失败") from exc
-
-        memory_candidate_context = ""
-        if (
-            domain_spec.uses_memory_candidates
-            and request.identity is not None
-            and (
-                self.memory_candidate_service is not None
-                or self.memory_candidate_extractor is not None
-            )
-        ):
-            try:
-                if self.memory_candidate_service is not None:
-                    candidates = await self.memory_candidate_service.propose(
-                        user_message=request.user_message,
-                        identity=request.identity,
-                        thread_id=thread_id,
-                        source_request_id=request.gateway_context.request_id,
-                    )
-                else:
-                    # 兼容旧装配时只做当前请求提取；这条路径不会持久化候选。
-                    extractor = self.memory_candidate_extractor
-                    assert extractor is not None
-                    candidates = await extractor.propose(request.user_message)
-                memory_candidate_context = build_candidate_context(
-                    candidates, request.identity.organization_ids
-                )
-            except MemoryCandidatePersistenceError as exc:
-                # 候选持久化故障不应阻断普通对话，但仍把未确认候选交给主模型，让用户
-                # 知道当前不能声称“已记住”；同时通过日志和指标暴露需要修复的基础设施问题。
-                memory_candidate_context = build_candidate_context(
-                    exc.candidates, request.identity.organization_ids
-                )
-                _logger.warning(
-                    "memory_candidate_persistence_failed",
-                    request_id=request.gateway_context.request_id,
-                    trace_id=request.gateway_context.trace_id,
-                )
-            except (MemoryCandidateExtractionError, ModelConfigurationError, ModelResponseError):
-                # 候选提取是辅助能力，暂时不可用时不应阻断普通健身问答；主模型仍会
-                # 通过公开的 Memory 保存工具和现有确认链路决定是否提出保存动作。
-                _logger.warning(
-                    "memory_candidate_extraction_failed",
-                    request_id=request.gateway_context.request_id,
-                    trace_id=request.gateway_context.trace_id,
-                )
-
-        system_prompt = _system_prompt(route, request.locale)
-        if route == "OPERATIONS":
-            system_prompt = f"{system_prompt}\n\n{operations_prompt_hint(request.user_message)}"
-        if knowledge_context:
-            system_prompt = f"{system_prompt}\n\n{knowledge_context}"
-        candidate_message = (
-            {"role": "system", "content": memory_candidate_context}
-            if memory_candidate_context
-            else None
-        )
-        initial_messages: list[dict[str, Any]] = [
-            {"role": "system", "content": system_prompt},
-        ]
-        if candidate_message is not None:
-            initial_messages.append(candidate_message)
-        initial_messages.append({"role": "user", "content": request.user_message})
         initial: SupervisorState = {
-            "graph_version": 2,
-            "active_domain": domain_spec.node_name,
-            "route": route,
-            "messages": initial_messages,
+            "graph_version": 3,
+            "active_domain": "",
+            "route": "FITNESS_COACHING",
+            "intent": "",
+            "route_plan": [],
+            "route_index": 0,
+            "route_source": "",
+            "route_confidence": 0,
+            "route_reason_code": "",
+            "router_version": "",
+            "routing_terminal": False,
+            "clarification_required": False,
+            "partial_answers": [],
+            "memory_candidates_prepared": False,
+            "previous_route": "",
+            "continue_domain": False,
+            "messages": [
+                {"role": "system", "content": _routing_system_prompt(request.locale)},
+                {"role": "user", "content": request.user_message},
+            ],
             "tool_steps": 0,
+            "current_tool_steps": 0,
             "input_tokens": 0,
             "output_tokens": 0,
+            "final_answer": "",
+            "model_tool_calls": [],
+            "pending_confirmation_id": None,
         }
-        config = {"configurable": {"thread_id": thread_id}}
+        config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
 
         async def run_with_persisted_history() -> Any:
             # Checkpoint 只会保存状态，不会自动把本次新消息拼接到业务上下文中。
@@ -353,6 +304,7 @@ class Supervisor:
                 # 旧版本把签名上下文和潜在确认凭证放进 State。不能继续反序列化或
                 # 自动迁移这类状态，避免敏感对象在恢复链路中继续传播；调用方应重建会话。
                 raise SupervisorCheckpointIncompatible("Checkpoint 包含不兼容的敏感运行时状态")
+            initial["previous_route"] = str(previous_values.get("route") or "")
             previous_messages = previous_values.get("messages", [])
             if previous_messages:
                 session_summary = None
@@ -368,38 +320,24 @@ class Supervisor:
                             "session_summary_load_failed",
                             request_id=request.gateway_context.request_id,
                         )
-                # system、RAG 引用和 Memory 候选都是“本轮临时上下文”，不能沿用上一轮
-                # 的领域提示。尤其同一会话从健身切换到预约时，如果保留旧
-                # system 消息，即使工具白名单已经切换，模型仍可能受旧领域规则影响。
-                # 因此先移除历史 system 消息，再由本轮重新构建领域提示、可选短期摘要
-                # 和候选上下文；user/assistant/tool 历史继续保留，保证多轮语义连续。
+                # 旧 system、RAG 和 Memory 候选都属于上一轮临时上下文。路由节点只接收
+                # 最近 user/assistant 语义，领域准备节点会按新意图重新生成 system 内容。
                 conversation_messages = [
                     message for message in previous_messages if message.get("role") != "system"
                 ]
                 current_messages = (
                     build_compacted_messages(
-                        system_prompt=system_prompt,
+                        system_prompt=_routing_system_prompt(request.locale),
                         summary=session_summary,
                         previous_messages=conversation_messages,
                         keep_recent_messages=self.session_summary_service.keep_recent_messages,
                     )
                     if session_summary and self.session_summary_service is not None
                     else [
-                        {"role": "system", "content": system_prompt},
+                        {"role": "system", "content": _routing_system_prompt(request.locale)},
                         *conversation_messages,
                     ]
                 )
-                if candidate_message is not None:
-                    # 短期摘要也是本轮系统上下文，Memory 候选放在所有 system 消息之后。
-                    insertion_index = next(
-                        (
-                            index
-                            for index, message in enumerate(current_messages)
-                            if message.get("role") != "system"
-                        ),
-                        len(current_messages),
-                    )
-                    current_messages.insert(insertion_index, candidate_message)
                 current_messages.append({"role": "user", "content": request.user_message})
                 initial["messages"] = current_messages
                 initial["input_tokens"] = previous_values.get("input_tokens", 0)
@@ -412,6 +350,7 @@ class Supervisor:
                     identity=request.identity,
                     thread_id=thread_id,
                     user_message=request.user_message,
+                    locale=request.locale,
                 ),
             )
 
@@ -461,13 +400,21 @@ class Supervisor:
             raise
 
         interrupts = final_state.get("__interrupt__", [])
+        route_plan = final_state.get("route_plan", [])
+        response_route = _response_route(route_plan, final_state.get("route"))
+        if final_state.get("clarification_required"):
+            response_route = "CLARIFICATION"
+        response_routes = tuple(
+            str(item.get("route")) for item in route_plan if isinstance(item, dict)
+        )
+        primary_intent = _primary_intent(route_plan, final_state.get("intent"))
         if interrupts:
             interrupt_value = interrupts[0].value
             if not isinstance(interrupt_value, dict):
                 raise SupervisorRuntimeError("Supervisor 返回了无效的确认提示")
             return SupervisorResponse(
-                answer="",
-                route=route,
+                answer=_combined_partial_answer(final_state.get("partial_answers", [])),
+                route=response_route,
                 tool_steps=final_state.get("tool_steps", 0),
                 input_tokens=_optional_int(final_state.get("input_tokens")),
                 output_tokens=_optional_int(final_state.get("output_tokens")),
@@ -479,16 +426,29 @@ class Supervisor:
                     else None
                 ),
                 confirmation_expires_at=_optional_text(interrupt_value.get("expires_at")),
+                intent=primary_intent,
+                routes=response_routes,
+                route_source=_optional_text(final_state.get("route_source")),
+                route_confidence=_optional_float(final_state.get("route_confidence")),
             )
         answer = final_state.get("final_answer", "").strip()
         if not answer:
             raise SupervisorRuntimeError("Supervisor 生成了空回答")
         response = SupervisorResponse(
             answer=answer,
-            route=final_state["route"],
+            route=response_route,
             tool_steps=final_state.get("tool_steps", 0),
             input_tokens=_optional_int(final_state.get("input_tokens")),
             output_tokens=_optional_int(final_state.get("output_tokens")),
+            status=(
+                "CLARIFICATION_REQUIRED"
+                if final_state.get("clarification_required")
+                else "COMPLETED"
+            ),
+            intent=primary_intent,
+            routes=response_routes,
+            route_source=_optional_text(final_state.get("route_source")),
+            route_confidence=_optional_float(final_state.get("route_confidence")),
         )
         await self._persist_session_summary(
             final_state,
@@ -550,7 +510,7 @@ class Supervisor:
 
         if self.confirmation_service is None:
             raise SupervisorRuntimeError("确认服务未配置")
-        config = {"configurable": {"thread_id": thread_id}}
+        config: dict[str, Any] = {"configurable": {"thread_id": thread_id}}
         try:
             if self.session_lock is None:
                 final_state = await self._graph.ainvoke(
@@ -656,7 +616,7 @@ class Supervisor:
                 as_node=(
                     domain_agent_spec(final_state["route"]).node_name
                     if final_state.get("graph_version") == 2
-                    else "model"
+                    else ("domain_complete" if final_state.get("graph_version") == 3 else "model")
                 ),
             )
         except (SessionSummaryError, ModelConfigurationError, ModelResponseError):
@@ -674,10 +634,18 @@ class Supervisor:
             raise SupervisorRuntimeError("已确认的执行生成了空回答")
         return SupervisorResponse(
             answer=answer,
-            route=final_state["route"],
+            route=_response_route(final_state.get("route_plan", []), final_state.get("route")),
             tool_steps=final_state.get("tool_steps", 0),
             input_tokens=_optional_int(final_state.get("input_tokens")),
             output_tokens=_optional_int(final_state.get("output_tokens")),
+            intent=_optional_text(final_state.get("intent")),
+            routes=tuple(
+                str(item.get("route"))
+                for item in final_state.get("route_plan", [])
+                if isinstance(item, dict)
+            ),
+            route_source=_optional_text(final_state.get("route_source")),
+            route_confidence=_optional_float(final_state.get("route_confidence")),
         )
 
     def _build_graph(self) -> Any:
@@ -688,15 +656,21 @@ class Supervisor:
         服务重启后仍通过父图 ``Command(resume=...)`` 恢复。
 
         顶层保留 model/tools/confirmation 三个旧节点，仅用于恢复 v1 已暂停 Checkpoint。
-        新请求带 ``graph_version=2``，一定经过 supervisor_router 进入领域子图。
+        新请求带 ``graph_version=3``，由上下文路由器生成最多两个意图并顺序进入子图。
         """
 
         graph = StateGraph(SupervisorState, context_schema=SupervisorRuntimeContext)
 
         # 新版顶层路由和四个真正独立编译的 LangGraph 子图。
         graph.add_node("supervisor_router", self._supervisor_router_node)
+        graph.add_node("prepare_domain", self._prepare_domain_node)
+        graph.add_node("domain_complete", self._domain_complete_node)
         domain_nodes: list[str] = []
-        route_map: dict[Hashable, str] = {"legacy_model": "model"}
+        route_map: dict[Hashable, str] = {
+            "legacy_model": "model",
+            "prepare_domain": "prepare_domain",
+            "finish": END,
+        }
         for spec in executable_domain_specs():
             domain_graph = build_domain_subgraph(
                 spec,
@@ -718,8 +692,18 @@ class Supervisor:
             self._after_supervisor_router,
             route_map,
         )
+        graph.add_conditional_edges(
+            "prepare_domain",
+            self._after_prepare_domain,
+            {spec.node_name: spec.node_name for spec in executable_domain_specs()},
+        )
         for node_name in domain_nodes:
-            graph.add_edge(node_name, END)
+            graph.add_edge(node_name, "domain_complete")
+        graph.add_conditional_edges(
+            "domain_complete",
+            self._after_domain_complete,
+            {"next": "prepare_domain", "finish": END},
+        )
 
         # 旧拓扑兼容分支：不会承接 v2 新请求，但节点名必须保留，才能恢复升级前
         # 已经停在 confirmation interrupt 的 Checkpoint。
@@ -735,26 +719,200 @@ class Supervisor:
         graph.add_edge("confirmation", END)
         return graph.compile(checkpointer=self._checkpointer)
 
-    @staticmethod
-    def _supervisor_router_node(state: SupervisorState) -> dict[str, Any]:
-        """验证顶层路由并记录当前领域 Agent，不执行任何业务工具。"""
+    async def _supervisor_router_node(
+        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        """生成受服务端约束的意图计划；本节点不暴露或执行任何业务工具。"""
 
-        route = state.get("route")
-        if route is None or route == "UNSUPPORTED_LEGACY":
-            raise SupervisorRuntimeError("Supervisor 路由不可执行")
-        spec = domain_agent_spec(route)
-        return {"active_domain": spec.node_name}
+        if state.get("graph_version") != 3:
+            return {}
+        if runtime.context is None or not runtime.context.user_message:
+            raise SupervisorRuntimeError("缺少路由所需的当前用户消息")
+        restricted = _customer_service_restricted_answer(runtime.context.user_message)
+        if restricted is not None:
+            return {
+                "route": "CUSTOMER_SERVICE",
+                "intent": "RESTRICTED_MEDICAL",
+                "route_plan": [],
+                "route_source": "HARD_GUARD",
+                "route_confidence": 1.0,
+                "route_reason_code": "RESTRICTED_CUSTOMER_SERVICE",
+                "router_version": "hard-guard-v1",
+                "routing_terminal": True,
+                "final_answer": restricted,
+            }
+        decision = await self.intent_router.decide(
+            runtime.context.user_message,
+            recent_messages=state.get("messages", []),
+            previous_route=state.get("previous_route") or None,
+        )
+        if any(item.route == "UNSUPPORTED_LEGACY" for item in decision.intents):
+            raise UnsupportedLegacyRequest("赛事、作品和活动运营不属于当前健身 Agent 的业务范围")
+        common: dict[str, Any] = {
+            "route_plan": [item.as_state() for item in decision.intents],
+            "route_source": decision.source,
+            "route_confidence": decision.confidence,
+            "route_reason_code": decision.reason_code,
+            "router_version": decision.classifier_version,
+            "input_tokens": state.get("input_tokens", 0) + (decision.input_tokens or 0),
+            "output_tokens": state.get("output_tokens", 0) + (decision.output_tokens or 0),
+        }
+        if decision.clarification:
+            return {
+                **common,
+                "routing_terminal": True,
+                "clarification_required": True,
+                "final_answer": decision.clarification,
+            }
+        first = decision.intents[0]
+        return {
+            **common,
+            "route": first.route,
+            "intent": first.intent,
+            "route_index": 0,
+            "active_domain": domain_agent_spec(first.route).node_name,
+        }
 
     @staticmethod
     def _after_supervisor_router(state: SupervisorState) -> str:
-        """把 v2 请求分派到领域子图；兼容无版本的历史 Checkpoint。"""
+        """新请求进入领域准备节点；v1/v2 历史状态仍走兼容路径。"""
 
-        if state.get("graph_version") != 2:
+        if state.get("graph_version") not in {2, 3}:
             return "legacy_model"
+        if state.get("routing_terminal"):
+            return "finish"
+        if state.get("graph_version") == 3:
+            return "prepare_domain"
         route = state.get("route")
         if route is None:
             raise SupervisorRuntimeError("缺少 Supervisor 路由")
         return domain_agent_spec(route).node_name
+
+    async def _prepare_domain_node(
+        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        """按当前意图重新构造最小领域上下文，并在锁内完成 RAG/Memory 准备。"""
+
+        if runtime.context is None or not runtime.context.user_message:
+            raise SupervisorRuntimeError("缺少领域运行上下文")
+        route = state["route"]
+        intent = state.get("intent", "")
+        spec = domain_agent_spec(route)
+        system_prompt = _system_prompt(route, runtime.context.locale, intent=intent)
+        if route == "OPERATIONS":
+            system_prompt = (
+                f"{system_prompt}\n\n{operations_prompt_hint(runtime.context.user_message)}"
+            )
+        if (
+            spec.uses_rag
+            and self.rag_service is not None
+            and runtime.context.identity is not None
+            and (route != "CUSTOMER_SERVICE" or intent == "BUSINESS_RULE_QA")
+        ):
+            try:
+                rag = await self.rag_service.search(
+                    runtime.context.user_message,
+                    RetrievalScope(
+                        subject=runtime.context.identity.subject,
+                        organization_ids=runtime.context.identity.organization_ids,
+                        roles=runtime.context.identity.roles,
+                    ),
+                )
+                context = rag.as_prompt_context()
+                if context:
+                    system_prompt = f"{system_prompt}\n\n{context}"
+            except RagSearchError as exc:
+                raise SupervisorRuntimeError("知识检索失败") from exc
+        system_messages = [{"role": "system", "content": system_prompt}]
+        memory_prepared = state.get("memory_candidates_prepared", False)
+        if (
+            spec.uses_memory_candidates
+            and not memory_prepared
+            and runtime.context.identity is not None
+            and (self.memory_candidate_service or self.memory_candidate_extractor)
+        ):
+            try:
+                if self.memory_candidate_service is not None:
+                    candidates = await self.memory_candidate_service.propose(
+                        user_message=runtime.context.user_message,
+                        identity=runtime.context.identity,
+                        thread_id=runtime.context.thread_id or "unknown-thread",
+                        source_request_id=runtime.context.gateway_context.request_id,
+                    )
+                else:
+                    assert self.memory_candidate_extractor is not None
+                    candidates = await self.memory_candidate_extractor.propose(
+                        runtime.context.user_message
+                    )
+                candidate_context = build_candidate_context(
+                    candidates, runtime.context.identity.organization_ids
+                )
+                if candidate_context:
+                    system_messages.append({"role": "system", "content": candidate_context})
+            except MemoryCandidatePersistenceError as exc:
+                candidate_context = build_candidate_context(
+                    exc.candidates, runtime.context.identity.organization_ids
+                )
+                if candidate_context:
+                    system_messages.append({"role": "system", "content": candidate_context})
+                _logger.warning("memory_candidate_persistence_failed")
+            except (MemoryCandidateExtractionError, ModelConfigurationError, ModelResponseError):
+                _logger.warning("memory_candidate_extraction_failed")
+            memory_prepared = True
+        history = [
+            m
+            for m in state.get("messages", [])
+            if m.get("role") != "system" or "当前会话短期摘要" in str(m.get("content", ""))
+        ]
+        return {
+            "messages": [*system_messages, *history],
+            "active_domain": spec.node_name,
+            "model_tool_calls": [],
+            "final_answer": "",
+            "current_tool_steps": 0,
+            "memory_candidates_prepared": memory_prepared,
+        }
+
+    @staticmethod
+    def _after_prepare_domain(state: SupervisorState) -> str:
+        return domain_agent_spec(state["route"]).node_name
+
+    @staticmethod
+    def _domain_complete_node(state: SupervisorState) -> dict[str, Any]:
+        """汇总已完成意图；若还有第二个意图则清空瞬时状态并继续调度。"""
+
+        plan = state.get("route_plan", [])
+        if state.get("graph_version") != 3 or not plan:
+            return {}
+        answer = str(state.get("final_answer", "")).strip()
+        if not answer:
+            raise SupervisorRuntimeError("领域 Agent 生成了空回答")
+        partial = [*state.get("partial_answers", [])]
+        partial.append({"intent": state.get("intent", ""), "answer": answer})
+        next_index = state.get("route_index", 0) + 1
+        if next_index >= len(plan):
+            return {
+                "partial_answers": partial,
+                "final_answer": _combined_partial_answer(partial),
+                "continue_domain": False,
+            }
+        next_item = plan[next_index]
+        return {
+            "partial_answers": partial,
+            "route_index": next_index,
+            "route": next_item["route"],
+            "intent": next_item["intent"],
+            "active_domain": domain_agent_spec(next_item["route"]).node_name,
+            "final_answer": "",
+            "model_tool_calls": [],
+            "pending_confirmation_id": None,
+            "continue_domain": True,
+            "current_tool_steps": 0,
+        }
+
+    @staticmethod
+    def _after_domain_complete(state: SupervisorState) -> str:
+        return "next" if state.get("continue_domain") else "finish"
 
     async def _model_node(
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
@@ -765,18 +923,20 @@ class Supervisor:
         if state.get("pending_confirmation_id"):
             return {"model_tool_calls": []}
         tool_schemas = (
-            _model_tools(self.tools, state["route"])
-            if state.get("tool_steps", 0) < self.max_tool_steps
+            _model_tools(self.tools, state["route"], state.get("intent"))
+            if state.get("current_tool_steps", state.get("tool_steps", 0)) < self.max_tool_steps
             else []
         )
-        force_tool_name = _forced_write_tool_name(
-            state["route"],
-            (
-                runtime.context.user_message
-                if runtime.context is not None and runtime.context.user_message
-                else ""
-            ),
-        )
+        force_tool_name = forced_tool_for_intent(state.get("intent", ""))
+        if force_tool_name is None:
+            force_tool_name = _forced_write_tool_name(
+                state["route"],
+                (
+                    runtime.context.user_message
+                    if runtime.context is not None and runtime.context.user_message
+                    else ""
+                ),
+            )
         model_kwargs: dict[str, Any] = {"tools": tool_schemas}
         if force_tool_name and tool_schemas:
             model_kwargs["force_tool_name"] = force_tool_name
@@ -795,6 +955,9 @@ class Supervisor:
             definition = self.tools.get(call.name)
             if definition.tool_id not in spec.allowed_tool_ids:
                 raise SupervisorRuntimeError("领域 Agent 请求了白名单之外的工具")
+            intent_tools = intent_allowed_tool_ids(state["route"], state.get("intent"))
+            if intent_tools is not None and definition.tool_id not in intent_tools:
+                raise SupervisorRuntimeError("领域 Agent 请求了当前意图之外的工具")
         if any(not self.tools.get(call.name).read_only for call in tool_calls):
             if len(tool_calls) != 1:
                 raise SupervisorRuntimeError("每次写工具调用都必须单独确认")
@@ -811,6 +974,7 @@ class Supervisor:
                 call.arguments,
                 runtime,
                 route=state["route"],
+                intent=state.get("intent"),
             )
             # Checkpoint 只保存空参数占位和确认 ID；精确参数已在确认单中加密保存。
             assistant_message: dict[str, Any] = {
@@ -871,6 +1035,9 @@ class Supervisor:
         )
         if record.tool_id not in domain_agent_spec(state["route"]).allowed_tool_ids:
             raise ConfirmationStateError("确认工具不属于当前领域")
+        intent_tools = intent_allowed_tool_ids(state["route"], state.get("intent"))
+        if intent_tools is not None and record.tool_id not in intent_tools:
+            raise ConfirmationStateError("确认工具不属于当前意图")
         if record.authorization_status == "PENDING":
             # 首次进入节点只展示脱敏摘要并暂停；resume 的内容不会被当作批准事实。
             resume_value = interrupt(
@@ -940,6 +1107,7 @@ class Supervisor:
             "pending_confirmation_id": None,
             "model_tool_calls": [],
             "tool_steps": state.get("tool_steps", 0) + 1,
+            "current_tool_steps": state.get("current_tool_steps", state.get("tool_steps", 0)) + 1,
             "final_answer": f"已完成{record.display_summary.get('operation', '确认写操作')}。",
         }
 
@@ -960,6 +1128,9 @@ class Supervisor:
             definition = self.tools.get(call.name)
             if definition.tool_id not in spec.allowed_tool_ids:
                 raise SupervisorRuntimeError("工具执行不属于当前领域")
+            intent_tools = intent_allowed_tool_ids(state["route"], state.get("intent"))
+            if intent_tools is not None and definition.tool_id not in intent_tools:
+                raise SupervisorRuntimeError("工具执行不属于当前意图")
             raw_input = call.arguments
             if (
                 spec.deterministic_operations_input
@@ -1011,10 +1182,15 @@ class Supervisor:
                     generated_payload,
                     runtime,
                     route=state["route"],
+                    intent=state.get("intent"),
                 )
                 return {
                     "messages": [*state["messages"], *tool_messages],
                     "tool_steps": state.get("tool_steps", 0) + 1,
+                    "current_tool_steps": state.get(
+                        "current_tool_steps", state.get("tool_steps", 0)
+                    )
+                    + 1,
                     "model_tool_calls": [],
                     "pending_confirmation_id": confirmation.id,
                     "final_answer": "",
@@ -1022,6 +1198,7 @@ class Supervisor:
         return {
             "messages": [*state["messages"], *tool_messages],
             "tool_steps": state.get("tool_steps", 0) + 1,
+            "current_tool_steps": state.get("current_tool_steps", state.get("tool_steps", 0)) + 1,
         }
 
     async def _prepare_write_confirmation(
@@ -1031,6 +1208,7 @@ class Supervisor:
         runtime: Runtime[SupervisorRuntimeContext],
         *,
         route: SupervisorRoute,
+        intent: str | None = None,
     ) -> Any:
         """统一创建写操作确认单，确保模型直写和生成后直写使用同一安全边界。"""
 
@@ -1041,6 +1219,9 @@ class Supervisor:
         definition = self.tools.get(tool_id)
         if definition.tool_id not in domain_agent_spec(route).allowed_tool_ids:
             raise SupervisorRuntimeError("写操作确认不属于当前领域")
+        intent_tools = intent_allowed_tool_ids(route, intent)
+        if intent_tools is not None and definition.tool_id not in intent_tools:
+            raise SupervisorRuntimeError("写操作确认不属于当前意图")
         bound_input = self.tools.bind_context_input(
             definition.tool_id,
             raw_input,
@@ -1069,6 +1250,9 @@ def classify_route(user_message: str) -> SupervisorRoute:
     误把遗留赛事代码当成健身业务能力。
     """
 
+    decision = deterministic_route_decision(user_message)
+    if decision is not None and decision.intents:
+        return decision.primary_route
     text = user_message.lower()
     if any(keyword in text for keyword in ("赛事", "比赛", "作品", "活动运营", "报名活动")):
         return "UNSUPPORTED_LEGACY"
@@ -1155,7 +1339,7 @@ def classify_route(user_message: str) -> SupervisorRoute:
     return "FITNESS_COACHING"
 
 
-def _system_prompt(route: SupervisorRoute, locale: str) -> str:
+def _system_prompt(route: SupervisorRoute, locale: str, *, intent: str | None = None) -> str:
     spec = domain_agent_spec(route)
     booking_instruction = (
         "预约规则：用户明确要求创建预约、改约或取消预约时，必须调用对应的预约工具，"
@@ -1180,7 +1364,9 @@ def _system_prompt(route: SupervisorRoute, locale: str) -> str:
         "动态业务事实必须通过已注册工具查询，不能猜测；工具失败时必须明确告知失败，不能宣称成功。"
         "不得根据自然语言中的 user_id、organization_id 或角色改变权限。"
         "Memory 候选只是模型建议，不是已保存事实；用户未批准前不得声称已经记住。"
-        f"{booking_instruction}{customer_service_instruction}当前路由={route}，语言={locale}。"
+        f"{booking_instruction}{customer_service_instruction}当前路由={route}，"
+        f"当前意图={intent or 'LEGACY'}，语言={locale}。"
+        "如果一条用户消息包含多个需求，只处理当前意图，不替另一个意图调用工具或执行写入。"
         "回答应简洁、准确，并区分已查询事实与一般建议。"
     )
 
@@ -1344,8 +1530,13 @@ def _safe_model_tool_result(tool_id: str, result: Any) -> Any:
     return {key: value for key, value in result.items() if key != "payload"}
 
 
-def _model_tools(registry: ToolRegistry, route: SupervisorRoute) -> list[dict[str, Any]]:
+def _model_tools(
+    registry: ToolRegistry, route: SupervisorRoute, intent: str | None = None
+) -> list[dict[str, Any]]:
     allowed_tool_ids = domain_agent_spec(route).allowed_tool_ids
+    intent_tool_ids = intent_allowed_tool_ids(route, intent)
+    if intent_tool_ids is not None:
+        allowed_tool_ids = allowed_tool_ids & intent_tool_ids
     return [
         {
             "type": "function",
@@ -1418,3 +1609,42 @@ def _optional_int(value: int | None) -> int | None:
 
 def _optional_text(value: Any) -> str | None:
     return value if isinstance(value, str) and value else None
+
+
+def _optional_float(value: Any) -> float | None:
+    return float(value) if isinstance(value, (int, float)) else None
+
+
+def _routing_system_prompt(locale: str) -> str:
+    """Checkpoint 中的临时占位提示；真正领域规则由 prepare_domain 每轮重建。"""
+
+    return f"正在进行受控意图路由。不要回答用户问题。语言={locale}。"
+
+
+def _response_route(route_plan: list[dict[str, Any]], fallback: Any) -> str:
+    routes = {str(item.get("route")) for item in route_plan if item.get("route")}
+    if len(routes) > 1:
+        return "MULTI_INTENT"
+    if routes:
+        return next(iter(routes))
+    return str(fallback or "CLARIFICATION")
+
+
+def _primary_intent(route_plan: list[dict[str, Any]], fallback: Any) -> str | None:
+    if route_plan:
+        return _optional_text(route_plan[0].get("intent"))
+    return _optional_text(fallback)
+
+
+def _combined_partial_answer(items: list[dict[str, str]]) -> str:
+    """按意图顺序合并回答，使双查询结果及“查询+待确认写入”均可独立阅读。"""
+
+    valid = [item for item in items if str(item.get("answer", "")).strip()]
+    if not valid:
+        return ""
+    if len(valid) == 1:
+        return str(valid[0]["answer"]).strip()
+    return "\n\n".join(
+        f"### {intent_display_name(str(item.get('intent', '')))}\n{str(item['answer']).strip()}"
+        for item in valid
+    )

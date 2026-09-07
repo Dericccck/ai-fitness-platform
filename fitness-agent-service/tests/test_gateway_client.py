@@ -99,9 +99,7 @@ async def test_client_requests_scoped_student_training_context_access() -> None:
         transport=httpx.MockTransport(handler), base_url="http://gateway.test"
     ) as http_client:
         client = GatewayClient(build_settings(), http_client)
-        access = await client.authorize_student_training_context(
-            context(), "org-1", "student-1"
-        )
+        access = await client.authorize_student_training_context(context(), "org-1", "student-1")
 
     assert access.actor_id == "coach-1"
     assert access.access_type == "ASSIGNED_COACH"

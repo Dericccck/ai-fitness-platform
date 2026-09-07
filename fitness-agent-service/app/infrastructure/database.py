@@ -30,13 +30,16 @@ class FencedCheckpointSaver:
     async def activate_fence(self, thread_id: str, fencing_token: int) -> None:
         if not thread_id or fencing_token < 1:
             raise ValueError("会话 fencing 参数无效")
-        async with self._fence_pool.connection() as connection, connection.transaction():
-            async with connection.cursor() as cursor:
-                await cursor.execute(
-                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (thread_id,)
-                )
-                await cursor.execute(
-                    """
+        async with (
+            self._fence_pool.connection() as connection,
+            connection.transaction(),
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (thread_id,)
+            )
+            await cursor.execute(
+                """
                     INSERT INTO agent_session_fences (thread_id, fencing_token, updated_at)
                     VALUES (%s, %s, CURRENT_TIMESTAMP)
                     ON CONFLICT (thread_id) DO UPDATE SET
@@ -44,15 +47,15 @@ class FencedCheckpointSaver:
                         updated_at = CURRENT_TIMESTAMP
                     WHERE agent_session_fences.fencing_token < EXCLUDED.fencing_token
                     """,
-                    (thread_id, fencing_token),
-                )
-                await cursor.execute(
-                    "SELECT fencing_token FROM agent_session_fences WHERE thread_id = %s",
-                    (thread_id,),
-                )
-                row = await cursor.fetchone()
-                if row is None or int(row["fencing_token"]) != fencing_token:
-                    raise StaleCheckpointWriter("会话 fencing token 已过期")
+                (thread_id, fencing_token),
+            )
+            await cursor.execute(
+                "SELECT fencing_token FROM agent_session_fences WHERE thread_id = %s",
+                (thread_id,),
+            )
+            row = await cursor.fetchone()
+            if row is None or int(row["fencing_token"]) != fencing_token:
+                raise StaleCheckpointWriter("会话 fencing token 已过期")
 
     async def aget_tuple(self, config: Any) -> Any:
         return await self._delegate.aget_tuple(config)
@@ -65,14 +68,10 @@ class FencedCheckpointSaver:
         before: Any | None = None,
         limit: int | None = None,
     ) -> AsyncIterator[Any]:
-        async for item in self._delegate.alist(
-            config, filter=filter, before=before, limit=limit
-        ):
+        async for item in self._delegate.alist(config, filter=filter, before=before, limit=limit):
             yield item
 
-    async def aput(
-        self, config: Any, checkpoint: Any, metadata: Any, new_versions: Any
-    ) -> Any:
+    async def aput(self, config: Any, checkpoint: Any, metadata: Any, new_versions: Any) -> Any:
         async with self._write_guard(config):
             return await self._delegate.aput(config, checkpoint, metadata, new_versions)
 
@@ -97,19 +96,22 @@ class FencedCheckpointSaver:
         token = configurable.get("fencing_token")
         if not thread_id or not isinstance(token, int) or token < 1:
             raise StaleCheckpointWriter("Checkpoint 写入缺少有效 fencing token")
-        async with self._fence_pool.connection() as connection, connection.transaction():
-            async with connection.cursor() as cursor:
-                await cursor.execute(
-                    "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (thread_id,)
-                )
-                await cursor.execute(
-                    "SELECT fencing_token FROM agent_session_fences WHERE thread_id = %s",
-                    (thread_id,),
-                )
-                row = await cursor.fetchone()
-                if row is None or int(row["fencing_token"]) != token:
-                    raise StaleCheckpointWriter("旧请求已失去 Checkpoint 写入权")
-                yield
+        async with (
+            self._fence_pool.connection() as connection,
+            connection.transaction(),
+            connection.cursor() as cursor,
+        ):
+            await cursor.execute(
+                "SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (thread_id,)
+            )
+            await cursor.execute(
+                "SELECT fencing_token FROM agent_session_fences WHERE thread_id = %s",
+                (thread_id,),
+            )
+            row = await cursor.fetchone()
+            if row is None or int(row["fencing_token"]) != token:
+                raise StaleCheckpointWriter("旧请求已失去 Checkpoint 写入权")
+            yield
 
 
 class CheckpointStore:
@@ -202,13 +204,14 @@ class CheckpointStore:
         if not ids:
             return 0
         deleted = 0
-        async with self._pool.connection() as connection, connection.transaction():
-            async with connection.cursor() as cursor:
-                for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
-                    await cursor.execute(
-                        f"DELETE FROM {table} WHERE thread_id = ANY(%s)", (ids,)
-                    )
-                    deleted += cursor.rowcount or 0
+        async with (
+            self._pool.connection() as connection,
+            connection.transaction(),
+            connection.cursor() as cursor,
+        ):
+            for table in ("checkpoint_writes", "checkpoint_blobs", "checkpoints"):
+                await cursor.execute(f"DELETE FROM {table} WHERE thread_id = ANY(%s)", (ids,))
+                deleted += cursor.rowcount or 0
         return deleted
 
 

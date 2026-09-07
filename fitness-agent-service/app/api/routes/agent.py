@@ -52,6 +52,10 @@ class AgentChatResponse(BaseModel):
     confirmation_id: str | None = None
     confirmation_summary: dict[str, object] | None = None
     confirmation_expires_at: str | None = None
+    intent: str | None = None
+    routes: tuple[str, ...] = ()
+    route_source: str | None = None
+    route_confidence: float | None = None
 
 
 @router.post(
@@ -128,4 +132,8 @@ async def chat(
         confirmation_id=response.confirmation_id,
         confirmation_summary=response.confirmation_summary,
         confirmation_expires_at=response.confirmation_expires_at,
+        intent=response.intent,
+        routes=response.routes,
+        route_source=response.route_source,
+        route_confidence=response.route_confidence,
     )

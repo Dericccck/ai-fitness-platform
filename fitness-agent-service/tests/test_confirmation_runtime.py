@@ -5,6 +5,7 @@ from typing import Any, cast
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent.fitness_tools import build_fitness_tool_registry
+from app.agent.routing import RouteDecision, RoutedIntent
 from app.agent.supervisor import Supervisor, SupervisorRequest
 from app.confirmation.cipher import AesGcmPayloadCipher, ConfirmationPayloadCipherError
 from app.confirmation.models import ConfirmationRecord
@@ -74,6 +75,32 @@ class OneWriteModel:
                     },
                 ),
             ),
+        )
+
+
+class ReadThenWriteModel(OneWriteModel):
+    """先完成客服只读意图，再为唯一训练写入提出确认。"""
+
+    async def chat_with_tools(
+        self, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]]
+    ) -> ModelTurn:
+        if self.calls == 0:
+            self.calls += 1
+            return ModelTurn(content="合同查询已经完成。", tool_calls=())
+        return await super().chat_with_tools(messages, tools=tools)
+
+
+class StaticReadWriteRouter:
+    async def decide(self, *_: Any, **__: Any) -> RouteDecision:
+        return RouteDecision(
+            intents=(
+                RoutedIntent("CUSTOMER_SERVICE", "QUERY_CONTRACT"),
+                RoutedIntent("FITNESS_COACHING", "CREATE_TRAINING_DRAFT"),
+            ),
+            source="LLM",
+            confidence=0.95,
+            reason_code="READ_THEN_WRITE",
+            classifier_version="test-router",
         )
 
 
@@ -323,6 +350,40 @@ async def test_write_tool_creates_confirmation_interrupt_without_gateway_executi
     assert messages[-1]["tool_calls"][0]["function"]["arguments"] == "{}"
     assert nested_state.values["pending_confirmation_id"] == "confirmation-1"
     assert "深蹲" not in str(state)
+
+
+async def test_read_then_write_preserves_read_answer_and_creates_one_confirmation() -> None:
+    models = ReadThenWriteModel()
+    gateway = FakeGateway()
+    confirmation_service = FakeConfirmationService(pending_record())
+    supervisor = Supervisor(
+        cast(ModelGateway, models),
+        build_fitness_tool_registry(cast(GatewayClient, gateway)),
+        checkpointer=InMemorySaver(),
+        confirmation_service=cast(Any, confirmation_service),
+        intent_router=StaticReadWriteRouter(),  # type: ignore[arg-type]
+    )
+    base = SupervisorRequest(
+        user_message="先查合同，再创建训练计划",
+        gateway_context=GatewayRequestContext("signed-context", "request-1", "trace-1"),
+        conversation_id="conversation-read-write",
+        thread_id="thread-1",
+        identity=AgentIdentity(
+            subject="coach-1",
+            organization_ids=frozenset({"org-1"}),
+            roles=frozenset({"COACH"}),
+            issued_at=1,
+            expires_at=2,
+        ),
+    )
+
+    response = await supervisor.invoke(base)
+
+    assert response.status == "CONFIRMATION_REQUIRED"
+    assert response.route == "MULTI_INTENT"
+    assert response.answer == "合同查询已经完成。"
+    assert len(confirmation_service.prepared) == 1
+    assert gateway.current_user_calls == 0
 
 
 async def test_generated_preview_flows_into_confirmation_before_draft_creation() -> None:

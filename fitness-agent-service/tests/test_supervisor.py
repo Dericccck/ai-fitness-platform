@@ -441,7 +441,9 @@ async def test_customer_service_only_exposes_read_tools() -> None:
     response = await supervisor.invoke(request("我的预约是什么时间"))
 
     assert response.route == "CUSTOMER_SERVICE"
-    assert models.tools_seen[0]
+    # 测试 Registry 只有课程工具，而“查询预约”意图只允许预约只读工具；交集为空，
+    # 证明 v3 不再把整个客服领域工具无差别暴露给模型。
+    assert models.tools_seen[0] == []
     assert all(
         tool["function"]["name"] == "fitness_course_list_v1" for tool in models.tools_seen[0]
     )

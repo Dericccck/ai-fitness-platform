@@ -95,7 +95,7 @@ class SessionLockManager:
                 try:
                     await asyncio.wait_for(stop.wait(), timeout=interval)
                     continue
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     pass
                 try:
                     renewed = await cast(
@@ -104,7 +104,7 @@ class SessionLockManager:
                             self._RENEW_SCRIPT, 1, key, owner_value, str(self.ttl_seconds)
                         ),
                     )
-                except Exception:
+                except Exception:  # noqa: BLE001 - 任意 Redis 驱动故障都意味着租约不可信
                     lease.mark_lost()
                     return
                 if int(renewed or 0) != 1:
@@ -118,9 +118,7 @@ class SessionLockManager:
             stop.set()
             renew_task.cancel()
             await asyncio.gather(renew_task, return_exceptions=True)
-            await cast(
-                Awaitable[Any], self.client.eval(self._RELEASE_SCRIPT, 1, key, owner_value)
-            )
+            await cast(Awaitable[Any], self.client.eval(self._RELEASE_SCRIPT, 1, key, owner_value))
 
 
 class Cache:

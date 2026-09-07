@@ -199,13 +199,9 @@ class ConfirmationService:
             return record
         if not record.tool_id.startswith("fitness.booking."):
             return record
-        operation = await self.gateway.query_booking_operation(
-            gateway_context, record.request_id
-        )
+        operation = await self.gateway.query_booking_operation(gateway_context, record.request_id)
         if operation.status == "SUCCEEDED":
-            return await self.finish_execution(
-                confirmation_id, success=True, trace_id=trace_id
-            )
+            return await self.finish_execution(confirmation_id, success=True, trace_id=trace_id)
         if operation.status == "FAILED":
             return await self.finish_execution(
                 confirmation_id,

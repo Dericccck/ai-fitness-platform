@@ -353,7 +353,11 @@ class ConfirmationRepository:
             """
         )
         async with self._database.engine.connect() as connection:
-            rows = (await connection.execute(statement, {"age": older_than_seconds, "limit": limit})).mappings().all()
+            rows = (
+                (await connection.execute(statement, {"age": older_than_seconds, "limit": limit}))
+                .mappings()
+                .all()
+            )
         return [_record_from_row(row) for row in rows]
 
     async def list_events(self, confirmation_id: str) -> list[ConfirmationEvent]:

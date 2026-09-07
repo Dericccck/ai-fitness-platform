@@ -46,7 +46,7 @@ class Settings(BaseSettings):
         validation_alias=AliasChoices("KNOWLEDGE_BASE_VERSION", "AGENT_KNOWLEDGE_BASE_VERSION"),
     )
     graph_version: str = Field(
-        default="supervisor-domain-subgraphs-v1",
+        default="supervisor-context-router-v3",
         validation_alias=AliasChoices("GRAPH_VERSION", "AGENT_GRAPH_VERSION"),
     )
     # 发布清单和索引构建是可回退制品的关联键；为空表示本地旧运行模式，不能冒充
@@ -240,6 +240,15 @@ class Settings(BaseSettings):
     # llm_max_output_tokens，防止所有请求无差别增加 Token 成本。
     training_plan_max_output_tokens: int = Field(default=3000, ge=512, le=8192)
     agent_max_tool_steps: int = Field(default=4, ge=1, le=8)
+    # Supervisor 路由采用“明确规则直达 + 模糊表达结构化 LLM”的混合模式。
+    # shadow 只记录模型判断而不改变真实路由，便于上线前对比；rules 是供应商故障时
+    # 可立即切回的保守模式。路由模型只接收有界的近期用户/助手文本，不接收工具结果、
+    # AgentContext、确认参数或业务密钥。
+    router_mode: Literal["rules", "shadow", "hybrid"] = "hybrid"
+    router_min_confidence: float = Field(default=0.8, ge=0.5, le=1)
+    router_timeout_seconds: float = Field(default=3.0, gt=0, le=15)
+    router_max_output_tokens: int = Field(default=220, ge=96, le=512)
+    router_context_messages: int = Field(default=6, ge=0, le=12)
     llm_thinking_enabled: bool = False
 
     # Embedding 后端：openai 走远程 API；local 加载本地模型文件。切换后必须重建向量索引。

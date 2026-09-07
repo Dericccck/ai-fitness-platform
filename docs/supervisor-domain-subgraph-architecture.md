@@ -19,13 +19,16 @@ Outbox、RabbitMQ、Inbox 和通知 Outbox 独立运行，避免把定时任务�
 
 ```mermaid
 flowchart TD
-    Start["用户请求"] --> Guard["业务范围与确定性风险护栏"]
-    Guard --> Context["本轮 RAG / Memory / 签名 Runtime Context"]
-    Context --> Router["Supervisor Router"]
-    Router --> Fitness["Fitness Agent 子图"]
-    Router --> Booking["Booking Agent 子图"]
-    Router --> Operations["Operations Agent 子图"]
-    Router --> Customer["Customer Service Agent 子图"]
+    Start["用户请求 + 最近会话"] --> Guard["确定性范围/写入护栏"]
+    Guard --> Router["混合语义 Router：规则 + 结构化 LLM"]
+    Router -->|低置信度| Clarify["要求澄清"]
+    Router -->|两个写意图| Split["要求拆分"]
+    Router --> Plan["最多两个意图的执行计划"]
+    Plan --> Context["按当前意图准备 RAG / Memory / Prompt"]
+    Context --> Fitness["Fitness Agent 子图"]
+    Context --> Booking["Booking Agent 子图"]
+    Context --> Operations["Operations Agent 子图"]
+    Context --> Customer["Customer Service Agent 子图"]
 
     subgraph Domain["每个领域子图的统一安全骨架"]
         Enter["enter：校验路由与领域"] --> Model["model：领域 Prompt + 工具白名单"]
@@ -42,7 +45,9 @@ flowchart TD
     Customer -.复用骨架.-> Domain
 ```
 
-顶层 Supervisor 只做路由和调度，不执行领域工具。子图共享安全节点实现，但各自拥有独立
+顶层 Supervisor 只做混合路由、计划聚合和调度，不执行领域工具。明确写入和高置信度关键词
+由规则直接识别；模糊表达、同义词和省略式追问由结构化 LLM 结合有界的最近会话判断。低于阈值
+时要求用户澄清，模型异常时走受控回退，不会猜测写操作。子图共享安全节点实现，但各自拥有独立
 LangGraph namespace、领域提示和不可变工具白名单；共享实现是为了避免四份确认、审计和错误
 处理逻辑逐渐漂移，不代表它们仍是一个无边界 Agent。
 
@@ -55,7 +60,8 @@ LangGraph namespace、领域提示和不可变工具白名单；共享实现是�
 | Operations | 固定经营指标工具 | 任意用户明细工具、训练/预约/客服写入、自由 SQL |
 | Customer Service | 本人课程/合同/预约/训练状态只读，规则 RAG，工单查询/创建 | Memory、训练计划变更、预约变更、经营指标 |
 
-工具隔离执行两次：模型调用后、工具真正执行前都会重新检查当前领域白名单。即使模型供应商
+工具隔离执行三次：模型可见 Schema、模型调用结果、工具真正执行前都会检查“领域白名单 ∩ 意图
+白名单”。即使模型供应商
 返回了一个跨领域函数名，也会 fail-closed，不会因为模型“不听 Prompt”而越过边界。Tool Registry
 和 Java Gateway 继续负责角色、组织、资源归属、确认凭证、幂等和事务校验；子图白名单不能替代
 这些后端授权。
@@ -63,7 +69,8 @@ LangGraph namespace、领域提示和不可变工具白名单；共享实现是�
 ## 4. State、Checkpoint 与确认恢复
 
 - 父图和所有子图共用一个 PostgreSQL Checkpointer，子图不创建第二套 Checkpointer；
-- `SupervisorState.graph_version=2` 标识新子图拓扑，`active_domain` 记录当前领域节点；
+- `SupervisorState.graph_version=3` 标识上下文混合路由拓扑，`route_plan` 保存最多两个不含参数的
+  领域意图，`active_domain` 记录当前领域节点；
 - 签名 AgentContext、Gateway Token、确认 Token 和明文写入参数只通过 LangGraph Runtime Context
   或加密确认单传递，不能进入 State；
 - 写操作在领域子图的 `confirmation` 节点调用 `interrupt()`，Checkpoint 会保存父图和子图 namespace；
@@ -77,6 +84,10 @@ LangGraph namespace、领域提示和不可变工具白名单；共享实现是�
 同一个 `thread_id` 可以从训练问答切换到预约查询。历史 user/assistant/tool 消息会继续保留，但
 system Prompt、RAG 引用和未确认 Memory 候选属于本轮临时上下文，每轮都会移除旧值并按新领域
 重新生成。这样既保留对话连续性，也防止 Fitness 的规则或知识引用泄漏到 Booking 子图。
+
+同一条消息最多接受两个意图：两个只读意图按原语义顺序执行并分别标注结果；一个只读加一个写入
+时固定先完成只读，再为唯一写入生成单独确认卡；两个写入或超过两个意图时要求拆分。确认单只绑定
+一个内部版本化工具和一份加密参数，不能批准另一领域的写入。
 
 ## 6. 故障与扩展边界
 

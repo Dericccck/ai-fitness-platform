@@ -33,6 +33,10 @@ export type ChatResponse = {
   confirmation_id?: string | null;
   confirmation_summary?: ConfirmationSummary | null;
   confirmation_expires_at?: string | null;
+  intent?: string | null;
+  routes?: string[];
+  route_source?: string | null;
+  route_confidence?: number | null;
 };
 
 export type Confirmation = {

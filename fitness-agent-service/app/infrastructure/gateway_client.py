@@ -739,9 +739,7 @@ class GatewayClient:
         last_error: Exception | None = None
         for attempt in range(self.settings.gateway_max_retries + 1):
             try:
-                response = await self._client.request(
-                    "POST", path, headers=headers, json=json_body
-                )
+                response = await self._client.request("POST", path, headers=headers, json=json_body)
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 last_error = exc
                 if attempt < self.settings.gateway_max_retries:

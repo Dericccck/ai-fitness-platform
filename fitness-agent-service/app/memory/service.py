@@ -205,7 +205,7 @@ class MemoryService:
             await self.summary_repository.invalidate_for_subject(subject_user_id)
             if self.checkpoint_cleaner is not None and thread_ids:
                 await self.checkpoint_cleaner.delete_threads(thread_ids)
-        except Exception:
+        except Exception:  # noqa: BLE001 - 派生缓存清理不能回滚已提交的 Memory 撤销
             # Memory 已经完成撤销；摘要清理失败必须可观测，但不能让用户重试造成
             # 版本冲突。后续请求也会在摘要读取失败时安全降级为不使用摘要。
             import structlog

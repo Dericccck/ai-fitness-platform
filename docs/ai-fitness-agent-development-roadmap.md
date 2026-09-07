@@ -2028,13 +2028,18 @@ PDF 深度解析的剩余收尾顺序固定为：
 ## Supervisor + LangGraph 领域子图重构（2026-08-30）
 
 本轮将原先集中在一个状态图中的领域执行逻辑拆为顶层 Supervisor Router 和四个真正编译的
-LangGraph 领域子图：Fitness、Booking、Operations、Customer Service。顶层只验证并分派路由；
+LangGraph 领域子图：Fitness、Booking、Operations、Customer Service。顶层通过“确定性风险规则 +
+结构化 LLM + 有界会话上下文”的混合路由生成最多两个意图，再按意图准备上下文并分派；
 每个子图拥有独立 namespace、领域 Prompt 和不可变工具白名单，并统一复用 enter、model、tools、
-confirmation 安全骨架。模型返回跨领域工具时会在模型回合后和实际执行前两次 fail-closed。
+confirmation 安全骨架。模型可见 Schema、模型返回结果和实际执行前均校验领域与意图白名单交集。
+
+多意图按最终安全策略一次落地：两个只读意图顺序执行并分别汇总；一个只读与一个写入同时出现时
+先完成只读，再为唯一写入生成独立确认卡；两个写入或超过两个意图时要求拆分。低置信度路由要求
+澄清，不能猜测执行。路由模型只分类，不生成参数，也不接收工具结果、签名上下文或确认凭证。
 
 父图继续统一持有 PostgreSQL Checkpointer。领域子图不创建第二套持久化，因此子图内
 `interrupt()`、父图 `Command(resume=...)`、服务重启恢复和确认单事实保持一个来源。新状态写入
-`graph_version=2` 和 `active_domain`；旧 `model/tools/confirmation` 节点暂时仅作为升级前已暂停
+`graph_version=3`、`route_plan` 和 `active_domain`；v1/v2 旧节点与子图仍作为升级前已暂停
 Checkpoint 的兼容入口。签名 AgentContext、确认 Token 和明文参数仍只存在于 Runtime Context
 或加密确认单，不进入 LangGraph State。
 

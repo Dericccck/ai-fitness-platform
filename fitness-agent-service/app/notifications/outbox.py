@@ -307,7 +307,11 @@ class NotificationOutboxRepository:
                   AND status IN ('PENDING', 'DEFERRED', 'RETRYABLE_FAILED')
                 """
             ).bindparams(bindparam("stale_types", expanding=True)),
-            {"organization_id": organization_id, "aggregate_id": aggregate_id, "stale_types": stale_types},
+            {
+                "organization_id": organization_id,
+                "aggregate_id": aggregate_id,
+                "stale_types": stale_types,
+            },
         )
         return int(result.rowcount or 0)
 
@@ -317,27 +321,37 @@ class NotificationOutboxRepository:
         if limit < 1 or limit > 100:
             raise ValueError("DEAD 通知列表限制必须在 1 到 100 之间")
         rows = (
-            await connection.execute(
-                text(
-                    """
+            (
+                await connection.execute(
+                    text(
+                        """
                     SELECT * FROM agent_notification_outbox
                     WHERE status = 'DEAD'
                       AND (CAST(:organization_id AS TEXT) IS NULL OR organization_id = :organization_id)
                     ORDER BY updated_at DESC, id DESC LIMIT :limit
                     """
-                ),
-                {"organization_id": organization_id, "limit": limit},
+                    ),
+                    {"organization_id": organization_id, "limit": limit},
+                )
             )
-        ).mappings().all()
+            .mappings()
+            .all()
+        )
         return [_from_row(row) for row in rows]
 
-    async def get_by_id(self, connection: Any, *, outbox_id: str) -> NotificationOutboxRecord | None:
+    async def get_by_id(
+        self, connection: Any, *, outbox_id: str
+    ) -> NotificationOutboxRecord | None:
         row = (
-            await connection.execute(
-                text("SELECT * FROM agent_notification_outbox WHERE id = :id"),
-                {"id": outbox_id},
+            (
+                await connection.execute(
+                    text("SELECT * FROM agent_notification_outbox WHERE id = :id"),
+                    {"id": outbox_id},
+                )
             )
-        ).mappings().first()
+            .mappings()
+            .first()
+        )
         return _from_row(row) if row is not None else None
 
     async def replay_dead(
@@ -658,7 +672,9 @@ def _from_row(row: Any) -> NotificationOutboxRecord:
         created_at=_required_utc(row["created_at"]),
         updated_at=_required_utc(row["updated_at"]),
         last_replayed_by=str(row.get("last_replayed_by")) if row.get("last_replayed_by") else None,
-        last_replay_reason=str(row.get("last_replay_reason")) if row.get("last_replay_reason") else None,
+        last_replay_reason=str(row.get("last_replay_reason"))
+        if row.get("last_replay_reason")
+        else None,
         replayed_at=_as_utc(row.get("replayed_at")),
     )
 

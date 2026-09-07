@@ -55,6 +55,7 @@ def build_registry() -> ToolRegistry:
         "fitness.booking.create.v1",
         "fitness.operations.metric.query.v1",
         "fitness.support.ticket.create.v1",
+        "fitness.support.ticket.list.v1",
     ):
         registry.register(
             ToolDefinition(
@@ -115,8 +116,8 @@ def test_supervisor_contains_four_real_domain_subgraphs() -> None:
         (
             "查询明天可约时间",
             "BOOKING",
+            "fitness_course_list_v1",
             "fitness_booking_create_v1",
-            "fitness_training_plan_generate_draft_v1",
         ),
         (
             "查看本月营收金额",
@@ -127,7 +128,7 @@ def test_supervisor_contains_four_real_domain_subgraphs() -> None:
         (
             "查询我的客服工单",
             "CUSTOMER_SERVICE",
-            "fitness_support_ticket_create_v1",
+            "fitness_support_ticket_list_v1",
             "fitness_operations_metric_query_v1",
         ),
     ),
@@ -191,5 +192,6 @@ async def test_same_thread_can_switch_domain_without_reusing_old_system_context(
     assert len(second_system_messages) == 1
     assert "预约 Agent" in second_system_messages[0]
     assert "健身 Agent" not in second_system_messages[0]
-    assert "fitness_booking_create_v1" in model.tools_seen[1]
+    assert "fitness_course_list_v1" in model.tools_seen[1]
+    assert "fitness_booking_create_v1" not in model.tools_seen[1]
     assert "fitness_training_plan_generate_draft_v1" not in model.tools_seen[1]

@@ -27,6 +27,7 @@ class HttpMetrics:
     session_summary_tokens_total: Counter
     session_summary_chars: Histogram
     operations_query_events_total: Counter
+    routing_decisions_total: Counter
     model_requests_total: Counter
     trulens_export_batches_total: Counter
     trulens_export_spans_total: Counter
@@ -137,6 +138,13 @@ class HttpMetrics:
                 namespace="fitness_agent",
                 registry=target_registry,
             ),
+            routing_decisions_total=Counter(
+                "routing_decisions_total",
+                "Supervisor 混合路由决策；标签只使用固定领域、来源和结果枚举。",
+                labelnames=("route", "source", "outcome"),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
             model_requests_total=Counter(
                 "model_requests_total",
                 "模型供应商请求结果；标签仅使用回合类型和固定状态。",
@@ -187,6 +195,27 @@ class HttpMetrics:
 
         if count > 0:
             self.operations_query_events_total.labels(event=event).inc(count)
+
+    def record_routing_decision(
+        self, route: str, source: str, outcome: str, count: int = 1
+    ) -> None:
+        """记录低基数路由结果；禁止把意图原文、会话或请求 ID 放进标签。"""
+
+        allowed_routes = {
+            "FITNESS_COACHING",
+            "BOOKING",
+            "OPERATIONS",
+            "CUSTOMER_SERVICE",
+            "MULTI_INTENT",
+            "CLARIFICATION",
+            "OUT_OF_SCOPE",
+        }
+        if route not in allowed_routes:
+            route = "CLARIFICATION"
+        if count > 0:
+            self.routing_decisions_total.labels(route=route, source=source, outcome=outcome).inc(
+                count
+            )
 
     def record_model_request(self, kind: str, status: str, count: int = 1) -> None:
         """记录模型请求结果；禁止把模型名、请求 ID 或供应商错误正文作为标签。"""

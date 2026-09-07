@@ -177,7 +177,9 @@ class SessionSummaryRepository:
             raise ValueError("主体 ID 不能为空")
         async with self._database.engine.begin() as connection:
             result = await connection.execute(
-                text("DELETE FROM agent_session_summaries WHERE subject_user_id = :subject_user_id"),
+                text(
+                    "DELETE FROM agent_session_summaries WHERE subject_user_id = :subject_user_id"
+                ),
                 {"subject_user_id": subject_user_id},
             )
         return int(result.rowcount or 0)
@@ -188,11 +190,14 @@ class SessionSummaryRepository:
         if not subject_user_id.strip():
             raise ValueError("主体 ID 不能为空")
         statement = text(
-            "SELECT thread_id FROM agent_session_summaries "
-            "WHERE subject_user_id = :subject_user_id"
+            "SELECT thread_id FROM agent_session_summaries WHERE subject_user_id = :subject_user_id"
         )
         async with self._database.engine.connect() as connection:
-            rows = (await connection.execute(statement, {"subject_user_id": subject_user_id})).scalars().all()
+            rows = (
+                (await connection.execute(statement, {"subject_user_id": subject_user_id}))
+                .scalars()
+                .all()
+            )
         return [str(thread_id) for thread_id in rows]
 
 

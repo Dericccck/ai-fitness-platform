@@ -389,11 +389,15 @@ class MemoryRepository:
         )
         async with self._database.engine.connect() as connection:
             rows = (
-                await connection.execute(
-                    statement,
-                    {"subject_user_id": subject_user_id, "organization_id": organization_id},
+                (
+                    await connection.execute(
+                        statement,
+                        {"subject_user_id": subject_user_id, "organization_id": organization_id},
+                    )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
         return [memory_from_row(row) for row in rows]
 
     async def revoke(
