@@ -14,6 +14,7 @@ from app.agent.supervisor import (
     _forced_write_tool_name,
     _is_explicit_training_plan_creation_request,
     _model_tools,
+    _sanitize_model_answer,
     _system_prompt,
     classify_route,
 )
@@ -48,6 +49,14 @@ class FakeModels:
         self.messages_seen.append(messages)
         self.force_tool_names.append(force_tool_name)
         return self.turns.pop(0)
+
+
+def test_model_answer_sanitizer_removes_provider_tool_protocol() -> None:
+    answer = _sanitize_model_answer(
+        '没有查询到预约。\n<｜｜DSML｜｜tool_calls>\n<｜｜DSML｜｜invoke name="internal">'
+    )
+
+    assert answer == "没有查询到预约。"
 
 
 class FakeCandidateExtractor:
@@ -164,6 +173,47 @@ async def test_supervisor_runs_model_tool_model_cycle_and_returns_real_result() 
     assert models.tools_seen[0]
     assert models.tools_seen[1] == []
     assert models.force_tool_names == [None, None]
+
+
+async def test_read_tool_invalid_input_is_returned_to_model_for_schema_retry() -> None:
+    calls: list[dict[str, Any]] = []
+    models = FakeModels(
+        [
+            ModelTurn(
+                content="",
+                tool_calls=(
+                    ModelToolCall(
+                        call_id="call-invalid",
+                        name="fitness.course.list.v1",
+                        arguments={"value": "课程", "status": "upcoming"},
+                    ),
+                ),
+            ),
+            ModelTurn(
+                content="",
+                tool_calls=(
+                    ModelToolCall(
+                        call_id="call-retry",
+                        name="fitness.course.list.v1",
+                        arguments={"value": "课程"},
+                    ),
+                ),
+            ),
+            ModelTurn(content="已按工具定义重新查询。", tool_calls=()),
+        ]
+    )
+    supervisor = Supervisor(
+        cast(ModelGateway, models),
+        build_registry(calls),
+        max_tool_steps=2,
+    )
+
+    response = await supervisor.invoke(request())
+
+    assert response.answer == "已按工具定义重新查询。"
+    assert response.tool_steps == 2
+    assert calls == [{"value": "课程", "signed_context": "signed-context"}]
+    assert "TOOL_INPUT_INVALID" in str(models.messages_seen[1])
 
 
 async def test_supervisor_forces_booking_create_tool_for_explicit_create_request() -> None:

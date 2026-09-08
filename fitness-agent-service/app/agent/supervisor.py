@@ -71,7 +71,13 @@ from .routing import (
     intent_allowed_tool_ids,
     intent_display_name,
 )
-from .tool_registry import ToolContext, ToolRegistry, ToolRegistryError
+from .tool_registry import (
+    ToolConfirmationNormalizationError,
+    ToolContext,
+    ToolInputValidationError,
+    ToolRegistry,
+    ToolRegistryError,
+)
 
 SupervisorRunStatus = Literal["COMPLETED", "CONFIRMATION_REQUIRED", "CLARIFICATION_REQUIRED"]
 _logger = structlog.get_logger("agent.supervisor")
@@ -431,7 +437,7 @@ class Supervisor:
                 route_source=_optional_text(final_state.get("route_source")),
                 route_confidence=_optional_float(final_state.get("route_confidence")),
             )
-        answer = final_state.get("final_answer", "").strip()
+        answer = _sanitize_model_answer(final_state.get("final_answer", ""))
         if not answer:
             raise SupervisorRuntimeError("Supervisor 生成了空回答")
         response = SupervisorResponse(
@@ -884,7 +890,7 @@ class Supervisor:
         plan = state.get("route_plan", [])
         if state.get("graph_version") != 3 or not plan:
             return {}
-        answer = str(state.get("final_answer", "")).strip()
+        answer = _sanitize_model_answer(state.get("final_answer", ""))
         if not answer:
             raise SupervisorRuntimeError("领域 Agent 生成了空回答")
         partial = [*state.get("partial_answers", [])]
@@ -969,13 +975,31 @@ class Supervisor:
             # 模型返回的是 model_name，确认单必须保存内部稳定 tool_id，避免供应商
             # 别名进入凭证、审计和后续恢复流程。
             definition = self.tools.get(call.name)
-            confirmation = await self._prepare_write_confirmation(
-                definition.tool_id,
-                call.arguments,
-                runtime,
-                route=state["route"],
-                intent=state.get("intent"),
-            )
+            try:
+                confirmation = await self._prepare_write_confirmation(
+                    definition.tool_id,
+                    call.arguments,
+                    runtime,
+                    route=state["route"],
+                    intent=state.get("intent"),
+                )
+            except ToolConfirmationNormalizationError:
+                # 语义路由可以正确判断“把那个安排往后一点”属于改约，但在没有预约、
+                # 教练或时间等确定参数时，模型无法形成可签名的确认动作。这属于信息
+                # 不足，不是服务故障：禁止生成宽泛确认单，也不能把校验异常变成 503。
+                clarification = _missing_write_parameters_clarification(state.get("intent"))
+                return {
+                    "messages": [
+                        *state["messages"],
+                        {"role": "assistant", "content": clarification},
+                    ],
+                    "model_tool_calls": [],
+                    "pending_confirmation_id": None,
+                    "final_answer": clarification,
+                    "clarification_required": True,
+                    "input_tokens": state.get("input_tokens", 0) + (turn.input_tokens or 0),
+                    "output_tokens": state.get("output_tokens", 0) + (turn.output_tokens or 0),
+                }
             # Checkpoint 只保存空参数占位和确认 ID；精确参数已在确认单中加密保存。
             assistant_message: dict[str, Any] = {
                 "role": "assistant",
@@ -1015,7 +1039,7 @@ class Supervisor:
         return {
             "messages": [*state["messages"], regular_assistant_message],
             "model_tool_calls": tool_calls,
-            "final_answer": turn.content if not tool_calls else "",
+            "final_answer": _sanitize_model_answer(turn.content) if not tool_calls else "",
             "input_tokens": state.get("input_tokens", 0) + (turn.input_tokens or 0),
             "output_tokens": state.get("output_tokens", 0) + (turn.output_tokens or 0),
         }
@@ -1159,7 +1183,29 @@ class Supervisor:
                 raw_input,
                 runtime.context.identity,
             )
-            result = await self.tools.invoke(definition.tool_id, bound_input, context)
+            try:
+                result = await self.tools.invoke(definition.tool_id, bound_input, context)
+            except ToolInputValidationError:
+                # 供应商偶尔会为只读工具附加 Schema 外字段（例如给预约列表传
+                # ``status=upcoming``）。Registry 必须继续严格拒绝，Supervisor 则把
+                # 不含原始参数的稳定错误交回模型，让它在既有工具预算内按 Schema
+                # 重试；不能静默删除字段，也不能把可纠正的模型错误升级成 HTTP 503。
+                if not definition.read_only:
+                    raise
+                tool_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.call_id,
+                        "content": json.dumps(
+                            {
+                                "error": "TOOL_INPUT_INVALID",
+                                "message": "工具参数不符合声明的 Schema，请只使用工具定义中的字段重试。",
+                            },
+                            ensure_ascii=False,
+                        ),
+                    }
+                )
+                continue
             model_result = _safe_model_tool_result(definition.tool_id, result)
             tool_messages.append(
                 {
@@ -1645,6 +1691,33 @@ def _combined_partial_answer(items: list[dict[str, str]]) -> str:
     if len(valid) == 1:
         return str(valid[0]["answer"]).strip()
     return "\n\n".join(
-        f"### {intent_display_name(str(item.get('intent', '')))}\n{str(item['answer']).strip()}"
+        f"### {intent_display_name(str(item.get('intent', '')))}\n"
+        f"{_sanitize_model_answer(item['answer'])}"
         for item in valid
+    )
+
+
+def _sanitize_model_answer(value: Any) -> str:
+    """移除供应商协议标记，避免内部工具调用语法出现在用户答案中。"""
+
+    answer = str(value or "").strip()
+    for marker in ("<｜｜DSML｜｜tool_calls>", "<|DSML|tool_calls>", "<tool_calls>"):
+        if marker in answer:
+            answer = answer.split(marker, 1)[0].rstrip()
+    return answer
+
+
+def _missing_write_parameters_clarification(intent: Any) -> str:
+    """为无法形成窄范围确认凭证的写意图返回可操作的补充信息提示。"""
+
+    prompts = {
+        "CREATE_BOOKING": "要创建预约，请补充课程、教练以及期望的开始和结束时间。",
+        "RESCHEDULE_BOOKING": "要调整预约，请说明具体预约，以及新的教练、开始时间和结束时间。",
+        "CANCEL_BOOKING": "要取消预约，请说明需要取消的具体预约。",
+        "CREATE_TRAINING_DRAFT": "要创建训练计划草案，请补充学员、教练、训练目标和训练安排。",
+        "CREATE_SUPPORT_TICKET": "要提交客服工单，请补充问题主题和具体描述。",
+    }
+    return prompts.get(
+        str(intent or ""),
+        "当前信息不足以生成安全、精确的操作确认单，请补充要修改的对象和必要参数。",
     )

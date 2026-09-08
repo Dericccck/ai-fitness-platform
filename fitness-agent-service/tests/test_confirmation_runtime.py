@@ -7,6 +7,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from app.agent.fitness_tools import build_fitness_tool_registry
 from app.agent.routing import RouteDecision, RoutedIntent
 from app.agent.supervisor import Supervisor, SupervisorRequest
+from app.agent.tool_registry import ToolConfirmationNormalizationError
 from app.confirmation.cipher import AesGcmPayloadCipher, ConfirmationPayloadCipherError
 from app.confirmation.models import ConfirmationRecord
 from app.confirmation.service import ConfirmationExecutionPreparation, _token_resource
@@ -100,6 +101,35 @@ class StaticReadWriteRouter:
             source="LLM",
             confidence=0.95,
             reason_code="READ_THEN_WRITE",
+            classifier_version="test-router",
+        )
+
+
+class MissingRescheduleParametersModel:
+    """识别出改约写工具，但没有臆造形成确认凭证所需的业务参数。"""
+
+    async def chat_with_tools(self, messages: list[dict[str, Any]], **_: Any) -> ModelTurn:
+        return ModelTurn(
+            content="",
+            tool_calls=(
+                ModelToolCall(
+                    call_id="call-reschedule",
+                    name="fitness_booking_reschedule_v1",
+                    arguments={},
+                ),
+            ),
+            input_tokens=11,
+            output_tokens=3,
+        )
+
+
+class StaticRescheduleRouter:
+    async def decide(self, *_: Any, **__: Any) -> RouteDecision:
+        return RouteDecision(
+            intents=(RoutedIntent("BOOKING", "RESCHEDULE_BOOKING"),),
+            source="LLM",
+            confidence=0.93,
+            reason_code="SEMANTIC_RESCHEDULE",
             classifier_version="test-router",
         )
 
@@ -243,6 +273,13 @@ class FakeConfirmationService:
         return self.record
 
 
+class RejectingConfirmationService(FakeConfirmationService):
+    """模拟真实确认服务拒绝缺少必填参数的写工具调用。"""
+
+    async def prepare(self, **kwargs: Any) -> ConfirmationRecord:
+        raise ToolConfirmationNormalizationError("缺少改约参数")
+
+
 class RecordingGateway(FakeGateway):
     def __init__(self) -> None:
         super().__init__()
@@ -384,6 +421,36 @@ async def test_read_then_write_preserves_read_answer_and_creates_one_confirmatio
     assert response.answer == "合同查询已经完成。"
     assert len(confirmation_service.prepared) == 1
     assert gateway.current_user_calls == 0
+
+
+async def test_missing_write_parameters_returns_clarification_without_confirmation() -> None:
+    gateway = FakeGateway()
+    confirmation_service = RejectingConfirmationService(pending_record())
+    supervisor = Supervisor(
+        cast(ModelGateway, MissingRescheduleParametersModel()),
+        build_fitness_tool_registry(cast(GatewayClient, gateway)),
+        confirmation_service=cast(Any, confirmation_service),
+        intent_router=StaticRescheduleRouter(),  # type: ignore[arg-type]
+    )
+    base = SupervisorRequest(
+        user_message="把那个安排往后一点",
+        gateway_context=GatewayRequestContext("signed-context", "request-1", "trace-1"),
+        conversation_id="conversation-missing-reschedule",
+        identity=AgentIdentity(
+            subject="coach-1",
+            organization_ids=frozenset({"org-1"}),
+            roles=frozenset({"COACH"}),
+            issued_at=1,
+            expires_at=2,
+        ),
+    )
+
+    response = await supervisor.invoke(base)
+
+    assert response.status == "CLARIFICATION_REQUIRED"
+    assert response.route == "CLARIFICATION"
+    assert "具体预约" in response.answer
+    assert confirmation_service.prepared == []
 
 
 async def test_generated_preview_flows_into_confirmation_before_draft_creation() -> None:
