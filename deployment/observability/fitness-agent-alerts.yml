@@ -33,7 +33,7 @@ groups:
           histogram_quantile(
             0.95,
             sum by (le) (
-              rate(fitness_agent_http_request_duration_seconds_bucket{job="fitness-agent"}[5m])
+              rate(fitness_agent_http_request_duration_seconds_bucket{job="fitness-agent",route!="/api/v1/agent/chat/stream"}[5m])
             )
           ) > 2
         for: 10m
@@ -84,6 +84,15 @@ groups:
           summary: "健身 Agent 站内通知投递失败"
           description: "最近 10 分钟存在通知投递失败；请检查通知 Outbox、模板、渠道适配器和重试次数。"
 
+      - alert: FitnessAgentDecisionActionFinalFailed
+        expr: increase(fitness_agent_maintenance_items_total{job="fitness-agent-workers",worker="decision_action",outcome="final_failed"}[10m]) > 0
+        labels:
+          severity: critical
+          service: fitness-agent
+        annotations:
+          summary: "经营决策动作最终失败"
+          description: "经过授权的经营动作已耗尽重试并进入最终失败；案例会停在 EXECUTION_FAILED，需在决策控制台审查后重放。"
+
       - alert: FitnessAgentTruLensExportFailed
         expr: increase(fitness_agent_trulens_export_batches_total{job="fitness-agent",status="FAILED"}[10m]) > 0
         labels:
@@ -92,3 +101,45 @@ groups:
         annotations:
           summary: "TruLens 在线评测导出失败"
           description: "最近 10 分钟存在 TruLens OTEL 批次写入失败；评测库可能缺少真实 Trace，应检查评测库连接、权限和容量。"
+
+  - name: fitness-agent-runtime-delivery
+    interval: 30s
+    rules:
+      - alert: FitnessAgentUsageLedgerFailed
+        expr: increase(fitness_agent_usage_ledger_failures_total{job=~"fitness-agent|fitness-agent-workers"}[10m]) > 0
+        labels:
+          severity: critical
+          service: fitness-agent
+        annotations:
+          summary: "模型用量账本持久化失败"
+          description: "计費用量无法完整落盘；检查 PostgreSQL 与新迁移，未知用量不能当作零成本。"
+
+      - alert: FitnessAgentSlowFirstAnswer
+        expr: histogram_quantile(0.95, sum by (le) (rate(fitness_agent_chat_first_answer_seconds_bucket{job="fitness-agent"}[5m]))) > 10 and sum(rate(fitness_agent_chat_first_answer_seconds_count{job="fitness-agent"}[5m])) > 0.05
+        for: 10m
+        labels:
+          severity: warning
+          service: fitness-agent
+        annotations:
+          summary: "有效答案首字延迟过高"
+          description: "持续有足够样本时首个有效答案 P95 超过 10 秒；心跳和阶段事件不计为首字。"
+
+      - alert: FitnessAgentModelFailureRate
+        expr: sum(rate(fitness_agent_model_attempt_duration_seconds_count{status="FAILED"}[5m])) / clamp_min(sum(rate(fitness_agent_model_attempt_duration_seconds_count[5m])), 0.001) > 0.2 and sum(rate(fitness_agent_model_attempt_duration_seconds_count[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          service: fitness-agent
+        annotations:
+          summary: "模型尝试失败比例过高"
+          description: "真实模型尝试失败比例持续超过 20%；检查供应商限额、超时、熔断与模型配置。"
+
+      - alert: FitnessAgentWorkerNotReady
+        expr: fitness_agent_worker_ready{job="fitness-agent-workers",required="true"} == 0 or up{job="fitness-agent-workers",required="true"} == 0
+        for: 3m
+        labels:
+          severity: warning
+          service: fitness-agent
+        annotations:
+          summary: "必需 Worker 未就绪"
+          description: "已明确启用的 Worker 连续 3 分钟未就绪或无法抓取；检查启动、租约、SIGTERM 和依赖配置。"

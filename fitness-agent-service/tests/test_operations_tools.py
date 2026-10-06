@@ -357,6 +357,7 @@ class FakeOperationsGateway:
         value = 120 if from_date == date(2026, 8, 1) else 100
         return GatewayOperationsMetric(
             metric=metric,
+            bucket=str(kwargs.get("bucket") or "NONE"),  # type: ignore[arg-type]
             organizationId=organization_id,
             **{
                 "from": from_date,
@@ -401,6 +402,50 @@ class RecordingOperationsAudit:
         # 这个测试替身只记录仓储收到的元数据，确保工具层没有把 rows、SQL 或 Prompt
         # 作为审计参数传入持久化边界。
         self.events.append(kwargs)
+
+
+@pytest.mark.asyncio
+async def test_audited_bucketed_query_emits_one_decision_snapshot() -> None:
+    gateway = FakeOperationsGateway()
+    audit = RecordingOperationsAudit()
+    snapshots: list[tuple[str, object, str | None]] = []
+
+    async def capture(organization_id: str, snapshot: object, trace_id: str | None) -> None:
+        snapshots.append((organization_id, snapshot, trace_id))
+
+    registry = ToolRegistry()
+    for definition in build_operations_tool_definitions(  # type: ignore[arg-type]
+        gateway,
+        audit_repository=audit,  # type: ignore[arg-type]
+        decision_snapshot_sink=capture,  # type: ignore[arg-type]
+    ):
+        registry.register(definition)
+
+    await registry.invoke(
+        "fitness.operations.metric.query.v1",
+        {
+            "organization_id": "org-1",
+            "metric": "APPOINTMENT_COUNT",
+            "from": "2026-08-01",
+            "to": "2026-08-15",
+            "bucket": "DAY",
+        },
+        ToolContext(
+            gateway_context=GatewayRequestContext(
+                signed_context="signed-context",
+                request_id="request-snapshot",
+                trace_id="trace-snapshot",
+            )
+        ),
+    )
+
+    assert len(snapshots) == 1
+    organization_id, snapshot, trace_id = snapshots[0]
+    assert organization_id == "org-1"
+    assert trace_id == "trace-snapshot"
+    assert snapshot.metric == "APPOINTMENT_COUNT"  # type: ignore[attr-defined]
+    assert snapshot.bucket == "DAY"  # type: ignore[attr-defined]
+    assert len(snapshot.source_digest) == 64  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio

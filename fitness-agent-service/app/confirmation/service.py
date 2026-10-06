@@ -22,6 +22,7 @@ from app.confirmation.normalization import (
     ConfirmationResourceSnapshot,
 )
 from app.confirmation.repository import ConfirmationRepository
+from app.confirmation.request_body import gateway_confirmation_body
 from app.confirmation.token import ConfirmationTokenIssuer
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.gateway_client import GatewayClient, GatewayRequestContext
@@ -135,7 +136,9 @@ class ConfirmationService:
             )
         try:
             plaintext = self.cipher.decrypt(
-                record.payload_ciphertext, associated_data=record.payload_hash
+                record.payload_ciphertext,
+                associated_data=record.payload_hash,
+                key_version=record.payload_key_version,
             )
             payload = json.loads(plaintext)
         except (ConfirmationPayloadCipherError, ValueError, TypeError) as exc:
@@ -148,6 +151,7 @@ class ConfirmationService:
             record,
             resource=_token_resource(record, tool_input),
             jti=jti,
+            request_body=gateway_confirmation_body(record.tool_id, tool_input),
         )
         if record.execution_status == "NOT_STARTED":
             record = await self.repository.claim_execution(

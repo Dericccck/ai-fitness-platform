@@ -54,6 +54,7 @@ class ConfirmationTokenIssuer:
         *,
         resource: str,
         jti: str,
+        request_body: bytes,
         now: int | None = None,
     ) -> str:
         """为已经批准且已绑定 JTI 的确认单签发短时 Token。"""
@@ -79,6 +80,8 @@ class ConfirmationTokenIssuer:
             "tool_id": record.tool_id,
             "organization_id": record.organization_id,
             "payload_hash": record.payload_hash,
+            "body_binding_version": 1,
+            "request_body_sha256": hashlib.sha256(request_body).hexdigest(),
             "jti": jti,
         }
         payload_bytes = json.dumps(

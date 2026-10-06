@@ -2,6 +2,7 @@ from datetime import UTC, datetime, timedelta
 from types import SimpleNamespace
 from typing import Any, cast
 
+import pytest
 from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent.fitness_tools import build_fitness_tool_registry
@@ -339,7 +340,10 @@ def test_aes_gcm_binds_ciphertext_to_payload_hash() -> None:
         raise AssertionError("changed payload hash must invalidate ciphertext")
 
 
-async def test_write_tool_creates_confirmation_interrupt_without_gateway_execution() -> None:
+@pytest.mark.parametrize("mode", ["json", "stream"])
+async def test_write_tool_creates_confirmation_interrupt_without_gateway_execution(
+    mode: str,
+) -> None:
     models = OneWriteModel()
     gateway = FakeGateway()
     registry = build_fitness_tool_registry(cast(GatewayClient, gateway))
@@ -368,7 +372,19 @@ async def test_write_tool_creates_confirmation_interrupt_without_gateway_executi
         ),
     )
 
-    response = await supervisor.invoke(request)
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    async def emit(event: str, data: dict[str, Any]) -> None:
+        events.append((event, data))
+
+    response = (
+        await supervisor.stream(request, emit)
+        if mode == "stream"
+        else await supervisor.invoke(request)
+    )
+    assert "signed-context" not in str(events)
+    assert "server-issued-token" not in str(events)
+    assert "深蹲" not in str(events)
 
     assert response.status == "CONFIRMATION_REQUIRED"
     assert response.confirmation_id == "confirmation-1"

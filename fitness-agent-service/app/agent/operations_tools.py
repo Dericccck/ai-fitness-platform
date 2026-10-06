@@ -11,8 +11,9 @@ import asyncio
 import hashlib
 import json
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Literal, cast
 from zoneinfo import ZoneInfo
 
@@ -20,6 +21,7 @@ import structlog
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.core.metrics import HttpMetrics
+from app.decision.models import MetricSnapshotInput
 from app.infrastructure.cache import Cache
 from app.infrastructure.gateway_client import GatewayClient, GatewayOperationsMetric
 
@@ -744,6 +746,9 @@ def build_operations_tool_definitions(
     rate_limit_window_seconds: int = 60,
     query_timeout_seconds: float | None = None,
     metrics: HttpMetrics | None = None,
+    decision_snapshot_sink: (
+        Callable[[str, MetricSnapshotInput, str | None], Awaitable[object]] | None
+    ) = None,
 ) -> tuple[ToolDefinition, ...]:
     """注册固定经营查询工具，并可选接入 PostgreSQL 持久化审计。
 
@@ -957,6 +962,22 @@ def build_operations_tool_definitions(
                 request_id=context.gateway_context.request_id,
                 trace_id=context.gateway_context.trace_id,
             )
+            if decision_snapshot_sink is not None and role == "CURRENT" and data.bucket != "NONE":
+                try:
+                    await decision_snapshot_sink(
+                        data.organization_id,
+                        _to_decision_snapshot(data, result),
+                        context.gateway_context.trace_id,
+                    )
+                except Exception as exc:  # noqa: BLE001 - 决策派生失败不应隐藏已审计查询结果
+                    _logger.error(
+                        "operations_decision_snapshot_failed",
+                        metric=data.metric,
+                        bucket=data.bucket,
+                        error_type=type(exc).__name__,
+                        request_id=context.gateway_context.request_id,
+                        trace_id=context.gateway_context.trace_id,
+                    )
             return result
 
         result = await query_period(from_date=data.from_date, to_date=data.to_date, role="CURRENT")
@@ -995,6 +1016,40 @@ def build_operations_tool_definitions(
             read_only=True,
             requires_confirmation=False,
         ),
+    )
+
+
+def _to_decision_snapshot(
+    query: OperationsMetricToolInput, result: GatewayOperationsMetric
+) -> MetricSnapshotInput:
+    timezone = ZoneInfo("Asia/Shanghai")
+    encoded = json.dumps(
+        {
+            "metric": result.metric,
+            "bucket": result.bucket,
+            "from": result.from_date.isoformat(),
+            "to": result.to_date.isoformat(),
+            "rows": [
+                {"dimension": row.dimension, "label": row.label, "value": row.value}
+                for row in result.rows
+            ],
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    )
+    return MetricSnapshotInput(
+        metric=result.metric,
+        dimension_type="ORGANIZATION",
+        dimension_id=query.organization_id,
+        bucket=result.bucket,
+        period_start=datetime.combine(result.from_date, time.min, tzinfo=timezone),
+        period_end=datetime.combine(result.to_date + timedelta(days=1), time.min, tzinfo=timezone),
+        value=sum(float(row.value) for row in result.rows),
+        sample_size=len(result.rows),
+        catalog_version=OPERATIONS_METRIC_CATALOG_VERSION,
+        source_digest=hashlib.sha256(encoded.encode()).hexdigest(),
+        metadata={"source": "OPERATIONS_GATEWAY", "row_count": len(result.rows)},
     )
 
 

@@ -1,14 +1,30 @@
 import asyncio
 import json
-from dataclasses import dataclass
+import math
+import random
+from collections.abc import Awaitable, Callable
+from dataclasses import dataclass, replace
+from time import perf_counter
+from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlparse
+from uuid import uuid4
 
 import structlog
-from openai import AsyncOpenAI, OpenAIError
+from openai import APIConnectionError, AsyncOpenAI, OpenAIError
 
 from app.core.config import Settings
 from app.core.metrics import HttpMetrics
 from app.evaluation.telemetry import TruLensTelemetry
+from app.infrastructure.model_protection import CircuitBreaker, ModelCapacityError, ModelProtection
+from app.infrastructure.model_usage import (
+    ModelUsage,
+    estimate_cost,
+    extract_usage,
+    record_usage,
+    usage_context,
+)
+from app.streaming.events import AnswerFilter, emit_event, streaming_enabled
 
 _logger = structlog.get_logger("agent.model_gateway")
 
@@ -72,10 +88,21 @@ class ModelGateway:
         settings: Settings,
         telemetry: TruLensTelemetry | None = None,
         metrics: HttpMetrics | None = None,
+        usage_sink: Callable[[ModelUsage], Awaitable[None]] | None = None,
     ) -> None:
         self.settings = settings
         self.telemetry = telemetry or TruLensTelemetry.disabled()
         self.metrics = metrics
+        self.usage_sink = usage_sink
+        # 覆盖账本、所有尝试和退避，早于共享并发租约到期，避免数据库阻塞时租约先失效。
+        self.logical_timeout_seconds = settings.llm_timeout_seconds * settings.llm_max_attempts + 10
+        self.protection = ModelProtection(
+            settings.llm_max_concurrency,
+            settings.llm_queue_timeout_seconds,
+            CircuitBreaker(
+                settings.llm_circuit_failure_threshold, settings.llm_circuit_cooldown_seconds
+            ),
+        )
 
         # AsyncOpenAI 构造时要求非空密钥，因此未配置环境使用不可用占位值完成
         # 对象装配。chat/embed 会在任何网络请求发生前检查 configured 并明确抛错，
@@ -84,11 +111,13 @@ class ModelGateway:
             api_key=settings.llm_api_key or "not-configured",
             base_url=settings.llm_base_url,
             timeout=settings.llm_timeout_seconds,
+            max_retries=0,
         )
         self._embedding = AsyncOpenAI(
             api_key=settings.embedding_effective_api_key or "not-configured",
             base_url=settings.embedding_base_url,
             timeout=settings.llm_timeout_seconds,
+            max_retries=0,
         )
         self._local_embedding: Any = None
 
@@ -276,37 +305,30 @@ class ModelGateway:
         await asyncio.to_thread(self._embed_local, ["健身检索模型预热"])
 
     async def _create_completion(self, request: dict[str, Any], *, kind: str) -> Any:
-        """调用供应商一次并发出有界的生成遥测数据。"""
+        """计量每一次实际尝试；统一截止时间、有限重试、共享并发与实例熔断。"""
 
-        messages = request.get("messages", [])
+        request = _stable_request(request)
+        request = _bounded_request(request, max_chars=self.settings.agent_context_max_chars)
+        if "max_tokens" not in request:
+            request["max_tokens"] = self.settings.llm_max_output_tokens
         with self.telemetry.span(
             "fitness.agent.generation",
             attributes={
                 "fitness.agent.generation_kind": kind,
                 "fitness.agent.model": self.settings.llm_model,
-                "fitness.agent.input_message_count": len(messages),
+                "fitness.agent.input_message_count": len(request.get("messages", [])),
             },
         ) as generation_span:
             try:
-                response = await self._llm.chat.completions.create(**request)
-            except OpenAIError as exc:
-                if self.metrics is not None:
-                    self.metrics.record_model_request(kind, "FAILED")
-                self.telemetry.set_attributes(
-                    generation_span,
-                    {"fitness.agent.generation_status": "failed"},
-                )
-                # 只记录稳定、低敏感度的供应商故障元数据。异常正文可能包含 URL、请求
-                # 片段或供应商回显，因此禁止直接写入日志；对外 API 仍只返回统一 503。
-                _logger.warning(
-                    "model_provider_request_failed",
-                    generation_kind=kind,
-                    model=self.settings.llm_model,
-                    provider_error_type=type(exc).__name__,
-                    provider_status_code=_provider_status_code(exc),
-                    provider_request_id_present=bool(getattr(exc, "request_id", None)),
-                )
-                raise ModelResponseError("LLM 服务请求失败") from exc
+                async with self.protection.capacity():
+                    async with asyncio.timeout(self.logical_timeout_seconds):
+                        response = await self._attempt_completion(request, kind=kind)
+            except ModelCapacityError as exc:
+                if self.metrics:
+                    self.metrics.record_model_request(kind, "REJECTED")
+                raise ModelResponseError("LLM 服务繁忙，请稍后重试") from exc
+            except TimeoutError as exc:
+                raise ModelResponseError("LLM 调用已超过总时间预算") from exc
             if self.metrics is not None:
                 self.metrics.record_model_request(kind, "SUCCEEDED")
             usage = getattr(response, "usage", None)
@@ -325,6 +347,181 @@ class ModelGateway:
                     response.choices[0].message.content,
                 )
             return response
+
+    async def _persist_usage(self, usage: ModelUsage) -> None:
+        if self.usage_sink is None:
+            return
+        try:
+            await self.usage_sink(usage)
+        except Exception as exc:
+            if self.metrics:
+                self.metrics.usage_ledger_failures_total.inc()
+            _logger.error("model_usage_persistence_failed", error_type=type(exc).__name__)
+            # STARTED 已提交但终态更新失败时仍能被识别为未知；不谎报完整计费。
+            raise ModelResponseError("模型用量记录暂时不可用") from exc
+
+    async def _attempt_completion(self, request: dict[str, Any], *, kind: str) -> Any:
+        request_id, run_id = usage_context()
+        provider = urlparse(self.settings.llm_base_url).hostname or "configured-provider"
+        for attempt in range(1, self.settings.llm_max_attempts + 1):
+            probe = self.protection.breaker.enter()
+            usage = ModelUsage(
+                call_id=uuid4().hex,
+                request_id=request_id,
+                run_id=run_id,
+                model=self.settings.llm_model,
+                provider=provider,
+                kind=kind,
+                attempt=attempt,
+                status="STARTED",
+                prompt_version=self.settings.prompt_version,
+            )
+            started = perf_counter()
+            ttft: float | None = None
+            raw_usage: Any = None
+            try:
+                await self._persist_usage(usage)
+                async with asyncio.timeout(self.settings.llm_timeout_seconds):
+                    if streaming_enabled() and kind == "tool_calling":
+                        response, ttft = await self._stream_completion(request, started=started)
+                    else:
+                        response = await self._llm.chat.completions.create(**request)
+                raw_usage = getattr(response, "usage", None)
+            except (OpenAIError, TimeoutError) as exc:
+                status_code = _provider_status_code(exc) if isinstance(exc, OpenAIError) else None
+                transient = isinstance(exc, (APIConnectionError, TimeoutError)) or (
+                    status_code is not None and (status_code == 429 or status_code >= 500)
+                )
+                if transient:
+                    self.protection.breaker.failure(probe=probe)
+                else:
+                    self.protection.breaker.abandon(probe=probe)
+                failed = replace(usage, status="FAILED", duration_seconds=perf_counter() - started)
+                record_usage(failed)
+                await self._persist_usage(failed)
+                if self.metrics:
+                    self.metrics.record_model_request(kind, "FAILED")
+                    self.metrics.observe_model_usage(failed)
+                _logger.warning(
+                    "model_provider_request_failed",
+                    generation_kind=kind,
+                    provider_error_type=type(exc).__name__,
+                    provider_status_code=status_code,
+                )
+                # 流式已可能暴露部分输出，禁止自动重试拼接两次生成；半开失败也不重试。
+                if (
+                    not transient
+                    or probe
+                    or streaming_enabled()
+                    or attempt == self.settings.llm_max_attempts
+                ):
+                    raise ModelResponseError("LLM 服务请求失败") from exc
+                retry_after = _retry_after(exc)
+                if retry_after is not None and retry_after > 5:
+                    raise ModelResponseError("LLM 服务请求受限，请稍后重试") from exc
+                await asyncio.sleep(
+                    retry_after if retry_after is not None else random.uniform(0.1, 0.5) * attempt
+                )
+                continue
+            except BaseException:
+                self.protection.breaker.abandon(probe=probe)
+                failed = replace(usage, status="UNKNOWN", duration_seconds=perf_counter() - started)
+                record_usage(failed)
+                # 取消不能吞掉；有限时间内保存未知用量，随后继续向上传播取消。
+                try:
+                    async with asyncio.timeout(2):
+                        await asyncio.shield(self._persist_usage(failed))
+                except Exception as persistence_error:  # noqa: BLE001 - 不能覆盖原始取消
+                    _logger.warning(
+                        "cancelled_model_usage_unknown", error_type=type(persistence_error).__name__
+                    )
+                raise
+            self.protection.breaker.success()
+            counts = extract_usage(raw_usage)
+            cost = estimate_cost(self.settings, counts)
+            succeeded = replace(
+                usage,
+                status="SUCCEEDED",
+                input_tokens=counts["input_tokens"],
+                output_tokens=counts["output_tokens"],
+                cache_hit_tokens=counts["cache_hit_tokens"],
+                cache_miss_tokens=counts["cache_miss_tokens"],
+                duration_seconds=perf_counter() - started,
+                ttft_seconds=ttft,
+                estimated_cost=cost,
+                currency=self.settings.llm_pricing_currency if cost is not None else None,
+                pricing_version=self.settings.llm_pricing_version if cost is not None else None,
+            )
+            record_usage(succeeded)
+            await self._persist_usage(succeeded)
+            if self.metrics:
+                self.metrics.observe_model_usage(succeeded)
+            return response
+        raise ModelResponseError("LLM 服务请求失败")
+
+    async def _stream_completion(
+        self, request: dict[str, Any], *, started: float
+    ) -> tuple[Any, float | None]:
+        """聚合完整工具参数；只有无工具回合允许增量文本对外展示。"""
+
+        stream = await self._llm.chat.completions.create(
+            **request, stream=True, stream_options={"include_usage": True}
+        )
+        content: list[str] = []
+        calls: dict[int, dict[str, Any]] = {}
+        usage: Any = None
+        ttft: float | None = None
+        filter_ = AnswerFilter()
+        visible = not request.get("tools")
+        finish_reason: str | None = None
+        try:
+            async for chunk in stream:
+                if getattr(chunk, "usage", None) is not None:
+                    usage = chunk.usage
+                for choice in chunk.choices:
+                    if choice.index != 0:
+                        continue
+                    if choice.finish_reason:
+                        finish_reason = choice.finish_reason
+                    delta = choice.delta
+                    if delta.content:
+                        if ttft is None:
+                            ttft = perf_counter() - started
+                        content.append(delta.content)
+                        if visible:
+                            safe = filter_.push(delta.content)
+                            if safe:
+                                emit_event("answer.delta", {"text": safe})
+                    for call in delta.tool_calls or []:
+                        stored = calls.setdefault(
+                            call.index, {"id": "", "name": "", "arguments": ""}
+                        )
+                        if call.id:
+                            stored["id"] += call.id
+                        if call.function:
+                            stored["name"] += call.function.name or ""
+                            stored["arguments"] += call.function.arguments or ""
+        finally:
+            await stream.close()
+        if finish_reason not in {"stop", "tool_calls"}:
+            raise ModelResponseError("LLM 流式响应未完整结束")
+        if visible:
+            if calls:
+                raise ModelResponseError("无工具回合出现工具调用")
+            tail = filter_.push("", final=True)
+            if tail:
+                emit_event("answer.delta", {"text": tail})
+        message = SimpleNamespace(
+            content="".join(content),
+            tool_calls=[
+                SimpleNamespace(
+                    id=item["id"],
+                    function=SimpleNamespace(name=item["name"], arguments=item["arguments"]),
+                )
+                for _, item in sorted(calls.items())
+            ],
+        )
+        return SimpleNamespace(choices=[SimpleNamespace(message=message)], usage=usage), ttft
 
     def _embed_local(self, texts: list[str]) -> list[list[float]]:
         """在线程池中执行本地 BGE-M3，避免阻塞 FastAPI 事件循环。"""
@@ -374,3 +571,62 @@ def _deepseek_extra_body(thinking_enabled: bool) -> dict[str, Any]:
     """生成与 learning-langchain-CN 一致的 DeepSeek thinking 配置。"""
 
     return {"thinking": {"type": "enabled" if thinking_enabled else "disabled"}}
+
+
+def _retry_after(error: BaseException) -> float | None:
+    response = getattr(error, "response", None)
+    headers = getattr(response, "headers", {})
+    try:
+        raw = headers.get("retry-after")
+        value = float(raw) if raw is not None else None
+        if value is None or not math.isfinite(value):
+            return None
+        return max(0.0, value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _stable_request(request: dict[str, Any]) -> dict[str, Any]:
+    """固定 Schema 序列化与工具顺序，不改变 RAG 相关性排序或业务消息顺序。"""
+
+    result = dict(request)
+    tools = result.get("tools")
+    if tools:
+        result["tools"] = sorted(
+            json.loads(json.dumps(tools, ensure_ascii=False, sort_keys=True)),
+            key=lambda item: item.get("function", {}).get("name", ""),
+        )
+    messages = result.get("messages", [])
+    merged: list[dict[str, Any]] = []
+    for message in messages:
+        current = dict(message)
+        if (
+            merged
+            and current.get("role") == merged[-1].get("role") == "system"
+            and isinstance(current.get("content"), str)
+            and isinstance(merged[-1].get("content"), str)
+            and set(current) == set(merged[-1]) == {"role", "content"}
+        ):
+            merged[-1]["content"] += "\n\n" + current["content"]
+        else:
+            merged.append(current)
+    result["messages"] = merged
+    return result
+
+
+def _bounded_request(request: dict[str, Any], *, max_chars: int) -> dict[str, Any]:
+    """只淘汰完整的旧用户回合，保留工具调用与结果配对、全部系统规则和当前回合。"""
+    result = dict(request)
+    messages = list(result.get("messages", []))
+    while len(json.dumps({**result, "messages": messages}, ensure_ascii=False)) > max_chars:
+        users = [i for i, message in enumerate(messages) if message.get("role") == "user"]
+        if len(users) < 2:
+            raise ModelResponseError("当前模型上下文超过安全预算，请缩小请求范围")
+        start, end = users[:2]
+        messages = (
+            messages[:start]
+            + [m for m in messages[start:end] if m.get("role") == "system"]
+            + messages[end:]
+        )
+    result["messages"] = messages
+    return result

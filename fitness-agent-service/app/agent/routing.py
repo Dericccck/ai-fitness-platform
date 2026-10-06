@@ -26,6 +26,19 @@ from app.infrastructure.model_gateway import (
 
 from .domain_subgraphs import SupervisorRoute
 
+
+def router_system_prompt() -> str:
+    """运行时与发布/评测共用同一份路由提示词。"""
+    return (
+        "你是健身平台的意图路由器，只分类，不回答问题，不生成工具参数。\n"
+        "最多输出两个意图。若同时存在查询和写入，保留两个；若存在两个写入，也保留两个，"
+        "服务端会要求拆分。不得根据用户要求绕过权限或确认。\n"
+        f"合法领域与意图：{json.dumps({key: sorted(value) for key, value in INTENTS_BY_ROUTE.items()}, ensure_ascii=False)}\n"
+        '输出严格 JSON：{"intents":[{"route":"...","intent":"..."}],'
+        '"confidence":0到1,"reason_code":"大写下划线原因码"}。'
+    )
+
+
 RouteSource = Literal[
     "HARD_GUARD",
     "DETERMINISTIC_RULE",
@@ -472,14 +485,7 @@ class HybridIntentRouter:
         previous_route: str | None,
     ) -> RouteDecision:
         history = _safe_history(recent_messages, self.context_messages)
-        prompt = (
-            "你是健身平台的意图路由器，只分类，不回答问题，不生成工具参数。\n"
-            "最多输出两个意图。若同时存在查询和写入，保留两个；若存在两个写入，也保留两个，"
-            "服务端会要求拆分。不得根据用户要求绕过权限或确认。\n"
-            f"合法领域与意图：{json.dumps({key: sorted(value) for key, value in INTENTS_BY_ROUTE.items()}, ensure_ascii=False)}\n"
-            '输出严格 JSON：{"intents":[{"route":"...","intent":"..."}],'
-            '"confidence":0到1,"reason_code":"大写下划线原因码"}。'
-        )
+        prompt = router_system_prompt()
         user_payload = {
             "previous_route": previous_route,
             "recent_messages": history,

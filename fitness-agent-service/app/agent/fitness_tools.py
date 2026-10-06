@@ -817,6 +817,7 @@ def build_fitness_tool_registry(
     operations_rate_limit_window_seconds: int = 60,
     operations_query_timeout_seconds: float | None = None,
     operations_metrics: HttpMetrics | None = None,
+    operations_decision_snapshot_sink: Any | None = None,
     telemetry: Any | None = None,
 ) -> ToolRegistry:
     """创建进程级健身工具注册表。
@@ -1290,6 +1291,7 @@ def build_fitness_tool_registry(
         rate_limit_window_seconds=operations_rate_limit_window_seconds,
         query_timeout_seconds=operations_query_timeout_seconds,
         metrics=operations_metrics,
+        decision_snapshot_sink=operations_decision_snapshot_sink,
     )
     for definition in definitions:
         registry.register(definition)

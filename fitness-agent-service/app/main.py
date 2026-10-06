@@ -17,10 +17,14 @@ from app.agent.training_plan_generation import (
     TrainingPlanGenerationService,
 )
 from app.api.middleware.request_context import RequestContextMiddleware
+from app.api.routes.admin_decisions import router as admin_decisions_router
 from app.api.routes.admin_knowledge import router as admin_knowledge_router
 from app.api.routes.admin_notifications import router as admin_notifications_router
 from app.api.routes.admin_operations import router as admin_operations_router
+from app.api.routes.admin_proactive import router as admin_proactive_router
 from app.api.routes.agent import router as agent_router
+from app.api.routes.auth import BrowserSessionMiddleware, auth_error
+from app.api.routes.auth import router as auth_router
 from app.api.routes.capabilities import router as capabilities_router
 from app.api.routes.confirmations import router as confirmations_router
 from app.api.routes.health import router as health_router
@@ -38,13 +42,18 @@ from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.metrics import HttpMetrics, MetricsMiddleware
 from app.core.telemetry import configure_tracing
+from app.decision.repository import DecisionRepository
+from app.decision.service import DecisionPlatformService
 from app.evaluation.telemetry import TruLensTelemetry
 from app.infrastructure.agent_context import AgentContextVerifier
+from app.infrastructure.browser_auth import BrowserAuthError, BrowserAuthService
 from app.infrastructure.cache import Cache, SessionLockManager
 from app.infrastructure.database import CheckpointStore, Database
 from app.infrastructure.gateway_client import GatewayClient
 from app.infrastructure.jwks import JwksPublicKeyProvider
 from app.infrastructure.model_gateway import ModelGateway
+from app.infrastructure.model_protection import RedisModelLease
+from app.infrastructure.model_usage import ModelUsageRepository
 from app.infrastructure.reranker import RerankerClient
 from app.memory.candidate import MemoryCandidateExtractionService
 from app.memory.candidate_repository import MemoryCandidateRepository
@@ -55,6 +64,7 @@ from app.memory.service import MemoryService
 from app.notifications.outbox import NotificationOutboxRepository
 from app.notifications.preferences import NotificationPreferenceRepository
 from app.notifications.templates import NotificationTemplateRepository
+from app.proactive.candidate_repository import ProactiveCandidateRepository
 from app.rag.admin_repository import KnowledgeIngestionRepository
 from app.rag.admin_service import KnowledgeAdminService
 from app.rag.document_quality import DocumentQualityThresholds
@@ -72,6 +82,8 @@ from app.rag.service import RagService
 from app.rag.storage import DocumentStorage, LocalDocumentStorage, S3DocumentStorage
 from app.rag.worker import KnowledgeIngestionWorker
 from app.session_summary import SessionSummaryRepository, SessionSummaryService
+from app.streaming.repository import ChatRunRepository
+from app.streaming.service import ChatRunManager
 
 runtime_settings = get_settings()
 configure_logging(runtime_settings.log_level)
@@ -99,6 +111,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # app.state 承担轻量依赖容器的职责。数据库、Checkpoint、Redis、Tool Registry 和
     # LangGraph Supervisor 都在这里统一装配，避免业务 Agent 自行读取环境变量或创建连接。
     app.state.settings = settings
+    app.state.metrics = http_metrics
     app.state.database = Database(settings)
     app.state.cache = Cache(settings.redis_url)
     app.state.checkpoint_store = CheckpointStore(settings)
@@ -115,11 +128,22 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
             timeout_seconds=settings.gateway_context_verification_jwks_timeout_seconds,
         ),
     )
+    app.state.model_usage_repository = ModelUsageRepository(app.state.database)
     app.state.models = ModelGateway(
         settings,
         telemetry=app.state.trulens_telemetry,
         metrics=http_metrics,
+        usage_sink=(
+            app.state.model_usage_repository.write if settings.llm_usage_ledger_enabled else None
+        ),
     )
+    if settings.llm_global_concurrency_enabled:
+        app.state.models.protection.shared = RedisModelLease(
+            app.state.cache.client,
+            provider=f"{settings.llm_base_url}/{settings.llm_model}",
+            limit=settings.llm_global_max_concurrency,
+            ttl=settings.llm_timeout_seconds * settings.llm_max_attempts + 30,
+        )
     app.state.reranker = RerankerClient(settings)
     app.state.knowledge_repository = KnowledgeRepository(app.state.database)
     parser_registry = DocumentParserRegistry(
@@ -148,6 +172,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         keyword_weight=settings.rag_keyword_weight,
         rrf_k=settings.rag_rrf_k,
         telemetry=app.state.trulens_telemetry,
+        metrics=http_metrics,
     )
     app.state.document_ingestion = DocumentIngestionService(
         app.state.knowledge_repository,
@@ -220,6 +245,11 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.notification_preferences = NotificationPreferenceRepository(
         default_timezone=settings.notification_default_timezone
     )
+    app.state.proactive_candidates = ProactiveCandidateRepository()
+    app.state.decision_repository = DecisionRepository()
+    app.state.decision_service = DecisionPlatformService(
+        app.state.database, app.state.decision_repository, metrics=http_metrics
+    )
     app.state.memory_candidate_extractor = MemoryCandidateExtractionService(
         app.state.models, metrics=http_metrics
     )
@@ -246,6 +276,13 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         operations_rate_limit_window_seconds=settings.operations_rate_limit_window_seconds,
         operations_query_timeout_seconds=settings.operations_query_timeout_seconds,
         operations_metrics=http_metrics,
+        operations_decision_snapshot_sink=lambda organization_id, snapshot, trace_id: (
+            app.state.decision_service.ingest_snapshot(
+                organization_id=organization_id,
+                payload=snapshot,
+                trace_id=trace_id,
+            )
+        ),
         telemetry=app.state.trulens_telemetry,
     )
     # 确认参数进入 PostgreSQL 前必须经过应用层加密；密钥缺失时拒绝启动，避免形成
@@ -253,6 +290,30 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     app.state.confirmation_cipher = AesGcmPayloadCipher.from_base64(
         settings.confirmation_encryption_key_base64,
         settings.confirmation_encryption_key_version,
+        settings.confirmation_encryption_decryption_key_ring,
+    )
+    app.state.chat_runs = ChatRunManager(
+        ChatRunRepository(
+            app.state.database,
+            app.state.confirmation_cipher,
+            timeout=settings.chat_run_timeout_seconds,
+            retention_hours=settings.chat_run_retention_hours,
+        ),
+        timeout=settings.chat_run_timeout_seconds,
+        heartbeat=settings.chat_stream_heartbeat_seconds,
+        queue_size=settings.chat_stream_queue_size,
+        shutdown_timeout=settings.worker_shutdown_timeout_seconds,
+        metrics=http_metrics,
+    )
+    app.state.browser_auth = (
+        BrowserAuthService(
+            settings,
+            app.state.cache.client,
+            app.state.confirmation_cipher,
+            app.state.context_verifier,
+        )
+        if settings.browser_auth_enabled
+        else None
     )
     # 候选正文和确认单参数使用同一套 AES-GCM 密钥管理边界，但通过不同 Repository
     # 隔离业务职责。候选只有 PENDING/APPROVED 等状态元数据可被 SQL 判断，value/unit
@@ -312,6 +373,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         app.state.cache.client,
         ttl_seconds=settings.session_lock_ttl_seconds,
     )
+    maintenance_task: asyncio.Task[None] | None = None
+    app.state.draining = False
     try:
         # Checkpointer 在服务启动阶段创建官方表结构；如果数据库不可用则拒绝启动，
         # 避免服务看似在线却丢失会话状态。
@@ -355,10 +418,18 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
                 metrics=http_metrics,
             ),
         )
+        maintenance_task = asyncio.create_task(_runtime_retention(app))
         yield
     finally:
+        app.state.draining = True
+        await app.state.chat_runs.close()
+        if maintenance_task is not None:
+            maintenance_task.cancel()
+            await asyncio.gather(maintenance_task, return_exceptions=True)
         # 即使请求处理出现异常，FastAPI 仍会进入 finally，确保连接被关闭。
         await app.state.models.close()
+        if app.state.browser_auth is not None:
+            await app.state.browser_auth.close()
         await app.state.gateway.close()
         await app.state.checkpoint_store.close()
         await app.state.cache.close()
@@ -379,6 +450,13 @@ app.state.trace_provider = configure_tracing(app, runtime_settings, metrics=http
 if runtime_settings.metrics_enabled:
     app.add_middleware(MetricsMiddleware, metrics=http_metrics)
 app.add_middleware(RequestContextMiddleware, service_name=runtime_settings.service_name)
+app.add_middleware(BrowserSessionMiddleware)
+app.add_exception_handler(BrowserAuthError, auth_error)
+app.add_exception_handler(TimeoutError, auth_error)
+from redis.exceptions import RedisError
+
+app.add_exception_handler(RedisError, auth_error)
+app.include_router(auth_router)
 app.include_router(agent_router)
 app.include_router(capabilities_router)
 app.include_router(confirmations_router)
@@ -388,9 +466,25 @@ app.include_router(notifications_router)
 app.include_router(admin_knowledge_router)
 app.include_router(admin_notifications_router)
 app.include_router(admin_operations_router)
+app.include_router(admin_proactive_router)
+app.include_router(admin_decisions_router)
 app.include_router(knowledge_review_router)
 app.include_router(rag_router)
 app.include_router(health_router)
+
+
+async def _runtime_retention(application: FastAPI) -> None:
+    """小批量清理短期结果和用量；多实例 SKIP LOCKED 避免长事务。"""
+    while True:
+        try:
+            await application.state.chat_runs.repository.cleanup()
+            if application.state.settings.llm_usage_ledger_enabled:
+                await application.state.model_usage_repository.cleanup(
+                    application.state.settings.llm_usage_retention_days
+                )
+        except Exception as exc:  # noqa: BLE001 - 保留期限任务失败不能终止 API
+            logger.error("runtime_retention_failed", error_type=type(exc).__name__)
+        await asyncio.sleep(60)
 
 
 def _build_document_storage(settings: Settings) -> DocumentStorage:

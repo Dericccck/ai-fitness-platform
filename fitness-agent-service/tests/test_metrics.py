@@ -94,3 +94,15 @@ def test_model_request_metrics_are_low_cardinality() -> None:
     assert 'fitness_agent_model_requests_total{kind="tool_calling",status="FAILED"}' in exposition
     assert "request_id" not in exposition
     assert "trace_id" not in exposition
+
+
+def test_business_decision_metrics_use_only_lifecycle_enums() -> None:
+    _, metrics = build_test_app()
+    metrics.record_business_decision_event("policy", "waiting_approval")
+    metrics.record_business_decision_event("approval", "approved")
+
+    exposition = generate_latest(metrics.registry).decode()
+    assert 'event="policy",outcome="waiting_approval"' in exposition
+    assert 'event="approval",outcome="approved"' in exposition
+    assert "case_id" not in exposition
+    assert "organization_id" not in exposition

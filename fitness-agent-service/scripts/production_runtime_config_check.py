@@ -9,6 +9,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -45,6 +46,11 @@ SERVICE_FILES = {
 RUNTIME_REQUIRED_KEYS = {
     "agent": {
         "AGENT_ENVIRONMENT",
+        "AGENT_BROWSER_AUTH_ENABLED",
+        "AGENT_BROWSER_AUTH_UPSTREAM_URL",
+        "AGENT_BROWSER_AUTH_UPSTREAM_SERVICE_TOKEN",
+        "AGENT_BROWSER_AUTH_ALLOWED_ORIGINS",
+        "AGENT_BROWSER_AUTH_COOKIE_SECURE",
         "AGENT_SERVICE_VERSION",
         "AGENT_SOURCE_COMMIT",
         "AGENT_PROMPT_VERSION",
@@ -196,6 +202,38 @@ def validate_runtime_directory(env_dir: Path) -> None:
         service_values[service] = values
 
     agent = service_values["agent"]
+    try:
+        url = urlparse(agent["AGENT_BROWSER_AUTH_UPSTREAM_URL"])
+        origins = json.loads(agent["AGENT_BROWSER_AUTH_ALLOWED_ORIGINS"])
+        if (
+            url.scheme != "https"
+            or not url.hostname
+            or "*" in url.netloc
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+        ):
+            raise ValueError()
+        if not isinstance(origins, list) or not origins:
+            raise ValueError()
+        for origin in origins:
+            parsed = urlparse(origin)
+            if (
+                parsed.scheme != "https"
+                or not parsed.hostname
+                or "*" in parsed.netloc
+                or parsed.username
+                or parsed.password
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError()
+    except (ValueError, TypeError):
+        raise ProductionRuntimeConfigError(
+            "浏览器认证上游与 Origin 必须为合法的精确 HTTPS 地址"
+        ) from None
     gateway = service_values["gateway"]
     booking = service_values["booking"]
     training = service_values["training"]

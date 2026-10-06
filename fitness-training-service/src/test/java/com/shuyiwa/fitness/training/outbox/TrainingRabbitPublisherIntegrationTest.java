@@ -41,13 +41,26 @@ public class TrainingRabbitPublisherIntegrationTest {
             admin.declareQueue(queue);
             admin.declareBinding(BindingBuilder.bind(queue).to(exchange)
                     .with("training.plan.published"));
+            admin.declareBinding(BindingBuilder.bind(queue).to(exchange)
+                    .with("training.plan.review_required"));
+            admin.declareBinding(BindingBuilder.bind(queue).to(exchange)
+                    .with("training.day.completed"));
+            admin.declareBinding(BindingBuilder.bind(queue).to(exchange)
+                    .with("training.day.skipped"));
+            admin.declareBinding(BindingBuilder.bind(queue).to(exchange)
+                    .with("training.plan.completed"));
 
-            publisher(template, exchangeName).publish(event(suffix + ":routed"));
+            RabbitTrainingMessagePublisher publisher = publisher(template, exchangeName);
+            publisher.publish(event(suffix + ":routed", "TRAINING_PLAN_PUBLISHED"));
+            publisher.publish(event(suffix + ":review-required", "TRAINING_PLAN_REVIEW_REQUIRED"));
+            publisher.publish(event(suffix + ":day-completed", "TRAINING_DAY_COMPLETED"));
+            publisher.publish(event(suffix + ":day-skipped", "TRAINING_DAY_SKIPPED"));
+            publisher.publish(event(suffix + ":plan-completed", "TRAINING_PLAN_COMPLETED"));
 
             admin.removeBinding(BindingBuilder.bind(queue).to(exchange)
                     .with("training.plan.published"));
             try {
-                publisher(template, exchangeName).publish(event(suffix + ":returned"));
+                publisher.publish(event(suffix + ":returned", "TRAINING_PLAN_PUBLISHED"));
             } catch (IllegalStateException expected) {
                 assertTrue(expected.getMessage().contains("publisher return"));
                 return;
@@ -68,10 +81,11 @@ public class TrainingRabbitPublisherIntegrationTest {
         return new RabbitTrainingMessagePublisher(template, properties);
     }
 
-    private static TrainingOutboxRepository.OutboxEvent event(String eventKey) {
+    private static TrainingOutboxRepository.OutboxEvent event(String eventKey, String eventType) {
         return new TrainingOutboxRepository.OutboxEvent(
-                1L, eventKey, "TRAINING_PLAN_PUBLISHED", "plan-it", "org-it", 1,
-                "{\"planId\":\"plan-it\",\"studentId\":\"student-it\"}", 0,
+                1L, eventKey, eventType, "plan-it", "org-it", 1,
+                "{\"planId\":\"plan-it\",\"dayId\":\"day-it\","
+                        + "\"studentId\":\"student-it\",\"coachId\":\"coach-it\"}", 0,
                 Instant.now());
     }
 

@@ -10,7 +10,9 @@ from __future__ import annotations
 import base64
 import binascii
 import os
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from types import MappingProxyType
 
 from cryptography.exceptions import InvalidTag
 from cryptography.hazmat.primitives.ciphers.aead import AESGCM
@@ -28,26 +30,44 @@ class AesGcmPayloadCipher:
     调用方使用确认动作的 ``payload_hash`` 作为 AAD，使密文不能被换绑到另一张确认单。
     """
 
-    key: bytes
+    key: bytes = field(repr=False)
     key_version: str
+    decryption_keys: Mapping[str, bytes] = field(default_factory=dict, repr=False)
 
     def __post_init__(self) -> None:
         if len(self.key) not in {16, 24, 32}:
             raise ConfirmationPayloadCipherError("AES 密钥长度必须为 128、192 或 256 位")
         if not self.key_version.strip():
             raise ConfirmationPayloadCipherError("必须提供加密密钥版本")
+        keys = dict(self.decryption_keys)
+        if self.key_version in keys:
+            raise ConfirmationPayloadCipherError("只读密钥环不能重复当前写入版本")
+        if any(
+            not version.strip() or len(key) not in {16, 24, 32} for version, key in keys.items()
+        ):
+            raise ConfirmationPayloadCipherError("只读加密密钥环无效")
+        object.__setattr__(self, "decryption_keys", MappingProxyType(keys))
 
     @classmethod
-    def from_base64(cls, encoded_key: str, key_version: str) -> AesGcmPayloadCipher:
+    def from_base64(
+        cls,
+        encoded_key: str,
+        key_version: str,
+        decryption_key_ring: Mapping[str, str] | None = None,
+    ) -> AesGcmPayloadCipher:
         """从 URL-safe Base64 Secret 构造加密器，不接受弱口令或隐式派生密钥。"""
 
         if not encoded_key.strip():
             raise ConfirmationPayloadCipherError("确认加密密钥未配置")
         try:
-            key = base64.urlsafe_b64decode(encoded_key.encode("ascii"))
+            key = base64.b64decode(encoded_key.encode("ascii"), altchars=b"-_", validate=True)
+            keys = {
+                version: base64.b64decode(value.encode("ascii"), altchars=b"-_", validate=True)
+                for version, value in (decryption_key_ring or {}).items()
+            }
         except (UnicodeEncodeError, binascii.Error, ValueError) as exc:
             raise ConfirmationPayloadCipherError("确认加密密钥不是有效的 Base64") from exc
-        return cls(key=key, key_version=key_version)
+        return cls(key=key, key_version=key_version, decryption_keys=keys)
 
     @classmethod
     def generate_for_local_development(cls, key_version: str = "local-v1") -> str:
@@ -64,15 +84,26 @@ class AesGcmPayloadCipher:
         ciphertext = AESGCM(self.key).encrypt(nonce, plaintext, associated_data.encode("utf-8"))
         return nonce + ciphertext
 
-    def decrypt(self, ciphertext: bytes, *, associated_data: str) -> bytes:
+    def decrypt(
+        self,
+        ciphertext: bytes,
+        *,
+        associated_data: str,
+        key_version: str | None = None,
+    ) -> bytes:
         """验证 AAD 和 GCM Tag 后解密；任何篡改都转换为稳定错误。"""
 
         if len(ciphertext) < 12 + 16:
             raise ConfirmationPayloadCipherError("加密 Payload 不完整")
         if not associated_data.strip():
             raise ConfirmationPayloadCipherError("必须提供关联数据")
+        version = self.key_version if key_version is None else key_version
+        key = self.key if version == self.key_version else self.decryption_keys.get(version)
+        if key is None:
+            # 不尝试其他版本，也不自动降级到当前密钥；版本与 AAD 都必须明确绑定。
+            raise ConfirmationPayloadCipherError("加密密钥版本不可用")
         try:
-            return AESGCM(self.key).decrypt(
+            return AESGCM(key).decrypt(
                 ciphertext[:12], ciphertext[12:], associated_data.encode("utf-8")
             )
         except InvalidTag as exc:

@@ -7,8 +7,11 @@ import asyncio
 from prometheus_client import start_http_server
 
 from app.core.config import Settings
+from app.core.worker_runtime import poll_worker, run_worker_process
 from app.main import app, http_metrics, lifespan
 from app.notifications.outbox import NotificationOutboxRepository
+from app.proactive.candidate_engine import ProactiveCandidateEngine
+from app.proactive.candidate_repository import ProactiveCandidateRepository
 from app.proactive.rabbit_consumer import ProactiveRabbitConsumer
 from app.proactive.repository import ProactiveEventRepository
 from app.proactive.worker import ProactiveEventWorker
@@ -24,6 +27,7 @@ async def run() -> None:
     async with lifespan(app):
         event_repository = ProactiveEventRepository()
         notification_repository = NotificationOutboxRepository()
+        candidate_repository = ProactiveCandidateRepository()
         consumer = ProactiveRabbitConsumer(
             app.state.database,
             event_repository,
@@ -40,16 +44,15 @@ async def run() -> None:
             notification_repository,
             batch_size=settings.proactive_worker_batch_size,
             metrics=http_metrics,
+            candidate_engine=ProactiveCandidateEngine(app.state.database, candidate_repository),
         )
         consumer_task = asyncio.create_task(consumer.run_forever())
         try:
-            while True:
-                await worker.run_once()
-                await asyncio.sleep(settings.proactive_worker_poll_seconds)
+            await poll_worker(worker.run_once, interval=settings.proactive_worker_poll_seconds)
         finally:
             consumer_task.cancel()
             await asyncio.gather(consumer_task, return_exceptions=True)
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    run_worker_process(run, metrics=http_metrics)

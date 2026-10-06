@@ -88,6 +88,20 @@ public class ConfirmationTokenVerifier {
             String organizationId = string(payload, "organization_id");
             String confirmationId = string(payload, "confirmation_id");
             String payloadHash = string(payload, "payload_hash");
+            String bodyHash = string(payload, "request_body_sha256");
+            if (!"1".equals(string(payload, "body_binding_version")) || !bodyHash.matches("[0-9a-f]{64}")) {
+                throw scopeMismatch("request_body_sha256");
+            }
+            org.springframework.web.context.request.RequestAttributes attributes =
+                    org.springframework.web.context.request.RequestContextHolder.getRequestAttributes();
+            if (attributes instanceof org.springframework.web.context.request.ServletRequestAttributes) {
+                Object actual = ((org.springframework.web.context.request.ServletRequestAttributes) attributes)
+                        .getRequest().getAttribute(ConfirmedRequestBodyFilter.BODY_HASH);
+                if (!(actual instanceof String) || !java.security.MessageDigest.isEqual(
+                        bodyHash.getBytes(StandardCharsets.US_ASCII), ((String) actual).getBytes(StandardCharsets.US_ASCII))) {
+                    throw scopeMismatch("request_body_sha256");
+                }
+            }
             String jti = string(payload, "jti");
             // 客户端仍只得到统一 401，避免借此探测授权边界；服务端按字段区分失败原因，
             // 便于定位 Agent 与 Gateway 的确认协议漂移。日志只包含字段名，不记录 Token

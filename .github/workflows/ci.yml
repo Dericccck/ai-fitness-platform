@@ -53,6 +53,19 @@ jobs:
       - name: Database migration contract
         run: uv run python scripts/migration_contract_check.py
 
+      - name: Runtime prompt snapshot and regression dataset contract
+        run: |
+          uv run --extra eval python -m app.evaluation.prompt_regression --export "$RUNNER_TEMP/runtime-prompts.json"
+          uv run --extra eval python -m app.evaluation.prompt_regression --dataset evals/prompt_regression.json --report "$RUNNER_TEMP/prompt-contract.json"
+
+      - name: Archive prompt contract evidence (not a live-model quality score)
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-prompt-contract
+          path: |
+            ${{ runner.temp }}/runtime-prompts.json
+            ${{ runner.temp }}/prompt-contract.json
+
       - name: Observability contract
         run: uv run python scripts/observability_contract_check.py
 
@@ -65,7 +78,7 @@ jobs:
             --entrypoint promtool \
             -v "$GITHUB_WORKSPACE/deployment/observability:/etc/prometheus:ro" \
             prom/prometheus:v2.54.1 \
-            test rules /etc/prometheus/tests/fitness-agent-alerts.test.yml
+            test rules /etc/prometheus/tests/fitness-agent-alerts.test.yml /etc/prometheus/tests/runtime-delivery-alerts.test.yml
 
       - name: Alertmanager configuration contract
         run: |
@@ -138,8 +151,12 @@ jobs:
             --image "fitness-agent-service@${IMAGE_DIGEST}" \
             --expected-environment staging
 
-  fitness-core-gateway:
-    name: Fitness Core Tool Gateway
+  fitness-java-services:
+    name: Java ${{ matrix.service }}
+    strategy:
+      fail-fast: false
+      matrix:
+        service: [fitness-core-gateway, fitness-training-service, fitness-booking-service, fitness-customer-service]
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
@@ -151,11 +168,66 @@ jobs:
           distribution: temurin
           java-version: "8"
           cache: maven
-          cache-dependency-path: fitness-core-gateway/pom.xml
+          cache-dependency-path: ${{ matrix.service }}/pom.xml
 
       # 只构建独立的健身核心 Gateway；根目录历史 Java 快照不属于本服务的构建边界。
-      - name: Test fitness core gateway
-        run: ./mvnw --batch-mode -f fitness-core-gateway/pom.xml clean test
+      - name: Test independent Java service
+        run: ./mvnw --batch-mode -f ${{ matrix.service }}/pom.xml clean test
+
+      - name: Build independent image (do not publish or deploy)
+        run: docker build -t ${{ matrix.service }}:${{ github.sha }} ${{ matrix.service }}
+
+  runtime-delivery-integration:
+    name: Isolated PostgreSQL and Redis runtime acceptance
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: pgvector/pgvector:pg16
+        env:
+          POSTGRES_USER: acceptance
+          POSTGRES_PASSWORD: acceptance
+          POSTGRES_DB: postgres
+        ports: ["5432:5432"]
+        options: --health-cmd "pg_isready -U acceptance" --health-interval 5s --health-timeout 3s --health-retries 10
+      redis:
+        image: redis:7.4-alpine
+        ports: ["6379:6379"]
+        options: --health-cmd "redis-cli ping" --health-interval 5s --health-timeout 3s --health-retries 10
+    defaults:
+      run:
+        working-directory: fitness-agent-service
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v6
+        with:
+          python-version-file: fitness-agent-service/.python-version
+      - uses: astral-sh/setup-uv@08807647e7069bb48b6ef5acd8ec9567f424441b
+        with:
+          version: "0.11.32"
+      - run: uv sync --locked --extra eval --extra dev
+      - name: Upgrade, assert real runtime contracts, rollback and remove only the temporary database
+        env:
+          AGENT_DATABASE_URL: postgresql+asyncpg://acceptance:acceptance@127.0.0.1:5432/postgres
+          AGENT_REDIS_URL: redis://127.0.0.1:6379/0
+        run: uv run python scripts/runtime_delivery_live_check.py --execute
+
+  fitness-web:
+    name: Frontend streaming contract and image
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: fitness-web
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+          cache: npm
+          cache-dependency-path: fitness-web/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+      - run: docker build -t fitness-web:${{ github.sha }} .
 
   ocr-service:
     name: OCR Service

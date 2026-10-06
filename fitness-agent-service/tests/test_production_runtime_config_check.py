@@ -35,6 +35,8 @@ def _write_runtime_files(directory: Path) -> None:
             "AGENT_CHECKPOINT_DATABASE_URL": "postgresql://agent@postgres.internal/agent",
             "AGENT_REDIS_URL": "redis://redis.internal:6379/0",
             "AGENT_GATEWAY_BASE_URL": "http://gateway.internal:8081",
+            "AGENT_BROWSER_AUTH_UPSTREAM_URL": "https://auth.internal/agent-sessions",
+            "AGENT_BROWSER_AUTH_ALLOWED_ORIGINS": '["https://fitness.internal"]',
             "AGENT_TRULENS_CAPTURE_MODE": "metadata",
             "AGENT_TRULENS_ONLINE_EXPORT_ENABLED": "true",
             "TRULENS_DATABASE_URL": "postgresql+psycopg://eval@evaluation.internal/agent_eval",

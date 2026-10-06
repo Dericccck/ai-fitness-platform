@@ -516,16 +516,26 @@ IN_APP，不接入短信（包括模拟短信）或 Push；预约等主动提醒
 过滤，并且只返回投递摘要、错误码和渠道消息 ID，不返回用户主体 ID、业务聚合 ID、标题或正文；同时提供低基数
 Prometheus 指标 `fitness_agent_notification_delivery_attempts_total`，用于观察各渠道成功、可重试失败和最终失败数量。
 
-主动提醒第一版：预约服务会把预约创建、改约和取消事件包装为标准事件信封，发布到共享领域事件 Exchange
-`fitness.domain.events`；训练服务会把训练计划提交审核和发布事件写入自己的 Outbox 后发布到同一 Exchange；
-`make agent-proactive-worker` 启动独立 Proactive Worker。Worker 先把事件按 `event_id` 幂等写入
-`agent_proactive_event_inbox`，再根据事件中的学员/教练 ID 生成通知 Outbox，最后由已有的
-`agent-notification-worker` 投递到站内收件箱。事件 Inbox 和通知 Outbox 都有租约、有限重试、死信状态和去重键，
-因此 RabbitMQ 重投不会生成重复通知。启动本地链路前执行 `make infra-up-messaging`、`make agent-migrate`，
-并在预约服务开启 `BOOKING_OUTBOX_PUBLISHER_ENABLED=true`；训练服务的对应开关为
-`TRAINING_OUTBOX_PUBLISHER_ENABLED=true`。主动提醒 Worker 默认关闭，需显式设置
-`AGENT_PROACTIVE_WORKER_ENABLED=true`。训练计划事件路由键为 `training.plan.review_required` 和
-`training.plan.published`；短信、Push 和 Memory 模拟短信仍不在本阶段范围内。
+主动服务采用“确定性事件链 + 局部 Agent”结构。预约创建/改约/取消、计划提交审核/发布这类必须准确表达的业务事实，
+仍直接由模板通知；训练日完成/跳过、训练周期完成、重复跳过、长期未训练、教练/运营摘要和取消预约后的服务跟进，
+先进入 `agent_proactive_candidates`，再由结构化决策 Agent 判断 `IGNORE / DEFER / NOTIFY / ASK_USER /
+PROPOSE_ACTION / ESCALATE_TO_COACH`。LLM 只负责模糊判断和表达，主体、机构、渠道、幂等键和工具参数均由服务端决定；
+模型不可用或置信度不足时使用安全回退，医疗承诺、羞辱施压和无来源证据会被拒绝。修改计划或预约只会生成 CTA，
+用户打开对话后仍复用既有 Supervisor、权限校验和确认单，主动 Agent 不直接写业务事实。
+
+完整链路为业务事务 Outbox → RabbitMQ `fitness.domain.events` → Agent Inbox → 幂等候选 → 最小化上下文快照 →
+结构化决策审计 → 不可变消息快照 → Notification Outbox → 偏好/安静时间/限频 → IN_APP。事件 Inbox、候选和通知
+Outbox 均采用租约、`FOR UPDATE SKIP LOCKED`、有限重试和 DEAD 人工重放；RabbitMQ 重投和 Worker 重启不会重复通知。
+管理员可以通过 `/api/v1/admin/proactive/inbox/dead`、`/candidates/dead` 查看并带原因重放，也可为客服等尚未接入
+领域事件的流程通过 `POST /api/v1/admin/proactive/candidates` 创建带稳定来源引用的候选。用户可对主动通知提交接受、
+拒绝、稍后提醒、静音和有用性反馈，反馈会进入后续决策上下文。
+
+本地启动顺序为 `make infra-up-messaging`、`make agent-migrate`，然后分别启动
+`make agent-proactive-worker`、`make agent-proactive-scheduler`、`make agent-proactive-decision-worker` 和
+`make agent-notification-worker`。对应开关为 `AGENT_PROACTIVE_WORKER_ENABLED`、
+`AGENT_PROACTIVE_SCHEDULER_ENABLED`、`AGENT_PROACTIVE_DECISION_WORKER_ENABLED`；Booking/Training 发布器仍需分别启用。
+训练新增路由键 `training.day.completed`、`training.day.skipped` 和 `training.plan.completed`。当前正式投递渠道为站内信；
+渠道适配器和投递审计边界已独立，接入短信、Push 或微信需要真实供应商凭据和用户渠道授权，不能用模拟成功替代。
 
 使用 `make agent-proactive-live-check` 可执行主动提醒链路验收。脚本默认只检查 Agent/Gateway/预约健康状态、
 Agent PostgreSQL 和 RabbitMQ，不写入预约；确认使用本地测试数据后，追加 `ARGS=--execute` 才会执行一次真实预约。
@@ -591,6 +601,13 @@ Agent 就绪探针在重启后的数据库连接池短暂重连窗口内会有�
 固定指标目录由 `OPERATIONS_METRIC_CATALOG` 集中维护。每个指标定义都包含稳定 ID、中文名称、业务口径、维度含义、
 支持的时间桶、是否支持上一等长周期环比和是否支持上一自然年同期同比；报表的 `metric_definition` 会返回这些非敏感元数据，帮助模型和管理员正确
 解释结果。新增经营指标时必须先补齐目录定义、Gateway 固定 SQL、权限/审计和评测，不能只增加一个自然语言关键词。
+
+已审计成功的日/周经营结果会同步形成可追溯指标快照，并进入自动经营决策闭环。平台使用稳健异常检测创建案例，
+根据策略模式、风险等级、预算、影响范围、数据质量和置信度选择影子运行、人工审批或低风险自治；授权动作由独立
+`make agent-decision-action-worker` 进程幂等执行，成功后进入效果观察，支持实验分流、增量效果计算和结案。
+管理接口统一位于 `/api/v1/admin/decisions`，前端入口为“经营决策”。完整架构、安全边界、运行和发布门禁见
+`../docs/ai-business-decision-platform-final.md`。聚合经营指标只会自动生成组织级运营/教练跟进任务，不会在缺少明确业务对象时
+直接发送用户提醒或修改预约、训练等核心业务事实。
 
 经营查询还受服务端资源策略保护：单次时间范围最多 92 天、结果最多 100 行；当前周期加环比/同比最多触发两次
 Gateway 查询，每次调用受 `AGENT_OPERATIONS_QUERY_TIMEOUT_SECONDS` 超时约束。生产 API 按机构使用 Redis 固定窗口限制请求量，

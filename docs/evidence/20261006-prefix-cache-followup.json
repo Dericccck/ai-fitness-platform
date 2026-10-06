@@ -1,0 +1,226 @@
+{
+  "passed": true,
+  "mode": "live_synthetic_stream_benchmark",
+  "model": "deepseek-v4-flash",
+  "samples_per_variant": 6,
+  "results": [
+    {
+      "variant": "stable",
+      "sample": 0,
+      "ttft_seconds": 0.5755299159791321,
+      "total_seconds": 0.8441387910861522,
+      "usage": {
+        "model_calls": 1,
+        "usage_complete": true,
+        "input_tokens": 2228,
+        "output_tokens": 24,
+        "known_input_tokens": 2228,
+        "known_output_tokens": 24,
+        "estimated_cost": null,
+        "currency": null
+      },
+      "cache_hit_tokens": 2048,
+      "cache_usage_known": true
+    },
+    {
+      "variant": "variable",
+      "sample": 0,
+      "ttft_seconds": 0.5162454999517649,
+      "total_seconds": 0.7231785419862717,
+      "usage": {
+        "model_calls": 1,
+        "usage_complete": true,
+        "input_tokens": 2251,
+        "output_tokens": 31,
+        "known_input_tokens": 2251,
+        "known_output_tokens": 31,
+        "estimated_cost": null,
+        "currency": null
+      },
+      "cache_hit_tokens": 0,
+      "cache_usage_known": true
+    },
+    {
+      "variant": "variable",
+      "sample": 1,
+      "ttft_seconds": 0.8378232091199607,
+      "total_seconds": 0.870876792119816,
+      "usage": {
+        "model_calls": 1,
+        "usage_complete": true,
+        "input_tokens": 2250,
+        "output_tokens": 19,
+        "known_input_tokens": 2250,
+        "known_output_tokens": 19,
+        "estimated_cost": null,
+        "currency": null
+      },
+      "cache_hit_tokens": 0,
+      "cache_usage_known": true
+    },
+    {
+      "variant": "stable",
+      "sample": 1,
+      "ttft_seconds": 0.6866448340006173,
+      "total_seconds": 0.8324722920078784,
+      "usage": {
+        "model_calls": 1,
+        "usage_complete": true,
+        "input_tokens": 2228,
+        "output_tokens": 24,
+        "known_input_tokens": 2228,
+        "known_output_tokens": 24,
+        "estimated_cost": null,
+        "currency": null
+      },
+      "cache_hit_tokens": 2048,
+      "cache_usage_known": true
+    },
+    {
+      "variant": "stable",
+      "sample": 2,
+      "ttft_seconds": 0.5375579998362809,
+      "total_seconds": 0.5921024999115616,
+      "usage": {
+        "model_calls": 1,
+        "usage_complete": true,
+        "input_tokens": 2228,
+        "output_tokens": 24,
+        "known_input_tokens": 2228,
+        "known_output_tokens": 24,
+        "estimated_cost": null,
+        "currency": null
+      },
+      "cache_hit_tokens": 2048,
+      "cache_usage_known": true
+    },
+    {
+      "variant": "variable",
+      "sample": 2,
+      "ttft_seconds": 0.6448595419060439,
+      "total_seconds": 0.6539182919077575,
+      "usage": {
+        "model_calls": 1,
+        "usage_complete": true,
+        "input_tokens": 2254,
+        "output_tokens": 24,
+        "known_input_tokens": 2254,
+        "known_output_tokens": 24,
+        "estimated_cost": null,
+        "currency": null
+      },
+      "cache_hit_tokens": 0,
+      "cache_usage_known": true
+    },
+    {
+      "variant": "variable",
+      "sample": 3,
+      "ttft_seconds": 0.59278095792979,
+      "total_seconds": 0.7172050420194864,
+      "usage": {
+        "model_calls": 1,
+        "usage_complete": true,
+        "input_tokens": 2252,
+        "output_tokens": 19,
+        "known_input_tokens": 2252,
+        "known_output_tokens": 19,
+        "estimated_cost": null,
+        "currency": null
+      },
+      "cache_hit_tokens": 0,
+      "cache_usage_known": true
+    },
+    {
+      "variant": "stable",
+      "sample": 3,
+      "ttft_seconds": 0.19417849997989833,
+      "total_seconds": 0.3470577918924391,
+      "usage": {
+        "model_calls": 1,
+        "usage_complete": true,
+        "input_tokens": 2228,
+        "output_tokens": 24,
+        "known_input_tokens": 2228,
+        "known_output_tokens": 24,
+        "estimated_cost": null,
+        "currency": null
+      },
+      "cache_hit_tokens": 2048,
+      "cache_usage_known": true
+    },
+    {
+      "variant": "stable",
+      "sample": 4,
+      "ttft_seconds": 0.7334515419788659,
+      "total_seconds": 1.0237059581559151,
+      "usage": {
+        "model_calls": 1,
+        "usage_complete": true,
+        "input_tokens": 2228,
+        "output_tokens": 24,
+        "known_input_tokens": 2228,
+        "known_output_tokens": 24,
+        "estimated_cost": null,
+        "currency": null
+      },
+      "cache_hit_tokens": 2048,
+      "cache_usage_known": true
+    },
+    {
+      "variant": "variable",
+      "sample": 4,
+      "ttft_seconds": 0.5240173749625683,
+      "total_seconds": 0.5573908749502152,
+      "usage": {
+        "model_calls": 1,
+        "usage_complete": true,
+        "input_tokens": 2256,
+        "output_tokens": 19,
+        "known_input_tokens": 2256,
+        "known_output_tokens": 19,
+        "estimated_cost": null,
+        "currency": null
+      },
+      "cache_hit_tokens": 0,
+      "cache_usage_known": true
+    },
+    {
+      "variant": "variable",
+      "sample": 5,
+      "ttft_seconds": 0.48706904193386436,
+      "total_seconds": 0.5321815421339124,
+      "usage": {
+        "model_calls": 1,
+        "usage_complete": true,
+        "input_tokens": 2252,
+        "output_tokens": 18,
+        "known_input_tokens": 2252,
+        "known_output_tokens": 18,
+        "estimated_cost": null,
+        "currency": null
+      },
+      "cache_hit_tokens": 0,
+      "cache_usage_known": true
+    },
+    {
+      "variant": "stable",
+      "sample": 5,
+      "ttft_seconds": 0.47758604190312326,
+      "total_seconds": 0.5705975419841707,
+      "usage": {
+        "model_calls": 1,
+        "usage_complete": true,
+        "input_tokens": 2228,
+        "output_tokens": 24,
+        "known_input_tokens": 2228,
+        "known_output_tokens": 24,
+        "estimated_cost": null,
+        "currency": null
+      },
+      "cache_hit_tokens": 2048,
+      "cache_usage_known": true
+    }
+  ],
+  "production_load_evidence": false,
+  "interpretation": "小样本配对观测；不代表上线规模、P95 SLA或确定的缓存加速比例"
+}

@@ -14,6 +14,7 @@ public class BookingServiceClientConfiguration {
     public RestTemplate bookingServiceRestTemplate(RestTemplateBuilder builder,
                                                    BookingServiceProperties properties) {
         return builder
+                .additionalInterceptors(new com.shuyiwa.fitness.gateway.security.ConfirmedBodyForwardingInterceptor())
                 .setConnectTimeout(Duration.ofMillis(properties.getTimeoutMilliseconds()))
                 .setReadTimeout(Duration.ofMillis(properties.getTimeoutMilliseconds()))
                 .build();

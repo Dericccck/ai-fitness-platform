@@ -8,6 +8,8 @@ from zoneinfo import ZoneInfo
 import httpx
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from app.confirmation.normalization import canonical_json_bytes
+from app.confirmation.request_body import training_execution_payload
 from app.core.config import Settings
 
 T = TypeVar("T", bound=BaseModel)
@@ -618,7 +620,7 @@ class GatewayClient:
         return await self._post(
             f"/internal/agent-tools/v1/training/plans/{plan_id}/days/{day_id}/execution",
             context,
-            {"dayId": day_id, "status": payload["status"], "note": payload.get("note")},
+            training_execution_payload(day_id, payload),
             GatewayTrainingDayExecution,
         )
 
@@ -682,13 +684,16 @@ class GatewayClient:
             headers["X-Trace-ID"] = context.trace_id
         if context.confirmation_token:
             headers["X-Confirmation-Token"] = context.confirmation_token
+        if json_body is not None:
+            headers["Content-Type"] = "application/json"
+        wire_body = canonical_json_bytes(json_body) if json_body is not None else None
         clean_params = {key: value for key, value in params.items() if value is not None}
         last_error: Exception | None = None
 
         for attempt in range(self.settings.gateway_max_retries + 1):
             try:
                 response = await self._client.request(
-                    method, path, params=clean_params, headers=headers, json=json_body
+                    method, path, params=clean_params, headers=headers, content=wire_body
                 )
             except (httpx.TimeoutException, httpx.NetworkError) as exc:
                 last_error = exc

@@ -237,13 +237,11 @@ class SessionSummaryService:
         record = await self.repository.get_for_subject(thread_id, subject_user_id)
         if record is None:
             return None
-        if record.summary_key_version != self.cipher.key_version:
-            _logger.warning("session_summary_key_version_mismatch", thread_id=thread_id)
-            return None
         try:
             plaintext = self.cipher.decrypt(
                 record.summary_ciphertext,
                 associated_data=_associated_data(thread_id, record.summary_hash),
+                key_version=record.summary_key_version,
             ).decode("utf-8")
         except (ConfirmationPayloadCipherError, UnicodeDecodeError):
             _logger.warning("session_summary_decrypt_failed", thread_id=thread_id)

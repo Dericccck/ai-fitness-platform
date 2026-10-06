@@ -42,6 +42,7 @@ async def ready(request: Request, response: Response) -> dict[str, object]:
 
     settings = request.app.state.settings
     checks: dict[str, object] = {
+        "accepting_requests": not getattr(request.app.state, "draining", False),
         "database": "unknown",
         "checkpoint": "unknown",
         "redis": "unknown",
@@ -49,11 +50,17 @@ async def ready(request: Request, response: Response) -> dict[str, object]:
         "embedding": settings.embedding_configured,
         "reranker": settings.reranker_configured,
         "fitness_gateway": settings.gateway_configured,
+        "runtime_schema": "unknown",
     }
 
     try:
         await request.app.state.database.ping()
         checks["database"] = "ok"
+        checks["runtime_schema"] = (
+            await request.app.state.database.runtime_schema_ready()
+            if settings.chat_stream_enabled or settings.llm_usage_ledger_enabled
+            else True
+        )
     except Exception as exc:  # noqa: BLE001 - health endpoint must report a stable response
         # 只返回异常类型，避免连接串、主机或凭证进入公开探针响应。
         checks["database"] = {"status": "failed", "error": type(exc).__name__}
@@ -71,7 +78,9 @@ async def ready(request: Request, response: Response) -> dict[str, object]:
         checks["redis"] = {"status": "failed", "error": type(exc).__name__}
 
     ready_state = (
-        checks["database"] == "ok"
+        checks["accepting_requests"] is True
+        and checks["database"] == "ok"
+        and checks["runtime_schema"] is True
         and checks["checkpoint"] == "ok"
         and checks["redis"] == "ok"
         and checks["llm"] is True

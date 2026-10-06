@@ -2,15 +2,15 @@
 
 from __future__ import annotations
 
-import asyncio
-
 from prometheus_client import start_http_server
 
 from app.core.config import Settings
+from app.core.worker_runtime import poll_worker, run_worker_process
 from app.main import app, http_metrics, lifespan
 from app.notifications.outbox import NotificationOutboxRepository
 from app.notifications.preferences import NotificationPreferenceRepository
 from app.notifications.worker import NotificationOutboxWorker
+from app.proactive.candidate_repository import ProactiveCandidateRepository
 
 
 async def run() -> None:
@@ -27,11 +27,10 @@ async def run() -> None:
                 default_timezone=settings.notification_default_timezone
             ),
             metrics=http_metrics,
+            proactive_candidates=ProactiveCandidateRepository(),
         )
-        while True:
-            await worker.run_once()
-            await asyncio.sleep(settings.notification_worker_poll_seconds)
+        await poll_worker(worker.run_once, interval=settings.notification_worker_poll_seconds)
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    run_worker_process(run, metrics=http_metrics)

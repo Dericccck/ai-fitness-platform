@@ -2,7 +2,7 @@ SHELL := /bin/sh
 
 .PHONY: observability-check observability-live-check observability-rule-test observability-alertmanager-check observability-e2e-check trulens-infra-up trulens-postgres-check trulens-agent-runtime-check web-check web-run
 
-.PHONY: agent-jwks-check agent-jwks-dual-check agent-domain-subgraphs-live-check agent-domain-subgraphs-session-live-check agent-proactive-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-release-manifest-check agent-release-components-check agent-migration-check agent-migration-live-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check gateway-it production-config-check production-runtime-config-check
+.PHONY: agent-jwks-check agent-jwks-dual-check agent-domain-subgraphs-live-check agent-domain-subgraphs-session-live-check agent-proactive-worker agent-proactive-decision-worker agent-proactive-scheduler agent-decision-action-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-release-manifest-check agent-release-components-check agent-migration-check agent-migration-live-check agent-proactive-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check customer-service-check customer-service-run agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check release-check gateway-it production-config-check production-runtime-config-check
 
 AGENT_DIR := fitness-agent-service
 UV_CACHE_DIR := $(CURDIR)/.cache/uv
@@ -15,7 +15,47 @@ TRULENS_JUDGE_EVAL_RELEASE_FILE ?= evals/trulens_judge.release.json
 
 .PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-live-check ocr-run ocr-image gateway-check gateway-run gateway-training-role-live-check gateway-training-write-live-check gateway-training-workflow-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check training-check training-run training-role-live-check training-role-visibility-live-check booking-check booking-it booking-run customer-service-check customer-service-run legacy-java-diagnostic release-check check agent-trulens-retention web-check web-run
 
-.PHONY: pdf-visual-audit
+.PHONY: pdf-visual-audit runtime-delivery-check runtime-delivery-live-check prompt-snapshot prompt-regression-contract prompt-regression prompt-release-gate llm-performance-benchmark agent-end-to-end-benchmark project-evidence-benchmark renewal-effect-check sae-release-plan app-config-check app-images
+
+runtime-delivery-check:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --extra eval pytest -q tests/test_runtime_usage.py tests/test_runtime_protection.py tests/test_runtime_streaming.py tests/test_runtime_stream_api.py tests/test_runtime_sdk_stream.py tests/test_runtime_health.py tests/test_worker_runtime.py tests/test_prompt_regression.py tests/test_prompt_release_gate.py tests/test_confirmation_runtime.py tests/test_browser_auth.py tests/test_browser_auth_config.py tests/test_payload_key_rotation.py tests/test_historical_prompt_export.py tests/test_sae_release_plan.py tests/test_agent_end_to_end_benchmark.py
+	cd fitness-web && npm test && npm run build
+
+runtime-delivery-live-check:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/runtime_delivery_live_check.py --execute
+
+prompt-snapshot:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --extra eval python -m app.evaluation.prompt_regression --export ../tmp/runtime-prompts.json
+
+prompt-regression-contract:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --extra eval python -m app.evaluation.prompt_regression --dataset evals/prompt_regression.json
+
+prompt-regression:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --extra eval python -m app.evaluation.prompt_regression --dataset evals/prompt_regression.json $(ARGS)
+
+prompt-release-gate:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --extra eval python scripts/prompt_release_gate.py $(ARGS)
+
+llm-performance-benchmark:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/llm_performance_benchmark.py $(ARGS)
+
+agent-end-to-end-benchmark:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/agent_end_to_end_benchmark.py $(ARGS)
+
+project-evidence-benchmark:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m scripts.project_evidence_benchmark $(ARGS)
+
+renewal-effect-check:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m scripts.renewal_effect_check $(ARGS)
+
+sae-release-plan:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/sae_release_plan.py $(ARGS)
+
+app-config-check:
+	docker compose -f deployment/docker-compose.app.yml --profile proactive --profile maintenance --profile observability config --quiet
+
+app-images:
+	docker compose -f deployment/docker-compose.app.yml --profile proactive --profile maintenance build
 
 help:
 	@echo "Available targets:"
@@ -61,6 +101,9 @@ help:
 	@echo "  agent-session-summary-worker Start the short-term session summary cleanup worker locally"
 	@echo "  agent-notification-worker Start the in-app notification Outbox worker locally"
 	@echo "  agent-proactive-worker Start the RabbitMQ proactive event worker locally"
+	@echo "  agent-proactive-decision-worker Start the structured proactive decision Agent locally"
+	@echo "  agent-decision-action-worker Start the authorized business decision action worker"
+	@echo "  agent-proactive-scheduler Start the time-window candidate scheduler locally"
 	@echo "  agent-proactive-reliability-check Verify proactive message deduplication, retry and recovery boundaries"
 	@echo "  agent-proactive-reliability-live-check Verify real RabbitMQ duplicate delivery and Worker restart recovery"
 	@echo "  agent-postgres-backup-restore-check Verify Agent PostgreSQL logical backup and temporary database restore"
@@ -103,6 +146,13 @@ help:
 	@echo "  release-check  Run the complete deterministic release quality gate; no business writes"
 	@echo "  web-check      Run the React frontend typecheck and production build"
 	@echo "  web-run        Start the React frontend development server"
+	@echo "  runtime-delivery-check Verify streaming, usage, protection, prompts, confirmation and frontend contracts"
+	@echo "  runtime-delivery-live-check Verify new runtime behavior in a unique temporary PostgreSQL database and real Redis"
+	@echo "  prompt-snapshot Export actual runtime prompts and tool schemas"
+	@echo "  prompt-regression-contract Validate synthetic evaluation contracts without model calls"
+	@echo "  llm-performance-benchmark Measure synthetic streaming latency; --execute enables billing"
+	@echo "  app-config-check Validate the complete application deployment graph"
+	@echo "  app-images Build independent application images without deployment"
 	@echo "  legacy-java-diagnostic Reproduce the incomplete legacy Java build (expected to fail)"
 	@echo "  check        Run Agent and fitness core Gateway quality gates"
 
@@ -143,7 +193,7 @@ observability-live-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/observability_contract_check.py --execute $(ARGS)
 
 observability-rule-test:
-	docker run --rm --entrypoint promtool -v "$(CURDIR)/deployment/observability:/etc/prometheus:ro" prom/prometheus:v2.54.1 test rules /etc/prometheus/tests/fitness-agent-alerts.test.yml
+	docker run --rm --entrypoint promtool -v "$(CURDIR)/deployment/observability:/etc/prometheus:ro" prom/prometheus:v2.54.1 test rules /etc/prometheus/tests/fitness-agent-alerts.test.yml /etc/prometheus/tests/runtime-delivery-alerts.test.yml
 
 observability-alertmanager-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/alertmanager_route_check.py
@@ -294,6 +344,15 @@ agent-notification-worker:
 
 agent-proactive-worker:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.proactive_worker_main
+
+agent-proactive-decision-worker:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.proactive_decision_worker_main
+
+agent-decision-action-worker:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.decision_action_worker_main
+
+agent-proactive-scheduler:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.proactive_scheduler_main
 
 agent-proactive-reliability-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run pytest tests/test_proactive_reliability.py

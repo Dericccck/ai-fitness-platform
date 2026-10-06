@@ -51,6 +51,12 @@ public class RabbitTrainingMessagePublisher implements TrainingMessagePublisher 
                 return "training.plan.review_required";
             case "TRAINING_PLAN_PUBLISHED":
                 return "training.plan.published";
+            case "TRAINING_DAY_COMPLETED":
+                return "training.day.completed";
+            case "TRAINING_DAY_SKIPPED":
+                return "training.day.skipped";
+            case "TRAINING_PLAN_COMPLETED":
+                return "training.plan.completed";
             default:
                 throw new IllegalArgumentException("不支持的训练事件类型：" + eventType);
         }

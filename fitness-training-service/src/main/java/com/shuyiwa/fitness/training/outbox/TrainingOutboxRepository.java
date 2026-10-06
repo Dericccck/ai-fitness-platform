@@ -8,6 +8,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 
 /**
@@ -71,6 +72,55 @@ public class TrainingOutboxRepository {
                 event.id, workerId) == 1;
     }
 
+    public List<DeadOutboxEvent> listDead() {
+        return jdbc.query("SELECT id, event_key, event_type, aggregate_id, organization_id, status, "
+                        + "attempt_count, last_error, created_at, replay_count, last_replayed_by, "
+                        + "last_replayed_at FROM agent_training_outbox WHERE status='DEAD' ORDER BY created_at, id",
+                (rs, rowNum) -> new DeadOutboxEvent(
+                        rs.getLong("id"), rs.getString("event_key"), rs.getString("event_type"),
+                        rs.getString("aggregate_id"), rs.getString("organization_id"),
+                        rs.getString("status"), rs.getInt("attempt_count"), rs.getString("last_error"),
+                        rs.getTimestamp("created_at").toInstant(), rs.getInt("replay_count"),
+                        rs.getString("last_replayed_by"), rs.getTimestamp("last_replayed_at") == null
+                                ? null : rs.getTimestamp("last_replayed_at").toInstant()));
+    }
+
+    public Optional<DeadOutboxEvent> findDead(long id) {
+        return findByIdAndStatus(id, "DEAD");
+    }
+
+    public Optional<DeadOutboxEvent> findById(long id) {
+        return findByIdAndStatus(id, null);
+    }
+
+    private Optional<DeadOutboxEvent> findByIdAndStatus(long id, String status) {
+        String sql = "SELECT id, event_key, event_type, aggregate_id, organization_id, status, "
+                + "attempt_count, last_error, created_at, replay_count, last_replayed_by, "
+                + "last_replayed_at FROM agent_training_outbox WHERE id=?"
+                + (status == null ? "" : " AND status=?");
+        Object[] arguments = status == null ? new Object[]{id} : new Object[]{id, status};
+        List<DeadOutboxEvent> rows = jdbc.query(sql, arguments, (rs, rowNum) -> new DeadOutboxEvent(
+                rs.getLong("id"), rs.getString("event_key"), rs.getString("event_type"),
+                rs.getString("aggregate_id"), rs.getString("organization_id"),
+                rs.getString("status"), rs.getInt("attempt_count"), rs.getString("last_error"),
+                rs.getTimestamp("created_at").toInstant(), rs.getInt("replay_count"),
+                rs.getString("last_replayed_by"), rs.getTimestamp("last_replayed_at") == null
+                        ? null : rs.getTimestamp("last_replayed_at").toInstant()));
+        return rows.stream().findFirst();
+    }
+
+    @Transactional
+    public boolean replayDead(long id, String operatorId, String reason) {
+        int changed = jdbc.update("UPDATE agent_training_outbox SET status='PENDING', attempt_count=0, "
+                        + "next_attempt_at=CURRENT_TIMESTAMP, last_error=NULL, claimed_at=NULL, claimed_by=NULL, "
+                        + "replay_count=replay_count+1, last_replayed_by=?, last_replayed_at=CURRENT_TIMESTAMP "
+                        + "WHERE id=? AND status='DEAD'", operatorId, id);
+        if (changed != 1) return false;
+        jdbc.update("INSERT INTO agent_training_outbox_replay_audit "
+                        + "(outbox_id, operator_id, reason) VALUES (?, ?, ?)", id, operatorId, reason);
+        return true;
+    }
+
     private static String safeError(Throwable failure) {
         String message = failure == null ? "未知的 Outbox 发布失败" : failure.toString();
         return message.length() <= 2000 ? message : message.substring(0, 2000);
@@ -99,6 +149,31 @@ public class TrainingOutboxRepository {
             this.payload = payload;
             this.attemptCount = attemptCount;
             this.occurredAt = occurredAt;
+        }
+    }
+
+    public static final class DeadOutboxEvent {
+        public final long id;
+        public final String eventKey;
+        public final String eventType;
+        public final String aggregateId;
+        public final String organizationId;
+        public final String status;
+        public final int attemptCount;
+        public final String lastError;
+        public final Instant createdAt;
+        public final int replayCount;
+        public final String lastReplayedBy;
+        public final Instant lastReplayedAt;
+
+        public DeadOutboxEvent(long id, String eventKey, String eventType, String aggregateId,
+                               String organizationId, String status, int attemptCount, String lastError,
+                               Instant createdAt, int replayCount, String lastReplayedBy, Instant lastReplayedAt) {
+            this.id = id; this.eventKey = eventKey; this.eventType = eventType;
+            this.aggregateId = aggregateId; this.organizationId = organizationId; this.status = status;
+            this.attemptCount = attemptCount; this.lastError = lastError; this.createdAt = createdAt;
+            this.replayCount = replayCount; this.lastReplayedBy = lastReplayedBy;
+            this.lastReplayedAt = lastReplayedAt;
         }
     }
 

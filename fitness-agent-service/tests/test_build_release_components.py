@@ -1,5 +1,7 @@
 import json
 
+from app.agent.domain_subgraphs import executable_domain_specs
+from app.agent.routing import INTENTS_BY_ROUTE
 from scripts.build_release_components import main
 from scripts.build_runtime_release_components import main as runtime_main
 from scripts.release_manifest_check import artifact_tree_digest
@@ -107,12 +109,19 @@ def test_runtime_components_export_actual_prompts_and_tool_schemas(tmp_path) -> 
         == 0
     )
     payload = json.loads(output.read_text(encoding="utf-8"))
-    assert set(payload["prompts"]) == {
+    expected = {
         "fitness_agent",
         "booking_agent",
         "operations_agent",
         "customer_service_agent",
     }
+    expected.add("router")
+    expected.update(
+        f"{spec.node_name}.{intent}"
+        for spec in executable_domain_specs()
+        for intent in INTENTS_BY_ROUTE[spec.route]
+    )
+    assert set(payload["prompts"]) == expected
     assert "fitness.user.get_current.v1" in payload["tool_schemas"]
     assert payload["index_build_id"] == "kb-runtime-test-1"
     assert "llm_api_key" not in json.dumps(payload)

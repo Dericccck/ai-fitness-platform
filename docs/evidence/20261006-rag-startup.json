@@ -1,0 +1,148 @@
+{
+  "completed": true,
+  "code_sha256": "69d4b0cda3e532b7526c301312cb6363a704f1518f5751b1b34acdb8944390fc",
+  "started_at": "2026-10-06T15:01:53.412062+00:00",
+  "pairs": 3,
+  "fixture_sha256": "c5b2f74ba966fa6263bb70068b8e61cd261cc02a468a384129584f7b7b221208",
+  "torch_threads": 4,
+  "production_load_evidence": false,
+  "results": [
+    {
+      "pair": 0,
+      "variant": "lazy_first_request",
+      "ready_preparation_seconds": 3.341119736433029e-07,
+      "first_rag_seconds": 4.0498291661497205,
+      "ids": [
+        "warmup",
+        "beginner",
+        "interval",
+        "rir",
+        "hinge"
+      ],
+      "relevant_hit": true
+    },
+    {
+      "pair": 0,
+      "variant": "warmup_before_ready",
+      "ready_preparation_seconds": 2.138043791987002,
+      "first_rag_seconds": 0.3839550002012402,
+      "ids": [
+        "warmup",
+        "beginner",
+        "interval",
+        "rir",
+        "hinge"
+      ],
+      "relevant_hit": true
+    },
+    {
+      "pair": 1,
+      "variant": "warmup_before_ready",
+      "ready_preparation_seconds": 1.7720422497950494,
+      "first_rag_seconds": 0.409930249908939,
+      "ids": [
+        "warmup",
+        "beginner",
+        "interval",
+        "rir",
+        "hinge"
+      ],
+      "relevant_hit": true
+    },
+    {
+      "pair": 1,
+      "variant": "lazy_first_request",
+      "ready_preparation_seconds": 8.312053978443146e-08,
+      "first_rag_seconds": 1.961303000105545,
+      "ids": [
+        "warmup",
+        "beginner",
+        "interval",
+        "rir",
+        "hinge"
+      ],
+      "relevant_hit": true
+    },
+    {
+      "pair": 2,
+      "variant": "lazy_first_request",
+      "ready_preparation_seconds": 8.312053978443146e-08,
+      "first_rag_seconds": 1.9772004170808941,
+      "ids": [
+        "warmup",
+        "beginner",
+        "interval",
+        "rir",
+        "hinge"
+      ],
+      "relevant_hit": true
+    },
+    {
+      "pair": 2,
+      "variant": "warmup_before_ready",
+      "ready_preparation_seconds": 1.7570257501211017,
+      "first_rag_seconds": 0.3772058340255171,
+      "ids": [
+        "warmup",
+        "beginner",
+        "interval",
+        "rir",
+        "hinge"
+      ],
+      "relevant_hit": true
+    }
+  ],
+  "temporary_database_removed": true,
+  "first_request_change": {
+    "before": {
+      "n": 3,
+      "mean": 2.66277752777872,
+      "median": 1.9772004170808941,
+      "p95": 3.842566291242838,
+      "min": 1.961303000105545,
+      "max": 4.0498291661497205
+    },
+    "after": {
+      "n": 3,
+      "mean": 0.39036369471189875,
+      "median": 0.3839550002012402,
+      "p95": 0.40733272493816913,
+      "min": 0.3772058340255171,
+      "max": 0.409930249908939
+    },
+    "mean_reduction": 2.272413833066821,
+    "relative_reduction_percent": 85.33998087938127,
+    "paired_mean_reduction_ci95": [
+      1.551372750196606,
+      3.6658741659484804
+    ],
+    "ci_scope": "固定测试用例/时段的配对bootstrap；不代表真实用户总体或跨时段供应商性能"
+  },
+  "startup_plus_first_request_change": {
+    "before": {
+      "n": 3,
+      "mean": 2.662777694563071,
+      "median": 1.977200500201434,
+      "p95": 3.842566600255668,
+      "min": 1.9613030832260847,
+      "max": 4.049829500261694
+    },
+    "after": {
+      "n": 3,
+      "mean": 2.2794009586796165,
+      "median": 2.1819724997039884,
+      "p95": 2.4879961629398166,
+      "min": 2.134231584146619,
+      "max": 2.521998792188242
+    },
+    "mean_reduction": 0.38337673588345433,
+    "relative_reduction_percent": 14.397624580761773,
+    "paired_mean_reduction_ci95": [
+      -0.22066941647790372,
+      1.5278307080734521
+    ],
+    "ci_scope": "固定测试用例/时段的配对bootstrap；不代表真实用户总体或跨时段供应商性能"
+  },
+  "finished_at": "2026-10-06T15:02:18.916061+00:00",
+  "scope": "同一进程中全新模型对象；模块和操作系统文件缓存可能已热，不是六次重启整个容器。预热把加载成本转移到ready之前，不代表稳态请求或LLM回答等比例加速。"
+}

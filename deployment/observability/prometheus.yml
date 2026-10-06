@@ -31,9 +31,13 @@ scrape_configs:
     static_configs:
       - targets:
           - "host.docker.internal:8092"
+          - "host.docker.internal:8093"
           - "host.docker.internal:8094"
           - "host.docker.internal:8095"
           - "host.docker.internal:8096"
+          - "host.docker.internal:8098"
+          - "host.docker.internal:8099"
+          - "host.docker.internal:8100"
         labels:
           service: fitness-agent-worker
           environment: local

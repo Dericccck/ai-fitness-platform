@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-import asyncio
+from prometheus_client import start_http_server
 
-from app.main import app, lifespan
+from app.core.worker_runtime import poll_worker, run_worker_process
+from app.main import app, http_metrics, lifespan
 
 
 async def run() -> None:
@@ -12,11 +13,10 @@ async def run() -> None:
 
     async with lifespan(app):
         settings = app.state.settings
+        start_http_server(settings.knowledge_worker_metrics_port, registry=http_metrics.registry)
         worker = app.state.knowledge_reindex_worker
-        while True:
-            await worker.run_once()
-            await asyncio.sleep(settings.rag_reindex_worker_poll_seconds)
+        await poll_worker(worker.run_once, interval=settings.rag_reindex_worker_poll_seconds)
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    run_worker_process(run, metrics=http_metrics)

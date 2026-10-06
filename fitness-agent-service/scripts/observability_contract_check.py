@@ -34,7 +34,12 @@ EXPECTED_ALERTS = frozenset(
         "FitnessAgentOperationsAuditFailed",
         "FitnessAgentMaintenanceFailed",
         "FitnessAgentNotificationDeliveryFailed",
+        "FitnessAgentDecisionActionFinalFailed",
         "FitnessAgentTruLensExportFailed",
+        "FitnessAgentUsageLedgerFailed",
+        "FitnessAgentSlowFirstAnswer",
+        "FitnessAgentModelFailureRate",
+        "FitnessAgentWorkerNotReady",
     }
 )
 

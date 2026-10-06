@@ -208,6 +208,67 @@ class ProactiveEventRepository:
         )
         return int(result.rowcount or 0) == 1
 
+    async def list_dead(
+        self,
+        connection: Any,
+        *,
+        limit: int = 50,
+        organization_ids: tuple[str, ...] | None = None,
+    ) -> list[ProactiveEventRecord]:
+        organization_filter = (
+            ""
+            if organization_ids is None
+            else " AND organization_id = ANY(CAST(:organizations AS TEXT[]))"
+        )
+        rows = (
+            (
+                await connection.execute(
+                    text(
+                        "SELECT * FROM agent_proactive_event_inbox WHERE status='DEAD'"
+                        + organization_filter
+                        + " ORDER BY updated_at DESC LIMIT :limit"
+                    ),
+                    {"limit": limit, "organizations": list(organization_ids or ())},
+                )
+            )
+            .mappings()
+            .all()
+        )
+        return [_from_row(row) for row in rows]
+
+    async def replay_dead(
+        self,
+        connection: Any,
+        *,
+        event_id: str,
+        operator_id: str,
+        reason: str,
+        organization_ids: tuple[str, ...] | None = None,
+    ) -> bool:
+        organization_filter = (
+            ""
+            if organization_ids is None
+            else " AND organization_id = ANY(CAST(:organizations AS TEXT[]))"
+        )
+        result = await connection.execute(
+            text(
+                """UPDATE agent_proactive_event_inbox SET status='PENDING', attempt_count=0,
+                   available_at=CURRENT_TIMESTAMP, locked_by=NULL, locked_at=NULL,
+                   last_error_code=NULL, last_replayed_by=:operator,
+                   last_replay_reason=:reason, replayed_at=CURRENT_TIMESTAMP,
+                   updated_at=CURRENT_TIMESTAMP
+                   WHERE event_id=:event_id AND status='DEAD'"""
+                + organization_filter
+            ),
+            {
+                "event_id": event_id,
+                "operator": operator_id,
+                "reason": reason[:256],
+                "organizations": list(organization_ids or ()),
+            },
+        )
+        return int(result.rowcount or 0) == 1
+
 
 def _from_row(row: Any) -> ProactiveEventRecord:
     return ProactiveEventRecord(

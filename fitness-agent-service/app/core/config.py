@@ -1,8 +1,9 @@
+from decimal import Decimal
 from functools import lru_cache
 from typing import Literal
 from urllib.parse import urlparse
 
-from pydantic import AliasChoices, Field, model_validator
+from pydantic import AliasChoices, Field, field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -123,9 +124,60 @@ class Settings(BaseSettings):
     checkpoint_pool_max_size: int = Field(default=5, ge=1, le=30)
     session_lock_ttl_seconds: int = Field(default=60, ge=10, le=300)
     # 确认单精确参数使用 AES-GCM 加密；密钥只允许通过 Secret 注入，不能写入仓库。
-    confirmation_encryption_key_base64: str = ""
+    confirmation_encryption_key_base64: str = Field(default="", repr=False)
     confirmation_encryption_key_version: str = "local-v1"
+    confirmation_encryption_decryption_key_ring: dict[str, str] = Field(
+        default_factory=dict, repr=False
+    )
     confirmation_ttl_seconds: int = Field(default=600, ge=60, le=3600)
+    browser_auth_enabled: bool = False
+    browser_auth_upstream_url: str = ""
+    browser_auth_upstream_service_token: str = Field(default="", repr=False)
+    browser_auth_allowed_origins: list[str] = Field(default_factory=list)
+    browser_auth_cookie_secure: bool = True
+    browser_auth_session_seconds: int = Field(default=28800, ge=300, le=86400)
+    browser_auth_idle_seconds: int = Field(default=1800, ge=300, le=3600)
+
+    @model_validator(mode="after")
+    def validate_browser_auth(self) -> "Settings":
+        from urllib.parse import urlparse
+
+        if not self.browser_auth_enabled:
+            return self
+        url = urlparse(self.browser_auth_upstream_url)
+        if (
+            url.scheme not in {"https", "http"}
+            or not url.hostname
+            or "*" in url.netloc
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+        ):
+            raise ValueError("浏览器认证上游 URL 无效")
+        if not self.browser_auth_upstream_service_token or not self.browser_auth_allowed_origins:
+            raise ValueError("浏览器认证必须提供上游服务凭证和允许的 Origin")
+        for origin in self.browser_auth_allowed_origins:
+            parsed = urlparse(origin)
+            if (
+                not parsed.hostname
+                or "*" in parsed.netloc
+                or parsed.scheme not in {"http", "https"}
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+                or parsed.username
+                or parsed.password
+            ):
+                raise ValueError("浏览器认证 Origin 必须为精确来源，不允许路径或通配符")
+        if self.environment == "production" and (
+            url.scheme != "https"
+            or not self.browser_auth_cookie_secure
+            or any(not value.startswith("https://") for value in self.browser_auth_allowed_origins)
+        ):
+            raise ValueError("生产浏览器认证必须使用 HTTPS、Secure Cookie 和 HTTPS Origin")
+        return self
+
     # 与 Java Gateway v1 兼容的服务端签发密钥；生产环境必须与 Gateway 使用 Secret Manager
     # 管理的同一密钥，不能通过浏览器或模型传入。
     confirmation_signing_secret: str = ""
@@ -235,6 +287,36 @@ class Settings(BaseSettings):
     )
     llm_timeout_seconds: float = Field(default=30.0, gt=0, le=120)
     llm_max_output_tokens: int = Field(default=1200, ge=128, le=8192)
+    # SDK 不自行重试；网关统一控制尝试次数、并发、截止时间和熔断。
+    llm_max_attempts: int = Field(default=2, ge=1, le=3)
+    llm_max_concurrency: int = Field(default=8, ge=1, le=256)
+    llm_queue_timeout_seconds: float = Field(default=2, gt=0, le=30)
+    llm_global_concurrency_enabled: bool = True
+    llm_global_max_concurrency: int = Field(default=16, ge=1, le=512)
+    llm_circuit_failure_threshold: int = Field(default=5, ge=1, le=100)
+    llm_circuit_cooldown_seconds: float = Field(default=30, gt=0, le=300)
+    llm_usage_ledger_enabled: bool = True
+    llm_usage_retention_days: int = Field(default=90, ge=1, le=3650)
+    # 留空表示价格未知，绝不能默认为免费。价格只适用于显式绑定的模型。
+    llm_pricing_model: str = ""
+    llm_pricing_version: str = ""
+    llm_pricing_currency: Literal["CNY", "USD"] = "CNY"
+    llm_input_price_per_million: Decimal | None = Field(default=None, ge=0)
+    llm_cached_input_price_per_million: Decimal | None = Field(default=None, ge=0)
+    llm_output_price_per_million: Decimal | None = Field(default=None, ge=0)
+    chat_rate_limit_enabled: bool = True
+    chat_user_requests_per_minute: int = Field(default=20, ge=1, le=10000)
+    chat_user_burst_per_second: int = Field(default=3, ge=1, le=1000)
+    chat_organization_requests_per_minute: int = Field(default=120, ge=1, le=100000)
+    chat_stream_enabled: bool = True
+    chat_run_timeout_seconds: float = Field(default=240, gt=0, le=600)
+    chat_run_retention_hours: int = Field(default=24, ge=1, le=168)
+    chat_stream_heartbeat_seconds: float = Field(default=10, gt=0, le=30)
+    chat_stream_queue_size: int = Field(default=128, ge=8, le=1024)
+    worker_shutdown_timeout_seconds: float = Field(default=45, gt=0, le=300)
+    knowledge_worker_metrics_port: int = Field(default=8101, ge=1, le=65535)
+    knowledge_worker_poll_seconds: float = Field(default=2, ge=0.1, le=60)
+    agent_context_max_chars: int = Field(default=60000, ge=16000, le=200000)
     # 结构化训练计划包含多天和动作明细，单独使用更大的输出预算，避免 JSON
     # 在动作 notes 或最后一个训练日中途被模型截断；普通对话和经营查询仍使用
     # llm_max_output_tokens，防止所有请求无差别增加 Token 成本。
@@ -336,10 +418,34 @@ class Settings(BaseSettings):
     proactive_rabbitmq_routing_key: str = (
         "appointment.created,appointment.rescheduled,appointment.cancelled,"
         "training.plan.review_required,training.plan.published"
+        ",training.day.completed,training.day.skipped,training.plan.completed"
     )
     proactive_worker_batch_size: int = Field(default=50, ge=1, le=500)
     proactive_worker_poll_seconds: float = Field(default=2.0, ge=0.1, le=60)
     proactive_worker_metrics_port: int = Field(default=8096, ge=1, le=65535)
+    # 主动候选由独立决策 Worker 调用结构化 LLM；模型不可用时默认使用安全模板回退，
+    # 生产方也可要求模型必须成功，从而将候选保留在重试/DEAD 流程而不是静默降级。
+    proactive_decision_worker_enabled: bool = False
+    proactive_decision_batch_size: int = Field(default=30, ge=1, le=200)
+    proactive_decision_poll_seconds: float = Field(default=2.0, ge=0.1, le=60)
+    proactive_decision_worker_metrics_port: int = Field(default=8098, ge=1, le=65535)
+    proactive_decision_max_attempts: int = Field(default=5, ge=1, le=20)
+    proactive_decision_max_output_tokens: int = Field(default=700, ge=256, le=2000)
+    proactive_decision_min_confidence: float = Field(default=0.68, ge=0.5, le=1)
+    proactive_decision_model_required: bool = False
+    proactive_scheduler_enabled: bool = False
+    proactive_scheduler_poll_seconds: float = Field(default=3600.0, ge=60, le=86400)
+    proactive_scheduler_metrics_port: int = Field(default=8099, ge=1, le=65535)
+    proactive_inactivity_days: int = Field(default=3, ge=1, le=30)
+    proactive_mismatch_skip_count: int = Field(default=2, ge=2, le=20)
+    proactive_scheduler_timezone: str = "Asia/Shanghai"
+    proactive_digest_hour_local: int = Field(default=8, ge=0, le=23)
+    # 经营决策动作由独立 Worker 执行；API 只创建经过策略或人工授权的动作记录。
+    decision_action_worker_enabled: bool = False
+    decision_action_batch_size: int = Field(default=30, ge=1, le=200)
+    decision_action_poll_seconds: float = Field(default=2.0, ge=0.1, le=60)
+    decision_action_worker_metrics_port: int = Field(default=8100, ge=1, le=65535)
+    decision_action_max_attempts: int = Field(default=5, ge=1, le=20)
     # RabbitMQ 网络抖动或 Broker 重启时由消费器使用有上限的指数退避重连，避免
     # 连接失败形成忙循环；生产环境可按 Broker 和告警恢复窗口调整，但不能关闭重连。
     proactive_rabbitmq_reconnect_initial_seconds: float = Field(default=1.0, gt=0, le=30)
@@ -380,6 +486,30 @@ class Settings(BaseSettings):
     operations_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
     gateway_max_retries: int = Field(default=2, ge=0, le=5)
     gateway_retry_backoff_seconds: float = Field(default=0.1, ge=0, le=5)
+
+    @field_validator(
+        "llm_input_price_per_million",
+        "llm_cached_input_price_per_million",
+        "llm_output_price_per_million",
+        mode="before",
+    )
+    @classmethod
+    def empty_price_is_unknown(cls, value: object) -> object:
+        return None if value == "" else value
+
+    @model_validator(mode="after")
+    def validate_runtime_delivery(self) -> "Settings":
+        rates = (
+            self.llm_input_price_per_million,
+            self.llm_cached_input_price_per_million,
+            self.llm_output_price_per_million,
+        )
+        if any(rate is not None for rate in rates):
+            if not self.llm_pricing_model or not self.llm_pricing_version:
+                raise ValueError("价格配置必须绑定模型和不可变版本")
+            if any(rate is not None and not rate.is_finite() for rate in rates):
+                raise ValueError("价格必须是有限非负数")
+        return self
 
     @model_validator(mode="after")
     def validate_recovery_configuration(self) -> "Settings":

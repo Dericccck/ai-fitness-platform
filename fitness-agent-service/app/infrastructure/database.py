@@ -237,6 +237,20 @@ class Database:
         async with self.engine.connect() as connection:
             await connection.execute(text("SELECT 1"))
 
+    async def runtime_schema_ready(self) -> bool:
+        """新运行时开启前必须完成迁移，不能仅凭数据库可连接就接收模型流量。"""
+        async with self.engine.connect() as connection:
+            return bool(
+                (
+                    await connection.execute(
+                        text("""
+                SELECT to_regclass('public.agent_model_usage') IS NOT NULL
+                   AND to_regclass('public.agent_chat_runs') IS NOT NULL
+            """)
+                    )
+                ).scalar_one()
+            )
+
     async def close(self) -> None:
         """释放连接池，主要用于应用优雅停机和集成测试清理。"""
 

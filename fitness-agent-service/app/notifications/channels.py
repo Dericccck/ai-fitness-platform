@@ -21,6 +21,9 @@ class NotificationDeliveryRequest:
     template_version: int
     title: str
     body: str
+    proactive_candidate_id: str | None = None
+    cta_type: str | None = None
+    cta_payload: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -62,6 +65,9 @@ class InAppNotificationChannelAdapter:
             template_version=request.template_version,
             title=request.title,
             body=request.body,
+            proactive_candidate_id=request.proactive_candidate_id,
+            cta_type=request.cta_type,
+            cta_payload=request.cta_payload,
         )
         return NotificationDeliveryReceipt(
             channel=self.channel,

@@ -3,9 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Sequence
+from collections.abc import Awaitable, Sequence
 from dataclasses import dataclass, replace
+from time import perf_counter
+from typing import TypeVar
 
+from app.core.metrics import HttpMetrics
 from app.evaluation.telemetry import TruLensTelemetry
 from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient, RerankResult
@@ -23,6 +26,9 @@ from .repository import KnowledgeRepository
 
 class RagSearchError(RuntimeError):
     """RAG 无法安全返回结果。"""
+
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -101,6 +107,7 @@ class RagService:
         keyword_weight: float = 0.4,
         rrf_k: int = 60,
         telemetry: TruLensTelemetry | None = None,
+        metrics: HttpMetrics | None = None,
     ) -> None:
         self.repository = repository
         self.models = models
@@ -122,6 +129,7 @@ class RagService:
         self.keyword_weight = keyword_weight
         self.rrf_k = rrf_k
         self.telemetry = telemetry or TruLensTelemetry.disabled()
+        self.metrics = metrics
 
     async def index_chunks(
         self,
@@ -183,16 +191,22 @@ class RagService:
 
         if not query.strip():
             return self._result(())
-        query_embedding = await self.models.embed([query])
+        query_embedding = await self._timed("embedding", self.models.embed([query]))
         _validate_embedding_dimensions(query_embedding, self.embedding_dimensions)
         if len(query_embedding) != 1:
             raise RagSearchError("Embedding 服务返回了无效的查询结果")
         vector_candidates, keyword_candidates = await asyncio.gather(
-            self.repository.search_candidates(
-                query_embedding[0], scope, limit=self.candidate_limit
+            self._timed(
+                "vector_recall",
+                self.repository.search_candidates(
+                    query_embedding[0], scope, limit=self.candidate_limit
+                ),
             ),
-            self.repository.search_keyword_candidates(
-                query, scope, limit=self.keyword_candidate_limit
+            self._timed(
+                "keyword_recall",
+                self.repository.search_keyword_candidates(
+                    query, scope, limit=self.keyword_candidate_limit
+                ),
             ),
         )
         candidates = _fuse_candidates(
@@ -208,10 +222,13 @@ class RagService:
 
         # 存在候选结果后必须调用 Reranker。此处回退到向量相似度会掩盖生产依赖故障，
         # 还会导致不同环境的检索质量静默发生变化。
-        ranked = await self.reranker.rerank(
-            query,
-            [candidate.content for candidate in candidates],
-            top_n=self.top_k,
+        ranked = await self._timed(
+            "rerank",
+            self.reranker.rerank(
+                query,
+                [candidate.content for candidate in candidates],
+                top_n=self.top_k,
+            ),
         )
         selected = _select_ranked_chunks(candidates, ranked, self.top_k)
         return self._result(tuple(selected))
@@ -224,6 +241,22 @@ class RagService:
             prompt_max_total_chars=self.prompt_max_total_chars,
             prompt_max_evidence_chars=self.prompt_max_evidence_chars,
         )
+
+    async def _timed(self, stage: str, action: Awaitable[T]) -> T:
+        started = perf_counter()
+        status = "FAILED"
+        try:
+            with self.telemetry.span(
+                "fitness.agent.rag_stage", attributes={"fitness.agent.rag_stage": stage}
+            ):
+                result = await action
+            status = "SUCCEEDED"
+            return result
+        finally:
+            if self.metrics:
+                self.metrics.rag_stage_duration_seconds.labels(stage=stage, status=status).observe(
+                    perf_counter() - started
+                )
 
 
 def _bounded_evidence_context(text: str, *, anchor: str, max_chars: int) -> str:

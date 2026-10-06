@@ -1,0 +1,305 @@
+x-agent: &agent
+  build:
+    context: ../fitness-agent-service
+  image: ${FITNESS_REGISTRY:-fitness}/fitness-agent-service:${FITNESS_RELEASE_TAG:-local}
+  env_file: ${FITNESS_CONFIG_DIR:?set FITNESS_CONFIG_DIR}/agent.env
+  restart: unless-stopped
+  stop_grace_period: 120s
+  extra_hosts: ["host.docker.internal:host-gateway"]
+  volumes:
+    - ${FITNESS_MODELS_DIR:?set FITNESS_MODELS_DIR}:/models:ro
+  networks: [fitness]
+  deploy:
+    resources:
+      limits: {cpus: "2", memory: 8G}
+
+x-worker-environment: &worker-environment
+  AGENT_DB_POOL_SIZE: "2"
+  AGENT_DB_MAX_OVERFLOW: "0"
+  AGENT_CHECKPOINT_POOL_MIN_SIZE: "1"
+  AGENT_CHECKPOINT_POOL_MAX_SIZE: "1"
+
+x-worker-health: &worker-health
+  test: ["CMD", "python", "-c", "import urllib.request; r=urllib.request.urlopen('http://127.0.0.1:9100/metrics',timeout=2).read(); assert b'fitness_agent_worker_ready 1.0' in r"]
+  interval: 15s
+  timeout: 3s
+  start_period: 180s
+  retries: 3
+
+services:
+  agent-migrate:
+    <<: *agent
+    restart: "no"
+    command: ["alembic", "upgrade", "head"]
+    healthcheck: {disable: true}
+
+  agent-api:
+    <<: *agent
+    environment:
+      AGENT_DB_POOL_SIZE: "5"
+      AGENT_DB_MAX_OVERFLOW: "5"
+      AGENT_CHECKPOINT_POOL_MIN_SIZE: "1"
+      AGENT_CHECKPOINT_POOL_MAX_SIZE: "3"
+      AGENT_GATEWAY_BASE_URL: http://gateway:8081
+    depends_on:
+      agent-migrate: {condition: service_completed_successfully}
+      gateway: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health/ready',timeout=5)"]
+      interval: 15s
+      timeout: 6s
+      start_period: 180s
+      retries: 3
+
+  web:
+    build: {context: ../fitness-web}
+    image: ${FITNESS_REGISTRY:-fitness}/fitness-web:${FITNESS_RELEASE_TAG:-local}
+    ports: ["${FITNESS_WEB_PORT:-8080}:8080"]
+    restart: unless-stopped
+    depends_on: {agent-api: {condition: service_healthy}}
+    networks: [fitness]
+    stop_grace_period: 30s
+
+  gateway:
+    build: {context: ../fitness-core-gateway}
+    image: ${FITNESS_REGISTRY:-fitness}/fitness-core-gateway:${FITNESS_RELEASE_TAG:-local}
+    env_file: ${FITNESS_CONFIG_DIR}/gateway.env
+    restart: unless-stopped
+    stop_grace_period: 120s
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    networks: [fitness]
+    environment:
+      FITNESS_SHUTDOWN_TIMEOUT_SECONDS: "45"
+      GATEWAY_TRAINING_SERVICE_BASE_URL: http://training:8082
+      GATEWAY_BOOKING_SERVICE_BASE_URL: http://booking:8083
+      GATEWAY_CUSTOMER_SERVICE_BASE_URL: http://customer-service:8084
+    depends_on:
+      training: {condition: service_healthy}
+      booking: {condition: service_healthy}
+      customer-service: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--max-time", "5", "http://127.0.0.1:8081/health/runtime-ready"]
+      interval: 15s
+      timeout: 6s
+      start_period: 60s
+      retries: 3
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 1G}
+
+  training:
+    build: {context: ../fitness-training-service}
+    image: ${FITNESS_REGISTRY:-fitness}/fitness-training-service:${FITNESS_RELEASE_TAG:-local}
+    env_file: ${FITNESS_CONFIG_DIR}/training.env
+    restart: unless-stopped
+    stop_grace_period: 120s
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    networks: [fitness]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--max-time", "5", "http://127.0.0.1:8082/health/runtime-ready"]
+      interval: 15s
+      timeout: 6s
+      start_period: 60s
+      retries: 3
+    environment:
+      FITNESS_SHUTDOWN_TIMEOUT_SECONDS: "45"
+      TRAINING_SCHEMA_INIT_ENABLED: "false"
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 1G}
+
+  booking:
+    build: {context: ../fitness-booking-service}
+    image: ${FITNESS_REGISTRY:-fitness}/fitness-booking-service:${FITNESS_RELEASE_TAG:-local}
+    env_file: ${FITNESS_CONFIG_DIR}/booking.env
+    restart: unless-stopped
+    stop_grace_period: 120s
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    networks: [fitness]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--max-time", "5", "http://127.0.0.1:8083/health/runtime-ready"]
+      interval: 15s
+      timeout: 6s
+      start_period: 60s
+      retries: 3
+    environment:
+      FITNESS_SHUTDOWN_TIMEOUT_SECONDS: "45"
+      BOOKING_SCHEMA_INIT_ENABLED: "false"
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 1G}
+
+  customer-service:
+    build: {context: ../fitness-customer-service}
+    image: ${FITNESS_REGISTRY:-fitness}/fitness-customer-service:${FITNESS_RELEASE_TAG:-local}
+    env_file: ${FITNESS_CONFIG_DIR}/customer-service.env
+    restart: unless-stopped
+    stop_grace_period: 120s
+    extra_hosts: ["host.docker.internal:host-gateway"]
+    networks: [fitness]
+    healthcheck:
+      test: ["CMD", "curl", "--fail", "--max-time", "5", "http://127.0.0.1:8084/health/runtime-ready"]
+      interval: 15s
+      timeout: 6s
+      start_period: 60s
+      retries: 3
+    environment:
+      FITNESS_SHUTDOWN_TIMEOUT_SECONDS: "45"
+      CUSTOMER_SERVICE_SCHEMA_INIT_ENABLED: "false"
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 1G}
+
+  notification-worker:
+    <<: *agent
+    command: ["python", "-m", "app.notification_worker_main"]
+    environment:
+      <<: *worker-environment
+      AGENT_NOTIFICATION_WORKER_METRICS_PORT: "9100"
+      AGENT_LOCAL_MODEL_WARMUP_ENABLED: "false"
+      AGENT_GATEWAY_BASE_URL: http://gateway:8081
+    depends_on: {agent-migrate: {condition: service_completed_successfully}}
+    healthcheck: *worker-health
+
+  proactive-worker:
+    <<: *agent
+    command: ["python", "-m", "app.proactive_worker_main"]
+    environment:
+      <<: *worker-environment
+      AGENT_PROACTIVE_WORKER_METRICS_PORT: "9100"
+      AGENT_LOCAL_MODEL_WARMUP_ENABLED: "false"
+      AGENT_GATEWAY_BASE_URL: http://gateway:8081
+    depends_on: {agent-migrate: {condition: service_completed_successfully}}
+    healthcheck: *worker-health
+    profiles: ["proactive"]
+
+  proactive-decision-worker:
+    <<: *agent
+    command: ["python", "-m", "app.proactive_decision_worker_main"]
+    environment:
+      <<: *worker-environment
+      AGENT_PROACTIVE_DECISION_WORKER_METRICS_PORT: "9100"
+      AGENT_LOCAL_MODEL_WARMUP_ENABLED: "false"
+      AGENT_GATEWAY_BASE_URL: http://gateway:8081
+    depends_on: {agent-migrate: {condition: service_completed_successfully}}
+    healthcheck: *worker-health
+    profiles: ["proactive"]
+
+  proactive-scheduler-worker:
+    <<: *agent
+    command: ["python", "-m", "app.proactive_scheduler_main"]
+    environment:
+      <<: *worker-environment
+      AGENT_PROACTIVE_SCHEDULER_METRICS_PORT: "9100"
+      AGENT_LOCAL_MODEL_WARMUP_ENABLED: "false"
+      AGENT_GATEWAY_BASE_URL: http://gateway:8081
+    depends_on: {agent-migrate: {condition: service_completed_successfully}}
+    healthcheck: *worker-health
+    profiles: ["proactive"]
+
+  decision-action-worker:
+    <<: *agent
+    command: ["python", "-m", "app.decision_action_worker_main"]
+    environment:
+      <<: *worker-environment
+      AGENT_DECISION_ACTION_WORKER_METRICS_PORT: "9100"
+      AGENT_LOCAL_MODEL_WARMUP_ENABLED: "false"
+      AGENT_GATEWAY_BASE_URL: http://gateway:8081
+    depends_on: {agent-migrate: {condition: service_completed_successfully}}
+    healthcheck: *worker-health
+    profiles: ["proactive"]
+
+  confirmation-reconciliation-worker:
+    <<: *agent
+    command: ["python", "-m", "app.confirmation_reconciliation_worker_main"]
+    environment:
+      <<: *worker-environment
+      AGENT_CONFIRMATION_RECONCILIATION_WORKER_METRICS_PORT: "9100"
+      AGENT_LOCAL_MODEL_WARMUP_ENABLED: "false"
+      AGENT_GATEWAY_BASE_URL: http://gateway:8081
+    depends_on: {agent-migrate: {condition: service_completed_successfully}}
+    healthcheck: *worker-health
+
+  knowledge-worker:
+    <<: *agent
+    command: ["python", "-m", "app.knowledge_worker_main"]
+    environment:
+      <<: *worker-environment
+      AGENT_KNOWLEDGE_WORKER_METRICS_PORT: "9100"
+      AGENT_LOCAL_MODEL_WARMUP_ENABLED: "false"
+      AGENT_GATEWAY_BASE_URL: http://gateway:8081
+    depends_on: {agent-migrate: {condition: service_completed_successfully}}
+    healthcheck: *worker-health
+    profiles: ["maintenance"]
+
+  reindex-worker:
+    <<: *agent
+    command: ["python", "-m", "app.reindex_worker_main"]
+    environment:
+      <<: *worker-environment
+      AGENT_KNOWLEDGE_WORKER_METRICS_PORT: "9100"
+      AGENT_LOCAL_MODEL_WARMUP_ENABLED: "false"
+      AGENT_GATEWAY_BASE_URL: http://gateway:8081
+    depends_on: {agent-migrate: {condition: service_completed_successfully}}
+    healthcheck: *worker-health
+    profiles: ["maintenance"]
+
+  memory-expiry-worker:
+    <<: *agent
+    command: ["python", "-m", "app.candidate_expiry_worker_main"]
+    environment:
+      <<: *worker-environment
+      AGENT_MEMORY_CANDIDATE_WORKER_METRICS_PORT: "9100"
+      AGENT_LOCAL_MODEL_WARMUP_ENABLED: "false"
+      AGENT_GATEWAY_BASE_URL: http://gateway:8081
+    depends_on: {agent-migrate: {condition: service_completed_successfully}}
+    healthcheck: *worker-health
+    profiles: ["maintenance"]
+
+  memory-retention-worker:
+    <<: *agent
+    command: ["python", "-m", "app.memory_retention_worker_main"]
+    environment:
+      <<: *worker-environment
+      AGENT_MEMORY_RETENTION_WORKER_METRICS_PORT: "9100"
+      AGENT_LOCAL_MODEL_WARMUP_ENABLED: "false"
+      AGENT_GATEWAY_BASE_URL: http://gateway:8081
+    depends_on: {agent-migrate: {condition: service_completed_successfully}}
+    healthcheck: *worker-health
+    profiles: ["maintenance"]
+
+  session-summary-worker:
+    <<: *agent
+    command: ["python", "-m", "app.session_summary_worker_main"]
+    environment:
+      <<: *worker-environment
+      AGENT_SESSION_SUMMARY_WORKER_METRICS_PORT: "9100"
+      AGENT_LOCAL_MODEL_WARMUP_ENABLED: "false"
+      AGENT_GATEWAY_BASE_URL: http://gateway:8081
+    depends_on: {agent-migrate: {condition: service_completed_successfully}}
+    healthcheck: *worker-health
+    profiles: ["maintenance"]
+
+  prometheus:
+    image: prom/prometheus:v2.54.1
+    restart: unless-stopped
+    profiles: ["observability"]
+    ports: ["127.0.0.1:${FITNESS_PROMETHEUS_PORT:-9190}:9090"]
+    volumes:
+      - ./observability/prometheus.app.yml:/etc/prometheus/prometheus.yml:ro
+      - ./observability/fitness-agent-alerts.yml:/etc/prometheus/fitness-agent-alerts.yml:ro
+      - ./observability/worker-targets.json:/etc/prometheus/worker-targets.json:ro
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--storage.tsdb.retention.time=15d"]
+    networks: [fitness]
+
+  alertmanager:
+    image: prom/alertmanager:v0.27.0
+    restart: unless-stopped
+    profiles: ["observability"]
+    ports: ["127.0.0.1:${FITNESS_ALERTMANAGER_PORT:-9193}:9093"]
+    volumes:
+      - ./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
+    networks: [fitness]
+
+networks:
+  fitness: {}

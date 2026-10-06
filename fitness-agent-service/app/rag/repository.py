@@ -525,6 +525,7 @@ class KnowledgeRepository:
             JOIN knowledge_documents d ON d.id = c.document_id
             LEFT JOIN knowledge_parents p ON p.id = c.parent_id AND p.document_id = c.document_id
             WHERE d.status = 'PUBLISHED'
+              AND c.visibility = d.visibility
               AND c.effective_from <= CURRENT_TIMESTAMP
               AND (c.effective_to IS NULL OR c.effective_to > CURRENT_TIMESTAMP)
               AND (

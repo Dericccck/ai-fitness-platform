@@ -42,6 +42,8 @@ public class TrainingDatabaseInitializer {
         applyIfNeeded("V20260824_005", "db/migration/V20260824_005__create_training_outbox.sql");
         applyIfNeeded("V20260906_006", "db/migration/V20260906_006__add_outbox_aggregate_version.sql");
         applyIfNeeded("V20260906_007", "db/migration/V20260906_007__create_exercise_policy_catalog.sql");
+        applyIfNeeded("V20260917_008", "db/migration/V20260917_008__extend_proactive_training_events.sql");
+        applyIfNeeded("V20260917_009", "db/migration/V20260917_009__training_outbox_replay.sql");
     }
 
     private void applyIfNeeded(String version, String resourcePath) {

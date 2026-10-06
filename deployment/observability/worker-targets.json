@@ -1,0 +1,5 @@
+[
+  {"targets": ["notification-worker:9100", "confirmation-reconciliation-worker:9100"], "labels": {"required": "true"}},
+  {"targets": ["proactive-worker:9100", "proactive-decision-worker:9100", "proactive-scheduler-worker:9100", "decision-action-worker:9100"], "labels": {"required": "false", "profile": "proactive"}},
+  {"targets": ["knowledge-worker:9100", "reindex-worker:9100", "memory-expiry-worker:9100", "memory-retention-worker:9100", "session-summary-worker:9100"], "labels": {"required": "false", "profile": "maintenance"}}
+]

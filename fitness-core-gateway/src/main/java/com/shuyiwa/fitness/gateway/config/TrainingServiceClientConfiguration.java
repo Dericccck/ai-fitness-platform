@@ -15,6 +15,7 @@ public class TrainingServiceClientConfiguration {
     public RestTemplate trainingServiceRestTemplate(RestTemplateBuilder builder,
                                                     TrainingServiceProperties properties) {
         return builder
+                .additionalInterceptors(new com.shuyiwa.fitness.gateway.security.ConfirmedBodyForwardingInterceptor())
                 .setConnectTimeout(Duration.ofMillis(properties.getTimeoutMilliseconds()))
                 .setReadTimeout(Duration.ofMillis(properties.getTimeoutMilliseconds()))
                 .build();

@@ -1,0 +1,86 @@
+rule_files:
+  - /etc/prometheus/fitness-agent-alerts.yml
+evaluation_interval: 30s
+tests:
+  - interval: 1m
+    input_series:
+      - series: 'fitness_agent_usage_ledger_failures_total{job="fitness-agent"}'
+        values: '0 0 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: FitnessAgentUsageLedgerFailed
+        exp_alerts: []
+      - eval_time: 2m
+        alertname: FitnessAgentUsageLedgerFailed
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: fitness-agent
+              job: fitness-agent
+            exp_annotations:
+              summary: "模型用量账本持久化失败"
+              description: "计費用量无法完整落盘；检查 PostgreSQL 与新迁移，未知用量不能当作零成本。"
+  - interval: 1m
+    input_series:
+      - series: 'fitness_agent_worker_ready{job="fitness-agent-workers",required="true",instance="worker:9100"}'
+        values: '0 0 0 0 0 1 1'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: FitnessAgentWorkerNotReady
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: FitnessAgentWorkerNotReady
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: fitness-agent
+              job: fitness-agent-workers
+              required: "true"
+              instance: worker:9100
+            exp_annotations:
+              summary: "必需 Worker 未就绪"
+              description: "已明确启用的 Worker 连续 3 分钟未就绪或无法抓取；检查启动、租约、SIGTERM 和依赖配置。"
+  - interval: 1m
+    input_series:
+      - series: 'fitness_agent_model_attempt_duration_seconds_count{status="FAILED"}'
+        values: '0+60x10'
+      - series: 'fitness_agent_model_attempt_duration_seconds_count{status="SUCCEEDED"}'
+        values: '0+60x10'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: FitnessAgentModelFailureRate
+        exp_alerts: []
+      - eval_time: 7m
+        alertname: FitnessAgentModelFailureRate
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: fitness-agent
+            exp_annotations:
+              summary: "模型尝试失败比例过高"
+              description: "真实模型尝试失败比例持续超过 20%；检查供应商限额、超时、熔断与模型配置。"
+  - interval: 1m
+    input_series:
+      - series: 'fitness_agent_chat_first_answer_seconds_bucket{job="fitness-agent",le="1"}'
+        values: '0+0x20'
+      - series: 'fitness_agent_chat_first_answer_seconds_bucket{job="fitness-agent",le="10"}'
+        values: '0+0x20'
+      - series: 'fitness_agent_chat_first_answer_seconds_bucket{job="fitness-agent",le="30"}'
+        values: '0+10x20'
+      - series: 'fitness_agent_chat_first_answer_seconds_bucket{job="fitness-agent",le="+Inf"}'
+        values: '0+10x20'
+      - series: 'fitness_agent_chat_first_answer_seconds_count{job="fitness-agent"}'
+        values: '0+10x20'
+    alert_rule_test:
+      - eval_time: 5m
+        alertname: FitnessAgentSlowFirstAnswer
+        exp_alerts: []
+      - eval_time: 12m
+        alertname: FitnessAgentSlowFirstAnswer
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: fitness-agent
+            exp_annotations:
+              summary: "有效答案首字延迟过高"
+              description: "持续有足够样本时首个有效答案 P95 超过 10 秒；心跳和阶段事件不计为首字。"

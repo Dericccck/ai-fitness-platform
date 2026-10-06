@@ -1,0 +1,20 @@
+{
+  "region_id": "cn-hangzhou",
+  "images": {
+    "agent": "registry.example.com/fitness/agent@sha256:REPLACE_DIGEST",
+    "gateway": "registry.example.com/fitness/gateway@sha256:REPLACE_DIGEST",
+    "training": "registry.example.com/fitness/training@sha256:REPLACE_DIGEST",
+    "booking": "registry.example.com/fitness/booking@sha256:REPLACE_DIGEST",
+    "customer-service": "registry.example.com/fitness/customer-service@sha256:REPLACE_DIGEST",
+    "web": "registry.example.com/fitness/web@sha256:REPLACE_DIGEST"
+  },
+  "applications": {
+    "training": "REPLACE_SAE_APP_ID",
+    "booking": "REPLACE_SAE_APP_ID",
+    "customer-service": "REPLACE_SAE_APP_ID",
+    "gateway": "REPLACE_SAE_APP_ID",
+    "agent-api": "REPLACE_SAE_APP_ID",
+    "notification-worker": "REPLACE_SAE_APP_ID",
+    "web": "REPLACE_SAE_APP_ID"
+  }
+}

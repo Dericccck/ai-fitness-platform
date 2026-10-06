@@ -1,0 +1,14 @@
+{
+  "data_kind": "pending_real_observations",
+  "source_reference": "",
+  "observation_start": "",
+  "observation_end": "",
+  "analysis": "ITT",
+  "independent_user_randomization": false,
+  "assignment_before_intervention": false,
+  "same_mature_observation_window": false,
+  "refund_window_closed": false,
+  "sample_ratio_check_passed": false,
+  "control": {"eligible_users": 0, "net_paid_renewals": 0},
+  "treatment": {"eligible_users": 0, "net_paid_renewals": 0}
+}

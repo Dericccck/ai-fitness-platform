@@ -294,8 +294,45 @@ public class TrainingPlanRepository {
                         + "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
                 executionId, planId, dayId, "RECORD_TRAINING_DAY_EXECUTION", status.name(), actorId,
                 requestId, note);
+        insertExecutionProactiveEvents(planId, dayId, organizationId, studentId, status, requestId);
         return findExecutionById(executionId).orElseThrow(
                 () -> new IllegalStateException("训练日执行记录写入后无法读取"));
+    }
+
+    /** 训练结果与主动事件同事务提交，避免执行已记录但陪练 Agent 永远不可见。 */
+    private void insertExecutionProactiveEvents(String planId, String dayId, String organizationId,
+                                                String studentId, TrainingDayExecutionStatus status,
+                                                String requestId) {
+        String coachId = jdbc.queryForObject(
+                "SELECT coach_id FROM training_plan WHERE id = ?", new Object[]{planId}, String.class);
+        Integer planVersion = jdbc.queryForObject(
+                "SELECT version FROM training_plan WHERE id = ?", new Object[]{planId}, Integer.class);
+        String eventType = status == TrainingDayExecutionStatus.COMPLETED
+                ? "TRAINING_DAY_COMPLETED" : "TRAINING_DAY_SKIPPED";
+        String payload = "{\"planId\":\"" + escapeJson(planId)
+                + "\",\"dayId\":\"" + escapeJson(dayId)
+                + "\",\"studentId\":\"" + escapeJson(studentId)
+                + "\",\"coachId\":\"" + escapeJson(coachId)
+                + "\",\"status\":\"" + status.name() + "\"}";
+        jdbc.update("INSERT INTO agent_training_outbox "
+                        + "(event_key, event_type, aggregate_id, organization_id, aggregate_version, payload) "
+                        + "VALUES (?, ?, ?, ?, ?, ?)",
+                "training-day-" + eventType.toLowerCase() + ":" + planId + ":" + requestId,
+                eventType, planId, organizationId, planVersion == null ? 1 : planVersion, payload);
+
+        Integer totalDays = jdbc.queryForObject(
+                "SELECT COUNT(1) FROM training_plan_day WHERE plan_id = ?",
+                new Object[]{planId}, Integer.class);
+        Integer recordedDays = jdbc.queryForObject(
+                "SELECT COUNT(1) FROM training_day_execution WHERE plan_id = ?",
+                new Object[]{planId}, Integer.class);
+        if (totalDays != null && totalDays > 0 && totalDays.equals(recordedDays)) {
+            jdbc.update("INSERT INTO agent_training_outbox "
+                            + "(event_key, event_type, aggregate_id, organization_id, aggregate_version, payload) "
+                            + "VALUES (?, 'TRAINING_PLAN_COMPLETED', ?, ?, ?, ?)",
+                    "training-plan-completed:" + planId + ":" + requestId,
+                    planId, organizationId, planVersion == null ? 1 : planVersion, payload);
+        }
     }
 
     private Optional<String> findExecutionIdByRequest(String requestId) {

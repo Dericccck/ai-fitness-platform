@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import datetime, time
+from datetime import UTC, datetime, time, timedelta
 from typing import Literal, cast
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
@@ -18,6 +18,12 @@ from app.notifications.preferences import (
     NotificationPreferenceRecord,
     NotificationPreferenceRepository,
     NotificationPreferenceValidationError,
+)
+from app.proactive.candidate_repository import ProactiveCandidateRepository
+from app.proactive.candidates import (
+    NOTIFICATION_TYPE_BY_CANDIDATE,
+    CandidateType,
+    candidate_expiry,
 )
 
 router = APIRouter(prefix="/api/v1/agent/notifications", tags=["agent-notifications"])
@@ -39,6 +45,29 @@ class InAppNotificationResponse(BaseModel):
     status: str
     created_at: datetime
     read_at: datetime | None
+    proactive_candidate_id: str | None = None
+    cta_type: str | None = None
+    cta_payload: dict[str, object] | None = None
+
+
+class ProactiveResponseRequest(BaseModel):
+    """用户对主动建议的明确反馈；身份只取签名上下文。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    response_type: Literal[
+        "OPENED",
+        "ACCEPTED",
+        "DECLINED",
+        "SNOOZED",
+        "MUTED",
+        "HELPFUL",
+        "NOT_HELPFUL",
+        "OPENED_CHAT",
+    ]
+    response_value: str | None = Field(default=None, max_length=256)
+    conversation_id: str | None = Field(default=None, min_length=1, max_length=128)
+    notification_id: str | None = Field(default=None, min_length=1, max_length=128)
 
 
 class NotificationPreferenceRequest(BaseModel):
@@ -87,6 +116,14 @@ async def get_notification_preference(
         "APPOINTMENT_CANCELLED",
         "TRAINING_PLAN_PUBLISHED",
         "TRAINING_PLAN_REVIEW_REQUIRED",
+        "TRAINING_ADHERENCE_SUPPORT",
+        "TRAINING_PLAN_ADJUSTMENT_SUGGESTED",
+        "TRAINING_CYCLE_REVIEW",
+        "COACH_DAILY_DIGEST",
+        "COACH_STUDENT_ATTENTION",
+        "OPERATIONS_DAILY_DIGEST",
+        "APPOINTMENT_FOLLOW_UP",
+        "CUSTOMER_SERVICE_FOLLOW_UP",
     ] = Query(default=DEFAULT_NOTIFICATION_TYPE),
     x_agent_context: str | None = Header(default=None),
 ) -> NotificationPreferenceResponse:
@@ -117,6 +154,14 @@ async def save_notification_preference(
         "APPOINTMENT_CANCELLED",
         "TRAINING_PLAN_PUBLISHED",
         "TRAINING_PLAN_REVIEW_REQUIRED",
+        "TRAINING_ADHERENCE_SUPPORT",
+        "TRAINING_PLAN_ADJUSTMENT_SUGGESTED",
+        "TRAINING_CYCLE_REVIEW",
+        "COACH_DAILY_DIGEST",
+        "COACH_STUDENT_ATTENTION",
+        "OPERATIONS_DAILY_DIGEST",
+        "APPOINTMENT_FOLLOW_UP",
+        "CUSTOMER_SERVICE_FOLLOW_UP",
     ] = Query(default=DEFAULT_NOTIFICATION_TYPE),
     x_agent_context: str | None = Header(default=None),
 ) -> NotificationPreferenceResponse:
@@ -194,6 +239,90 @@ async def mark_notification_read(
     return _to_response(notification)
 
 
+@router.post("/proactive/{candidate_id}/responses", status_code=status.HTTP_204_NO_CONTENT)
+async def record_proactive_response(
+    candidate_id: str,
+    payload: ProactiveResponseRequest,
+    request: Request,
+    x_agent_context: str | None = Header(default=None),
+) -> None:
+    """记录主动建议反馈；用户只能操作属于自己的 Candidate。"""
+
+    identity = _verify_identity(request, x_agent_context)
+    repository = cast(ProactiveCandidateRepository, request.app.state.proactive_candidates)
+    async with request.app.state.database.engine.begin() as connection:
+        candidate = await repository.get_for_subject(
+            connection, candidate_id=candidate_id, subject_user_id=identity.subject
+        )
+        if candidate is None or candidate.organization_id not in identity.organization_ids:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到主动建议")
+        notification_repository = _repository(request)
+        if (
+            payload.notification_id is not None
+            and not await notification_repository.in_app_belongs_to_candidate(
+                connection,
+                notification_id=payload.notification_id,
+                candidate_id=candidate_id,
+                subject_user_id=identity.subject,
+            )
+        ):
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="未找到主动通知")
+        created = await repository.record_response(
+            connection,
+            candidate_id=candidate_id,
+            subject_user_id=identity.subject,
+            response_type=payload.response_type,
+            response_value=payload.response_value,
+            conversation_id=payload.conversation_id,
+            notification_id=payload.notification_id,
+        )
+        candidate_type = CandidateType(candidate.candidate_type)
+        if payload.response_type == "MUTED":
+            preference_repository = _preference_repository(request)
+            notification_type = NOTIFICATION_TYPE_BY_CANDIDATE[candidate_type]
+            current = await preference_repository.get(
+                connection,
+                subject_user_id=identity.subject,
+                organization_id=candidate.organization_id,
+                notification_type=notification_type,
+            )
+            await preference_repository.upsert(
+                connection,
+                subject_user_id=identity.subject,
+                organization_id=candidate.organization_id,
+                notification_type=notification_type,
+                enabled=False,
+                quiet_start=current.quiet_start,
+                quiet_end=current.quiet_end,
+                timezone=current.timezone,
+                minimum_interval_seconds=current.minimum_interval_seconds,
+            )
+        elif payload.response_type == "SNOOZED" and created:
+            try:
+                minutes = int(payload.response_value or "1440")
+            except ValueError as exc:
+                raise HTTPException(status_code=422, detail="稍后提醒分钟数无效") from exc
+            if minutes < 15 or minutes > 10_080:
+                raise HTTPException(status_code=422, detail="稍后提醒必须在 15 分钟到 7 天之间")
+            available_at = datetime.now(UTC) + timedelta(minutes=minutes)
+            await repository.enqueue(
+                connection,
+                candidate_type=candidate.candidate_type,
+                reason_code="USER_SNOOZED",
+                subject_user_id=candidate.subject_user_id,
+                organization_id=candidate.organization_id,
+                aggregate_type=candidate.aggregate_type,
+                aggregate_id=candidate.aggregate_id,
+                trigger_source="USER_RESPONSE",
+                trigger_event_ids=candidate.trigger_event_ids,
+                facts={"parent_candidate_id": candidate.id, "snooze_minutes": minutes},
+                dedupe_key=f"snooze:{candidate.id}",
+                available_at=available_at,
+                expires_at=candidate_expiry(candidate_type, available_at),
+                priority=candidate.priority,
+            )
+
+
 def _repository(request: Request) -> NotificationOutboxRepository:
     return cast(NotificationOutboxRepository, request.app.state.notification_outbox)
 
@@ -235,6 +364,9 @@ def _to_response(notification: InAppNotificationRecord) -> InAppNotificationResp
         status=notification.status,
         created_at=notification.created_at,
         read_at=notification.read_at,
+        proactive_candidate_id=notification.proactive_candidate_id,
+        cta_type=notification.cta_type,
+        cta_payload=notification.cta_payload,
     )
 
 

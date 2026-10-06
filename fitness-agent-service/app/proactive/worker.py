@@ -10,6 +10,7 @@ from app.core.metrics import HttpMetrics
 from app.infrastructure.database import Database
 from app.notifications.outbox import NotificationOutboxRepository
 
+from .candidate_engine import ProactiveCandidateEngine
 from .events import ProactiveEventContractError, ProactiveEventMessage, notification_targets
 from .repository import ProactiveEventRecord, ProactiveEventRepository, new_worker_id
 
@@ -44,6 +45,7 @@ class ProactiveEventWorker:
         worker_id: str | None = None,
         metrics: HttpMetrics | None = None,
         max_attempts: int = 8,
+        candidate_engine: ProactiveCandidateEngine | None = None,
     ) -> None:
         if batch_size < 1 or batch_size > 500:
             raise ValueError("主动事件批次大小必须在 1 到 500 之间")
@@ -56,6 +58,7 @@ class ProactiveEventWorker:
         self.worker_id = worker_id or new_worker_id()
         self.metrics = metrics
         self.max_attempts = max_attempts
+        self.candidate_engine = candidate_engine
 
     async def run_once(self) -> ProactiveEventRunResult:
         """有界领取并处理一批事件；单条失败不阻塞同批其他事件。"""
@@ -117,6 +120,22 @@ class ProactiveEventWorker:
                 if not processed:
                     raise RuntimeError("抑制过期主动事件时丢失了主动事件锁")
                 return
+            # 复杂训练行为进入主动候选决策层；候选和 Inbox 完成标记在同一事务内。
+            # 简单业务事实继续走确定性模板通知，不依赖 LLM。
+            if event.event_type in {
+                "TRAINING_DAY_COMPLETED",
+                "TRAINING_DAY_SKIPPED",
+                "TRAINING_PLAN_COMPLETED",
+            }:
+                if self.candidate_engine is None:
+                    raise RuntimeError("主动候选引擎未配置")
+                await self.candidate_engine.enqueue_event(connection, event)
+                processed = await self.event_repository.mark_processed(
+                    connection, event_id=record.event_id, worker_id=self.worker_id
+                )
+                if not processed:
+                    raise RuntimeError("生成主动候选时丢失了主动事件锁")
+                return
             targets = notification_targets(event)
             suppress_stale = getattr(self.notification_repository, "suppress_stale_for_event", None)
             if suppress_stale is not None:
@@ -145,6 +164,12 @@ class ProactiveEventWorker:
                         "occurred_at": event.occurred_at.isoformat() if event.occurred_at else None,
                     },
                 )
+            # 取消预约既要立即发送确定性事实通知，也要产生独立候选，让 Agent
+            # 在不自动改约的前提下判断是否需要提供重新预约帮助。
+            if event.event_type == "APPOINTMENT_CANCELLED":
+                if self.candidate_engine is None:
+                    raise RuntimeError("主动候选引擎未配置")
+                await self.candidate_engine.enqueue_event(connection, event)
             processed = await self.event_repository.mark_processed(
                 connection,
                 event_id=record.event_id,

@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import asyncio
-
 from prometheus_client import start_http_server
 
 from app.confirmation.reconciliation_worker import ConfirmationReconciliationWorker
 from app.core.config import Settings
+from app.core.worker_runtime import poll_worker, run_worker_process
 from app.main import app, http_metrics, lifespan
 
 
@@ -26,10 +25,10 @@ async def run() -> None:
             older_than_seconds=max(60, settings.confirmation_ttl_seconds // 2),
             batch_size=settings.confirmation_reconciliation_batch_size,
         )
-        while True:
-            await worker.run_once()
-            await asyncio.sleep(settings.confirmation_reconciliation_poll_seconds)
+        await poll_worker(
+            worker.run_once, interval=settings.confirmation_reconciliation_poll_seconds
+        )
 
 
 if __name__ == "__main__":
-    asyncio.run(run())
+    run_worker_process(run, metrics=http_metrics)

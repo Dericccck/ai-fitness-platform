@@ -37,6 +37,28 @@ export type ChatResponse = {
   routes?: string[];
   route_source?: string | null;
   route_confidence?: number | null;
+  request_usage?: {
+    model_calls: number;
+    usage_complete: boolean;
+    input_tokens: number | null;
+    output_tokens: number | null;
+    estimated_cost: string | null;
+    currency: string | null;
+  };
+};
+
+export type ChatRun = {
+  run_id: string;
+  status: "RUNNING" | "COMPLETED" | "FAILED" | "UNKNOWN";
+  response: ChatResponse | null;
+  error_code: string | null;
+};
+
+export type ChatStreamEvent = {
+  run_id: string;
+  sequence: number;
+  event: string;
+  data: { text?: string; stage?: string; response?: ChatResponse; error_code?: string };
 };
 
 export type Confirmation = {
@@ -99,11 +121,16 @@ export type InAppNotification = {
   notification_type: string;
   aggregate_type: string;
   aggregate_id: string;
+  organization_id: string;
+  template_version: number;
   title: string;
   body: string;
   status: string;
   created_at: string;
   read_at: string | null;
+  proactive_candidate_id: string | null;
+  cta_type: string | null;
+  cta_payload: Record<string, unknown> | null;
 };
 
 export type NotificationPreference = {
@@ -260,4 +287,113 @@ export type NotificationDeliveryAttempt = {
   provider_message_id: string | null;
   started_at: string;
   finished_at: string | null;
+};
+
+export type BusinessObjective = {
+  id: string;
+  organization_id: string;
+  objective_key: string;
+  name: string;
+  metric: string;
+  direction: "INCREASE" | "DECREASE" | "TARGET";
+  target_value: number | null;
+  status: string;
+  version: number;
+};
+
+export type StrategyPolicy = {
+  id: string;
+  organization_id: string;
+  objective_id: string;
+  objective_name: string;
+  objective_metric: string;
+  strategy_key: string;
+  version: number;
+  mode: "DISABLED" | "REPLAY" | "SHADOW" | "ADVISORY" | "AUTONOMOUS";
+  risk_level: "L0" | "L1" | "L2" | "L3" | "L4";
+  allowed_actions: string[];
+  status: string;
+};
+
+export type DecisionOption = {
+  id: string;
+  case_id: string;
+  option_key: string;
+  title: string;
+  action_type: string;
+  expected_benefit: number;
+  estimated_cost: number;
+  risk_penalty: number;
+  uncertainty_penalty: number;
+  score: number;
+  confidence: number;
+};
+
+export type DecisionCase = {
+  id: string;
+  organization_id: string;
+  objective_id: string;
+  policy_id: string;
+  anomaly_id: string;
+  title: string;
+  status: string;
+  risk_level: string;
+  diagnosis: Record<string, unknown>;
+  selected_option_id: string | null;
+  trace_id: string | null;
+  expires_at: string;
+  created_at: string;
+  updated_at: string;
+  options?: DecisionOption[];
+  events?: DecisionEvent[];
+  actions?: ActionRun[];
+};
+
+export type DecisionEvent = {
+  id: number;
+  event_type: string;
+  from_status: string | null;
+  to_status: string;
+  actor_id: string;
+  reason_code: string;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type DecisionEffect = {
+  metric: string;
+  window_start: string;
+  window_end: string;
+  treatment_value: number;
+  treatment_samples: number;
+  control_value: number;
+  control_samples: number;
+  absolute_effect: number;
+  relative_effect_percent: number | null;
+};
+
+export type DecisionExperiment = {
+  id: string;
+  organization_id: string;
+  policy_id: string;
+  name: string;
+  status: "DRAFT" | "RUNNING" | "STOPPED" | "COMPLETED";
+  treatment_percent: number;
+  primary_metric: string;
+  guardrail_metrics: string[];
+  observation_days: number;
+  created_at: string;
+};
+
+export type ActionRun = {
+  id: string;
+  case_id: string;
+  option_id: string;
+  organization_id: string;
+  action_type: string;
+  status: string;
+  attempt_count: number;
+  last_error_code: string | null;
+  result: Record<string, unknown>;
+  created_at: string;
 };

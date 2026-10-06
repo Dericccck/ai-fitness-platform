@@ -1,9 +1,13 @@
 from dataclasses import dataclass
 from time import perf_counter
+from typing import TYPE_CHECKING
 
 from prometheus_client import CollectorRegistry, Counter, Gauge, Histogram, Info
 from starlette.routing import BaseRoute
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
+
+if TYPE_CHECKING:
+    from app.infrastructure.model_usage import ModelUsage
 
 
 @dataclass(slots=True)
@@ -29,8 +33,20 @@ class HttpMetrics:
     operations_query_events_total: Counter
     routing_decisions_total: Counter
     model_requests_total: Counter
+    model_attempt_duration_seconds: Histogram
+    model_ttft_seconds: Histogram
+    model_tokens_total: Counter
+    model_estimated_cost_total: Counter
+    usage_ledger_failures_total: Counter
+    protection_rejections_total: Counter
+    stream_events_total: Counter
+    chat_first_answer_seconds: Histogram
+    worker_ready: Gauge
+    rag_stage_duration_seconds: Histogram
     trulens_export_batches_total: Counter
     trulens_export_spans_total: Counter
+    proactive_decisions_total: Counter
+    business_decision_events_total: Counter
 
     @classmethod
     def create(
@@ -152,6 +168,77 @@ class HttpMetrics:
                 namespace="fitness_agent",
                 registry=target_registry,
             ),
+            model_attempt_duration_seconds=Histogram(
+                "model_attempt_duration_seconds",
+                "一次实际模型尝试耗时。",
+                labelnames=("kind", "status"),
+                namespace="fitness_agent",
+                registry=target_registry,
+                buckets=(0.1, 0.5, 1, 2, 5, 10, 20, 30, 60, 120),
+            ),
+            model_ttft_seconds=Histogram(
+                "model_ttft_seconds",
+                "供应商首个内容片段耗时，不含推理内容。",
+                labelnames=("kind",),
+                namespace="fitness_agent",
+                registry=target_registry,
+                buckets=(0.1, 0.5, 1, 2, 5, 10, 20, 30, 60),
+            ),
+            model_tokens_total=Counter(
+                "model_tokens_total",
+                "已知 Token 用量；未知不计入而非推定为零。",
+                labelnames=("kind", "direction"),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
+            model_estimated_cost_total=Counter(
+                "model_estimated_cost_total",
+                "按显式版本价格估算的 API 成本。",
+                labelnames=("currency",),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
+            usage_ledger_failures_total=Counter(
+                "usage_ledger_failures_total",
+                "未采样用量账本持久化失败。",
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
+            protection_rejections_total=Counter(
+                "protection_rejections_total",
+                "入口保护拒绝请求。",
+                labelnames=("reason",),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
+            stream_events_total=Counter(
+                "stream_events_total",
+                "公开流式事件；只使用固定事件类型。",
+                labelnames=("event",),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
+            chat_first_answer_seconds=Histogram(
+                "chat_first_answer_seconds",
+                "任务开始至第一个有效答案片段。",
+                namespace="fitness_agent",
+                registry=target_registry,
+                buckets=(0.1, 0.5, 1, 2, 5, 10, 20, 30, 60, 120),
+            ),
+            worker_ready=Gauge(
+                "worker_ready",
+                "Worker 完成装配且尚未进入 drain。",
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
+            rag_stage_duration_seconds=Histogram(
+                "rag_stage_duration_seconds",
+                "RAG 各阶段耗时，包括失败。",
+                labelnames=("stage", "status"),
+                namespace="fitness_agent",
+                registry=target_registry,
+                buckets=(0.01, 0.05, 0.1, 0.5, 1, 2, 5, 10, 30, 60),
+            ),
             trulens_export_batches_total=Counter(
                 "trulens_export_batches_total",
                 "TruLens OTEL 在线导出批次结果；status 只允许 SUCCEEDED 或 FAILED。",
@@ -166,7 +253,54 @@ class HttpMetrics:
                 namespace="fitness_agent",
                 registry=target_registry,
             ),
+            proactive_decisions_total=Counter(
+                "proactive_decisions_total",
+                "主动式 Agent 的结构化决策结果。",
+                labelnames=("decision", "source"),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
+            business_decision_events_total=Counter(
+                "business_decision_events_total",
+                "经营决策平台从指标检测到效果评估的低基数事件。",
+                labelnames=("event", "outcome"),
+                namespace="fitness_agent",
+                registry=target_registry,
+            ),
         )
+
+    def observe_model_usage(self, usage: "ModelUsage") -> None:
+        kind = usage.kind
+        status = usage.status
+        duration = getattr(usage, "duration_seconds", None)
+        if duration is not None:
+            self.model_attempt_duration_seconds.labels(kind=kind, status=status).observe(duration)
+        ttft = getattr(usage, "ttft_seconds", None)
+        if ttft is not None:
+            self.model_ttft_seconds.labels(kind=kind).observe(ttft)
+        for attribute, direction in (
+            ("input_tokens", "input"),
+            ("output_tokens", "output"),
+            ("cache_hit_tokens", "cache_hit"),
+            ("cache_miss_tokens", "cache_miss"),
+        ):
+            count = getattr(usage, attribute, None)
+            if count is not None:
+                self.model_tokens_total.labels(kind=kind, direction=direction).inc(count)
+        cost = getattr(usage, "estimated_cost", None)
+        if cost is not None:
+            self.model_estimated_cost_total.labels(currency=str(usage.currency)).inc(float(cost))
+
+    def record_proactive_decision(self, decision: str, source: str) -> None:
+        """记录低基数决策枚举和内容来源，不记录候选或用户标识。"""
+
+        self.proactive_decisions_total.labels(decision=decision, source=source).inc()
+
+    def record_business_decision_event(self, event: str, outcome: str, count: int = 1) -> None:
+        """记录决策生命周期事件；标签只能使用固定事件和结果枚举。"""
+
+        if count > 0:
+            self.business_decision_events_total.labels(event=event, outcome=outcome).inc(count)
 
     def record_memory_candidate_event(self, event: str, count: int = 1) -> None:
         """记录固定枚举事件；调用方不能把用户 ID、候选 ID 等高基数值作为标签。"""

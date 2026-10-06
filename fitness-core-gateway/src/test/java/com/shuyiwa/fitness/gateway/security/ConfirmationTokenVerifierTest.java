@@ -24,6 +24,32 @@ public class ConfirmationTokenVerifierTest {
     private static final String SECRET = "confirmation-secret-for-test-32-bytes";
 
     @Test
+    public void actualHttpBodyMustMatchVerifiedClaimAndMissingFilterFailsClosed() throws Exception {
+        org.springframework.mock.web.MockHttpServletRequest request = new org.springframework.mock.web.MockHttpServletRequest();
+        org.springframework.web.context.request.RequestContextHolder.setRequestAttributes(
+            new org.springframework.web.context.request.ServletRequestAttributes(request));
+        try {
+            for (String actual : new String[]{null, ConfirmedRequestBodyFilter.sha256("{\"tampered\":true}".getBytes(StandardCharsets.UTF_8))}) {
+                request.setAttribute(ConfirmedRequestBodyFilter.BODY_HASH, actual);
+                try {
+                    new ConfirmationTokenVerifier(new ObjectMapper(), properties()).verify(
+                        token("org-1", "fitness.training.plan.create_draft.v1"), context(),
+                        "fitness.training.plan.create_draft.v1", "CREATE_TRAINING_DRAFT", "org-1:student-1", "request-1");
+                    org.junit.Assert.fail("Body mismatch must reject");
+                } catch (GatewaySecurityException expected) {
+                    org.junit.Assert.assertTrue(expected.getMessage().contains("request_body_sha256"));
+                }
+            }
+            request.setAttribute(ConfirmedRequestBodyFilter.BODY_HASH, ConfirmedRequestBodyFilter.sha256("{}".getBytes(StandardCharsets.UTF_8)));
+            new ConfirmationTokenVerifier(new ObjectMapper(), properties()).verify(
+                token("org-1", "fitness.training.plan.create_draft.v1"), context(),
+                "fitness.training.plan.create_draft.v1", "CREATE_TRAINING_DRAFT", "org-1:student-1", "request-1");
+        } finally {
+            org.springframework.web.context.request.RequestContextHolder.resetRequestAttributes();
+        }
+    }
+
+    @Test
     public void acceptsTokenWithCompleteScope() throws Exception {
         ConfirmationTokenVerifier verifier = new ConfirmationTokenVerifier(
                 new ObjectMapper(), properties()
@@ -120,6 +146,8 @@ public class ConfirmationTokenVerifierTest {
         payload.put("tool_id", toolId);
         payload.put("organization_id", organizationId);
         payload.put("payload_hash", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        payload.put("body_binding_version", 1);
+        payload.put("request_body_sha256", ConfirmedRequestBodyFilter.sha256("{}".getBytes(StandardCharsets.UTF_8)));
         payload.put("jti", "jti-1");
         byte[] payloadBytes = new ObjectMapper().writeValueAsBytes(payload);
         Mac mac = Mac.getInstance("HmacSHA256");
@@ -141,6 +169,8 @@ public class ConfirmationTokenVerifierTest {
         payload.put("tool_id", "fitness.training.plan.create_draft.v1");
         payload.put("organization_id", "org-1");
         payload.put("payload_hash", "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa");
+        payload.put("body_binding_version", 1);
+        payload.put("request_body_sha256", ConfirmedRequestBodyFilter.sha256("{}".getBytes(StandardCharsets.UTF_8)));
         payload.put("jti", "jti-1");
         byte[] payloadBytes = new ObjectMapper().writeValueAsBytes(payload);
         Signature signer = Signature.getInstance("SHA256withRSA");

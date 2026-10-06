@@ -9,6 +9,13 @@ Supervisor 与四个 LangGraph 领域子图的拓扑、工具隔离和 Checkpoin
 [Supervisor + LangGraph 领域子图架构](docs/supervisor-domain-subgraph-architecture.md)。
 前端角色、页面、接口、状态和联调边界见
 [前端接入契约](docs/frontend-integration-contract.md)。
+自动经营决策的目标、策略、异常、审批、可靠动作和实验归因闭环见
+[AI 自动经营决策平台（最终交付版）](docs/ai-business-decision-platform-final.md)。
+2026-10-06 的提示词评测、真实用量、模型保护、SSE、独立部署与验收边界见
+[企业级运行时升级与验收说明](docs/enterprise-runtime-upgrade-20261006.md)。
+
+正式登录、密钥轮换、确认请求体绑定、SAE 离线发布计划及外部接入边界见
+[接入交接与补齐说明](docs/auth-key-rotation-and-sae-handoff.md)。
 
 赛事与活动运营属于历史遗留代码，默认不纳入当前健身项目的分析、开发和简历描述。
 

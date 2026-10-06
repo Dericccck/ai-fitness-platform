@@ -48,9 +48,13 @@ TRAINING_INTERNAL_SERVICE_TOKEN
 
 - `training.plan.review_required`：计划提交审核，通知负责教练。
 - `training.plan.published`：计划审核发布，通知对应学员。
+- `training.day.completed`：训练日完成，形成训练复盘候选。
+- `training.day.skipped`：训练日跳过，形成关怀或计划调整候选。
+- `training.plan.completed`：训练周期完成，形成周期总结候选。
 
-Agent 通过 `agent_proactive_event_inbox` 做事件幂等，再由现有通知 Outbox 投递站内通知；训练服务不直接
-访问 PostgreSQL，也不直接写 Agent 通知表。当前仍只接入 `IN_APP` 站内通知，不接短信或 Push。
+Agent 通过 `agent_proactive_event_inbox` 做事件幂等。审核和发布事件走确定性模板；训练行为事件先生成
+幂等候选，再经过上下文快照、结构化决策、安全策略和不可变消息快照，最终由通知 Outbox 投递站内通知。
+训练服务不直接访问 PostgreSQL，也不直接写 Agent 通知表。当前仍只接入 `IN_APP` 站内通知，不接短信或 Push。
 
 真实本地闭环先使用根目录命令 `make gateway-training-proactive-preflight` 做只读依赖检查，再使用
 `make gateway-training-proactive-live-check`；后者会复用 Gateway 训练角色工作流，

@@ -58,6 +58,9 @@ class InAppNotificationRecord:
     status: str
     created_at: datetime
     read_at: datetime | None
+    proactive_candidate_id: str | None = None
+    cta_type: str | None = None
+    cta_payload: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
@@ -315,6 +318,39 @@ class NotificationOutboxRepository:
         )
         return int(result.rowcount or 0)
 
+    async def is_stale_before_delivery(
+        self, connection: Any, *, record: NotificationOutboxRecord
+    ) -> bool:
+        """最终投递前再次检查更高聚合版本，覆盖旧通知已进入 PROCESSING 的竞态。"""
+
+        version = record.payload.get("aggregate_version")
+        if not isinstance(version, int):
+            return False
+        superseding: tuple[str, ...] = ()
+        if (
+            record.notification_type == "APPOINTMENT_CREATED"
+            or record.notification_type == "APPOINTMENT_RESCHEDULED"
+        ):
+            superseding = ("APPOINTMENT_RESCHEDULED", "APPOINTMENT_CANCELLED")
+        elif record.notification_type == "TRAINING_PLAN_REVIEW_REQUIRED":
+            superseding = ("TRAINING_PLAN_PUBLISHED",)
+        if not superseding:
+            return False
+        count = await connection.scalar(
+            text(
+                """SELECT COUNT(1) FROM agent_proactive_event_inbox
+                   WHERE organization_id=:organization_id AND aggregate_id=:aggregate_id
+                     AND aggregate_version > :version AND event_type IN :types"""
+            ).bindparams(bindparam("types", expanding=True)),
+            {
+                "organization_id": record.organization_id,
+                "aggregate_id": record.aggregate_id,
+                "version": version,
+                "types": superseding,
+            },
+        )
+        return int(count or 0) > 0
+
     async def list_dead(
         self, connection: Any, *, organization_id: str | None = None, limit: int = 50
     ) -> list[NotificationOutboxRecord]:
@@ -382,6 +418,9 @@ class NotificationOutboxRepository:
         template_version: int,
         title: str,
         body: str,
+        proactive_candidate_id: str | None = None,
+        cta_type: str | None = None,
+        cta_payload: dict[str, Any] | None = None,
     ) -> str:
         """幂等写入站内收件箱并返回收件箱 ID。
 
@@ -398,11 +437,13 @@ class NotificationOutboxRepository:
                         INSERT INTO agent_in_app_notifications (
                             id, notification_type, subject_user_id, organization_id,
                             aggregate_type, aggregate_id, dedupe_key,
-                            template_version, title, body
+                            template_version, title, body, proactive_candidate_id,
+                            cta_type, cta_payload
                         ) VALUES (
                             :id, :notification_type, :subject_user_id, :organization_id,
                             :aggregate_type, :aggregate_id, :dedupe_key,
-                            :template_version, :title, :body
+                            :template_version, :title, :body, :proactive_candidate_id,
+                            :cta_type, CAST(:cta_payload AS JSONB)
                         )
                         ON CONFLICT (dedupe_key) DO NOTHING
                         RETURNING id
@@ -419,6 +460,9 @@ class NotificationOutboxRepository:
                     "template_version": template_version,
                     "title": title,
                     "body": body,
+                    "proactive_candidate_id": proactive_candidate_id,
+                    "cta_type": cta_type,
+                    "cta_payload": json.dumps(cta_payload or {}),
                 },
             )
         ).scalar_one_or_none()
@@ -649,6 +693,30 @@ class NotificationOutboxRepository:
         )
         return _in_app_from_row(row) if row is not None else None
 
+    async def in_app_belongs_to_candidate(
+        self,
+        connection: Any,
+        *,
+        notification_id: str,
+        candidate_id: str,
+        subject_user_id: str,
+    ) -> bool:
+        """校验反馈引用的通知确实属于当前用户和主动候选。"""
+
+        count = await connection.scalar(
+            text(
+                """SELECT COUNT(*) FROM agent_in_app_notifications
+                   WHERE id=:notification_id AND proactive_candidate_id=:candidate_id
+                     AND subject_user_id=:subject_user_id"""
+            ),
+            {
+                "notification_id": notification_id,
+                "candidate_id": candidate_id,
+                "subject_user_id": subject_user_id,
+            },
+        )
+        return int(count or 0) == 1
+
 
 def _from_row(row: Any) -> NotificationOutboxRecord:
     """把数据库行映射成下游发布器使用的稳定对象。"""
@@ -718,6 +786,11 @@ def _in_app_from_row(row: Any) -> InAppNotificationRecord:
         status=str(row["status"]),
         created_at=_required_utc(row["created_at"]),
         read_at=_as_utc(row["read_at"]),
+        proactive_candidate_id=str(row["proactive_candidate_id"])
+        if row.get("proactive_candidate_id")
+        else None,
+        cta_type=str(row["cta_type"]) if row.get("cta_type") else None,
+        cta_payload=dict(row["cta_payload"] or {}) if row.get("cta_payload") is not None else None,
     )
 
 

@@ -18,6 +18,7 @@ from typing import Any
 
 from app.agent.domain_subgraphs import executable_domain_specs
 from app.agent.fitness_tools import build_fitness_tool_registry
+from app.agent.routing import INTENTS_BY_ROUTE, router_system_prompt
 from app.agent.supervisor import _system_prompt
 from app.core.config import Settings
 from app.infrastructure.gateway_client import GatewayClient
@@ -74,6 +75,16 @@ async def _write_runtime_sources(root: Path, settings: Settings) -> tuple[list[s
         path = prompts_dir / f"{spec.node_name}.txt"
         path.write_text(_system_prompt(spec.route, "zh-CN"), encoding="utf-8")
         prompt_args.append(f"{spec.node_name}={path}")
+        for intent in sorted(INTENTS_BY_ROUTE[spec.route]):
+            name = f"{spec.node_name}.{intent}"
+            intent_path = prompts_dir / f"{name}.txt"
+            intent_path.write_text(
+                _system_prompt(spec.route, "zh-CN", intent=intent), encoding="utf-8"
+            )
+            prompt_args.append(f"{name}={intent_path}")
+    router_path = prompts_dir / "router.txt"
+    router_path.write_text(router_system_prompt(), encoding="utf-8")
+    prompt_args.append(f"router={router_path}")
 
     gateway = GatewayClient(settings)
     try:

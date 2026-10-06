@@ -1,0 +1,1538 @@
+{
+  "completed": false,
+  "phase": "all",
+  "started_at": "2026-10-06T14:54:30.981099+00:00",
+  "platform": "macOS-15.7.3-arm64-arm-64bit",
+  "python": "3.11.5",
+  "torch_threads": 4,
+  "fixture_sha256": "c5b2f74ba966fa6263bb70068b8e61cd261cc02a468a384129584f7b7b221208",
+  "model": "deepseek-v4-flash",
+  "embedding_model": "5617a9f61b028005a4858fdac845db406aefb181",
+  "reranker_model": "2cfc18c9415c912f9d8155881c133215df768a70",
+  "production_load_evidence": false,
+  "code_sha256": "3d6fe0e5b4ae9779a229b677e0c39fd6ef694c58e651b48bbe75adb40fa3b5da",
+  "renewal": {
+    "status": "DATA_INSUFFICIENT",
+    "renewal_uplift_pp": null
+  },
+  "local_model_load": {
+    "embedding_cold_seconds": 9.335987624945119,
+    "embedding_warm_seconds": 0.12928312481381,
+    "reranker_cold_seconds": 2.6916232088115066,
+    "reranker_warm_seconds": 0.10554916597902775,
+    "samples": 1,
+    "interpretation": "首次加载和已驻留模型的单次组件调用；预热转移启动成本，不是每次请求均缩短这么多"
+  },
+  "rag": {
+    "rows": [
+      {
+        "case_id": "q01",
+        "category": "semantic",
+        "current_seconds": 0.39983016694895923,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "warmup",
+              "beginner",
+              "stretch",
+              "sleep",
+              "plateau"
+            ],
+            "case_id": "q01",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q01",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "warmup",
+              "beginner",
+              "stretch",
+              "sleep",
+              "plateau"
+            ],
+            "case_id": "q01",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "warmup",
+              "beginner",
+              "interval",
+              "rir",
+              "hinge"
+            ],
+            "case_id": "q01",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q02",
+        "category": "semantic",
+        "current_seconds": 0.4045102500822395,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "stretch",
+              "interval",
+              "beginner",
+              "plateau",
+              "hinge"
+            ],
+            "case_id": "q02",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q02",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "stretch",
+              "interval",
+              "beginner",
+              "plateau",
+              "hinge"
+            ],
+            "case_id": "q02",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "stretch",
+              "beginner",
+              "warmup",
+              "plateau",
+              "hinge"
+            ],
+            "case_id": "q02",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q03",
+        "category": "semantic",
+        "current_seconds": 0.3467127080075443,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "squat",
+              "hinge",
+              "beginner",
+              "stretch",
+              "plateau"
+            ],
+            "case_id": "q03",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q03",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "squat",
+              "hinge",
+              "beginner",
+              "stretch",
+              "plateau"
+            ],
+            "case_id": "q03",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "squat",
+              "warmup",
+              "hinge",
+              "beginner",
+              "interval"
+            ],
+            "case_id": "q03",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q04",
+        "category": "semantic",
+        "current_seconds": 0.35041412501595914,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "hinge",
+              "beginner",
+              "squat",
+              "stretch",
+              "interval"
+            ],
+            "case_id": "q04",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q04",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "hinge",
+              "beginner",
+              "squat",
+              "stretch",
+              "interval"
+            ],
+            "case_id": "q04",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "hinge",
+              "beginner",
+              "warmup",
+              "stretch",
+              "squat"
+            ],
+            "case_id": "q04",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q05",
+        "category": "semantic",
+        "current_seconds": 0.3690905829425901,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "overload",
+              "plateau",
+              "beginner",
+              "interval",
+              "deload"
+            ],
+            "case_id": "q05",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q05",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "overload",
+              "plateau",
+              "beginner",
+              "interval",
+              "deload"
+            ],
+            "case_id": "q05",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "overload",
+              "deload",
+              "record",
+              "plateau",
+              "rir"
+            ],
+            "case_id": "q05",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q06",
+        "category": "semantic",
+        "current_seconds": 0.5118559580296278,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "deload",
+              "sleep",
+              "plateau",
+              "fatloss",
+              "beginner"
+            ],
+            "case_id": "q06",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q06",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "deload",
+              "sleep",
+              "plateau",
+              "fatloss",
+              "beginner"
+            ],
+            "case_id": "q06",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "deload",
+              "sleep",
+              "plateau",
+              "fatloss",
+              "protein"
+            ],
+            "case_id": "q06",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q07",
+        "category": "semantic",
+        "current_seconds": 0.3974449171219021,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "sleep",
+              "plateau",
+              "interval",
+              "protein",
+              "deload"
+            ],
+            "case_id": "q07",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q07",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "sleep",
+              "plateau",
+              "interval",
+              "protein",
+              "deload"
+            ],
+            "case_id": "q07",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "sleep",
+              "plateau",
+              "interval",
+              "deload",
+              "warmup"
+            ],
+            "case_id": "q07",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q08",
+        "category": "semantic",
+        "current_seconds": 0.3327184999361634,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "pain",
+              "sleep",
+              "plateau",
+              "stretch",
+              "water"
+            ],
+            "case_id": "q08",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q08",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "pain",
+              "sleep",
+              "plateau",
+              "stretch",
+              "water"
+            ],
+            "case_id": "q08",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "pain",
+              "sleep",
+              "warmup",
+              "plateau",
+              "interval"
+            ],
+            "case_id": "q08",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q09",
+        "category": "semantic",
+        "current_seconds": 0.577413417166099,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "aerobic",
+              "shoes",
+              "record",
+              "water",
+              "protein"
+            ],
+            "case_id": "q09",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q09",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "aerobic",
+              "shoes",
+              "record",
+              "water",
+              "protein"
+            ],
+            "case_id": "q09",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "aerobic",
+              "shoes",
+              "overload",
+              "water",
+              "pain"
+            ],
+            "case_id": "q09",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q10",
+        "category": "semantic",
+        "current_seconds": 0.37914745789021254,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "interval",
+              "beginner",
+              "plateau",
+              "sleep",
+              "aerobic"
+            ],
+            "case_id": "q10",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q10",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "interval",
+              "beginner",
+              "plateau",
+              "sleep",
+              "aerobic"
+            ],
+            "case_id": "q10",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "interval",
+              "beginner",
+              "rir",
+              "warmup",
+              "coach"
+            ],
+            "case_id": "q10",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q11",
+        "category": "semantic",
+        "current_seconds": 0.36829958320595324,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "fatloss",
+              "deload",
+              "overload",
+              "plateau",
+              "protein"
+            ],
+            "case_id": "q11",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q11",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "fatloss",
+              "deload",
+              "overload",
+              "plateau",
+              "protein"
+            ],
+            "case_id": "q11",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "fatloss",
+              "protein",
+              "deload",
+              "overload",
+              "privacy"
+            ],
+            "case_id": "q11",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q12",
+        "category": "semantic",
+        "current_seconds": 0.36110233305953443,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "beginner",
+              "warmup",
+              "plateau",
+              "deload",
+              "interval"
+            ],
+            "case_id": "q12",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q12",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "beginner",
+              "warmup",
+              "plateau",
+              "deload",
+              "interval"
+            ],
+            "case_id": "q12",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "beginner",
+              "warmup",
+              "interval",
+              "plateau",
+              "rir"
+            ],
+            "case_id": "q12",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q13",
+        "category": "semantic",
+        "current_seconds": 0.3481967500410974,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "plateau",
+              "sleep",
+              "interval",
+              "deload",
+              "protein"
+            ],
+            "case_id": "q13",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q13",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "plateau",
+              "sleep",
+              "interval",
+              "deload",
+              "protein"
+            ],
+            "case_id": "q13",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "plateau",
+              "sleep",
+              "interval",
+              "deload",
+              "overload"
+            ],
+            "case_id": "q13",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q14",
+        "category": "semantic",
+        "current_seconds": 0.37523754104040563,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "plan",
+              "record",
+              "plateau",
+              "coach",
+              "privacy"
+            ],
+            "case_id": "q14",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q14",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "plan",
+              "record",
+              "plateau",
+              "coach",
+              "privacy"
+            ],
+            "case_id": "q14",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "plan",
+              "warmup",
+              "plateau",
+              "record",
+              "coach"
+            ],
+            "case_id": "q14",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q15",
+        "category": "semantic",
+        "current_seconds": 0.37848945800215006,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "waitlist",
+              "booking",
+              "late",
+              "hours",
+              "renewal"
+            ],
+            "case_id": "q15",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q15",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "waitlist",
+              "booking",
+              "late",
+              "hours",
+              "renewal"
+            ],
+            "case_id": "q15",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "waitlist",
+              "hours",
+              "booking",
+              "renewal",
+              "notification"
+            ],
+            "case_id": "q15",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q16",
+        "category": "semantic",
+        "current_seconds": 0.35825241706334054,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "notification",
+              "renewal",
+              "privacy",
+              "refund",
+              "waitlist"
+            ],
+            "case_id": "q16",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q16",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "notification",
+              "renewal",
+              "privacy",
+              "refund",
+              "waitlist"
+            ],
+            "case_id": "q16",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "notification",
+              "renewal",
+              "privacy",
+              "booking",
+              "waitlist"
+            ],
+            "case_id": "q16",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q17",
+        "category": "exact",
+        "current_seconds": 0.3079028748907149,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "booking",
+              "rir",
+              "rpe",
+              "plateau",
+              "waitlist"
+            ],
+            "case_id": "q17",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [
+              "booking"
+            ],
+            "case_id": "q17",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "booking",
+              "rir",
+              "rpe",
+              "plateau",
+              "waitlist"
+            ],
+            "case_id": "q17",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "booking",
+              "plateau",
+              "aerobic",
+              "warmup",
+              "record"
+            ],
+            "case_id": "q17",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q18",
+        "category": "exact",
+        "current_seconds": 0.3412497080862522,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "refund",
+              "rpe",
+              "aerobic",
+              "record",
+              "leave"
+            ],
+            "case_id": "q18",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [
+              "refund"
+            ],
+            "case_id": "q18",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "refund",
+              "rpe",
+              "aerobic",
+              "record",
+              "leave"
+            ],
+            "case_id": "q18",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "refund",
+              "aerobic",
+              "plateau",
+              "interval",
+              "record"
+            ],
+            "case_id": "q18",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q19",
+        "category": "exact",
+        "current_seconds": 0.3310906670521945,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "leave",
+              "refund",
+              "beginner",
+              "rir",
+              "plateau"
+            ],
+            "case_id": "q19",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [
+              "leave"
+            ],
+            "case_id": "q19",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "leave",
+              "refund",
+              "beginner",
+              "rir",
+              "plateau"
+            ],
+            "case_id": "q19",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "leave",
+              "aerobic",
+              "refund",
+              "shoes",
+              "plateau"
+            ],
+            "case_id": "q19",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q20",
+        "category": "exact",
+        "current_seconds": 0.3420725839678198,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "waitlist",
+              "booking",
+              "stretch",
+              "late",
+              "coach"
+            ],
+            "case_id": "q20",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [
+              "waitlist"
+            ],
+            "case_id": "q20",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "waitlist",
+              "booking",
+              "stretch",
+              "late",
+              "coach"
+            ],
+            "case_id": "q20",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "waitlist",
+              "aerobic",
+              "plateau",
+              "interval",
+              "late"
+            ],
+            "case_id": "q20",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q21",
+        "category": "exact",
+        "current_seconds": 0.31327487505041063,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "late",
+              "waitlist",
+              "aerobic",
+              "booking",
+              "stretch"
+            ],
+            "case_id": "q21",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [
+              "late"
+            ],
+            "case_id": "q21",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "late",
+              "waitlist",
+              "aerobic",
+              "booking",
+              "stretch"
+            ],
+            "case_id": "q21",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "late",
+              "aerobic",
+              "plateau",
+              "shoes",
+              "warmup"
+            ],
+            "case_id": "q21",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q22",
+        "category": "exact",
+        "current_seconds": 0.3896284168586135,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "hours",
+              "rpe",
+              "sleep",
+              "plateau",
+              "rir"
+            ],
+            "case_id": "q22",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [
+              "hours"
+            ],
+            "case_id": "q22",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "hours",
+              "rpe",
+              "sleep",
+              "plateau",
+              "rir"
+            ],
+            "case_id": "q22",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "hours",
+              "aerobic",
+              "plateau",
+              "shoes",
+              "interval"
+            ],
+            "case_id": "q22",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q23",
+        "category": "composite",
+        "current_seconds": 0.4675287080463022,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "rir",
+              "rpe",
+              "record",
+              "plateau",
+              "plan"
+            ],
+            "case_id": "q23",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q23",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "rir",
+              "rpe",
+              "record",
+              "plateau",
+              "plan"
+            ],
+            "case_id": "q23",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "rir",
+              "rpe",
+              "record",
+              "aerobic",
+              "plateau"
+            ],
+            "case_id": "q23",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q24",
+        "category": "composite",
+        "current_seconds": 0.3862159170676023,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "deload",
+              "sleep",
+              "plateau",
+              "interval",
+              "fatloss"
+            ],
+            "case_id": "q24",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q24",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "deload",
+              "sleep",
+              "plateau",
+              "interval",
+              "fatloss"
+            ],
+            "case_id": "q24",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "sleep",
+              "deload",
+              "interval",
+              "overload",
+              "protein"
+            ],
+            "case_id": "q24",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q25",
+        "category": "composite",
+        "current_seconds": 0.4448942909948528,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "renewal",
+              "notification",
+              "hours",
+              "waitlist",
+              "booking"
+            ],
+            "case_id": "q25",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q25",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "renewal",
+              "notification",
+              "hours",
+              "waitlist",
+              "booking"
+            ],
+            "case_id": "q25",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "renewal",
+              "notification",
+              "hours",
+              "refund",
+              "booking"
+            ],
+            "case_id": "q25",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      },
+      {
+        "case_id": "q26",
+        "category": "composite",
+        "current_seconds": 0.4024287078063935,
+        "variants": {
+          "vector_only": {
+            "ids": [
+              "water",
+              "protein",
+              "sleep",
+              "plateau",
+              "stretch"
+            ],
+            "case_id": "q26",
+            "recall_at_k": 0.5,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "keyword_only": {
+            "ids": [],
+            "case_id": "q26",
+            "recall_at_k": 0.0,
+            "reciprocal_rank": 0.0,
+            "forbidden_hits": 0
+          },
+          "hybrid_rrf": {
+            "ids": [
+              "water",
+              "protein",
+              "sleep",
+              "plateau",
+              "stretch"
+            ],
+            "case_id": "q26",
+            "recall_at_k": 0.5,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          },
+          "current_hybrid_reranker": {
+            "ids": [
+              "water",
+              "protein",
+              "stretch",
+              "warmup",
+              "pain"
+            ],
+            "case_id": "q26",
+            "recall_at_k": 1.0,
+            "reciprocal_rank": 1.0,
+            "forbidden_hits": 0
+          }
+        }
+      }
+    ],
+    "summary": {
+      "vector_only": {
+        "recall_at_k": 0.9807692307692307,
+        "mrr": 1.0,
+        "case_count": 26.0,
+        "forbidden_hits": 0.0
+      },
+      "keyword_only": {
+        "recall_at_k": 0.23076923076923078,
+        "mrr": 0.23076923076923078,
+        "case_count": 26.0,
+        "forbidden_hits": 0.0
+      },
+      "hybrid_rrf": {
+        "recall_at_k": 0.9807692307692307,
+        "mrr": 1.0,
+        "case_count": 26.0,
+        "forbidden_hits": 0.0
+      },
+      "current_hybrid_reranker": {
+        "recall_at_k": 1.0,
+        "mrr": 1.0,
+        "case_count": 26.0,
+        "forbidden_hits": 0.0
+      }
+    },
+    "current_latency_seconds": {
+      "n": 26,
+      "mean": 0.3840385736682667,
+      "median": 0.3721640619914979,
+      "p95": 0.5007741455337964,
+      "min": 0.3079028748907149,
+      "max": 0.577413417166099
+    },
+    "subgroups": {
+      "semantic": {
+        "vector_only": {
+          "recall_at_k": 1.0,
+          "mrr": 1.0,
+          "case_count": 16.0,
+          "forbidden_hits": 0.0
+        },
+        "keyword_only": {
+          "recall_at_k": 0.0,
+          "mrr": 0.0,
+          "case_count": 16.0,
+          "forbidden_hits": 0.0
+        },
+        "hybrid_rrf": {
+          "recall_at_k": 1.0,
+          "mrr": 1.0,
+          "case_count": 16.0,
+          "forbidden_hits": 0.0
+        },
+        "current_hybrid_reranker": {
+          "recall_at_k": 1.0,
+          "mrr": 1.0,
+          "case_count": 16.0,
+          "forbidden_hits": 0.0
+        }
+      },
+      "exact": {
+        "vector_only": {
+          "recall_at_k": 1.0,
+          "mrr": 1.0,
+          "case_count": 6.0,
+          "forbidden_hits": 0.0
+        },
+        "keyword_only": {
+          "recall_at_k": 1.0,
+          "mrr": 1.0,
+          "case_count": 6.0,
+          "forbidden_hits": 0.0
+        },
+        "hybrid_rrf": {
+          "recall_at_k": 1.0,
+          "mrr": 1.0,
+          "case_count": 6.0,
+          "forbidden_hits": 0.0
+        },
+        "current_hybrid_reranker": {
+          "recall_at_k": 1.0,
+          "mrr": 1.0,
+          "case_count": 6.0,
+          "forbidden_hits": 0.0
+        }
+      },
+      "composite": {
+        "vector_only": {
+          "recall_at_k": 0.875,
+          "mrr": 1.0,
+          "case_count": 4.0,
+          "forbidden_hits": 0.0
+        },
+        "keyword_only": {
+          "recall_at_k": 0.0,
+          "mrr": 0.0,
+          "case_count": 4.0,
+          "forbidden_hits": 0.0
+        },
+        "hybrid_rrf": {
+          "recall_at_k": 0.875,
+          "mrr": 1.0,
+          "case_count": 4.0,
+          "forbidden_hits": 0.0
+        },
+        "current_hybrid_reranker": {
+          "recall_at_k": 1.0,
+          "mrr": 1.0,
+          "case_count": 4.0,
+          "forbidden_hits": 0.0
+        }
+      }
+    },
+    "baseline_type": "检索架构消融；vector_only不是上一版完整生产实现",
+    "recall_change_pp": 1.9230769230769273
+  },
+  "finished_at": "2026-10-06T14:54:59.687625+00:00",
+  "error_type": "ArgumentError"
+}

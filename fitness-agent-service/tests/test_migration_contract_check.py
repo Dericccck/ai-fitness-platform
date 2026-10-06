@@ -9,9 +9,10 @@ def test_repository_migration_chain_is_single_and_bidirectional() -> None:
     result = validate_migrations(migrations_dir)
 
     assert result.passed is True
-    # 0038：主动事件版本；0039：确认结果未知；0040：通知重放；0041：会话 fencing。
-    assert len(result.revisions) == 41
-    assert result.heads == ("20260905_0041",)
+    # 0038：主动事件版本；0039：确认结果未知；0040：通知重放；0041：会话 fencing；
+    # 0042：主动式 Agent 闭环；0043：候选数据库契约；0044：经营决策平台。
+    assert len(result.revisions) == 45
+    assert result.heads == ("20261006_0045",)
 
 
 def test_migration_contract_rejects_unknown_parent_and_multiple_heads(tmp_path: Path) -> None:

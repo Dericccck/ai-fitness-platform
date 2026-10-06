@@ -44,6 +44,7 @@ def test_token_binds_confirmation_scope_and_jti() -> None:
         approved_record(),
         resource="org-1:student-1",
         jti="jti-1",
+        request_body=b"{}",
         now=1_000,
     )
     encoded_payload, encoded_signature = token.split(".")
@@ -71,7 +72,9 @@ def test_rs256_token_contains_key_id_and_can_be_verified() -> None:
             serialization.PrivateFormat.PKCS8,
             serialization.NoEncryption(),
         ).decode("utf-8"),
-    ).issue(approved_record(), resource="org-1:student-1", jti="jti-1", now=1_000)
+    ).issue(
+        approved_record(), resource="org-1:student-1", jti="jti-1", request_body=b"{}", now=1_000
+    )
 
     encoded_payload, encoded_signature = token.split(".")
     payload = base64.urlsafe_b64decode(encoded_payload + "==")

@@ -9,7 +9,7 @@ Supervisor 负责维护一次对话的状态、让模型选择已注册工具、
 from __future__ import annotations
 
 import json
-from collections.abc import Hashable, Mapping
+from collections.abc import Awaitable, Callable, Hashable, Mapping
 from dataclasses import dataclass, replace
 from typing import Any, Literal, TypedDict
 
@@ -35,6 +35,7 @@ from app.infrastructure.model_gateway import (
     ModelResponseError,
     ModelToolCall,
 )
+from app.infrastructure.model_usage import collect_usage
 from app.memory.candidate import (
     MemoryCandidateExtractionError,
     MemoryCandidateExtractionService,
@@ -51,6 +52,7 @@ from app.session_summary import (
     SessionSummaryService,
     build_compacted_messages,
 )
+from app.streaming.events import emit_event, stream_events
 
 from .domain_subgraphs import (
     SupervisorRoute,
@@ -151,6 +153,8 @@ class SupervisorResponse:
     routes: tuple[str, ...] = ()
     route_source: str | None = None
     route_confidence: float | None = None
+    # 原字段保持会话累计口径；新增字段只包含本次实际模型调用，未知值保留 null。
+    request_usage: dict[str, Any] | None = None
 
 
 class SupervisorState(TypedDict, total=False):
@@ -228,13 +232,34 @@ class Supervisor:
         return dict(self._domain_graphs)
 
     async def invoke(self, request: SupervisorRequest) -> SupervisorResponse:
-        with self.telemetry.request(
-            request_id=request.gateway_context.request_id,
-            trace_id=request.gateway_context.trace_id,
-            conversation_id=request.conversation_id,
-            user_message=request.user_message,
-        ) as request_span:
-            response = await self._invoke(request)
+        return await self._invoke_with_telemetry(request)
+
+    async def stream(
+        self,
+        request: SupervisorRequest,
+        emit: Callable[[str, dict[str, Any]], Awaitable[None]],
+    ) -> SupervisorResponse:
+        with stream_events():
+            return await self._invoke_with_telemetry(request, emit=emit)
+
+    async def _invoke_with_telemetry(
+        self,
+        request: SupervisorRequest,
+        *,
+        emit: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> SupervisorResponse:
+        with (
+            collect_usage(request.gateway_context.request_id or "unassigned") as usage,
+            self.telemetry.request(
+                request_id=request.gateway_context.request_id,
+                trace_id=request.gateway_context.trace_id,
+                conversation_id=request.conversation_id,
+                user_message=request.user_message,
+            ) as request_span,
+        ):
+            response = await self._invoke(request, emit=emit)
+            if usage.calls:
+                response = replace(response, request_usage=usage.summary())
             self.telemetry.set_attributes(
                 request_span,
                 {
@@ -245,6 +270,8 @@ class Supervisor:
                     "fitness.agent.tool_steps": response.tool_steps,
                     "fitness.agent.input_tokens": response.input_tokens,
                     "fitness.agent.output_tokens": response.output_tokens,
+                    "fitness.agent.request_input_tokens": usage.summary()["input_tokens"],
+                    "fitness.agent.request_output_tokens": usage.summary()["output_tokens"],
                 },
             )
             self.telemetry.finish_request(
@@ -252,7 +279,12 @@ class Supervisor:
             )
             return response
 
-    async def _invoke(self, request: SupervisorRequest) -> SupervisorResponse:
+    async def _invoke(
+        self,
+        request: SupervisorRequest,
+        *,
+        emit: Callable[[str, dict[str, Any]], Awaitable[None]] | None = None,
+    ) -> SupervisorResponse:
         """执行一次可恢复、上下文感知且支持双意图的 Supervisor 状态图。"""
 
         # API 传入的 thread_id 已由签名身份和 conversation_id 派生并脱敏。路由现在
@@ -348,17 +380,29 @@ class Supervisor:
                 initial["messages"] = current_messages
                 initial["input_tokens"] = previous_values.get("input_tokens", 0)
                 initial["output_tokens"] = previous_values.get("output_tokens", 0)
-            return await self._graph.ainvoke(
+            context = SupervisorRuntimeContext(
+                gateway_context=request.gateway_context,
+                identity=request.identity,
+                thread_id=thread_id,
+                user_message=request.user_message,
+                locale=request.locale,
+            )
+            if emit is None:
+                return await self._graph.ainvoke(initial, config=config, context=context)
+            # 0.6.x 多模式+子图输出为 (namespace, mode, chunk)，不是 1.1+ version="v2"。
+            final: dict[str, Any] = {}
+            async for namespace, mode, chunk in self._graph.astream(
                 initial,
                 config=config,
-                context=SupervisorRuntimeContext(
-                    gateway_context=request.gateway_context,
-                    identity=request.identity,
-                    thread_id=thread_id,
-                    user_message=request.user_message,
-                    locale=request.locale,
-                ),
-            )
+                context=context,
+                stream_mode=["custom", "values"],
+                subgraphs=True,
+            ):
+                if mode == "values" and not namespace:
+                    final = chunk
+                elif mode == "custom" and isinstance(chunk, dict):
+                    await emit(str(chunk["event"]), chunk["data"])
+            return final
 
         try:
             if self.session_lock is None:
@@ -472,19 +516,24 @@ class Supervisor:
         gateway_context: GatewayRequestContext,
         thread_id: str,
     ) -> SupervisorResponse:
-        with self.telemetry.request(
-            request_id=gateway_context.request_id,
-            trace_id=gateway_context.trace_id,
-            conversation_id=thread_id,
-            user_message=None,
-            route="CONFIRMATION_RESUME",
-        ) as request_span:
+        with (
+            collect_usage(gateway_context.request_id or "unassigned") as usage,
+            self.telemetry.request(
+                request_id=gateway_context.request_id,
+                trace_id=gateway_context.trace_id,
+                conversation_id=thread_id,
+                user_message=None,
+                route="CONFIRMATION_RESUME",
+            ) as request_span,
+        ):
             response = await self._resume_confirmation(
                 confirmation_id,
                 identity=identity,
                 gateway_context=gateway_context,
                 thread_id=thread_id,
             )
+            if usage.calls:
+                response = replace(response, request_usage=usage.summary())
             self.telemetry.set_attributes(
                 request_span,
                 {
@@ -732,6 +781,7 @@ class Supervisor:
 
         if state.get("graph_version") != 3:
             return {}
+        emit_event("stage.changed", {"stage": "ROUTING"})
         if runtime.context is None or not runtime.context.user_message:
             raise SupervisorRuntimeError("缺少路由所需的当前用户消息")
         restricted = _customer_service_restricted_answer(runtime.context.user_message)
@@ -802,6 +852,7 @@ class Supervisor:
         if runtime.context is None or not runtime.context.user_message:
             raise SupervisorRuntimeError("缺少领域运行上下文")
         route = state["route"]
+        emit_event("stage.changed", {"stage": "PREPARING_CONTEXT", "route": route})
         intent = state.get("intent", "")
         spec = domain_agent_spec(route)
         system_prompt = _system_prompt(route, runtime.context.locale, intent=intent)
@@ -924,6 +975,7 @@ class Supervisor:
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
     ) -> dict[str, Any]:
         spec = domain_agent_spec(state["route"])
+        emit_event("stage.changed", {"stage": "GENERATING", "route": state["route"]})
         # 中断恢复会从该节点重新执行。只要 State 已有待确认 ID，就不能再次调用 LLM，
         # 否则模型可能重新生成一套与原确认单不同的参数。
         if state.get("pending_confirmation_id"):
@@ -933,6 +985,17 @@ class Supervisor:
             if state.get("current_tool_steps", state.get("tool_steps", 0)) < self.max_tool_steps
             else []
         )
+        # 经营指标已由确定性服务端工具完整查询，后续回合只解释结果，允许真实 Token 流。
+        # 其他领域保留自主工具循环；存在工具时网关缓冲文本，避免泄漏工具选择内容。
+        if (
+            spec.deterministic_operations_input
+            and state.get("current_tool_steps", 0) > 0
+            and not any(
+                "TOOL_INPUT_INVALID" in str(m.get("content", ""))
+                for m in state.get("messages", [])[-1:]
+            )
+        ):
+            tool_schemas = []
         force_tool_name = forced_tool_for_intent(state.get("intent", ""))
         if force_tool_name is None:
             force_tool_name = _forced_write_tool_name(
@@ -1140,6 +1203,7 @@ class Supervisor:
     ) -> dict[str, Any]:
         if runtime.context is None:
             raise SupervisorRuntimeError("缺少 Supervisor 运行时上下文")
+        emit_event("stage.changed", {"stage": "QUERYING_BUSINESS", "route": state["route"]})
         context = ToolContext(
             gateway_context=runtime.context.gateway_context,
             identity=runtime.context.identity,
@@ -1701,7 +1765,7 @@ def _sanitize_model_answer(value: Any) -> str:
     """移除供应商协议标记，避免内部工具调用语法出现在用户答案中。"""
 
     answer = str(value or "").strip()
-    for marker in ("<｜｜DSML｜｜tool_calls>", "<|DSML|tool_calls>", "<tool_calls>"):
+    for marker in ("<｜｜DSML｜｜tool_calls>", "<|DSML|tool_calls>", "<tool_calls>", "<think>"):
         if marker in answer:
             answer = answer.split(marker, 1)[0].rstrip()
     return answer

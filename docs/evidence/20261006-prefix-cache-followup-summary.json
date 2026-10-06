@@ -1,0 +1,56 @@
+{
+  "analysis_date": "2026-10-06",
+  "source_file": "20261006-prefix-cache-followup.json",
+  "source_sha256": "d0e0f85bd3a403330f811f8bd728275fa1b8d957d6b663d48ec1bf06e363beb8",
+  "model": "deepseek-v4-flash",
+  "pairs": 6,
+  "model_calls": 12,
+  "comparison": "variable prefix versus stable prefix, paired by sample, alternating execution order",
+  "production_load_evidence": false,
+  "full_agent_evidence": false,
+  "production_code_changed_by_this_followup": false,
+  "ttft_seconds": {
+    "variable_mean": 0.6004659376339987,
+    "stable_mean": 0.5341581389463196,
+    "mean_reduction": 0.06630779868767911,
+    "relative_reduction_percent": 11.042724413136591,
+    "paired_mean_reduction_ci95": [-0.07427453676161046, 0.22637322291169143],
+    "variable_median": 0.5583991664461792,
+    "stable_median": 0.5565439579077065,
+    "stable_improvement_demonstrated": false,
+    "measurement_note": "First answer.delta event from the model/LangGraph stream, not browser render time; the source script does not separately reject whitespace-only first deltas."
+  },
+  "total_seconds": {
+    "variable_mean": 0.6757918475195765,
+    "stable_mean": 0.7016791458396862,
+    "mean_reduction": -0.02588729832010961,
+    "relative_reduction_percent": -3.8306615291566826,
+    "paired_mean_reduction_ci95": [-0.23271231912076473, 0.17771508358418941],
+    "stable_improvement_demonstrated": false
+  },
+  "cache": {
+    "usage_known_for_all_calls": true,
+    "stable_calls_with_observed_hits": 6,
+    "variable_calls_with_observed_hits": 0,
+    "stable_hit_tokens_per_call": 2048,
+    "stable_input_tokens_per_call": 2228,
+    "stable_cached_input_percent": 91.92100538599641
+  },
+  "confounders": {
+    "variable_input_tokens": [2251, 2250, 2254, 2252, 2256, 2252],
+    "variable_output_tokens": [31, 19, 24, 19, 19, 18],
+    "stable_output_tokens": [24, 24, 24, 24, 24, 24],
+    "provider_cache_disabled_by_api": false,
+    "cross_time_validation": false,
+    "independent_answer_quality_review": false,
+    "prices_configured": false
+  },
+  "statistics": {
+    "helper": "fitness-agent-service/scripts/evidence_statistics.py:paired_change",
+    "bootstrap_samples": 2000,
+    "seed": 20261006,
+    "positive_reduction_means_faster": true,
+    "scope": "Fixed query and testing period; bootstrap intervals are small-sample descriptions, not general provider performance guarantees."
+  },
+  "interpretation": "Observed cache hits and computed sample differences; neither TTFT nor total latency establishes a stable improvement. Do not claim a 60% end-to-end TTFT reduction, and do not combine this model-only test with different full-Agent baselines."
+}

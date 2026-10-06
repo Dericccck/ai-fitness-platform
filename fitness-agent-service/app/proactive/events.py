@@ -20,6 +20,9 @@ SUPPORTED_PROACTIVE_EVENT_TYPES = frozenset(
         "APPOINTMENT_CANCELLED",
         "TRAINING_PLAN_PUBLISHED",
         "TRAINING_PLAN_REVIEW_REQUIRED",
+        "TRAINING_DAY_COMPLETED",
+        "TRAINING_DAY_SKIPPED",
+        "TRAINING_PLAN_COMPLETED",
     }
 )
 SUPPORTED_PROACTIVE_EVENT_SOURCES = frozenset({"booking", "training"})
@@ -113,16 +116,22 @@ def notification_targets(event: ProactiveEventMessage) -> tuple[ProactiveNotific
                 _required_id(event.payload, "coachId", "coach_id"), "COACH"
             ),
         )
-    elif event.event_type == "TRAINING_PLAN_PUBLISHED":
+    elif event.event_type in {"TRAINING_PLAN_PUBLISHED", "TRAINING_PLAN_COMPLETED"}:
         candidates = (
             ProactiveNotificationTarget(
                 _required_id(event.payload, "studentId", "student_id"), "STUDENT"
             ),
         )
-    else:
+    elif event.event_type == "TRAINING_PLAN_REVIEW_REQUIRED":
         candidates = (
             ProactiveNotificationTarget(
                 _required_id(event.payload, "coachId", "coach_id"), "COACH"
+            ),
+        )
+    else:
+        candidates = (
+            ProactiveNotificationTarget(
+                _required_id(event.payload, "studentId", "student_id"), "STUDENT"
             ),
         )
     targets: list[ProactiveNotificationTarget] = []
