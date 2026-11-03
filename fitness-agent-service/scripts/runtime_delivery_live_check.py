@@ -30,6 +30,7 @@ async def check(*, execute: bool) -> dict[str, object]:
         AGENT_REDIS_URL=settings.redis_url,
         AGENT_CHECKPOINT_DATABASE_URL="",
         AGENT_RUN_RUNTIME_DELIVERY_TESTS="1",
+        AGENT_RUN_POSTGRES_TESTS="1",
     )
 
     async def run(*args: str) -> None:
@@ -59,7 +60,9 @@ async def check(*, execute: bool) -> dict[str, object]:
             "pytest",
             "-q",
             "tests/test_runtime_delivery_postgres.py",
+            "tests/test_confirmation_postgres.py",
             "tests/test_browser_auth_redis.py",
+            "tests/test_session_summary_postgres.py",
         )
         await run("-m", "alembic", "downgrade", "20260918_0044")
         await run("-m", "alembic", "upgrade", "head")
@@ -67,7 +70,12 @@ async def check(*, execute: bool) -> dict[str, object]:
         return {
             "passed": True,
             "mode": "isolated_runtime_acceptance",
-            "tests": 6,
+            "test_files": [
+                "test_runtime_delivery_postgres.py",
+                "test_confirmation_postgres.py",
+                "test_browser_auth_redis.py",
+                "test_session_summary_postgres.py",
+            ],
             "migration": "head -> 0044 -> head -> base",
             "temporary_database_removed": True,
         }

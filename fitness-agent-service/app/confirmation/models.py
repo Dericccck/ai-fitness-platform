@@ -74,6 +74,9 @@ class ConfirmationAction:
     actor_roles: tuple[str, ...] = ()
     actor_organization_ids: tuple[str, ...] = ()
     trace_id: str | None = None
+    # 路由与 Payload 构造版本在创建动作时固定，后续灰度/回退不能改变在途操作。
+    transport: str = "http"
+    contract_version: str = "v1"
 
 
 @dataclass(frozen=True)
@@ -114,6 +117,14 @@ class ConfirmationRecord:
     # 创建确认时的签名授权快照。确认时若角色或机构范围发生变化，必须重新发起动作。
     actor_roles: tuple[str, ...] = ()
     actor_organization_ids: tuple[str, ...] = ()
+
+    transport: str = "http"
+    contract_version: str = "v1"
+    reconciliation_next_attempt_at: datetime | None = None
+    reconciliation_last_attempt_at: datetime | None = None
+    reconciliation_attempts: int = 0
+    reconciliation_lease_until: datetime | None = None
+    reconciliation_claim_token: str | None = None
 
     def is_expired(self, now: datetime) -> bool:
         """判断是否已经超过授权有效期。"""
@@ -204,6 +215,8 @@ class ConfirmationRecord:
 
         if self.authorization_status != "APPROVED":
             raise ConfirmationStateError("只有已批准的确认单才能签发凭证")
+        if self.execution_status != "NOT_STARTED":
+            raise ConfirmationStateError("已领取或结果未知的动作不能签发新凭证")
         if self.is_expired(now):
             raise ConfirmationStateError("已过期的确认单不能签发凭证")
         if self.credential_jti is not None:
@@ -213,19 +226,9 @@ class ConfirmationRecord:
         return self._replace(credential_jti=credential_jti, version=self.version + 1)
 
     def requeue_retryable(self) -> ConfirmationRecord:
-        """允许可恢复的工具失败重新领取执行权。"""
+        """历史可重试失败不能证明未执行，禁止重置 JTI 后重放。"""
 
-        if self.execution_status != "FAILED_RETRYABLE":
-            raise ConfirmationStateError("只有可重试的执行才能重新入队")
-        return self._replace(
-            execution_status="NOT_STARTED",
-            execution_started_at=None,
-            finished_at=None,
-            credential_jti=None,
-            credential_consumed_at=None,
-            last_error_code=None,
-            version=self.version + 1,
-        )
+        raise ConfirmationStateError("历史执行结果必须先对账，不能重新领取执行权")
 
     def finish_success(self, now: datetime) -> ConfirmationRecord:
         """记录业务工具真实返回成功。"""
@@ -240,12 +243,12 @@ class ConfirmationRecord:
         )
 
     def finish_failure(self, now: datetime, error_code: str, retryable: bool) -> ConfirmationRecord:
-        """记录执行失败；可重试失败不会篡改原始批准决定。"""
+        """仅确定拒绝可记最终失败；暂时失败必须查询原操作，不能自动重放。"""
 
         if self.execution_status not in {"RUNNING", "UNKNOWN"}:
             raise ConfirmationStateError("只有执行中或结果未知的操作才能标记为失败")
         return self._replace(
-            execution_status="FAILED_RETRYABLE" if retryable else "FAILED_FINAL",
+            execution_status="UNKNOWN" if retryable else "FAILED_FINAL",
             finished_at=now,
             last_error_code=error_code,
             version=self.version + 1,
@@ -254,7 +257,7 @@ class ConfirmationRecord:
     def mark_unknown(self, now: datetime) -> ConfirmationRecord:
         """把超时/进程中断的 RUNNING 标为结果未知，禁止直接当作失败重试。"""
 
-        if self.execution_status != "RUNNING":
+        if self.execution_status not in {"RUNNING", "FAILED_RETRYABLE"}:
             raise ConfirmationStateError("只有执行中的操作才能标记为结果未知")
         return self._replace(
             execution_status="UNKNOWN",

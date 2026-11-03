@@ -1,3 +1,4 @@
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import pytest
@@ -23,6 +24,8 @@ from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.gateway_client import GatewayRequestContext
 from app.infrastructure.model_gateway import ModelGateway, ModelToolCall, ModelTurn
 from app.memory.candidate import MemoryCandidate
+from app.memory.models import FitnessMemory
+from app.memory.service import MemoryService
 
 
 class ToolInput(BaseModel):
@@ -373,6 +376,94 @@ async def test_supervisor_passes_unconfirmed_memory_candidate_to_model_context()
         message["role"] == "system" and "不是已保存事实" in message["content"]
         for message in models.messages_seen[0]
     )
+
+
+async def test_personalization_is_runtime_only_and_respects_subject_and_purpose() -> None:
+    now = datetime.now(UTC)
+    items = [
+        FitnessMemory(
+            id=name,
+            subject_user_id="student-1",
+            organization_id="org-1",
+            memory_type=memory_type,  # type: ignore[arg-type]
+            memory_key="style",
+            content={"value": value},
+            source_type="USER_EXPLICIT",
+            confidence=1,
+            status="ACTIVE",
+            version=1,
+            expires_at=None,
+            created_at=now,
+            updated_at=now,
+        )
+        for name, memory_type, value in [
+            ("style", "COMMUNICATION_PREFERENCE", "请简明回答"),
+            ("goal", "TRAINING_GOAL", "训练目标不应加入普通对话"),
+        ]
+    ]
+
+    class MemoryStub:
+        async def list_personalization(self, **_: Any) -> list[FitnessMemory]:
+            return items
+
+    models = FakeModels([ModelTurn(content="好的。", tool_calls=())])
+    supervisor = Supervisor(
+        cast(ModelGateway, models),
+        build_registry([]),
+        checkpointer=InMemorySaver(),
+        memory_service=cast(MemoryService, MemoryStub()),
+    )
+    identity = AgentIdentity(
+        subject="student-1",
+        organization_ids=frozenset({"org-1"}),
+        roles=frozenset({"STUDENT"}),
+        issued_at=1,
+        expires_at=2,
+    )
+    await supervisor.invoke(
+        SupervisorRequest("你好", request().gateway_context, "memory-test", identity=identity)
+    )
+    prompt = str(models.messages_seen[0])
+    assert "请简明回答" in prompt
+    assert "训练目标不应加入普通对话" not in prompt
+    checkpoint = await supervisor._graph.aget_state({"configurable": {"thread_id": "memory-test"}})
+    assert "请简明回答" not in str(checkpoint.values)
+
+
+async def test_memory_revision_change_excludes_old_checkpoint_from_new_prompt() -> None:
+    class RevisionRepository:
+        revision = 0
+
+        async def current_memory_revision(self, subject: str) -> int:
+            assert subject == "student-1"
+            return self.revision
+
+    class SummaryStub(FakeSessionSummaryService):
+        repository = RevisionRepository()
+
+        async def load_for_subject(self, _: str, __: str) -> str:
+            return ""
+
+    summary = SummaryStub()
+    models = FakeModels([ModelTurn(content="好的", tool_calls=()) for _ in range(3)])
+    supervisor = Supervisor(
+        cast(ModelGateway, models),
+        build_registry([]),
+        checkpointer=InMemorySaver(),
+        session_summary_service=summary,  # type: ignore[arg-type]
+    )
+    identity = AgentIdentity("student-1", frozenset({"org-1"}), frozenset({"STUDENT"}), 1, 2)
+    for message in ("我喜欢旧偏好", "继续", "新问题"):
+        if message == "新问题":
+            summary.repository.revision = 1
+        await supervisor.invoke(
+            SupervisorRequest(
+                message, request().gateway_context, "revision-test", identity=identity
+            )
+        )
+    assert "我喜欢旧偏好" in str(models.messages_seen[1])
+    assert "我喜欢旧偏好" not in str(models.messages_seen[2])
+    assert "新问题" in str(models.messages_seen[2])
 
 
 async def test_supervisor_restores_previous_conversation_messages() -> None:

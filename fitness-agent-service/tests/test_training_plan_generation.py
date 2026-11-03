@@ -1,3 +1,4 @@
+import json
 from dataclasses import dataclass
 from datetime import UTC, datetime
 
@@ -82,7 +83,7 @@ class FakeModels:
 class FakeMemory:
     memories: list[FitnessMemory]
 
-    async def list_active(
+    async def list_personalization(
         self, *, identity: AgentIdentity, organization_id: str
     ) -> list[FitnessMemory]:
         assert identity.subject in {"coach-1", "student-1"}
@@ -319,6 +320,117 @@ async def test_generation_uses_controlled_student_context_reader() -> None:
 
     assert reader.calls == [("coach-1", "student-1", "org-1")]
     assert result["context_sources"][0]["version"] == 3
+
+
+@pytest.mark.asyncio
+async def test_memory_reference_is_model_declared_and_deduplicated() -> None:
+    now = datetime.now(UTC)
+    memory = FitnessMemory(
+        id="student-memory-1",
+        subject_user_id="student-1",
+        organization_id="org-1",
+        memory_type="TRAINING_GOAL",
+        memory_key="goal",
+        content={"key": "goal", "value": "减脂"},
+        source_type="USER_EXPLICIT",
+        confidence=1.0,
+        status="ACTIVE",
+        version=3,
+        expires_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    response = json.loads(valid_json())
+    response["used_memory_refs"] = [
+        {"memory_id": "student-memory-1", "version": 3},
+        {"memory_id": "student-memory-1", "version": 3},
+    ]
+    models = FakeModels([json.dumps(response)])
+    service = TrainingPlanGenerationService(
+        models, FakeRag(evidence()), student_context_reader=FakeStudentContext([memory], [])
+    )
+
+    result = await service.generate(
+        request(), IDENTITY, GatewayRequestContext(signed_context="signed-context")
+    )
+
+    assert result["memory_references"] == ({"id": "student-memory-1", "version": 3},)
+    assert result["memory_reference_semantics"] == "MODEL_DECLARED_NOT_VERIFIED_USE"
+    assert result["context_sources"][0]["id"] == "student-memory-1"
+    assert '"memory_id": "student-memory-1", "version": 3' in models.calls[0][1]["content"]
+    assert "used_memory_refs" not in result["payload"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "reference",
+    [
+        {"memory_id": "other-user-memory", "version": 3},
+        {"memory_id": "student-memory-1", "version": 2},
+    ],
+)
+async def test_memory_reference_rejects_uninjected_or_wrong_version(reference: dict) -> None:
+    now = datetime.now(UTC)
+    memory = FitnessMemory(
+        id="student-memory-1",
+        subject_user_id="student-1",
+        organization_id="org-1",
+        memory_type="TRAINING_GOAL",
+        memory_key="goal",
+        content={"key": "goal", "value": "减脂"},
+        source_type="USER_EXPLICIT",
+        confidence=1.0,
+        status="ACTIVE",
+        version=3,
+        expires_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    response = json.loads(valid_json())
+    response["used_memory_refs"] = [reference]
+    service = TrainingPlanGenerationService(
+        FakeModels([json.dumps(response)]),
+        FakeRag(evidence()),
+        student_context_reader=FakeStudentContext([memory], []),
+        max_repair_attempts=0,
+    )
+
+    with pytest.raises(TrainingPlanGenerationError, match="未注入或版本不匹配"):
+        await service.generate(
+            request(), IDENTITY, GatewayRequestContext(signed_context="signed-context")
+        )
+
+
+@pytest.mark.asyncio
+async def test_memory_injected_without_model_declaration_is_not_counted_as_referenced() -> None:
+    now = datetime.now(UTC)
+    memory = FitnessMemory(
+        id="student-memory-1",
+        subject_user_id="student-1",
+        organization_id="org-1",
+        memory_type="TRAINING_GOAL",
+        memory_key="goal",
+        content={"key": "goal", "value": "减脂"},
+        source_type="USER_EXPLICIT",
+        confidence=1.0,
+        status="ACTIVE",
+        version=3,
+        expires_at=None,
+        created_at=now,
+        updated_at=now,
+    )
+    service = TrainingPlanGenerationService(
+        FakeModels([valid_json()]),
+        FakeRag(evidence()),
+        student_context_reader=FakeStudentContext([memory], []),
+    )
+
+    result = await service.generate(
+        request(), IDENTITY, GatewayRequestContext(signed_context="signed-context")
+    )
+
+    assert len(result["context_sources"]) == 1
+    assert result["memory_references"] == ()
 
 
 @pytest.mark.asyncio

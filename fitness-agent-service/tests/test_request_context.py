@@ -1,3 +1,4 @@
+import pytest
 from fastapi import FastAPI
 from httpx import ASGITransport, AsyncClient
 
@@ -28,15 +29,16 @@ async def test_preserves_valid_request_and_trace_ids() -> None:
     assert response.headers["X-Trace-ID"] == "trace-456"
 
 
-async def test_replaces_untrusted_context_ids() -> None:
+@pytest.mark.parametrize("invalid", ["invalid id value", ".", ".."])
+async def test_replaces_untrusted_context_ids(invalid: str) -> None:
     transport = ASGITransport(app=build_test_app())
     async with AsyncClient(transport=transport, base_url="http://test") as client:
         response = await client.get(
             "/probe",
-            headers={"X-Request-ID": "invalid id value"},
+            headers={"X-Request-ID": invalid},
         )
 
     generated_request_id = response.headers["X-Request-ID"]
-    assert generated_request_id != "invalid id value"
+    assert generated_request_id != invalid
     assert normalize_context_id(generated_request_id) == generated_request_id
     assert response.headers["X-Trace-ID"] == generated_request_id

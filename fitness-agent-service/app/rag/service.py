@@ -12,6 +12,7 @@ from app.core.metrics import HttpMetrics
 from app.evaluation.telemetry import TruLensTelemetry
 from app.infrastructure.model_gateway import ModelGateway
 from app.infrastructure.reranker import RerankerClient, RerankResult
+from app.streaming.control import cancellation_checkpoint
 
 from .models import (
     KnowledgeChunk,
@@ -173,11 +174,13 @@ class RagService:
         return embeddings
 
     async def search(self, query: str, scope: RetrievalScope) -> RagSearchResult:
+        await cancellation_checkpoint()
         with self.telemetry.span(
             "fitness.agent.retrieval",
             attributes={"fitness.agent.retrieval.scope_roles": sorted(scope.roles)},
         ) as retrieval_span:
             result = await self._search(query, scope)
+            await cancellation_checkpoint()
             self.telemetry.finish_retrieval(
                 retrieval_span,
                 query=query,
@@ -195,20 +198,32 @@ class RagService:
         _validate_embedding_dimensions(query_embedding, self.embedding_dimensions)
         if len(query_embedding) != 1:
             raise RagSearchError("Embedding 服务返回了无效的查询结果")
-        vector_candidates, keyword_candidates = await asyncio.gather(
-            self._timed(
-                "vector_recall",
-                self.repository.search_candidates(
-                    query_embedding[0], scope, limit=self.candidate_limit
-                ),
+        recalls = [
+            asyncio.create_task(
+                self._timed(
+                    "vector_recall",
+                    self.repository.search_candidates(
+                        query_embedding[0], scope, limit=self.candidate_limit
+                    ),
+                )
             ),
-            self._timed(
-                "keyword_recall",
-                self.repository.search_keyword_candidates(
-                    query, scope, limit=self.keyword_candidate_limit
-                ),
+            asyncio.create_task(
+                self._timed(
+                    "keyword_recall",
+                    self.repository.search_keyword_candidates(
+                        query, scope, limit=self.keyword_candidate_limit
+                    ),
+                )
             ),
-        )
+        ]
+        try:
+            vector_candidates, keyword_candidates = await asyncio.gather(*recalls)
+        finally:
+            # gather 可能先报告一个分支退出；运行终态须等所有召回分支完成清理。
+            for recall in recalls:
+                if not recall.done() and not recall.cancelling():
+                    recall.cancel()
+            await asyncio.gather(*recalls, return_exceptions=True)
         candidates = _fuse_candidates(
             vector_candidates,
             keyword_candidates,

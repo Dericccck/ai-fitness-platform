@@ -7,7 +7,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 
 from app.agent.fitness_tools import build_fitness_tool_registry
 from app.agent.routing import RouteDecision, RoutedIntent
-from app.agent.supervisor import Supervisor, SupervisorRequest
+from app.agent.supervisor import Supervisor, SupervisorRequest, SupervisorRuntimeContext
 from app.agent.tool_registry import ToolConfirmationNormalizationError
 from app.confirmation.cipher import AesGcmPayloadCipher, ConfirmationPayloadCipherError
 from app.confirmation.models import ConfirmationRecord
@@ -584,3 +584,128 @@ async def test_approved_confirmation_resumes_server_side_and_executes_once() -> 
     assert gateway.confirmation_tokens == ["server-issued-token"]
     state = await supervisor._graph.aget_state({"configurable": {"thread_id": "thread-1"}})
     assert state.values["pending_confirmation_id"] is None
+    messages = state.values["messages"]
+    assistant_call = next(m for m in messages if m.get("tool_calls"))
+    tool_result = next(m for m in messages if m.get("role") == "tool")
+    assert tool_result["tool_call_id"] == assistant_call["tool_calls"][0]["id"] == "call-create"
+
+
+@pytest.mark.parametrize("revision_result", [2, RuntimeError("database unavailable")])
+async def test_resume_stale_memory_finishes_write_without_continuing_old_context(
+    revision_result: int | Exception,
+) -> None:
+    class RevisionRepository:
+        async def current_memory_revision(self, subject: str) -> int:
+            assert subject == "coach-1"
+            if isinstance(revision_result, Exception):
+                raise revision_result
+            return revision_result
+
+    record = pending_record().approve(datetime.now(UTC), "decision-1")
+    confirmation_service = FakeConfirmationService(record)
+    gateway = RecordingGateway()
+    supervisor = Supervisor(
+        cast(ModelGateway, OneWriteModel()),
+        build_fitness_tool_registry(cast(GatewayClient, gateway)),
+        confirmation_service=cast(Any, confirmation_service),
+        session_summary_service=cast(Any, SimpleNamespace(repository=RevisionRepository())),
+    )
+    identity = AgentIdentity(
+        subject="coach-1",
+        organization_ids=frozenset({"org-1"}),
+        roles=frozenset({"COACH"}),
+        issued_at=1,
+        expires_at=2,
+    )
+    runtime = SimpleNamespace(
+        context=SupervisorRuntimeContext(
+            gateway_context=GatewayRequestContext(
+                signed_context="signed-context", request_id="request-1", trace_id="trace-1"
+            ),
+            identity=identity,
+            thread_id="thread-1",
+        )
+    )
+    state = cast(
+        Any,
+        {
+            "pending_confirmation_id": "confirmation-1",
+            "route": "FITNESS_COACHING",
+            "memory_revision": 1,
+            "route_plan": [{"route": "FITNESS_COACHING"}, {"route": "BOOKING"}],
+            "partial_answers": [{"answer": "已撤销记忆旧内容"}],
+            "turn_base_messages": [{"role": "user", "content": "已撤销记忆旧内容"}],
+            "messages": [
+                {"role": "user", "content": "已撤销记忆旧内容"},
+                {
+                    "role": "assistant",
+                    "content": "",
+                    "tool_calls": [
+                        {
+                            "id": "call-create",
+                            "function": {"name": "fitness_training_plan_create_draft_v1"},
+                        }
+                    ],
+                },
+            ],
+        },
+    )
+
+    result = await supervisor._confirmation_node(state, cast(Any, runtime))
+
+    assert confirmation_service.finished == [True]
+    assert gateway.confirmation_tokens == ["server-issued-token"]
+    assert result["final_answer"] == "已完成创建训练计划草案。"
+    assert result["route_plan"] == []
+    assert result["partial_answers"] == []
+    assert result["turn_base_messages"] == []
+    assert result["messages"] == [{"role": "assistant", "content": result["final_answer"]}]
+    assert result["pending_confirmation_id"] is None
+
+
+@pytest.mark.parametrize(
+    "bad_calls",
+    [
+        [{"id": "", "function": {"name": "fitness_training_plan_create_draft_v1"}}],
+        [{"id": "call-1", "function": {"name": "unrelated_tool"}}],
+    ],
+)
+async def test_resume_missing_matching_call_does_not_create_orphan_result(bad_calls: list) -> None:
+    record = pending_record().approve(datetime.now(UTC), "decision-1")
+    service = FakeConfirmationService(record)
+    gateway = RecordingGateway()
+    supervisor = Supervisor(
+        cast(ModelGateway, OneWriteModel()),
+        build_fitness_tool_registry(cast(GatewayClient, gateway)),
+        confirmation_service=cast(Any, service),
+    )
+    identity = AgentIdentity(
+        subject="coach-1",
+        organization_ids=frozenset({"org-1"}),
+        roles=frozenset({"COACH"}),
+        issued_at=1,
+        expires_at=2,
+    )
+    runtime = SimpleNamespace(
+        context=SupervisorRuntimeContext(
+            gateway_context=GatewayRequestContext(
+                signed_context="signed-context", request_id="request-1", trace_id="trace-1"
+            ),
+            identity=identity,
+            thread_id="thread-1",
+        )
+    )
+    result = await supervisor._confirmation_node(
+        cast(
+            Any,
+            {
+                "pending_confirmation_id": "confirmation-1",
+                "route": "FITNESS_COACHING",
+                "messages": [{"role": "assistant", "content": "", "tool_calls": bad_calls}],
+            },
+        ),
+        cast(Any, runtime),
+    )
+    assert service.finished == [True]
+    assert all(m.get("role") != "tool" and "tool_calls" not in m for m in result["messages"])
+    assert result["final_answer"] == "已完成创建训练计划草案。"

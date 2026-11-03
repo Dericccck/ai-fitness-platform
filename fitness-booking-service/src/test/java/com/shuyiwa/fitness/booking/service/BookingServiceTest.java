@@ -199,6 +199,38 @@ public class BookingServiceTest {
         throw new AssertionError("missing cancel confirmation must be rejected");
     }
 
+    @Test
+    public void legacyOperationQueryRejectsAnotherActorInSameOrganization() {
+        when(repository.findOperationScope("operation-1")).thenReturn(Optional.of(
+                new BookingRepository.OperationScope("org-1", "other-student")));
+        try { service.queryOperation(studentActor(), "operation-1"); throw new AssertionError("cross-actor query"); }
+        catch (com.shuyiwa.fitness.booking.api.BookingApiException expected) {
+            assertEquals(403, expected.getStatus().value());
+        }
+    }
+
+    @Test
+    public void requestBindingConflictStopsAllThreeWriteEntrypointsBeforeIdempotentReuse() {
+        org.mockito.Mockito.doThrow(new com.shuyiwa.fitness.booking.api.BookingApiException(
+                org.springframework.http.HttpStatus.CONFLICT, "binding mismatch"))
+                .when(repository).assertRequestBinding(any(), any(), any());
+        when(repository.isOrganizationMember("org-1", "student-1")).thenReturn(true);
+        when(repository.isCoachInOrganization("org-1", "coach-1")).thenReturn(true);
+        for (int index = 0; index < 3; index++) {
+            try {
+                if (index == 0) service.create(studentActor(), request());
+                else if (index == 1) service.reschedule(rescheduleActor(), rescheduleRequest());
+                else service.cancel(cancelActor(), cancelRequest());
+                throw new AssertionError("conflicting operation was accepted");
+            } catch (com.shuyiwa.fitness.booking.api.BookingApiException expected) {
+                assertEquals(409, expected.getStatus().value());
+            }
+        }
+        org.mockito.Mockito.verify(repository, org.mockito.Mockito.never()).findByRequestId(any());
+        org.mockito.Mockito.verify(repository, org.mockito.Mockito.never()).findByRescheduleRequestId(any());
+        org.mockito.Mockito.verify(repository, org.mockito.Mockito.never()).findByCancelRequestId(any());
+    }
+
     private static BookingActor studentActor() {
         return new BookingActor("student-1", set(BookingActor.STUDENT), set("org-1"), "request-1",
                 new BookingConfirmation("confirmation-1", "jti-1", "fitness.booking.create.v1",

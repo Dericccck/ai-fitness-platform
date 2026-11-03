@@ -61,7 +61,7 @@ public class BookingService {
         if (scope == null) {
             return new BookingOperationView(operationId, "UNKNOWN", null, null, null);
         }
-        if (!actor.canAccessOrganization(scope.organizationId)) {
+        if (!actor.canAccessOrganization(scope.organizationId) || !actor.getUserId().equals(scope.actorId)) {
             throw new BookingApiException(HttpStatus.FORBIDDEN, "操作不在当前主体授权范围内");
         }
         BookingAppointmentView appointment = repository.findByRequestId(operationId).orElse(null);
@@ -103,6 +103,7 @@ public class BookingService {
         boolean studentLocked = false;
         LocalDate bookingDate = request.getStartTime().atZone(BUSINESS_ZONE).toLocalDate();
         try {
+            repository.assertRequestBinding(actor.getRequestId(), actor.getUserId(), actor.getConfirmation());
             BookingAppointmentView applied = repository.findByRequestId(actor.getRequestId()).orElse(null);
             if (applied != null) {
                 return applied;
@@ -179,6 +180,7 @@ public class BookingService {
         String lockedStudentId = null;
         LocalDate bookingDate = request.getStartTime().atZone(BUSINESS_ZONE).toLocalDate();
         try {
+            repository.assertRequestBinding(actor.getRequestId(), actor.getUserId(), actor.getConfirmation());
             BookingAppointmentView applied = repository.findByRescheduleRequestId(actor.getRequestId())
                     .orElse(null);
             if (applied != null) return applied;
@@ -262,6 +264,7 @@ public class BookingService {
         String lockedStudentId = null;
         LocalDate lockedDate = null;
         try {
+            repository.assertRequestBinding(actor.getRequestId(), actor.getUserId(), actor.getConfirmation());
             BookingCancelledView applied = repository.findByCancelRequestId(actor.getRequestId())
                     .orElse(null);
             if (applied != null) return applied;

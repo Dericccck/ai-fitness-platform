@@ -11,6 +11,9 @@ scrape_configs:
   - job_name: fitness-agent
     static_configs:
       - targets: ["agent-api:8090"]
+  - job_name: fitness-mcp
+    static_configs:
+      - targets: ["fitness-mcp:8001"]
   - job_name: fitness-agent-workers
     file_sd_configs:
       - files: ["/etc/prometheus/worker-targets.json"]

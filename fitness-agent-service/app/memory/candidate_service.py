@@ -139,15 +139,14 @@ class MemoryCandidateService:
         decision: Literal["APPROVE", "REJECT"],
         decision_request_id: str,
     ) -> MemoryCandidateDecisionResult:
-        """处理候选页面/接口中的用户决定；批准时先幂等保存 ACTIVE Memory，再记录候选已批准。
+        """处理候选页面/接口中的用户决定。
 
         候选管理接口的批准动作本身就是显式人机确认，所以这里不再启动第二个
         LangGraph ``interrupt()``；对话式 ``fitness.memory.save.v1`` 仍走独立的
         interrupt 确认链路。
 
-        两步操作之间如果进程崩溃，候选可能暂时仍为 PENDING；相同决定请求重试时，
-        MemoryService 会按稳定 source_request_id 幂等收敛，最终再把候选改为 APPROVED。
-        这样不会出现“候选已批准但 Memory 尚未保存”的假成功状态。
+        PostgreSQL 仓储在同一事务中完成记忆更新与候选状态变更；相同决定请求重试
+        返回既有结果。摘要失效目前在事务完成之后执行，不构成撤销的完整版本屏障。
         """
 
         if not decision_request_id.strip():
@@ -166,6 +165,21 @@ class MemoryCandidateService:
             if self.metrics is not None:
                 self.metrics.record_memory_candidate_event("rejected")
             return MemoryCandidateDecisionResult(rejected)
+        # PostgreSQL path applies the memory and decision in one transaction.
+        approve_atomic = getattr(self.repository, "approve_atomic", None)
+        if approve_atomic is not None:
+            approved, memory = await approve_atomic(
+                candidate_id,
+                identity=identity,
+                decision_request_id=decision_request_id,
+                memory_repository=self.memory_service.repository,
+            )
+            # Atomic approval bypasses MemoryService.save; invalidate its derived summaries
+            # after the transaction commits, including on an idempotent retry.
+            await self.memory_service._invalidate_derived_context(identity.subject)
+            if self.metrics is not None:
+                self.metrics.record_memory_candidate_event("approved")
+            return MemoryCandidateDecisionResult(approved, memory)
         if candidate.status == "APPROVED" and candidate.decision_request_id == decision_request_id:
             memory = await self._save_candidate_memory(candidate, identity)
             return MemoryCandidateDecisionResult(candidate, memory)

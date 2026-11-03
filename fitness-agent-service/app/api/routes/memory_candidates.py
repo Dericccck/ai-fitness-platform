@@ -1,8 +1,7 @@
 """Memory 候选的本人查询和明确决定 API。
 
 模型只能提出候选，不能通过对话参数直接把它变成长期事实。前端确认卡或管理页面
-调用本路由时，Agent 服务会重新验证签名主体；批准路径先写入正式 ACTIVE Memory，
-再把候选置为 APPROVED，重复请求使用决定请求 ID 和候选 ID 幂等收敛。
+调用本路由时，Agent 服务会重新验证签名主体并在决定事务中检查候选与目标版本。
 """
 
 from __future__ import annotations
@@ -63,6 +62,13 @@ class MemoryCandidateResponse(BaseModel):
     decision_request_id: str | None
     decided_at: datetime | None
     memory_id: str | None = None
+    slot_code: str | None = None
+    action: str = "ADD"
+    target_memory_id: str | None = None
+    expected_version: int | None = None
+    previous_value: str | None = None
+    evidence_quote: str | None = None
+    clarification_reason: str | None = None
 
 
 class MemoryCandidateEventResponse(BaseModel):
@@ -266,6 +272,13 @@ def _to_response(
         decision_request_id=record.decision_request_id,
         decided_at=record.decided_at,
         memory_id=memory_id,
+        slot_code=record.candidate.slot_code,
+        action=record.candidate.action,
+        target_memory_id=record.candidate.target_memory_id,
+        expected_version=record.candidate.expected_version,
+        previous_value=record.candidate.previous_value,
+        evidence_quote=record.candidate.evidence_quote,
+        clarification_reason=record.candidate.clarification_reason,
     )
 
 

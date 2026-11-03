@@ -15,7 +15,7 @@ async def run() -> None:
     if not settings.decision_action_worker_enabled:
         raise RuntimeError("决策动作 Worker 需要启用 DECISION_ACTION_WORKER_ENABLED")
     start_http_server(settings.decision_action_worker_metrics_port, registry=http_metrics.registry)
-    async with lifespan(app):
+    async with lifespan(app, role="worker"):
         worker = DecisionActionWorker(
             app.state.database,
             app.state.decision_repository,

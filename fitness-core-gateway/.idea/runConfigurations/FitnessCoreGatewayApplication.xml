@@ -1,9 +1,15 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="FitnessCoreGatewayApplication" type="Application" factoryName="Application">
-    <!--
-      运行配置只保存入口类和模块，不保存数据库密码、内部 Token 或签名密钥。
-      请在 IntelliJ IDEA 的 Environment variables 中配置本机环境变量，避免凭证进入 Git。
-    -->
+    <envs>
+      <env name="GATEWAY_DB_URL" value="jdbc:mysql://127.0.0.1:3307/fitness?useUnicode=true&amp;characterEncoding=utf-8&amp;serverTimezone=Asia/Shanghai" />
+      <env name="GATEWAY_DB_USERNAME" value="fitness" />
+      <env name="GATEWAY_DB_PASSWORD" value="fitness_dev_2026" />
+      <env name="GATEWAY_INTERNAL_SERVICE_TOKEN" value="cab4ccfd92824de510963f6fbc942a477bf414a25c2ecf93bd6ad724f3cb9284" />
+      <env name="GATEWAY_CONTEXT_SIGNING_SECRET" value="83155867504433456428e9e456a02eb0f643b932f862f86823cff6ebf157955a" />
+      <env name="GATEWAY_CONFIRMATION_SIGNING_SECRET" value="9861cc2edc495480a16109ec44b5f58759664e22b1fdf4397206dac407c759af" />
+      <env name="GATEWAY_CUSTOMER_SERVICE_TOKEN" value="6222e22f06fb169ed9d2d0faeafedde0f392d09fa9d0c78207855f8ba38930bb" />
+      <env name="GATEWAY_CUSTOMER_SERVICE_BASE_URL" value="http://127.0.0.1:8084" />
+    </envs>
     <option name="MAIN_CLASS_NAME" value="com.shuyiwa.fitness.gateway.FitnessCoreGatewayApplication" />
     <module name="fitness-core-gateway" />
     <method v="2">

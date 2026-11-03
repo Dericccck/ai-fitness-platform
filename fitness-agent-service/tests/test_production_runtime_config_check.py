@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import time
 from pathlib import Path
 
 import pytest
@@ -57,6 +60,53 @@ def _write_runtime_files(directory: Path) -> None:
             "GATEWAY_CUSTOMER_SERVICE_TOKEN": "shared-customer-token",
         }
     )
+    tokens = {
+        name: f"test-only-{name}-" + "a" * 40
+        for name in ["mcp-client", "mcp-execution", "agent-query", "agent-execution", "reconcile"]
+    }
+    endpoint = "https://fitness-mcp.internal/mcp"
+    values_by_service["agent"].update(
+        {
+            "AGENT_MCP_ENABLED": "true",
+            "AGENT_MCP_URL": endpoint,
+            "AGENT_MCP_SERVICE_TOKEN": tokens["mcp-client"],
+            "AGENT_GATEWAY_QUERY_SERVICE_TOKEN": tokens["agent-query"],
+            "AGENT_GATEWAY_HTTP_EXECUTION_SERVICE_TOKEN": tokens["agent-execution"],
+            "AGENT_GATEWAY_RECONCILIATION_SERVICE_TOKEN": tokens["reconcile"],
+        }
+    )
+    expiry = int(time.time()) + 3600
+    values_by_service["mcp"].update(
+        {
+            "MCP_RESOURCE_URL": endpoint,
+            "MCP_GATEWAY_BASE_URL": "http://gateway.internal:8081",
+            "MCP_GATEWAY_SERVICE_TOKEN": tokens["mcp-execution"],
+            "MCP_ALLOWED_HOSTS": '["fitness-mcp.internal"]',
+            "MCP_ALLOWED_ORIGINS": "[]",
+            "MCP_CONTEXT_JWKS_URL": "https://auth.internal/.well-known/jwks.json",
+            "MCP_SERVICE_CREDENTIALS_JSON": json.dumps(
+                [
+                    {
+                        "principal": "agent-api",
+                        "sha256": hashlib.sha256(tokens["mcp-client"].encode()).hexdigest(),
+                        "scopes": ["fitness:read", "fitness:write"],
+                        "expires_at": expiry,
+                        "resource": endpoint,
+                    }
+                ]
+            ),
+        }
+    )
+    for name, principal in [
+        ("mcp-execution", "MCP_EXECUTION"),
+        ("agent-query", "AGENT_QUERY"),
+        ("agent-execution", "AGENT_EXECUTION"),
+        ("reconcile", "RECONCILIATION"),
+    ]:
+        values_by_service["gateway"][f"GATEWAY_{principal}_TOKEN_SHA256"] = hashlib.sha256(
+            tokens[name].encode()
+        ).hexdigest()
+        values_by_service["gateway"][f"GATEWAY_{principal}_TOKEN_EXPIRES_AT"] = str(expiry)
     for service, token_key, token in (
         ("booking", "BOOKING_INTERNAL_SERVICE_TOKEN", "shared-booking-token"),
         ("training", "TRAINING_INTERNAL_SERVICE_TOKEN", "shared-training-token"),
@@ -125,3 +175,31 @@ def test_runtime_config_rejects_shared_trulens_database(tmp_path: Path) -> None:
 
     with pytest.raises(ProductionRuntimeConfigError, match="独立评测库"):
         validate_runtime_directory(runtime_dir)
+
+
+@pytest.mark.parametrize("problem", ["resource", "scope", "expired", "digest", "legacy", "host"])
+def test_runtime_config_rejects_invalid_mcp_trust(tmp_path: Path, problem: str) -> None:
+    runtime = tmp_path / "runtime"
+    _write_runtime_files(runtime)
+    path = runtime / ("gateway.env" if problem in {"digest", "legacy"} else "mcp.env")
+    from scripts.production_config_contract_check import parse_template
+
+    values = parse_template(path)
+    if problem in {"resource", "scope", "expired"}:
+        entries = json.loads(values["MCP_SERVICE_CREDENTIALS_JSON"])
+        if problem == "resource":
+            entries[0]["resource"] = "https://another.internal/mcp"
+        elif problem == "scope":
+            entries[0]["scopes"] = ["fitness:read"]
+        else:
+            entries[0]["expires_at"] = 1
+        values["MCP_SERVICE_CREDENTIALS_JSON"] = json.dumps(entries)
+    elif problem == "digest":
+        values["GATEWAY_MCP_EXECUTION_TOKEN_SHA256"] = "0" * 64
+    elif problem == "legacy":
+        values["GATEWAY_ALLOW_LEGACY_SERVICE_TOKEN"] = "true"
+    else:
+        values["MCP_ALLOWED_HOSTS"] = '["*"]'
+    path.write_text("\n".join(f"{key}={value}" for key, value in values.items()) + "\n")
+    with pytest.raises(ProductionRuntimeConfigError):
+        validate_runtime_directory(runtime)

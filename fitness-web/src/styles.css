@@ -55,3 +55,33 @@ h1, h2, h3, p { margin: 0; }.topbar h1 { margin-top: 8px; font-size: 28px; lette
 .identity-form button, .topbar-meta > button { border: 1px solid #57836c; border-radius: 7px; padding: 9px 12px; color: #d4f6c5; background: #173529; font: inherit; font-size: 12px; }
 .identity-form button:disabled, .topbar-meta > button:disabled { opacity: .55; cursor: wait; }
 .identity-form button:focus-visible, .topbar-meta > button:focus-visible { outline: 2px solid #a9ef88; outline-offset: 3px; }
+
+.composer textarea { min-width: 0; }
+.composer-actions { display: flex; align-self: end; gap: 8px; }
+.composer .stop-button { color: #e2e8f0; background: #26354a; border: 1px solid #45576e; white-space: nowrap; }
+.composer .stop-button:not(:disabled):hover { background: #354860; }
+.stopped-label { display: block; margin-top: 8px; color: #92a3ba; font-size: 12px; }
+@media (max-width: 680px) { .composer-actions { flex-direction: column; } .composer-actions button { width: 100%; } }
+
+/* 录音与回复朗读沿用对话面板的颜色和按钮尺寸。 */
+.composer { flex-direction: column; gap: 9px; }
+.composer-input-row { display: flex; gap: 12px; min-width: 0; }
+.voice-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; }
+.composer .voice-toolbar button { align-self: center; padding: 7px 11px; font-size: 12px; }
+.composer .voice-record { background: #26354a; color: #dce6f2; border: 1px solid #45576e; }
+.composer .voice-record span { margin: 0 5px 0 0; font-size: 12px; color: #a9ef88; }
+.composer .voice-record.is-recording { color: #ffd5d5; border-color: #bf6464; background: #492b35; }
+.composer .voice-record.is-recording span { color: #ff9696; }
+.composer .voice-secondary { color: #c8d6e5; background: #243247; }
+.voice-toggle { display: inline-flex; align-items: center; gap: 6px; color: #c8d6e5; font-size: 12px; cursor: pointer; }
+.voice-toggle input { accent-color: #a9ef88; }
+.voice-timer { color: #f0b9b9; font-size: 12px; font-variant-numeric: tabular-nums; }
+.voice-toolbar meter { width: 70px; height: 12px; }
+.voice-note { margin-top: 6px; color: #8fa4bc; font-size: 11px; line-height: 1.5; }
+.voice-error { display: flex; align-items: center; flex-wrap: wrap; gap: 7px; color: #f4b5b5; font-size: 12px; margin-top: 6px; }
+.composer .voice-error button { padding: 5px 8px; background: #3d3448; color: #f4d7d7; font-size: 11px; }
+.voice-reply { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-top: 7px; color: #8fa4bc; font-size: 11px; }
+.voice-reply button { border: 1px solid #344a62; border-radius: 6px; background: #17283c; color: #b8d9c8; padding: 5px 9px; font-size: 11px; }
+.voice-reply button:disabled { opacity: .5; cursor: not-allowed; }
+.voice-input-label { display: block; margin-top: 5px; text-align: right; color: #ac9ccc; font-size: 10px; }
+@media (max-width: 680px) { .composer-input-row { gap: 8px; } .voice-toolbar { gap: 6px; } }

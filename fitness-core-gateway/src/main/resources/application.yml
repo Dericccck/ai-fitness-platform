@@ -18,6 +18,25 @@ gateway:
   security:
     # 生产环境必须由 Secret Manager 注入，不能使用默认值。
     internal-service-token: ${GATEWAY_INTERNAL_SERVICE_TOKEN:}
+    allow-legacy-internal-service-token: ${GATEWAY_ALLOW_LEGACY_SERVICE_TOKEN:false}
+    legacy-internal-service-token-expires-at: ${GATEWAY_LEGACY_SERVICE_TOKEN_EXPIRES_AT:0}
+    service-credentials:
+      mcp-execution:
+        token-sha256: ${GATEWAY_MCP_EXECUTION_TOKEN_SHA256:}
+        expires-at-epoch-seconds: ${GATEWAY_MCP_EXECUTION_TOKEN_EXPIRES_AT:0}
+        scopes: [TOOLS_EXECUTE]
+      agent-http-execution:
+        token-sha256: ${GATEWAY_AGENT_EXECUTION_TOKEN_SHA256:}
+        expires-at-epoch-seconds: ${GATEWAY_AGENT_EXECUTION_TOKEN_EXPIRES_AT:0}
+        scopes: [TOOLS_EXECUTE]
+      agent-query:
+        token-sha256: ${GATEWAY_AGENT_QUERY_TOKEN_SHA256:}
+        expires-at-epoch-seconds: ${GATEWAY_AGENT_QUERY_TOKEN_EXPIRES_AT:0}
+        scopes: [INTERNAL_QUERY]
+      confirmation-reconciler:
+        token-sha256: ${GATEWAY_RECONCILIATION_TOKEN_SHA256:}
+        expires-at-epoch-seconds: ${GATEWAY_RECONCILIATION_TOKEN_EXPIRES_AT:0}
+        scopes: [RECONCILE]
     context-signing-secret: ${GATEWAY_CONTEXT_SIGNING_SECRET:}
     context-signing-algorithm: ${GATEWAY_CONTEXT_SIGNING_ALGORITHM:HS256}
     context-signing-key-id: ${GATEWAY_CONTEXT_SIGNING_KEY_ID:legacy}

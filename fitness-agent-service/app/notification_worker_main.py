@@ -18,7 +18,7 @@ async def run() -> None:
 
     settings = Settings()
     start_http_server(settings.notification_worker_metrics_port, registry=http_metrics.registry)
-    async with lifespan(app):
+    async with lifespan(app, role="worker"):
         worker = NotificationOutboxWorker(
             app.state.database,
             NotificationOutboxRepository(),

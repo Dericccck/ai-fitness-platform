@@ -15,7 +15,7 @@ async def run() -> None:
     if not settings.proactive_scheduler_enabled:
         raise RuntimeError("主动候选调度需要启用 PROACTIVE_SCHEDULER_ENABLED")
     start_http_server(settings.proactive_scheduler_metrics_port, registry=http_metrics.registry)
-    async with lifespan(app):
+    async with lifespan(app, role="worker"):
         scheduler = ProactiveCandidateScheduler(
             app.state.database,
             app.state.proactive_candidates,

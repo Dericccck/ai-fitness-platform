@@ -4,6 +4,7 @@ import pytest
 
 from app.infrastructure.agent_context import AgentIdentity
 from app.memory.models import FitnessMemory, MemoryValidationError
+from app.memory.repository import MemoryVersionConflictError
 from app.memory.service import MemoryService
 
 IDENTITY = AgentIdentity(
@@ -32,6 +33,8 @@ class FakeMemoryRepository:
             str(kwargs["memory_key"]),
         )
         previous = self.items.get(key)
+        if previous:
+            raise MemoryVersionConflictError("Memory 已存在，请先读取并按版本纠正")
         version = previous.version + 1 if previous else 1
         now = datetime.now(UTC)
         item = FitnessMemory(
@@ -101,7 +104,7 @@ class FakeMemoryRepository:
 
 
 @pytest.mark.asyncio
-async def test_memory_save_is_structured_and_same_key_correction_increments_version() -> None:
+async def test_memory_save_is_structured_and_same_key_requires_versioned_correction() -> None:
     service = MemoryService(FakeMemoryRepository())  # type: ignore[arg-type]
 
     first = await service.save(
@@ -114,15 +117,26 @@ async def test_memory_save_is_structured_and_same_key_correction_increments_vers
         expires_at=None,
         source_request_id="request-1",
     )
-    corrected = await service.save(
+    with pytest.raises(MemoryVersionConflictError):
+        await service.save(
+            identity=IDENTITY,
+            organization_id="org-1",
+            memory_type="TRAINING_PREFERENCE",
+            memory_key="preferred_style",
+            value="自重训练",
+            unit=None,
+            expires_at=None,
+            source_request_id="request-2",
+        )
+    corrected = await service.correct(
         identity=IDENTITY,
         organization_id="org-1",
-        memory_type="TRAINING_PREFERENCE",
-        memory_key="preferred_style",
+        memory_id=first.id,
+        expected_version=first.version,
         value="自重训练",
         unit=None,
         expires_at=None,
-        source_request_id="request-2",
+        source_request_id="correct-2",
     )
 
     assert first.version == 1
@@ -130,15 +144,15 @@ async def test_memory_save_is_structured_and_same_key_correction_increments_vers
     assert corrected.version == 2
     assert corrected.content["value"] == "自重训练"
 
-    retried = await service.save(
+    retried = await service.correct(
         identity=IDENTITY,
         organization_id="org-1",
-        memory_type="TRAINING_PREFERENCE",
-        memory_key="preferred_style",
+        memory_id=first.id,
+        expected_version=first.version,
         value="自重训练",
         unit=None,
         expires_at=None,
-        source_request_id="request-2",
+        source_request_id="correct-2",
     )
     assert retried.id == corrected.id
     assert retried.version == corrected.version
@@ -241,7 +255,7 @@ async def test_memory_correction_preserves_stable_key_and_increments_version() -
 
 
 @pytest.mark.asyncio
-async def test_memory_revocation_clears_summaries_and_checkpoints() -> None:
+async def test_memory_revocation_clears_summaries_but_preserves_business_checkpoints() -> None:
     class SummaryRepository:
         async def list_thread_ids_for_subject(self, subject_user_id: str) -> list[str]:
             assert subject_user_id == IDENTITY.subject
@@ -268,4 +282,4 @@ async def test_memory_revocation_clears_summaries_and_checkpoints() -> None:
 
     await service._invalidate_derived_context(IDENTITY.subject)
 
-    assert cleaner.thread_ids == ["thread-a", "thread-b"]
+    assert cleaner.thread_ids == []

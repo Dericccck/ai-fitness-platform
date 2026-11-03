@@ -49,9 +49,10 @@ export type ChatResponse = {
 
 export type ChatRun = {
   run_id: string;
-  status: "RUNNING" | "COMPLETED" | "FAILED" | "UNKNOWN";
+  status: "RUNNING" | "CANCEL_REQUESTED" | "CANCELLED" | "COMPLETED" | "FAILED" | "UNKNOWN";
   response: ChatResponse | null;
   error_code: string | null;
+  stop_reason?: string | null;
 };
 
 export type ChatStreamEvent = {
@@ -80,6 +81,23 @@ export type ChatMessage = {
   content: string;
   route?: string;
   confirmation?: ChatResponse;
+  stopped?: boolean;
+  runId?: string;
+  voiceInput?: boolean;
+};
+
+export type VoiceConfig = {
+  enabled: boolean;
+  max_recording_seconds: number;
+  max_upload_bytes: number;
+  max_spoken_chars: number;
+};
+
+export type VoiceManifest = {
+  run_id: string;
+  revision: string;
+  segment_count: number;
+  segments: { index: number; text: string }[];
 };
 
 export type MemoryCandidate = {
@@ -90,6 +108,13 @@ export type MemoryCandidate = {
   unit: string | null;
   status: string;
   expires_at: string;
+  slot_code?: string | null;
+  action?: "ADD" | "UPDATE" | "NOOP" | "NEEDS_CLARIFICATION";
+  target_memory_id?: string | null;
+  expected_version?: number | null;
+  previous_value?: string | null;
+  evidence_quote?: string | null;
+  clarification_reason?: string | null;
 };
 
 export type MemoryCandidateInbox = {
@@ -114,6 +139,13 @@ export type FitnessMemory = {
   expires_at: string | null;
   updated_at: string;
   content_redacted: boolean;
+};
+
+export type MemorySettings = {
+  extraction_enabled: boolean;
+  extraction_config_enabled: boolean;
+  personalization_enabled: boolean;
+  revision: number;
 };
 
 export type InAppNotification = {

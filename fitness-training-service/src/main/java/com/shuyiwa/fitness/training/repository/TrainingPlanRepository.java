@@ -52,6 +52,7 @@ public class TrainingPlanRepository {
 
     @Transactional
     public TrainingPlan insertDraft(TrainingPlan plan, String requestId, TrainingConfirmation confirmation) {
+        assertRequestBinding(requestId, plan.getCreatedBy(), confirmation);
         Optional<TrainingPlan> existing = findByCreateRequestId(requestId);
         if (existing.isPresent()) {
             return existing.get();
@@ -63,6 +64,7 @@ public class TrainingPlanRepository {
                 plan.getTitle(), plan.getGoalType(), plan.getSource(), plan.getStatus().name(),
                 plan.getCreatedBy(), requestId);
         if (inserted == 0) {
+            assertRequestBinding(requestId, plan.getCreatedBy(), confirmation);
             // 并发请求在第一次查询后抢先插入时，由唯一键保证最终只保留一份草案。
             return findByCreateRequestId(requestId).orElseThrow(
                     () -> new IllegalStateException("创建请求幂等记录不存在"));
@@ -157,6 +159,7 @@ public class TrainingPlanRepository {
     @Transactional
     public boolean transition(TrainingPlan plan, TrainingPlanStatus target, String action, String actorId,
                               String requestId, String comment, TrainingConfirmation confirmation) {
+        assertRequestBinding(requestId, actorId, confirmation);
         Optional<String> appliedPlan = findPlanIdByRequest(requestId);
         if (appliedPlan.isPresent()) {
             // 网络重试不能再次写审计，也不能把同一请求误认为新的状态转换。
@@ -256,6 +259,7 @@ public class TrainingPlanRepository {
                                                     TrainingDayExecutionStatus status, LocalDate executionDate,
                                                     String note, String actorId, String requestId,
                                                     TrainingConfirmation confirmation) {
+        assertRequestBinding(requestId, actorId, confirmation);
         Optional<String> appliedExecution = findExecutionIdByRequest(requestId);
         if (appliedExecution.isPresent()) {
             return findExecutionById(appliedExecution.get()).orElseThrow(
@@ -377,6 +381,30 @@ public class TrainingPlanRepository {
         execution.setCreatedAt(toInstant(rs.getTimestamp("created_at")));
         execution.setUpdatedAt(toInstant(rs.getTimestamp("updated_at")));
         return execution;
+    }
+
+    /** A stable operation ID can never be rebound to another actor, confirmation, tool or payload. */
+    public void assertRequestBinding(String requestId, String actorId, TrainingConfirmation confirmation) {
+        if (confirmation == null) throw new TrainingApiException(HttpStatus.CONFLICT, "业务请求已绑定其他确认动作");
+        java.util.List<java.util.Map<String,Object>> rows = jdbc.queryForList(
+                "SELECT c.confirmation_id,c.tool_id,c.action,c.organization_id,c.resource,c.payload_hash, "
+                + "COALESCE(p.created_by,a.actor_id,e.actor_id) AS actor_id FROM training_confirmation_consumption c "
+                + "LEFT JOIN training_plan p ON p.create_request_id=c.request_id "
+                + "LEFT JOIN training_plan_audit a ON a.request_id=c.request_id "
+                + "LEFT JOIN training_day_execution_audit e ON e.request_id=c.request_id WHERE c.request_id=? ", requestId);
+        if (rows.isEmpty()) return;
+        if (rows.size() != 1) throw new TrainingApiException(HttpStatus.CONFLICT, "业务请求已绑定其他确认动作");
+        java.util.Map<String,Object> row = rows.get(0);
+        if (!java.util.Objects.equals(actorId, row.get("actor_id"))
+                || !java.util.Objects.equals(confirmation.getConfirmationId(), row.get("confirmation_id"))
+                || !java.util.Objects.equals(confirmation.getToolId(), row.get("tool_id"))
+                || !java.util.Objects.equals(confirmation.getAction(), row.get("action"))
+                || !java.util.Objects.equals(confirmation.getOrganizationId(), row.get("organization_id"))
+                || !java.util.Objects.equals(confirmation.getResource(), row.get("resource"))
+                || row.get("payload_hash") == null
+                || !confirmation.getPayloadHash().equalsIgnoreCase(row.get("payload_hash").toString())) {
+            throw new TrainingApiException(HttpStatus.CONFLICT, "业务请求已绑定其他确认动作");
+        }
     }
 
     /**

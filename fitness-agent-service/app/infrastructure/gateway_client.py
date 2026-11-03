@@ -6,11 +6,62 @@ from typing import Any, Literal, TypeVar
 from zoneinfo import ZoneInfo
 
 import httpx
+from fitness_tool_contracts.canonical import canonical_json_bytes, training_execution_payload
+from fitness_tool_contracts.models import (
+    GatewayAppointment,
+    GatewayBookingAvailability,
+    GatewayBookingCancelled,
+    GatewayBookingCreated,
+    GatewayBookingOperation,
+    GatewayContract,
+    GatewayCourse,
+    GatewayCustomerServiceTicket,
+    GatewayOperationsMetric,
+    GatewayOperationsMetricRow,
+    GatewayOrganization,
+    GatewayStudentTrainingContextAccess,
+    GatewayTrainingDay,
+    GatewayTrainingDayExecution,
+    GatewayTrainingItem,
+    GatewayTrainingPlan,
+    GatewayUser,
+)
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.confirmation.normalization import canonical_json_bytes
-from app.confirmation.request_body import training_execution_payload
 from app.core.config import Settings
+
+__all__ = [
+    "GatewayAppointment",
+    "GatewayAuthenticationError",
+    "GatewayBadRequestError",
+    "GatewayBookingAvailability",
+    "GatewayBookingCancelled",
+    "GatewayBookingCreated",
+    "GatewayBookingOperation",
+    "GatewayClient",
+    "GatewayClientError",
+    "GatewayConfigurationError",
+    "GatewayConflictError",
+    "GatewayContract",
+    "GatewayCourse",
+    "GatewayCustomerServiceTicket",
+    "GatewayExecutionUnknownError",
+    "GatewayForbiddenError",
+    "GatewayNotFoundError",
+    "GatewayOperationsMetric",
+    "GatewayOperationsMetricRow",
+    "GatewayOrganization",
+    "GatewayProtocolError",
+    "GatewayRequestContext",
+    "GatewayStudentTrainingContextAccess",
+    "GatewayToolOperation",
+    "GatewayTrainingDay",
+    "GatewayTrainingDayExecution",
+    "GatewayTrainingItem",
+    "GatewayTrainingPlan",
+    "GatewayUnavailableError",
+    "GatewayUser",
+]
 
 T = TypeVar("T", bound=BaseModel)
 _BUSINESS_TIMEZONE = ZoneInfo("Asia/Shanghai")
@@ -62,6 +113,10 @@ class GatewayUnavailableError(GatewayClientError):
     """Gateway 网络超时、连接失败或暂时返回服务端错误。"""
 
 
+class GatewayExecutionUnknownError(GatewayUnavailableError):
+    """写请求已发送或无法证明未发送；必须查询原业务 ID，禁止自动重发。"""
+
+
 class GatewayProtocolError(GatewayClientError):
     """Gateway 返回的数据不符合已版本化的 Tool View 契约。"""
 
@@ -79,218 +134,33 @@ class GatewayRequestContext:
     trace_id: str | None = None
     # 仅由上游确认流程注入，模型输出和工具参数都不能生成确认凭证。
     confirmation_token: str | None = None
+    # 仅保存非秘密的路由选择；确认创建时固定，恢复时不能改用当前灰度配置。
+    transport: str | None = None
+    contract_version: str = "v1"
 
 
 class _GatewayModel(BaseModel):
     model_config = ConfigDict(extra="forbid", populate_by_name=True)
 
 
-class GatewayUser(_GatewayModel):
-    id: str
-    name: str | None = None
-    phone: str | None = None
-    avatar: str | None = None
-    introduction: str | None = None
-    enabled: bool
+class GatewayToolOperation(_GatewayModel):
+    """全领域操作结果；所有状态都必须与原确认动作完整绑定。"""
 
-
-class GatewayOrganization(_GatewayModel):
-    id: str
-    name: str | None = None
-    address: str | None = None
-    summary: str | None = None
-    organization_type: str | None = Field(default=None, alias="organizationType")
-
-
-class GatewayStudentTrainingContextAccess(_GatewayModel):
+    operation_id: str = Field(alias="operationId")
+    tool_id: str = Field(alias="toolId")
+    confirmation_id: str = Field(alias="confirmationId")
     organization_id: str = Field(alias="organizationId")
     actor_id: str = Field(alias="actorId")
-    student_id: str = Field(alias="studentId")
-    access_type: Literal["SELF", "ASSIGNED_COACH", "ADMIN"] = Field(alias="accessType")
-
-
-class GatewayCourse(_GatewayModel):
-    id: str
-    name: str | None = None
-    code: str | None = None
-    price: int | None = None
-    status: int | None = None
-
-
-class GatewayContract(_GatewayModel):
-    id: str
-    organization_id: str = Field(alias="organizationId")
-    user_id: str = Field(alias="userId")
-    course_id: str | None = Field(default=None, alias="courseId")
-    number_id: str | None = Field(default=None, alias="numberId")
-    start_date: str | None = Field(default=None, alias="startDate")
-    end_date: str | None = Field(default=None, alias="endDate")
-    total_class_hours: int | None = Field(default=None, alias="totalClassHours")
-    remaining_class_hours: int | None = Field(default=None, alias="remainingClassHours")
-    status: int | None = None
-
-
-class GatewayAppointment(_GatewayModel):
-    id: str
-    organization_id: str = Field(alias="organizationId")
-    user_id: str = Field(alias="userId")
-    coach_id: str | None = Field(default=None, alias="coachId")
-    course_id: str | None = Field(default=None, alias="courseId")
-    course_name: str | None = Field(default=None, alias="courseName")
-    start_time: datetime | None = Field(default=None, alias="startTime")
-    end_time: datetime | None = Field(default=None, alias="endTime")
-    status: int | None = None
-    contract_id: str | None = Field(default=None, alias="contractId")
-
-
-class GatewayBookingAvailability(_GatewayModel):
-    """Java Gateway 的预约预检结果；available 不等于预约已创建。"""
-
-    organization_id: str = Field(alias="organizationId")
-    student_id: str = Field(alias="studentId")
-    coach_id: str = Field(alias="coachId")
-    course_id: str | None = Field(default=None, alias="courseId")
-    start_time: datetime = Field(alias="startTime")
-    end_time: datetime = Field(alias="endTime")
-    available: bool
-    reason_codes: list[str] = Field(alias="reasonCodes")
-    conflicts: list[GatewayAppointment]
-
-
-class GatewayOperationsMetricRow(_GatewayModel):
-    """Java Gateway 返回的一行已聚合经营指标，不包含明细业务记录。"""
-
-    dimension: str
-    label: str
-    value: int
-
-
-class GatewayOperationsMetric(_GatewayModel):
-    """组织管理员可读取的固定指标查询结果。"""
-
-    metric: str
-    bucket: Literal["NONE", "DAY", "WEEK"] = "NONE"
-    organization_id: str = Field(alias="organizationId")
-    from_date: date = Field(alias="from")
-    to_date: date = Field(alias="to")
-    rows: list[GatewayOperationsMetricRow]
-    generated_at: datetime = Field(alias="generatedAt")
-
-
-class GatewayCustomerServiceTicket(_GatewayModel):
-    """客服服务返回的只读工单事实；空列表表示当前范围内没有工单。"""
-
-    id: str
-    organization_id: str = Field(alias="organizationId")
-    subject_user_id: str = Field(alias="subjectUserId")
-    created_by_user_id: str = Field(alias="createdByUserId")
-    category: str
-    source: str
-    subject: str
-    description: str
-    status: Literal["OPEN", "IN_PROGRESS", "RESOLVED", "CLOSED"]
-    related_resource_type: str | None = Field(default=None, alias="relatedResourceType")
-    related_resource_id: str | None = Field(default=None, alias="relatedResourceId")
-    created_at: datetime | None = Field(default=None, alias="createdAt")
-    updated_at: datetime | None = Field(default=None, alias="updatedAt")
-    resolved_at: datetime | None = Field(default=None, alias="resolvedAt")
-
-
-class GatewayBookingCreated(_GatewayModel):
-    """创建预约后的稳定事实，包含扣减后的剩余课时。"""
-
-    id: str
-    organization_id: str = Field(alias="organizationId")
-    user_id: str = Field(alias="userId")
-    coach_id: str = Field(alias="coachId")
-    course_id: str = Field(alias="courseId")
-    course_name: str | None = Field(default=None, alias="courseName")
-    start_time: datetime = Field(alias="startTime")
-    end_time: datetime = Field(alias="endTime")
-    status: int
-    contract_id: str = Field(alias="contractId")
-    remaining_class_hours: int = Field(alias="remainingClassHours")
-
-
-class GatewayBookingCancelled(GatewayBookingCreated):
-    """取消预约后的稳定事实，明确表示旧预约已被删除标记并退回课时。"""
-
-    cancelled: bool
-
-
-class GatewayBookingOperation(_GatewayModel):
-    operation_id: str = Field(alias="operationId")
+    payload_hash: str = Field(alias="payloadHash")
     status: Literal["SUCCEEDED", "PROCESSING", "FAILED", "UNKNOWN"]
-    organization_id: str | None = Field(default=None, alias="organizationId")
-    actor_id: str | None = Field(default=None, alias="actorId")
-    appointment: GatewayBookingCreated | None = None
-
-
-class GatewayTrainingItem(_GatewayModel):
-    id: str
-    exercise_name: str = Field(alias="exerciseName")
-    sort_order: int = Field(alias="sortOrder")
-    sets: int
-    reps: str
-    rest_seconds: int | None = Field(default=None, alias="restSeconds")
-    target_weight_kg: float | None = Field(default=None, alias="targetWeightKg")
-    target_rpe: float | None = Field(default=None, alias="targetRpe")
-    notes: str | None = None
-
-
-class GatewayTrainingDay(_GatewayModel):
-    id: str
-    day_number: int = Field(alias="dayNumber")
-    title: str
-    scheduled_date: str | None = Field(default=None, alias="scheduledDate")
-    items: list[GatewayTrainingItem]
-
-
-class GatewayTrainingPlan(_GatewayModel):
-    id: str
-    organization_id: str = Field(alias="organizationId")
-    student_id: str = Field(alias="studentId")
-    coach_id: str = Field(alias="coachId")
-    title: str
-    goal_type: str = Field(alias="goalType")
-    # 来源只说明计划由 Agent 草拟还是教练直接创建，不代表审核结果。
-    source: Literal["AGENT", "COACH"]
-    # Java 训练计划状态：DRAFT 草案；PENDING_REVIEW 待教练审核；APPROVED 已审核；
-    # REJECTED 已驳回；PUBLISHED 已发布。学员只能读取和执行 PUBLISHED 计划。
-    status: Literal["DRAFT", "PENDING_REVIEW", "APPROVED", "REJECTED", "PUBLISHED"]
-    version: int
-    created_by: str = Field(alias="createdBy")
-    reviewed_by: str | None = Field(default=None, alias="reviewedBy")
-    published_by: str | None = Field(default=None, alias="publishedBy")
-    review_comment: str | None = Field(default=None, alias="reviewComment")
-    created_at: datetime | None = Field(default=None, alias="createdAt")
-    updated_at: datetime | None = Field(default=None, alias="updatedAt")
-    reviewed_at: datetime | None = Field(default=None, alias="reviewedAt")
-    published_at: datetime | None = Field(default=None, alias="publishedAt")
-    days: list[GatewayTrainingDay]
-
-
-class GatewayTrainingDayExecution(_GatewayModel):
-    """训练日完成/跳过记录；本阶段不包含逐组实绩或健康量表。"""
-
-    id: str
-    plan_id: str = Field(alias="planId")
-    day_id: str = Field(alias="dayId")
-    organization_id: str = Field(alias="organizationId")
-    student_id: str = Field(alias="studentId")
-    status: Literal["COMPLETED", "SKIPPED"]
-    execution_date: str = Field(alias="executionDate")
-    note: str | None = None
-    version: int
-    created_at: datetime | None = Field(default=None, alias="createdAt")
-    updated_at: datetime | None = Field(default=None, alias="updatedAt")
+    result_reference: str | dict[str, Any] | None = Field(default=None, alias="resultReference")
 
 
 class GatewayClient:
     """调用 Java 健身核心 Gateway 的异步客户端。
 
-    对 GET 查询以及具备请求 ID 幂等保障的训练计划写操作，在连接异常、超时、429 和
-    5xx 时做有限重试；401/403/400 等确定性错误不会重试。客户端复用一个 HTTP 连接池，
+    只对 GET 查询做有限重试。业务 POST 的超时、5xx 或不可验证响应均为 UNKNOWN，
+    不因幂等键而自动重发或重签确认凭证。客户端复用一个 HTTP 连接池，
     关闭由 FastAPI lifespan 负责。响应先通过 Pydantic 校验，再交给 Agent Runtime。
     """
 
@@ -413,6 +283,7 @@ class GatewayClient:
             context,
             {"organizationId": organization_id, "studentId": student_id},
             GatewayStudentTrainingContextAccess,
+            service_scope="query",
         )
 
     async def query_operations_metric(
@@ -508,6 +379,7 @@ class GatewayClient:
             context,
             {},
             GatewayBookingOperation,
+            service_scope="query",
         )
 
     async def reconcile_booking_operation(
@@ -525,6 +397,65 @@ class GatewayClient:
             return GatewayBookingOperation.model_validate(response_json)
         except ValidationError as exc:
             raise GatewayProtocolError("Gateway 对账响应不符合工具契约") from exc
+
+    async def query_tool_operation(
+        self,
+        context: GatewayRequestContext,
+        *,
+        operation_id: str,
+        tool_id: str,
+        confirmation_id: str,
+        organization_id: str,
+        payload_hash: str,
+    ) -> GatewayToolOperation:
+        self._validate_operation_scope(
+            operation_id, tool_id, confirmation_id, organization_id, payload_hash
+        )
+        return await self._get(
+            f"/internal/agent-tools/v1/operations/{operation_id}",
+            context,
+            {
+                "toolId": tool_id,
+                "confirmationId": confirmation_id,
+                "organizationId": organization_id,
+                "payloadHash": payload_hash,
+            },
+            GatewayToolOperation,
+            service_scope="query",
+        )
+
+    async def reconcile_tool_operation(
+        self,
+        *,
+        operation_id: str,
+        tool_id: str,
+        confirmation_id: str,
+        organization_id: str,
+        actor_id: str,
+        payload_hash: str,
+    ) -> GatewayToolOperation:
+        self._validate_operation_scope(
+            operation_id, tool_id, confirmation_id, organization_id, actor_id, payload_hash
+        )
+        data = await self._service_request(
+            f"/internal/agent-reconciliation/v1/operations/{operation_id}",
+            {
+                "toolId": tool_id,
+                "confirmationId": confirmation_id,
+                "organizationId": organization_id,
+                "actorId": actor_id,
+                "payloadHash": payload_hash,
+            },
+        )
+        try:
+            return GatewayToolOperation.model_validate(data)
+        except ValidationError as exc:
+            raise GatewayProtocolError("Gateway 全域对账响应不符合契约") from exc
+
+    @staticmethod
+    def _validate_operation_scope(*values: str) -> None:
+        if any(not value.strip() or "/" in value for value in values):
+            raise GatewayBadRequestError("操作查询绑定范围不完整")
 
     async def reschedule_booking(
         self,
@@ -564,7 +495,11 @@ class GatewayClient:
         self, context: GatewayRequestContext, plan_id: str
     ) -> GatewayTrainingPlan:
         return await self._get(
-            f"/internal/agent-tools/v1/training/plans/{plan_id}", context, {}, GatewayTrainingPlan
+            f"/internal/agent-tools/v1/training/plans/{plan_id}",
+            context,
+            {},
+            GatewayTrainingPlan,
+            service_scope="query",
         )
 
     async def create_training_draft(
@@ -625,9 +560,17 @@ class GatewayClient:
         )
 
     async def _get(
-        self, path: str, context: GatewayRequestContext, params: dict[str, Any], model: type[T]
+        self,
+        path: str,
+        context: GatewayRequestContext,
+        params: dict[str, Any],
+        model: type[T],
+        *,
+        service_scope: Literal["execute", "query"] = "execute",
     ) -> T:
-        response_json = await self._request(path, context, params, method="GET")
+        response_json = await self._request(
+            path, context, params, method="GET", service_scope=service_scope
+        )
         try:
             return model.model_validate(response_json)
         except ValidationError as exc:
@@ -644,7 +587,9 @@ class GatewayClient:
         try:
             return model.model_validate(response_json)
         except ValidationError as exc:
-            raise GatewayProtocolError("Gateway 响应不符合工具契约") from exc
+            raise GatewayExecutionUnknownError(
+                "Gateway 写入响应无法验证，必须查询操作结果"
+            ) from exc
 
     async def _get_list(
         self,
@@ -669,14 +614,20 @@ class GatewayClient:
         *,
         method: str,
         json_body: dict[str, Any] | None = None,
+        service_scope: Literal["execute", "query"] = "execute",
     ) -> Any:
-        if not self.settings.gateway_configured:
-            raise GatewayConfigurationError("健身核心 Gateway 未配置")
         if not context.signed_context:
             raise GatewayAuthenticationError("必须提供已签名的 AgentContext")
 
+        is_write = method != "GET"
+        if is_write and service_scope == "query":
+            raise GatewayConfigurationError("内部查询凭证不能用于业务执行")
+        if is_write and not context.request_id:
+            raise GatewayBadRequestError("业务写请求必须提供稳定的请求 ID")
+        service_token = self._service_token(service_scope)
+
         headers = {
-            "X-Internal-Service-Token": self.settings.gateway_internal_service_token,
+            "X-Internal-Service-Token": service_token,
             "X-Agent-Context": context.signed_context,
             "X-Request-ID": context.request_id or str(uuid.uuid4()),
         }
@@ -690,20 +641,29 @@ class GatewayClient:
         clean_params = {key: value for key, value in params.items() if value is not None}
         last_error: Exception | None = None
 
-        for attempt in range(self.settings.gateway_max_retries + 1):
+        retries = 0 if is_write else self.settings.gateway_max_retries
+        for attempt in range(retries + 1):
             try:
                 response = await self._client.request(
                     method, path, params=clean_params, headers=headers, content=wire_body
                 )
-            except (httpx.TimeoutException, httpx.NetworkError) as exc:
+            except httpx.TransportError as exc:
                 last_error = exc
-                if attempt < self.settings.gateway_max_retries:
+                if is_write:
+                    raise GatewayExecutionUnknownError(
+                        "Gateway 写入结果未知，必须查询原操作"
+                    ) from exc
+                if attempt < retries:
                     await self._sleep_before_retry(attempt)
                     continue
                 raise GatewayUnavailableError("健身核心 Gateway 请求失败") from exc
 
             if response.status_code in {408, 429} or response.status_code >= 500:
-                if attempt < self.settings.gateway_max_retries:
+                if is_write:
+                    raise GatewayExecutionUnknownError(
+                        "Gateway 写入结果未知，必须查询原操作", status_code=response.status_code
+                    )
+                if attempt < retries:
                     await self._sleep_before_retry(attempt)
                     continue
                 raise GatewayUnavailableError(
@@ -722,10 +682,16 @@ class GatewayClient:
                 raise GatewayBadRequestError(
                     "Gateway 拒绝了工具请求", status_code=response.status_code
                 )
+            if is_write and not 200 <= response.status_code < 300:
+                raise GatewayExecutionUnknownError("Gateway 写入未返回可验证的成功状态")
 
             try:
                 return response.json()
             except ValueError as exc:
+                if is_write:
+                    raise GatewayExecutionUnknownError(
+                        "Gateway 写入响应无效，必须查询原操作"
+                    ) from exc
                 raise GatewayProtocolError(
                     "Gateway 返回了无效 JSON", status_code=response.status_code
                 ) from exc
@@ -735,10 +701,8 @@ class GatewayClient:
     async def _service_request(self, path: str, json_body: dict[str, Any]) -> Any:
         """仅供无用户请求上下文的后台任务调用受限服务端点。"""
 
-        if not self.settings.gateway_configured:
-            raise GatewayConfigurationError("健身核心 Gateway 未配置")
         headers = {
-            "X-Internal-Service-Token": self.settings.gateway_internal_service_token,
+            "X-Internal-Service-Token": self._service_token("reconcile"),
             "X-Request-ID": str(uuid.uuid4()),
         }
         last_error: Exception | None = None
@@ -766,6 +730,25 @@ class GatewayClient:
             except ValueError as exc:
                 raise GatewayProtocolError("Gateway 对账响应不是 JSON") from exc
         raise GatewayUnavailableError("健身核心 Gateway 对账请求失败") from last_error
+
+    def _service_token(self, scope: Literal["execute", "query", "reconcile"]) -> str:
+        """每个通道独立校验地址和凭证，不借用其他作用域的已配置状态或 Token。"""
+
+        if not self.settings.gateway_base_url.strip():
+            raise GatewayConfigurationError("健身核心 Gateway 地址未配置")
+        settings_by_scope = {
+            "execute": "gateway_http_execution_service_token",
+            "query": "gateway_query_service_token",
+            "reconcile": "gateway_reconciliation_service_token",
+        }
+        # 旧 Token 只保留原有显式迁移兼容，Java 仍验证其过期时间和允许路由。
+        token = (
+            getattr(self.settings, settings_by_scope[scope], "")
+            or self.settings.gateway_internal_service_token
+        )
+        if not token.strip():
+            raise GatewayConfigurationError("当前 Gateway 通道的服务凭证未配置")
+        return token
 
     async def _sleep_before_retry(self, attempt: int) -> None:
         delay = self.settings.gateway_retry_backoff_seconds * (2**attempt)

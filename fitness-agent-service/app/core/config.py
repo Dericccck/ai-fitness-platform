@@ -71,6 +71,49 @@ class Settings(BaseSettings):
     log_level: str = "INFO"
     api_docs_enabled: bool = True
 
+    voice_enabled: bool = False
+    voice_api_key: str = Field(
+        default="",
+        repr=False,
+        validation_alias=AliasChoices("AGENT_VOICE_API_KEY", "DASHSCOPE_API_KEY"),
+    )
+    voice_base_url: str = "https://dashscope.aliyuncs.com"
+    voice_asr_model: str = "qwen3-asr-flash"
+    voice_tts_model: str = "qwen3-tts-flash"
+    voice_tts_voice: str = "Cherry"
+    voice_tts_language: Literal["Auto", "Chinese", "English"] = "Auto"
+    voice_max_recording_seconds: int = Field(default=60, ge=1, le=60)
+    voice_max_upload_bytes: int = Field(default=2097152, ge=65536, le=2097152)
+    voice_max_spoken_chars: int = Field(default=15360, ge=480, le=15360)
+    voice_timeout_seconds: float = Field(default=60, ge=1, le=120)
+    voice_upload_timeout_seconds: float = Field(default=15, ge=1, le=60)
+    voice_max_concurrency: int = Field(default=4, ge=1, le=32)
+    voice_rate_limit_enabled: bool = True
+    voice_asr_user_requests_per_minute: int = Field(default=10, ge=1, le=100)
+    voice_asr_organization_requests_per_minute: int = Field(default=120, ge=1, le=10000)
+    voice_tts_user_requests_per_minute: int = Field(default=60, ge=1, le=1000)
+    voice_tts_organization_requests_per_minute: int = Field(default=600, ge=1, le=10000)
+    voice_cache_max_bytes: int = Field(default=33554432, ge=0, le=268435456)
+
+    @model_validator(mode="after")
+    def validate_voice(self) -> "Settings":
+        if not self.voice_enabled:
+            return self
+        url = urlparse(self.voice_base_url)
+        if (
+            url.scheme != "https"
+            or not url.hostname
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+            or url.path not in {"", "/"}
+        ):
+            raise ValueError("voice_base_url 必须是无路径和凭证的 HTTPS 服务域名")
+        if not self.voice_api_key.strip():
+            raise ValueError("启用语音必须配置 AGENT_VOICE_API_KEY 或 DASHSCOPE_API_KEY")
+        return self
+
     metrics_enabled: bool = True
     otel_enabled: bool = False
     otel_exporter_otlp_traces_endpoint: str = ""
@@ -386,6 +429,13 @@ class Settings(BaseSettings):
     memory_candidate_expiry_batch_size: int = Field(default=500, ge=1, le=5000)
     memory_candidate_expiry_poll_seconds: float = Field(default=60.0, ge=1, le=3600)
     memory_candidate_worker_metrics_port: int = Field(default=8092, ge=1, le=65535)
+    # 候选提取异步化；消息正文仅在加密来源表保存，任务通过来源 ID 引用。
+    # 上线前须完成真实数据、隐私和恢复验证；部署方明确启用异步提取。
+    memory_async_extraction_enabled: bool = False
+    memory_extraction_poll_seconds: float = Field(default=2.0, ge=0.1, le=60)
+    memory_extraction_worker_metrics_port: int = Field(default=8102, ge=1, le=65535)
+    memory_extraction_source_retention_days: int = Field(default=30, ge=1, le=3650)
+    memory_extraction_max_attempts: int = Field(default=5, ge=1, le=20)
     # 正式 Memory 与候选进入终态后仍保留有限期限用于用户追踪和故障排查，期限到达后由
     # 独立 Worker 清除正文；不可变生命周期审计事件不随正文删除。
     memory_terminal_retention_days: int = Field(default=90, ge=1, le=3650)
@@ -480,12 +530,65 @@ class Settings(BaseSettings):
 
     gateway_base_url: str = "http://127.0.0.1:8081"
     gateway_internal_service_token: str = ""
+    gateway_query_service_token: str = Field(default="", repr=False)
+    gateway_http_execution_service_token: str = Field(default="", repr=False)
+    gateway_reconciliation_service_token: str = Field(default="", repr=False)
+    mcp_enabled: bool = False
+    mcp_url: str = ""
+    mcp_service_token: str = Field(default="", repr=False)
+    # Empty means all 20 approved remote capabilities. Rollout is fixed by tool ID.
+    mcp_tool_ids: list[str] = Field(default_factory=list)
+    mcp_timeout_seconds: float = Field(default=10.0, gt=0, le=60)
+    mcp_catalog_refresh_seconds: float = Field(default=30.0, ge=5, le=300)
+    mcp_health_ttl_seconds: float = Field(default=90.0, ge=10, le=600)
+    mcp_max_result_bytes: int = Field(default=1048576, ge=1024, le=2097152)
+    mcp_max_concurrency: int = Field(default=32, ge=1, le=256)
+    mcp_allow_private_http: bool = False
     gateway_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
     operations_query_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
     operations_rate_limit_requests: int = Field(default=60, ge=1, le=10_000)
     operations_rate_limit_window_seconds: int = Field(default=60, ge=1, le=3600)
     gateway_max_retries: int = Field(default=2, ge=0, le=5)
     gateway_retry_backoff_seconds: float = Field(default=0.1, ge=0, le=5)
+
+    @model_validator(mode="after")
+    def validate_mcp(self) -> "Settings":
+        if not self.mcp_enabled and not (self.mcp_url and self.mcp_service_token):
+            return self
+        from fitness_tool_contracts.catalog import TOOL_SPECS
+
+        parsed = urlparse(self.mcp_url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.query
+            or parsed.fragment
+            or parsed.path != "/mcp"
+            or "*" in parsed.netloc
+        ):
+            raise ValueError("AGENT_MCP_URL 必须是固定的 HTTP(S) /mcp 地址")
+        if not self.mcp_service_token.strip():
+            raise ValueError("启用 MCP 必须配置 AGENT_MCP_SERVICE_TOKEN")
+        if len(self.mcp_tool_ids) != len(set(self.mcp_tool_ids)) or (
+            set(self.mcp_tool_ids) - TOOL_SPECS.keys()
+        ):
+            raise ValueError("AGENT_MCP_TOOL_IDS 只能包含不重复的已批准远端工具 ID")
+        if self.mcp_health_ttl_seconds < self.mcp_catalog_refresh_seconds:
+            raise ValueError("MCP 健康缓存期限不能小于目录刷新周期")
+        if self.environment in {"staging", "production"}:
+            if parsed.scheme != "https" and not self.mcp_allow_private_http:
+                raise ValueError("MCP 必须使用 HTTPS，私有网络 HTTP 需显式启用并配置网格加密")
+            tokens = [
+                self.mcp_service_token,
+                self.gateway_query_service_token,
+                self.gateway_http_execution_service_token,
+                self.gateway_reconciliation_service_token,
+            ]
+            if any(not value.strip() for value in tokens) or len(set(tokens)) != len(tokens):
+                raise ValueError("MCP、内部查询、HTTP 执行、后台对账必须配置不同服务凭证")
+        return self
 
     @field_validator(
         "llm_input_price_per_million",
@@ -693,7 +796,14 @@ class Settings(BaseSettings):
     def gateway_configured(self) -> bool:
         """判断 Agent 是否具备调用 Java 健身核心 Gateway 的最小配置。"""
 
-        return bool(self.gateway_base_url and self.gateway_internal_service_token)
+        return bool(
+            self.gateway_base_url
+            and (self.gateway_query_service_token or self.gateway_internal_service_token)
+        )
+
+    @property
+    def mcp_configured(self) -> bool:
+        return bool(self.mcp_url and self.mcp_service_token)
 
     @property
     def checkpoint_conninfo(self) -> str:

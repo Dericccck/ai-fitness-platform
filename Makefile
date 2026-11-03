@@ -13,12 +13,12 @@ TRULENS_EVAL_RELEASE_FILE ?= evals/trulens_smoke.release.json
 TRULENS_JUDGE_EVAL_RELEASE_ID ?= trulens-judge-20260905-v1
 TRULENS_JUDGE_EVAL_RELEASE_FILE ?= evals/trulens_judge.release.json
 
-.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-live-check ocr-run ocr-image gateway-check gateway-run gateway-training-role-live-check gateway-training-write-live-check gateway-training-workflow-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check training-check training-run training-role-live-check training-role-visibility-live-check booking-check booking-it booking-run customer-service-check customer-service-run legacy-java-diagnostic release-check check agent-trulens-retention web-check web-run
+.PHONY: help infra-up infra-up-storage infra-up-security infra-up-ocr infra-up-messaging infra-down observability-up agent-lock agent-sync agent-migrate agent-format agent-check agent-eval agent-operations-eval agent-operations-comparison-eval agent-operations-policy-eval agent-session-summary-eval agent-security-check agent-run agent-dev-context agent-business-live-preflight agent-operations-live-preflight agent-operations-live-check agent-booking-live-check agent-fitness-live-check agent-customer-service-preflight agent-customer-service-live-check agent-customer-service-write-live-check gateway-customer-service-role-live-check agent-reindex-worker agent-memory-expiry-worker agent-memory-extraction-worker agent-memory-retention-worker agent-session-summary-worker agent-notification-worker agent-proactive-reliability-check agent-proactive-reliability-live-check agent-postgres-backup-restore-check agent-recovery-check agent-rate-limit-load-check agent-capacity-check agent-release-rollback-check agent-image knowledge-manifest knowledge-validate knowledge-quality-gate knowledge-validate-ocr knowledge-submit-review knowledge-approve-safe knowledge-retire-reference ocr-sync ocr-check ocr-live-check ocr-run ocr-image gateway-check gateway-run gateway-training-role-live-check gateway-training-write-live-check gateway-training-workflow-live-check gateway-training-proactive-preflight gateway-training-proactive-live-check training-check training-run training-role-live-check training-role-visibility-live-check booking-check booking-it booking-run customer-service-check customer-service-run legacy-java-diagnostic release-check check agent-trulens-retention web-check web-run
 
 .PHONY: pdf-visual-audit runtime-delivery-check runtime-delivery-live-check prompt-snapshot prompt-regression-contract prompt-regression prompt-release-gate llm-performance-benchmark agent-end-to-end-benchmark project-evidence-benchmark renewal-effect-check sae-release-plan app-config-check app-images
 
 runtime-delivery-check:
-	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --extra eval pytest -q tests/test_runtime_usage.py tests/test_runtime_protection.py tests/test_runtime_streaming.py tests/test_runtime_stream_api.py tests/test_runtime_sdk_stream.py tests/test_runtime_health.py tests/test_worker_runtime.py tests/test_prompt_regression.py tests/test_prompt_release_gate.py tests/test_confirmation_runtime.py tests/test_browser_auth.py tests/test_browser_auth_config.py tests/test_payload_key_rotation.py tests/test_historical_prompt_export.py tests/test_sae_release_plan.py tests/test_agent_end_to_end_benchmark.py
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --extra eval pytest -q tests/test_runtime_usage.py tests/test_runtime_protection.py tests/test_runtime_streaming.py tests/test_chat_run_cancellation.py tests/test_session_summary.py tests/test_migration_contract_check.py tests/test_runtime_stream_api.py tests/test_runtime_sdk_stream.py tests/test_runtime_health.py tests/test_worker_runtime.py tests/test_prompt_regression.py tests/test_prompt_release_gate.py tests/test_confirmation_runtime.py tests/test_browser_auth.py tests/test_browser_auth_config.py tests/test_payload_key_rotation.py tests/test_historical_prompt_export.py tests/test_sae_release_plan.py tests/test_agent_end_to_end_benchmark.py
 	cd fitness-web && npm test && npm run build
 
 runtime-delivery-live-check:
@@ -97,6 +97,7 @@ help:
 	@echo "  agent-run    Start the Agent API locally"
 	@echo "  agent-reindex-worker Start the knowledge index rebuild worker locally"
 	@echo "  agent-memory-expiry-worker Start the Memory candidate expiry worker locally"
+	@echo "  agent-memory-extraction-worker Start the Memory extraction worker locally"
 	@echo "  agent-memory-retention-worker Start the Memory content retention worker locally"
 	@echo "  agent-session-summary-worker Start the short-term session summary cleanup worker locally"
 	@echo "  agent-notification-worker Start the in-app notification Outbox worker locally"
@@ -333,6 +334,9 @@ agent-reindex-worker:
 agent-memory-expiry-worker:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.candidate_expiry_worker_main
 
+agent-memory-extraction-worker:
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.memory_extraction_worker_main
+
 agent-memory-retention-worker:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python -m app.memory_retention_worker_main
 
@@ -388,7 +392,7 @@ production-config-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/production_config_contract_check.py
 
 production-runtime-config-check:
-	@test -n "$(PRODUCTION_ENV_DIR)" || (echo "请先设置 PRODUCTION_ENV_DIR（仓库外部的五份生产配置目录）"; exit 1)
+	@test -n "$(PRODUCTION_ENV_DIR)" || (echo "请先设置 PRODUCTION_ENV_DIR（仓库外部的六份生产配置目录）"; exit 1)
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/production_runtime_config_check.py --env-dir "$(abspath $(PRODUCTION_ENV_DIR))"
 
 agent-migration-check:
@@ -402,7 +406,21 @@ agent-proactive-live-check:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/proactive_booking_live_check.py $(ARGS)
 
 agent-image:
-	docker build --file $(AGENT_DIR)/Dockerfile --tag fitness-agent-service:local $(AGENT_DIR)
+	docker build --file $(AGENT_DIR)/Dockerfile --tag fitness-agent-service:local .
+
+.PHONY: mcp-sync mcp-check mcp-run mcp-image
+mcp-sync:
+	cd fitness-mcp-service && UV_CACHE_DIR=$(UV_CACHE_DIR) uv sync --locked --extra dev
+
+mcp-check:
+	cd fitness-mcp-service && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --locked --extra dev pytest -q tests ../packages/fitness-tool-contracts/tests
+	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --locked --extra dev pytest -q tests/test_mcp_client.py tests/test_business_tools_client.py tests/test_mcp_service_integration.py
+
+mcp-run:
+	cd fitness-mcp-service && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run --locked uvicorn app.main:app --host 127.0.0.1 --port 8001
+
+mcp-image:
+	docker build --file fitness-mcp-service/Dockerfile --tag fitness-mcp-service:local .
 
 knowledge-manifest:
 	cd $(AGENT_DIR) && UV_CACHE_DIR=$(UV_CACHE_DIR) uv run python scripts/build_knowledge_manifest.py

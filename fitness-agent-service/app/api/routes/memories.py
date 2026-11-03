@@ -11,7 +11,7 @@ from datetime import datetime
 from typing import cast
 
 from fastapi import APIRouter, Header, HTTPException, Query, Request, status
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, model_validator
 
 from app.api.middleware.request_context import normalize_context_id
 from app.infrastructure.agent_context import (
@@ -19,7 +19,7 @@ from app.infrastructure.agent_context import (
     AgentIdentity,
 )
 from app.memory.models import FitnessMemory, MemoryEventRecord, MemoryValidationError
-from app.memory.repository import MemoryNotFoundError, MemoryVersionConflictError
+from app.memory.repository import MemoryNotFoundError, MemorySettings, MemoryVersionConflictError
 from app.memory.service import MemoryService
 
 router = APIRouter(prefix="/api/v1/agent/memories", tags=["agent-memories"])
@@ -51,6 +51,29 @@ class MemoryCorrectionRequest(BaseModel):
         min_length=1,
         max_length=128,
         pattern=r"^[A-Za-z0-9._:-]+$",
+    )
+
+
+class MemorySettingsRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    expected_revision: int = Field(ge=0)
+    extraction_enabled: StrictBool | None = None
+    personalization_enabled: StrictBool | None = None
+
+    @model_validator(mode="after")
+    def require_change(self) -> MemorySettingsRequest:
+        if self.extraction_enabled is None and self.personalization_enabled is None:
+            raise ValueError("请提供至少一个 Memory 开关")
+        return self
+
+
+class MemorySettingsResponse(BaseModel):
+    extraction_enabled: bool
+    personalization_enabled: bool
+    revision: int
+    extraction_config_enabled: bool = Field(
+        description="服务配置是否启用异步提取；不代表后台 Worker 运行正常"
     )
 
 
@@ -101,6 +124,47 @@ async def list_memories(
     except MemoryValidationError as exc:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该机构") from exc
     return [_to_response(memory) for memory in memories]
+
+
+@router.get("/settings", response_model=MemorySettingsResponse)
+async def get_memory_settings(
+    request: Request,
+    organization_id: str = Query(min_length=1, max_length=128),
+    x_agent_context: str | None = Header(default=None),
+) -> MemorySettingsResponse:
+    identity = _verify_identity(request, x_agent_context)
+    try:
+        result = await _memory_service(request).get_settings(
+            identity=identity, organization_id=organization_id
+        )
+    except MemoryValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该机构") from exc
+    return _to_settings_response(request, result)
+
+
+@router.patch("/settings", response_model=MemorySettingsResponse)
+async def update_memory_settings(
+    payload: MemorySettingsRequest,
+    request: Request,
+    organization_id: str = Query(min_length=1, max_length=128),
+    x_agent_context: str | None = Header(default=None),
+) -> MemorySettingsResponse:
+    identity = _verify_identity(request, x_agent_context)
+    try:
+        result = await _memory_service(request).update_settings(
+            identity=identity,
+            organization_id=organization_id,
+            expected_revision=payload.expected_revision,
+            extraction_enabled=payload.extraction_enabled,
+            personalization_enabled=payload.personalization_enabled,
+        )
+    except MemoryValidationError as exc:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="无权访问该机构") from exc
+    except MemoryVersionConflictError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT, detail="Memory 设置已变化，请刷新后重试"
+        ) from exc
+    return _to_settings_response(request, result)
 
 
 @router.put("/{memory_id}", response_model=MemoryResponse)
@@ -207,6 +271,15 @@ async def list_memory_events(
 
 def _memory_service(request: Request) -> MemoryService:
     return cast(MemoryService, request.app.state.memory_service)
+
+
+def _to_settings_response(request: Request, result: MemorySettings) -> MemorySettingsResponse:
+    return MemorySettingsResponse(
+        extraction_enabled=result.extraction_enabled,
+        personalization_enabled=result.personalization_enabled,
+        revision=result.revision,
+        extraction_config_enabled=request.app.state.settings.memory_async_extraction_enabled,
+    )
 
 
 def _verify_identity(request: Request, token: str | None) -> AgentIdentity:

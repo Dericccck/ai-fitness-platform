@@ -16,13 +16,20 @@ async def run() -> None:
 
     settings = Settings()
     start_http_server(settings.memory_retention_worker_metrics_port, registry=http_metrics.registry)
-    async with lifespan(app):
+    async with lifespan(app, role="worker"):
         worker = MemoryRetentionWorker(
             MemoryRetentionRepository(app.state.database),
             batch_size=settings.memory_retention_batch_size,
             metrics=http_metrics,
         )
-        await poll_worker(worker.run_once, interval=settings.memory_retention_poll_seconds)
+
+        async def maintain() -> None:
+            await worker.run_once()
+            await app.state.memory_source_retention.cleanup_expired(
+                limit=settings.memory_retention_batch_size
+            )
+
+        await poll_worker(maintain, interval=settings.memory_retention_poll_seconds)
 
 
 if __name__ == "__main__":

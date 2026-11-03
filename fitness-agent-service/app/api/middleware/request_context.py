@@ -18,7 +18,7 @@ def normalize_context_id(raw_value: str | None) -> str | None:
     这里只接受长度受限的字母、数字和少量分隔符；非法值会被丢弃，由服务生成 UUID。
     """
 
-    if raw_value and _CONTEXT_ID_PATTERN.fullmatch(raw_value):
+    if raw_value and raw_value not in {".", ".."} and _CONTEXT_ID_PATTERN.fullmatch(raw_value):
         return raw_value
     return None
 

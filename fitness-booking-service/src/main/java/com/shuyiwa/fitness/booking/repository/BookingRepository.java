@@ -450,6 +450,28 @@ public class BookingRepository {
         return result.stream().findFirst();
     }
 
+    /** A stable operation ID can never be rebound to another actor, confirmation, tool or payload. */
+    public void assertRequestBinding(String requestId, String actorId, BookingConfirmation confirmation) {
+        if (confirmation == null) throw new BookingApiException(HttpStatus.CONFLICT, "业务请求已绑定其他确认动作");
+        java.util.List<java.util.Map<String,Object>> rows = jdbc.queryForList(
+                "SELECT c.confirmation_id,c.tool_id,c.action,c.organization_id,c.resource,c.payload_hash, "
+                + "a.actor_id FROM agent_booking_confirmation_consumption c "
+                + "LEFT JOIN agent_booking_audit a ON a.request_id=c.request_id WHERE c.request_id=? ", requestId);
+        if (rows.isEmpty()) return;
+        if (rows.size() != 1) throw new BookingApiException(HttpStatus.CONFLICT, "业务请求已绑定其他确认动作");
+        java.util.Map<String,Object> row = rows.get(0);
+        if (!java.util.Objects.equals(actorId, row.get("actor_id"))
+                || !java.util.Objects.equals(confirmation.getConfirmationId(), row.get("confirmation_id"))
+                || !java.util.Objects.equals(confirmation.getToolId(), row.get("tool_id"))
+                || !java.util.Objects.equals(confirmation.getAction(), row.get("action"))
+                || !java.util.Objects.equals(confirmation.getOrganizationId(), row.get("organization_id"))
+                || !java.util.Objects.equals(confirmation.getResource(), row.get("resource"))
+                || row.get("payload_hash") == null
+                || !confirmation.getPayloadHash().equalsIgnoreCase(row.get("payload_hash").toString())) {
+            throw new BookingApiException(HttpStatus.CONFLICT, "业务请求已绑定其他确认动作");
+        }
+    }
+
     private void consumeConfirmation(BookingConfirmation confirmation, String requestId) {
         if (confirmation == null) throw new BookingApiException(HttpStatus.UNAUTHORIZED, "缺少确认凭证");
         try {

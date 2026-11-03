@@ -25,8 +25,8 @@ WORKERS = {
     "session-summary-worker": "app.session_summary_worker_main",
     "confirmation-reconciliation-worker": "app.confirmation_reconciliation_worker_main",
 }
-IMAGES = {"agent", "gateway", "training", "booking", "customer-service", "web"}
-REQUIRED = {"training", "booking", "customer-service", "gateway", "agent-api", "web"}
+IMAGES = {"agent", "mcp", "gateway", "training", "booking", "customer-service", "web"}
+REQUIRED = {"training", "booking", "customer-service", "gateway", "mcp", "agent-api", "web"}
 
 
 def build_plan(config: dict[str, Any]) -> dict[str, Any]:
@@ -36,7 +36,7 @@ def build_plan(config: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(region, str) or not re.fullmatch(r"[a-z]{2}-[a-z]+-?\d*", region):
         raise ValueError("region_id 无效")
     if not isinstance(images, dict) or set(images) != IMAGES:
-        raise ValueError("需要六个镜像的不可变地址")
+        raise ValueError("需要七个镜像的不可变地址（包括独立 MCP 服务）")
     for image in images.values():
         if (
             not isinstance(image, str)
@@ -58,6 +58,7 @@ def build_plan(config: dict[str, Any]) -> dict[str, Any]:
     groups = [
         ["training", "booking", "customer-service"],
         ["gateway"],
+        ["mcp"],
         ["agent-api"],
         sorted(apps.keys() & WORKERS.keys()),
         ["web"],
@@ -98,7 +99,7 @@ def build_plan(config: dict[str, Any]) -> dict[str, Any]:
             "每个 Worker 独立应用，指标端口与其配置一致；不启用 HTTP 缩容到零",
         ],
         "stages": stages,
-        "rollback": "先停写、排空及核对未知结果；按匹配协议回滚兼容镜像，保留新增表，不自动 downgrade",
+        "rollback": "先停写、排空及对账 UNKNOWN；仅回退 MCP 开关或兼容镜像；保留 UNKNOWN/稳定ID/全域对账/凭证隔离基础版本与新增表，不自动 downgrade",
     }
 
 

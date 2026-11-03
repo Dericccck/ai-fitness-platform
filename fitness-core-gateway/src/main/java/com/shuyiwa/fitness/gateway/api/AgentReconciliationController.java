@@ -27,7 +27,7 @@ public class AgentReconciliationController {
             @RequestHeader("X-Internal-Service-Token") String internalToken,
             @PathVariable String operationId,
             @RequestBody ReconciliationScope scope) {
-        tokenVerifier.verify(internalToken);
+        tokenVerifier.verify(internalToken, InternalServiceTokenVerifier.RECONCILE);
         if (scope == null || isBlank(scope.getOrganizationId()) || isBlank(scope.getActorId())) {
             throw new IllegalArgumentException("对账机构和原始操作者不能为空");
         }

@@ -16,7 +16,7 @@ async def run() -> None:
 
     settings = Settings()
     start_http_server(settings.session_summary_worker_metrics_port, registry=http_metrics.registry)
-    async with lifespan(app):
+    async with lifespan(app, role="worker"):
         worker = SessionSummaryCleanupWorker(
             SessionSummaryRepository(app.state.database),
             batch_size=settings.session_summary_batch_size,

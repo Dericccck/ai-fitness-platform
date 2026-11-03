@@ -457,6 +457,13 @@ OCR 服务需要返回 `media_type`、`warnings` 和 `blocks` 数组；每个 bl
 本地可通过 `make agent-reindex-worker` 启动独立轮询进程；生产环境应将它部署为独立 Worker，
 与 API 进程分开扩缩容。
 
+异步 Memory 候选提取可在本地通过 `make agent-memory-extraction-worker` 启动。
+启用 `AGENT_MEMORY_ASYNC_EXTRACTION_ENABLED` 后，用户原话加密保存，完成的对话创建持久任务；
+Worker 提取候选，用户确认后才写入正式记忆。前端数据中心支持按机构设置自动提取和个性化使用。
+提取 Worker 同时定期检查记忆和候选过期及来源保留期；正式内容脱敏仍需部署保留 Worker。
+全局关闭异步提取时，常规聊天不会回退到旧同步提取。该功能仍有上线阻断项，具体见
+[`memory-implementation-status-20261029.md`](../docs/memory-implementation-status-20261029.md)。
+
 Memory 候选过期由 `MemoryCandidateExpiryWorker` 独立处理。本地可通过
 `make agent-memory-expiry-worker` 启动；它按 `AGENT_MEMORY_CANDIDATE_EXPIRY_POLL_SECONDS`
 轮询，每批最多处理 `AGENT_MEMORY_CANDIDATE_EXPIRY_BATCH_SIZE` 条记录，并在 `8092` 暴露低基数
@@ -642,3 +649,66 @@ make agent-image
 
 镜像使用多阶段构建和 `uv.lock`，最终容器以固定 UID/GID `10001:10001` 运行；CI 会在
 Python 检查通过后重新构建镜像，防止只在开发机缓存中可用。
+
+## 用户停止生成
+
+前端输入框右侧提供“停止”按钮，生成或恢复结果时可用。它会调用
+`POST /api/v1/agent/runs/{run_id}/cancel`，请求体为
+`{"cancel_request_id":"客户端生成并在重试时复用的请求 ID"}`。接口继续使用已验证的
+AgentContext/浏览器认证，不消耗模型配额。
+
+首次接受取消返回 202 / CANCEL_REQUESTED；执行者退出并清理该 run 的待执行确认单后，
+`GET /api/v1/agent/runs/{run_id}` 返回 CANCELLED，SSE 发布 run.cancelled。已完成或其他终态
+返回 200 和真实状态。不存在或范围不匹配返回 404。断网或刷新仍只恢复结果，不自动取消。
+
+每个实例每 500 毫秒批量检查本机运行的 PG 控制状态，取消超出 10 秒未被确认记 UNKNOWN /
+CANCEL_ACK_TIMEOUT。同一会话停止期间不能启动新的流式运行；未完成轮次的历史不会进入下一轮
+模型上下文。按钮只停止普通流式对话，已经批准或执行的业务写入需要通过确认单和业务结果核对。
+
+启动新版本前必须运行 `make agent-migrate`（新增迁移 `20261006_0046`、`20261007_0047`），随后重启服务。
+readiness 会检查取消字段与确认单来源字段。滚动发布应先 drain 旧实例再启用新界面，避免旧实例
+不识别取消状态。详见 [取消设计](../docs/agent-task-cancellation-design.md)。
+
+取消回归包含 `tests/test_chat_run_cancellation.py`、`tests/test_runtime_stream_api.py`；
+`make runtime-delivery-check` 会运行这些测试。隔离 PG/Redis 验收通过
+`python scripts/runtime_delivery_live_check.py --execute` 运行，不修改开发业务库。
+
+复核修复使用独立的 `agent_chat_history_commits` 保存最近完整轮次，COMPLETED、凭据与
+候选摘要在同一 PG 事务提交。结果保留期仍为原配置；凭据跟随 checkpoint 引用和主体
+撤销清理。旧 COMPLETED 记录在可信 checkpoint 引用下懒回填；已删除且无凭据的旧 run
+不猜测成功。0047 清除来源不明的旧派生摘要，后续基于可信历史重建，保留 checkpoint。
+
+前端查询临时错误有界重试；结果待确认期间保留 run_id、取消请求 ID、意图及已有文字，
+提供“重试查询”，阻止新提交覆盖旧任务。刷新恢复同一 run，身份范围变化清理旧操作。
+实现及验收详见[修复计划与交付记录](../docs/agent-task-cancellation-fix-plan.md)。
+
+## RAG 问题采集与独立评测
+
+新增离线问题采集/标注工作台 `evals/rag-study-workbench.html` 和命令行
+`python -m scripts.rag_study`，支持来源校验、授权候选池、双人标注、第三人裁决、
+按参与者/同义问题族冻结开发与测试集，以及实际向量/关键词/混合/重排方案对比。
+80条合成问题用于流程验收，不代表真实用户记录或人工金标。
+
+操作步骤、权限要求与指标解释见[问题研究完整手册](../docs/rag-question-study-guide.md)。
+私有资料默认放在 Git 已忽略的 `var/rag-studies/`；不要将原问题或授权知识正文提交仓库。
+只有显式传入 `--execute` 才执行数据库/模型任务，正式研究建议使用知识库只读账号。
+
+## 语音对话
+
+Web 支持录音识别后编辑发送，以及最终 Agent 回复朗读。识别模型为百炼
+`qwen3-asr-flash`，合成为 `qwen3-tts-flash`。在服务端环境设置
+`AGENT_VOICE_ENABLED=true` 和 `AGENT_VOICE_API_KEY`（亦支持 `DASHSCOPE_API_KEY`），
+API Key 必须与 `AGENT_VOICE_BASE_URL` 的地域一致。重启服务加载配置。
+
+语音 API 沿用现有登录/CSRF 或签名 AgentContext。录音为 16 kHz 单声道 PCM16 WAV，
+最多 60 秒 / 2 MiB；只朗读当前身份有权访问的 COMPLETED run，默认有效期 24 小时。
+长回复按最多 480 字符分段；音频不落盘，服务端内存缓存最多 32 MiB、10 分钟。
+语音异常不影响现有文字或业务确认流程。
+
+相关接口和验收说明见 [语音实施说明](../docs/agent-voice-conversation-implementation.md)。
+`python scripts/voice_live_check.py` 会进行少量真实百炼调用，以固定测试句验证 TTS→ASR；
+脚本使用 FFmpeg 转换测试音频，正式服务没有 FFmpeg 依赖。输出位于根目录 `output/voice/`。
+
+## MCP 业务工具接入
+
+项目支持通过独立 `fitness-mcp-service` 调用20个Java业务能力；四个本地工具继续本地执行。确认动作固定通道与版本，不确定写入按原ID对账。安装、五个独立凭证、迁移、灰度、监控及回退步骤见 [MCP实施与运行指南](../docs/mcp-integration.md)。

@@ -48,6 +48,9 @@ class FitnessMemory:
     # 正文脱敏后仍保留类型、稳定键和生命周期状态，供用户看到“这条 Memory 曾存在过”，
     # 但不能再恢复原始偏好。默认值兼容内存测试和历史调用方构造领域对象。
     content_redacted: bool = False
+    slot_code: str | None = None
+    scope_key: str | None = None
+    item_key: str | None = None
 
     def is_active(self, now: datetime) -> bool:
         """判断当前是否仍可作为训练计划上下文使用。"""

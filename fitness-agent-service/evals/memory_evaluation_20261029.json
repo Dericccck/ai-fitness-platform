@@ -1,0 +1,793 @@
+{
+  "generated_at": "2026-10-29T08:27:54.672491+08:00",
+  "dataset": "memory_labeled.json",
+  "warning": "合成样本非真实用户分布。提取只比较类型集合；关系比较仅对被评分样本比较动作，不验证端到端事务。",
+  "extraction": {
+    "mode": "real_model",
+    "model": "deepseek-v4-flash",
+    "total": 54,
+    "scored": 54,
+    "errors": 0,
+    "model_attempts": 54,
+    "model_successes": 54,
+    "cases_skipped_before_model": 0,
+    "pipeline_exact_case_accuracy_including_errors": 0.9444444444444444,
+    "type_precision_scored": 0.9534883720930233,
+    "type_recall_scored": 0.9761904761904762,
+    "scope": "评测受控提取流水线（model_called=false 表示未调用），不是模型单独准确率；仅比较类别集合，不验证提取值、数量、证据、冲突或安全性。",
+    "relation_cases_evaluated": 0,
+    "results": [
+      {
+        "id": "goal_01",
+        "expected": [
+          "TRAINING_GOAL"
+        ],
+        "actual": [
+          "TRAINING_GOAL"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "goal_02",
+        "expected": [
+          "TRAINING_GOAL"
+        ],
+        "actual": [
+          "TRAINING_GOAL"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "goal_03",
+        "expected": [
+          "TRAINING_GOAL"
+        ],
+        "actual": [
+          "TRAINING_GOAL"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "goal_04",
+        "expected": [
+          "TRAINING_GOAL"
+        ],
+        "actual": [
+          "TRAINING_GOAL"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "goal_05",
+        "expected": [
+          "TRAINING_GOAL"
+        ],
+        "actual": [
+          "TRAINING_GOAL"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "goal_06",
+        "expected": [
+          "TRAINING_GOAL"
+        ],
+        "actual": [
+          "TRAINING_GOAL"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "preference_01",
+        "expected": [
+          "TRAINING_PREFERENCE"
+        ],
+        "actual": [
+          "TRAINING_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "preference_02",
+        "expected": [
+          "TRAINING_PREFERENCE"
+        ],
+        "actual": [
+          "TRAINING_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "preference_03",
+        "expected": [
+          "TRAINING_PREFERENCE"
+        ],
+        "actual": [
+          "TRAINING_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "preference_04",
+        "expected": [
+          "TRAINING_PREFERENCE"
+        ],
+        "actual": [
+          "TRAINING_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "preference_05",
+        "expected": [
+          "TRAINING_PREFERENCE"
+        ],
+        "actual": [
+          "TRAINING_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "preference_06",
+        "expected": [
+          "TRAINING_PREFERENCE"
+        ],
+        "actual": [
+          "TRAINING_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "equipment_01",
+        "expected": [
+          "EQUIPMENT_AVAILABILITY"
+        ],
+        "actual": [
+          "EQUIPMENT_AVAILABILITY"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "equipment_02",
+        "expected": [
+          "EQUIPMENT_AVAILABILITY"
+        ],
+        "actual": [
+          "EQUIPMENT_AVAILABILITY"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "equipment_03",
+        "expected": [
+          "EQUIPMENT_AVAILABILITY"
+        ],
+        "actual": [
+          "EQUIPMENT_AVAILABILITY"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "equipment_04",
+        "expected": [
+          "EQUIPMENT_AVAILABILITY"
+        ],
+        "actual": [
+          "EQUIPMENT_AVAILABILITY"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "equipment_05",
+        "expected": [
+          "EQUIPMENT_AVAILABILITY"
+        ],
+        "actual": [
+          "EQUIPMENT_AVAILABILITY"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "equipment_06",
+        "expected": [
+          "EQUIPMENT_AVAILABILITY"
+        ],
+        "actual": [
+          "EQUIPMENT_AVAILABILITY"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "schedule_01",
+        "expected": [
+          "SCHEDULE_PREFERENCE"
+        ],
+        "actual": [
+          "SCHEDULE_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "schedule_02",
+        "expected": [
+          "SCHEDULE_PREFERENCE"
+        ],
+        "actual": [
+          "SCHEDULE_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "schedule_03",
+        "expected": [
+          "SCHEDULE_PREFERENCE"
+        ],
+        "actual": [
+          "SCHEDULE_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "schedule_04",
+        "expected": [
+          "SCHEDULE_PREFERENCE"
+        ],
+        "actual": [
+          "SCHEDULE_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "schedule_05",
+        "expected": [
+          "SCHEDULE_PREFERENCE"
+        ],
+        "actual": [
+          "SCHEDULE_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "schedule_06",
+        "expected": [
+          "SCHEDULE_PREFERENCE"
+        ],
+        "actual": [],
+        "pass": false,
+        "model_called": true
+      },
+      {
+        "id": "communication_01",
+        "expected": [
+          "COMMUNICATION_PREFERENCE"
+        ],
+        "actual": [
+          "COMMUNICATION_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "communication_02",
+        "expected": [
+          "COMMUNICATION_PREFERENCE"
+        ],
+        "actual": [
+          "COMMUNICATION_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "communication_03",
+        "expected": [
+          "COMMUNICATION_PREFERENCE"
+        ],
+        "actual": [
+          "COMMUNICATION_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "communication_04",
+        "expected": [
+          "COMMUNICATION_PREFERENCE"
+        ],
+        "actual": [
+          "COMMUNICATION_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "communication_05",
+        "expected": [
+          "COMMUNICATION_PREFERENCE"
+        ],
+        "actual": [
+          "COMMUNICATION_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "communication_06",
+        "expected": [
+          "COMMUNICATION_PREFERENCE"
+        ],
+        "actual": [
+          "COMMUNICATION_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "negative_01",
+        "expected": [],
+        "actual": [],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "negative_02",
+        "expected": [],
+        "actual": [],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "negative_03",
+        "expected": [],
+        "actual": [],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "negative_04",
+        "expected": [],
+        "actual": [],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "negative_05",
+        "expected": [],
+        "actual": [],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "negative_06",
+        "expected": [],
+        "actual": [],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "negative_07",
+        "expected": [],
+        "actual": [],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "negative_08",
+        "expected": [],
+        "actual": [],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "negative_09",
+        "expected": [],
+        "actual": [],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "negative_10",
+        "expected": [],
+        "actual": [],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "negative_11",
+        "expected": [],
+        "actual": [],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "negative_12",
+        "expected": [],
+        "actual": [],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "multi_01",
+        "expected": [
+          "EQUIPMENT_AVAILABILITY",
+          "TRAINING_GOAL"
+        ],
+        "actual": [
+          "EQUIPMENT_AVAILABILITY",
+          "TRAINING_GOAL"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "multi_02",
+        "expected": [
+          "COMMUNICATION_PREFERENCE",
+          "SCHEDULE_PREFERENCE"
+        ],
+        "actual": [
+          "COMMUNICATION_PREFERENCE",
+          "SCHEDULE_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "multi_03",
+        "expected": [
+          "SCHEDULE_PREFERENCE",
+          "TRAINING_PREFERENCE"
+        ],
+        "actual": [
+          "SCHEDULE_PREFERENCE",
+          "TRAINING_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "multi_04",
+        "expected": [
+          "TRAINING_GOAL",
+          "TRAINING_PREFERENCE"
+        ],
+        "actual": [
+          "TRAINING_GOAL",
+          "TRAINING_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "multi_05",
+        "expected": [
+          "EQUIPMENT_AVAILABILITY",
+          "SCHEDULE_PREFERENCE"
+        ],
+        "actual": [
+          "EQUIPMENT_AVAILABILITY",
+          "SCHEDULE_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "multi_06",
+        "expected": [
+          "COMMUNICATION_PREFERENCE",
+          "SCHEDULE_PREFERENCE"
+        ],
+        "actual": [
+          "COMMUNICATION_PREFERENCE",
+          "SCHEDULE_PREFERENCE"
+        ],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "adversarial_01",
+        "expected": [],
+        "actual": [],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "adversarial_02",
+        "expected": [],
+        "actual": [],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "adversarial_03",
+        "expected": [],
+        "actual": [
+          "EQUIPMENT_AVAILABILITY"
+        ],
+        "pass": false,
+        "model_called": true
+      },
+      {
+        "id": "adversarial_04",
+        "expected": [],
+        "actual": [],
+        "pass": true,
+        "model_called": true
+      },
+      {
+        "id": "adversarial_05",
+        "expected": [],
+        "actual": [
+          "TRAINING_PREFERENCE"
+        ],
+        "pass": false,
+        "model_called": true
+      },
+      {
+        "id": "adversarial_06",
+        "expected": [],
+        "actual": [],
+        "pass": true,
+        "model_called": true
+      }
+    ]
+  },
+  "relation": {
+    "mode": "relation_live",
+    "total": 32,
+    "scored": 31,
+    "passed": 28,
+    "requires_model": 0,
+    "unsupported_revoke": 1,
+    "errors": 0,
+    "model_attempts": 8,
+    "model_successes": 8,
+    "note": "调用真实比较器；需要模型、尚不支持和错误的样本不计作通过。",
+    "results": [
+      {
+        "id": "rel_01",
+        "status": "scored",
+        "expected": "ADD",
+        "actual": "ADD",
+        "pass": true
+      },
+      {
+        "id": "rel_02",
+        "status": "scored",
+        "expected": "UPDATE",
+        "actual": "UPDATE",
+        "pass": true
+      },
+      {
+        "id": "rel_03",
+        "status": "scored",
+        "expected": "NOOP",
+        "actual": "NOOP",
+        "pass": true
+      },
+      {
+        "id": "rel_04",
+        "status": "unsupported_revoke"
+      },
+      {
+        "id": "rel_05",
+        "status": "scored",
+        "expected": "NEEDS_CLARIFICATION",
+        "actual": "NEEDS_CLARIFICATION",
+        "pass": true
+      },
+      {
+        "id": "rel_06",
+        "status": "scored",
+        "expected": "UPDATE",
+        "actual": "UPDATE",
+        "pass": true
+      },
+      {
+        "id": "rel_07",
+        "status": "scored",
+        "expected": "ADD",
+        "actual": "NEEDS_CLARIFICATION",
+        "pass": false
+      },
+      {
+        "id": "rel_08",
+        "status": "scored",
+        "expected": "ADD",
+        "actual": "NEEDS_CLARIFICATION",
+        "pass": false
+      },
+      {
+        "id": "rel_09",
+        "status": "scored",
+        "expected": "ADD",
+        "actual": "ADD",
+        "pass": true
+      },
+      {
+        "id": "rel_10",
+        "status": "scored",
+        "expected": "UPDATE",
+        "actual": "NEEDS_CLARIFICATION",
+        "pass": false
+      },
+      {
+        "id": "rel_11",
+        "status": "scored",
+        "expected": "ADD",
+        "actual": "ADD",
+        "pass": true
+      },
+      {
+        "id": "rel_12",
+        "status": "scored",
+        "expected": "UPDATE",
+        "actual": "UPDATE",
+        "pass": true
+      },
+      {
+        "id": "rule_noop_01",
+        "status": "scored",
+        "expected": "NOOP",
+        "actual": "NOOP",
+        "pass": true
+      },
+      {
+        "id": "rule_add_01",
+        "status": "scored",
+        "expected": "ADD",
+        "actual": "ADD",
+        "pass": true
+      },
+      {
+        "id": "rule_noop_02",
+        "status": "scored",
+        "expected": "NOOP",
+        "actual": "NOOP",
+        "pass": true
+      },
+      {
+        "id": "rule_add_02",
+        "status": "scored",
+        "expected": "ADD",
+        "actual": "ADD",
+        "pass": true
+      },
+      {
+        "id": "rule_noop_03",
+        "status": "scored",
+        "expected": "NOOP",
+        "actual": "NOOP",
+        "pass": true
+      },
+      {
+        "id": "rule_add_03",
+        "status": "scored",
+        "expected": "ADD",
+        "actual": "ADD",
+        "pass": true
+      },
+      {
+        "id": "rule_noop_04",
+        "status": "scored",
+        "expected": "NOOP",
+        "actual": "NOOP",
+        "pass": true
+      },
+      {
+        "id": "rule_add_04",
+        "status": "scored",
+        "expected": "ADD",
+        "actual": "ADD",
+        "pass": true
+      },
+      {
+        "id": "rule_noop_05",
+        "status": "scored",
+        "expected": "NOOP",
+        "actual": "NOOP",
+        "pass": true
+      },
+      {
+        "id": "rule_add_05",
+        "status": "scored",
+        "expected": "ADD",
+        "actual": "ADD",
+        "pass": true
+      },
+      {
+        "id": "rule_noop_06",
+        "status": "scored",
+        "expected": "NOOP",
+        "actual": "NOOP",
+        "pass": true
+      },
+      {
+        "id": "rule_add_06",
+        "status": "scored",
+        "expected": "ADD",
+        "actual": "ADD",
+        "pass": true
+      },
+      {
+        "id": "rule_noop_07",
+        "status": "scored",
+        "expected": "NOOP",
+        "actual": "NOOP",
+        "pass": true
+      },
+      {
+        "id": "rule_add_07",
+        "status": "scored",
+        "expected": "ADD",
+        "actual": "ADD",
+        "pass": true
+      },
+      {
+        "id": "rule_noop_08",
+        "status": "scored",
+        "expected": "NOOP",
+        "actual": "NOOP",
+        "pass": true
+      },
+      {
+        "id": "rule_add_08",
+        "status": "scored",
+        "expected": "ADD",
+        "actual": "ADD",
+        "pass": true
+      },
+      {
+        "id": "rule_noop_09",
+        "status": "scored",
+        "expected": "NOOP",
+        "actual": "NOOP",
+        "pass": true
+      },
+      {
+        "id": "rule_add_09",
+        "status": "scored",
+        "expected": "ADD",
+        "actual": "ADD",
+        "pass": true
+      },
+      {
+        "id": "rule_noop_10",
+        "status": "scored",
+        "expected": "NOOP",
+        "actual": "NOOP",
+        "pass": true
+      },
+      {
+        "id": "rule_add_10",
+        "status": "scored",
+        "expected": "ADD",
+        "actual": "ADD",
+        "pass": true
+      }
+    ]
+  }
+}

@@ -16,6 +16,10 @@ import java.util.Map;
 public class GatewayProperties {
 
     private String internalServiceToken = "";
+    /** Legacy shared credentials require an explicit, expiring migration window. */
+    private boolean allowLegacyInternalServiceToken;
+    private long legacyInternalServiceTokenExpiresAt;
+    private Map<String, ServiceCredential> serviceCredentials = new HashMap<>();
     private String contextSigningSecret = "";
     /** 当前签名契约使用的算法名称；v1 只允许 HS256，避免算法降级或混淆。 */
     private String contextSigningAlgorithm = "HS256";
@@ -47,6 +51,29 @@ public class GatewayProperties {
 
     public void setInternalServiceToken(String internalServiceToken) {
         this.internalServiceToken = internalServiceToken;
+    }
+
+    public boolean isAllowLegacyInternalServiceToken() { return allowLegacyInternalServiceToken; }
+    public void setAllowLegacyInternalServiceToken(boolean value) { allowLegacyInternalServiceToken = value; }
+    public long getLegacyInternalServiceTokenExpiresAt() { return legacyInternalServiceTokenExpiresAt; }
+    public void setLegacyInternalServiceTokenExpiresAt(long value) { legacyInternalServiceTokenExpiresAt = value; }
+    public Map<String, ServiceCredential> getServiceCredentials() { return serviceCredentials; }
+    public void setServiceCredentials(Map<String, ServiceCredential> value) {
+        serviceCredentials = value == null ? new HashMap<>() : new HashMap<>(value);
+    }
+
+    public static final class ServiceCredential {
+        private String tokenSha256 = "";
+        private long expiresAtEpochSeconds;
+        private java.util.Set<String> scopes = new java.util.HashSet<>();
+        public String getTokenSha256() { return tokenSha256; }
+        public void setTokenSha256(String value) { tokenSha256 = value; }
+        public long getExpiresAtEpochSeconds() { return expiresAtEpochSeconds; }
+        public void setExpiresAtEpochSeconds(long value) { expiresAtEpochSeconds = value; }
+        public java.util.Set<String> getScopes() { return scopes; }
+        public void setScopes(java.util.Set<String> value) {
+            scopes = value == null ? new java.util.HashSet<>() : new java.util.HashSet<>(value);
+        }
     }
 
     public String getContextSigningSecret() {

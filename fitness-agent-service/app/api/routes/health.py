@@ -52,13 +52,21 @@ async def ready(request: Request, response: Response) -> dict[str, object]:
         "fitness_gateway": settings.gateway_configured,
         "runtime_schema": "unknown",
     }
+    mcp = getattr(request.app.state, "mcp_tools", None)
+    if mcp is not None:
+        # Cached state only: a probe must never perform tools/list or billable work.
+        checks["mcp"] = mcp.health
 
     try:
         await request.app.state.database.ping()
         checks["database"] = "ok"
         checks["runtime_schema"] = (
             await request.app.state.database.runtime_schema_ready()
-            if settings.chat_stream_enabled or settings.llm_usage_ledger_enabled
+            if (
+                settings.chat_stream_enabled
+                or settings.llm_usage_ledger_enabled
+                or getattr(settings, "mcp_enabled", False)
+            )
             else True
         )
     except Exception as exc:  # noqa: BLE001 - health endpoint must report a stable response

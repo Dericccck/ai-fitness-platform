@@ -1,0 +1,65 @@
+<!doctype html>
+<html lang="zh-CN">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+<title>RAG 问题采集与独立标注工作台</title>
+<style>
+body{font:16px/1.6 system-ui,sans-serif;max-width:1100px;margin:32px auto;padding:0 20px;color:#152c38;background:#f6f8fa}section{background:white;border:1px solid #cdd8df;border-radius:10px;padding:20px;margin:20px 0}label{display:block;margin:12px 0}input,textarea,select,button{font:inherit;padding:8px;max-width:100%;box-sizing:border-box}textarea,input[type=text]{width:100%}textarea{min-height:72px}button{cursor:pointer;margin:6px;background:#e9f3f6;border:1px solid #a6bec9;border-radius:5px}pre{white-space:pre-wrap;overflow-wrap:anywhere;background:#f1f5f7;padding:12px}#catalog{max-height:450px;overflow:auto}#status{position:sticky;top:0;background:#fff2cc;padding:10px}small{color:#4c6470}details{border-bottom:1px solid #ddd;padding:6px}
+</style>
+<h1>问题采集 · 独立标注</h1>
+<p>离线页面，不发送网络请求，不自动保存到浏览器。关闭页面前请导出。导出文件含研究数据，应放进私有研究目录，不提交 Git。</p>
+<p id="status" role="status">等待导入研究协议或标注包。</p>
+<section>
+<h2>1. 采集问题</h2>
+<p>研究负责人提供 protocol.json 与匿名参与者编号；请只记录你实际想问的问题。不要填写姓名、手机号、身份证、合同号或详细病史。合成演示请使用 synthetic 协议。</p>
+<label>研究协议 <input id="protocolFile" type="file" accept=".json"></label>
+<label>匿名参与者编号 <input id="participant" type="text" maxlength="100" placeholder="由负责人分配，例如 pilot-017"></label>
+<label>原始问题 <textarea id="query" maxlength="2000"></textarea></label>
+<label>必要的匿名上下文（每行一轮，最多10轮）<textarea id="context"></textarea></label>
+<label>来源凭据编号（如试用会话编号，不填访问密钥）<input id="reference" type="text" maxlength="500"></label>
+<label><input id="consent" type="checkbox">我同意将以上已去标识的问题和必要上下文用于本次检索质量评测，知道它们将交由授权研究人员复核。</label>
+<button id="add">加入记录</button><button id="exportQuestions">导出本次问题 JSON</button>
+<p id="count">0 条记录</p>
+</section>
+<section>
+<h2>2. 独立标注 / 第三人裁决</h2>
+<p>候选证据只供参考，请搜索完整授权目录补齐遗漏。不要把动态账户事实、缺少上下文或权限外问题强行标为知识库可回答。每个相关ID表示一个完整的计分分块。</p>
+<label>标注包 <input id="packetFile" type="file" accept=".json"></label>
+<label>恢复自己已导出的标注草稿（会替换当前标签）<input id="reviewFile" type="file" accept=".json"></label>
+<button id="previous">上一题</button><button id="next">下一题</button>
+<pre id="case">未导入</pre>
+<label>问题类别 <select id="category"><option value="">请选择</option><option value="answerable">知识库可回答</option><option value="no_answer">授权知识库无答案</option><option value="business_tool">需要实时业务工具</option><option value="needs_context">需要补充上下文</option><option value="out_of_scope">超出业务范围</option></select></label>
+<label>相关分块ID（逗号分隔；非可回答类别必须留空）<textarea id="ids"></textarea></label>
+<label>判定理由（至少5字）<textarea id="rationale"></textarea></label>
+<label>检索/阅读过程（至少5字，说明检查过哪些候选外证据）<textarea id="notes"></textarea></label>
+<button id="saveLabel">保存本题标签</button>
+<label>搜索完整授权目录 <input id="search" type="text" placeholder="分块ID、标题或正文关键词"></label>
+<div id="catalog"></div>
+<label><input id="independent" type="checkbox">我已完成独立审核（裁决者已复核分歧），理解姓名/勾选不构成真实身份核验。</label>
+<button id="exportDraft">导出草稿</button><button id="exportReview">导出完整标注</button>
+</section>
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+let protocol=null, questions=[], packet=null, index=0, labels=Object.create(null);
+const status = message => {$('status').textContent=message;};
+const validId = value => /^[A-Za-z0-9_-]{1,100}$/.test(value);
+async function load(input){const file=input.files[0];if(!file)throw Error('请选择文件');if(file.size>100*1024*1024)throw Error('文件超过100MiB');return JSON.parse(await file.text());}
+function download(name,data){const url=URL.createObjectURL(new Blob([JSON.stringify(data,null,2)+'\n'],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);status('已请求下载 '+name+'，请移入私有研究目录。');}
+function guard(fn){return async()=>{try{await fn();}catch(error){status(error.message);}};}
+$('protocolFile').onchange=guard(async()=>{const next=await load($('protocolFile'));if(!['synthetic','pilot','production_log'].includes(next.source_kind)||!next.consent_version)throw Error('协议格式不正确');if(questions.length)throw Error('请先导出记录，再刷新页面更换协议');protocol=next;status('已加载协议：'+protocol.study_id+'；来源：'+protocol.source_kind);});
+$('add').onclick=guard(()=>{if(!protocol)throw Error('先导入协议');const participant=$('participant').value.trim(),query=$('query').value.trim(),reference=$('reference').value.trim();const context=$('context').value.split('\n').filter(x=>x.trim());if(!validId(participant)||!query||reference.length<3||!$('consent').checked)throw Error('参与者编号、问题、来源凭据和同意均必填');if(context.length>10||context.some(x=>x.length>2000))throw Error('上下文超过限制');const caseId='q-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2,8);questions.push({case_id:caseId,participant_id:participant,query,context,source_kind:protocol.source_kind,source_reference:reference,collected_at:new Date().toISOString(),consent:true,consent_version:protocol.consent_version});$('query').value='';$('context').value='';$('count').textContent=questions.length+' 条记录';status('已加入记录，尚未导出。');});
+$('exportQuestions').onclick=guard(()=>{if(!questions.length)throw Error('暂无记录');download('questions.json',questions);});
+$('packetFile').onchange=guard(async()=>{const next=await load($('packetFile'));if(next.packet_type!=='annotation'||!next.cases?.length)throw Error('标注包无效或没有问题');if(packet)throw Error('请导出后刷新页面再切换标注包');packet=next;index=0;labels=Object.create(null);render();status('评审者：'+packet.reviewer_id+'；来源：'+packet.source_kind);});
+$('reviewFile').onchange=guard(async()=>{if(!packet)throw Error('先导入标注包');const draft=await load($('reviewFile'));if(draft.pool_sha256!==packet.pool_sha256||draft.reviewer_id!==packet.reviewer_id)throw Error('不是当前研究/评审者的草稿');const valid=new Set(packet.cases.map(x=>x.case_id));if(!Array.isArray(draft.labels)||draft.labels.some(x=>!valid.has(x.case_id)))throw Error('草稿问题集合不匹配');labels=Object.fromEntries(draft.labels.map(x=>[x.case_id,x]));render();status('已恢复草稿；最终导入时CLI仍会严格校验。');});
+function render(){const row=packet.cases[index],label=labels[row.case_id];$('case').textContent=JSON.stringify({进度:(index+1)+' / '+packet.cases.length,已保存:Object.keys(labels).length,问题:row.query,上下文:row.context,检索输入:row.retrieval_query,编号:row.case_id,候选ID:row.candidates,裁决参考:packet.conflicts?.find(x=>x.case_id===row.case_id)},null,2);$('category').value=label?.category||'';$('ids').value=label?.relevant_ids.join(', ')||'';$('rationale').value=label?.rationale||'';$('notes').value=label?.search_notes||'';renderCatalog();}
+function renderCatalog(){if(!packet)return;const query=$('search').value.toLowerCase();$('catalog').replaceChildren();for(const row of packet.cases[index].catalog){if(![row.id,row.title,row.content].join(' ').toLowerCase().includes(query))continue;const details=document.createElement('details'),summary=document.createElement('summary'),body=document.createElement('pre');summary.textContent=row.id+' · '+row.title;body.textContent=row.content;details.append(summary,body);$('catalog').append(details);}}
+function saveLabel(){if(!packet)throw Error('先导入标注包');const row=packet.cases[index],category=$('category').value,ids=$('ids').value.split(/[,，\s]+/).filter(Boolean);const allowed=new Set(row.catalog.map(x=>x.id));if(!category||(category==='answerable')!==(ids.length>0)||ids.some(x=>!allowed.has(x))||new Set(ids).size!==ids.length)throw Error('类别与相关ID不一致，或存在重复/越权ID');const rationale=$('rationale').value.trim(),search_notes=$('notes').value.trim();if(rationale.length<5||search_notes.length<5)throw Error('请补全判定理由与搜索过程');labels[row.case_id]={case_id:row.case_id,category,relevant_ids:ids,rationale,search_notes};status('本题已保存到内存，关闭前请导出。');}
+$('saveLabel').onclick=guard(saveLabel);$('search').oninput=renderCatalog;
+for(const [button,delta]of[['previous',-1],['next',1]])$(button).onclick=guard(()=>{saveLabel();index=Math.max(0,Math.min(packet.cases.length-1,index+delta));render();});
+function exportLabels(complete){if(!packet)throw Error('先导入标注包');if(complete){saveLabel();if(packet.cases.some(x=>!labels[x.case_id])||!$('independent').checked)throw Error('全部问题完成并声明独立复核后才能导出完整标注');}download((complete?'review-':'draft-')+packet.reviewer_id+'.json',{pool_sha256:packet.pool_sha256,reviewer_id:packet.reviewer_id,reviewer_kind:packet.reviewer_kind,independent_review_declared:complete&&$('independent').checked,labels:Object.values(labels)});}
+$('exportDraft').onclick=guard(()=>exportLabels(false));$('exportReview').onclick=guard(()=>exportLabels(true));
+window.addEventListener('beforeunload',event=>{if(questions.length||Object.keys(labels).length){event.preventDefault();event.returnValue='';}});
+</script>
+</html>

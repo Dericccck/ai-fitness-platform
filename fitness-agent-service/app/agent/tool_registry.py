@@ -28,6 +28,7 @@ from app.confirmation.normalization import (
 from app.evaluation.telemetry import TruLensTelemetry, hash_identifier
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.gateway_client import GatewayClientError, GatewayRequestContext
+from app.streaming.control import cancellation_checkpoint
 
 ToolHandler = Callable[[BaseModel, "ToolContext"], Awaitable[Any]]
 _TOOL_ID_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]+\.v[0-9]+$")
@@ -196,10 +197,12 @@ class ToolRegistry:
         self,
         audit_sink: ToolAuditSink | None = None,
         telemetry: TruLensTelemetry | None = None,
+        availability_checker: Callable[[str], bool] | None = None,
     ) -> None:
         self._definitions: dict[str, ToolDefinition] = {}
         self._audit_sink = audit_sink or LoggingToolAuditSink()
         self._telemetry = telemetry or TruLensTelemetry.disabled()
+        self._availability_checker = availability_checker
 
     def register(self, definition: ToolDefinition) -> None:
         """注册工具并检查版本、角色和写操作安全元数据。"""
@@ -241,6 +244,7 @@ class ToolRegistry:
         return [
             definition.public_spec()
             for definition in sorted(self._definitions.values(), key=lambda item: item.tool_id)
+            if self._availability_checker is None or self._availability_checker(definition.tool_id)
         ]
 
     def bind_context_input(
@@ -443,6 +447,7 @@ class ToolRegistry:
             ) from exc
 
         try:
+            await cancellation_checkpoint()
             result = await definition.handler(validated_input, context)
         except GatewayClientError as exc:
             error_code = exc.code or type(exc).__name__

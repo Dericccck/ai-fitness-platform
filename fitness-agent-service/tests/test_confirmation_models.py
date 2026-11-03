@@ -87,16 +87,18 @@ def test_expired_confirmation_cannot_be_approved_or_executed() -> None:
         expired.expire(now - timedelta(seconds=2))
 
 
-def test_retryable_failure_can_be_requeued_without_changing_approval() -> None:
+def test_uncertain_failure_preserves_original_credential_and_cannot_be_requeued() -> None:
     now = datetime.now(UTC)
     failed = record().approve(now, "decision-1").issue_credential("jti-1", now).claim_execution(now)
     retryable = failed.finish_failure(now, "GATEWAY_TIMEOUT", retryable=True)
-    requeued = retryable.requeue_retryable()
-
-    assert requeued.authorization_status == "APPROVED"
-    assert requeued.execution_status == "NOT_STARTED"
-    assert requeued.credential_jti is None
-    assert requeued.credential_consumed_at is None
+    assert retryable.authorization_status == "APPROVED"
+    assert retryable.execution_status == "UNKNOWN"
+    assert retryable.credential_jti == "jti-1"
+    assert retryable.credential_consumed_at == now
+    with pytest.raises(ConfirmationStateError):
+        retryable.requeue_retryable()
+    with pytest.raises(ConfirmationStateError):
+        retryable.issue_credential("jti-2", now)
 
 
 def test_unknown_execution_can_converge_after_downstream_reconciliation() -> None:

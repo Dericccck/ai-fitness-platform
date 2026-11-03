@@ -24,6 +24,7 @@ from app.infrastructure.model_usage import (
     record_usage,
     usage_context,
 )
+from app.streaming.control import cancellation_checkpoint, check_cancelled
 from app.streaming.events import AnswerFilter, emit_event, streaming_enabled
 
 _logger = structlog.get_logger("agent.model_gateway")
@@ -364,6 +365,7 @@ class ModelGateway:
         request_id, run_id = usage_context()
         provider = urlparse(self.settings.llm_base_url).hostname or "configured-provider"
         for attempt in range(1, self.settings.llm_max_attempts + 1):
+            await cancellation_checkpoint()
             probe = self.protection.breaker.enter()
             usage = ModelUsage(
                 call_id=uuid4().hex,
@@ -430,7 +432,8 @@ class ModelGateway:
                 # 取消不能吞掉；有限时间内保存未知用量，随后继续向上传播取消。
                 try:
                     async with asyncio.timeout(2):
-                        await asyncio.shield(self._persist_usage(failed))
+                        # 当前取消已被捕获；直接等待有限清理，避免 shield 留下脱离运行的任务。
+                        await self._persist_usage(failed)
                 except Exception as persistence_error:  # noqa: BLE001 - 不能覆盖原始取消
                     _logger.warning(
                         "cancelled_model_usage_unknown", error_type=type(persistence_error).__name__
@@ -476,6 +479,7 @@ class ModelGateway:
         finish_reason: str | None = None
         try:
             async for chunk in stream:
+                check_cancelled()
                 if getattr(chunk, "usage", None) is not None:
                     usage = chunk.usage
                 for choice in chunk.choices:

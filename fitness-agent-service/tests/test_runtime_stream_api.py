@@ -6,6 +6,7 @@ from uuid import uuid4
 from httpx import ASGITransport, AsyncClient
 
 from app.agent.supervisor import SupervisorResponse
+from app.api.routes.agent import _run_owner
 from app.core.config import Settings
 from tests.test_agent_api import FakeSupervisor, build_app
 from tests.test_runtime_streaming import MemoryRunRepository, manager
@@ -59,6 +60,8 @@ async def test_stream_repeated_run_is_canonical_and_not_executed_again() -> None
         )
         assert changed.status_code == 409
     assert len(supervisor.requests) == 1
+    # 未配置异步来源时不回退到旧同步提取，避免绕过用户的提取开关。
+    assert supervisor.requests[0].defer_memory_extraction is True
     await app.state.chat_runs.close()
 
 
@@ -87,3 +90,51 @@ async def test_chat_quota_fail_closed_returns_retry_after() -> None:
         assert failed.status_code == 503 and "secret-connection-string" not in failed.text
     assert not supervisor.requests
     await app.state.chat_runs.close()
+
+
+async def test_cancel_api_auth_scope_quota_and_canonical_response() -> None:
+    import asyncio
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock
+
+    app, _ = stream_app()
+    run_id = str(uuid4())
+    identity = app.state.context_verifier.verify("signed-context")
+    owner = _run_owner(identity)
+    entered = asyncio.Event()
+
+    async def execute(emit: Any) -> dict[str, Any]:
+        entered.set()
+        await asyncio.Event().wait()
+        return {}
+
+    await app.state.chat_runs.start(run_id, owner, "digest", "request", execute)
+    await entered.wait()
+    app.state.settings.chat_rate_limit_enabled = True
+    app.state.cache = SimpleNamespace(consume_fixed_window=AsyncMock(return_value=False))
+    path = f"/api/v1/agent/runs/{run_id}/cancel"
+    headers = {"X-Agent-Context": "signed-context"}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        assert (await client.post(path, json={"cancel_request_id": "stop"})).status_code == 401
+        assert (
+            await client.post(
+                path, headers=headers, json={"cancel_request_id": "stop", "user_id": "other"}
+            )
+        ).status_code == 422
+        await app.state.chat_runs.repository.claim("foreign", "foreign-owner", "digest")
+        assert (
+            await client.post(
+                "/api/v1/agent/runs/foreign/cancel",
+                headers=headers,
+                json={"cancel_request_id": "stop"},
+            )
+        ).status_code == 404
+        response = await client.post(path, headers=headers, json={"cancel_request_id": "stop"})
+        assert response.status_code == 202
+        assert response.json()["status"] == "CANCEL_REQUESTED"
+        await app.state.chat_runs.close()
+        repeated = await client.post(path, headers=headers, json={"cancel_request_id": "stop"})
+        assert repeated.status_code == 200 and repeated.json()["status"] == "CANCELLED"
+        canonical = await client.get(f"/api/v1/agent/runs/{run_id}", headers=headers)
+        assert canonical.json() == repeated.json()
+    app.state.cache.consume_fixed_window.assert_not_awaited()

@@ -73,6 +73,7 @@ public class CustomerServiceTicketRepository {
                                              String subjectUserId) {
         CustomerServiceConfirmation confirmation = actor.getConfirmation();
         String requestId = actor.getRequestId();
+        assertRequestBinding(requestId, actor.getUserId(), confirmation);
         Optional<ExistingTicket> existing = findByRequestId(requestId);
         if (existing.isPresent()) {
             if (!existing.get().payloadHash.equalsIgnoreCase(confirmation.getPayloadHash())) {
@@ -94,6 +95,7 @@ public class CustomerServiceTicketRepository {
                     request.getRelatedResourceType(), request.getRelatedResourceId(), requestId,
                     confirmation.getPayloadHash());
         } catch (DuplicateKeyException exception) {
+            assertRequestBinding(requestId, actor.getUserId(), confirmation);
             ExistingTicket raced = findByRequestId(requestId)
                     .orElseThrow(() -> new IllegalStateException("客服工单幂等记录不存在"));
             if (!raced.payloadHash.equalsIgnoreCase(confirmation.getPayloadHash())) {
@@ -111,6 +113,28 @@ public class CustomerServiceTicketRepository {
                 ticketId, actor.getUserId(), requestId);
         return findById(request.getOrganizationId(), ticketId)
                 .orElseThrow(() -> new IllegalStateException("客服工单写入后无法读取"));
+    }
+
+    /** A stable operation ID can never be rebound to another actor, confirmation, tool or payload. */
+    public void assertRequestBinding(String requestId, String actorId, CustomerServiceConfirmation confirmation) {
+        if (confirmation == null) throw new CustomerServiceConflictException("业务请求已绑定其他确认动作");
+        java.util.List<java.util.Map<String,Object>> rows = jdbc.queryForList(
+                "SELECT c.confirmation_id,c.tool_id,c.action,c.organization_id,c.resource,c.payload_hash, "
+                + "t.created_by_user_id AS actor_id FROM agent_customer_service_confirmation_consumption c "
+                + "LEFT JOIN agent_customer_service_ticket t ON t.create_request_id=c.request_id WHERE c.request_id=? ", requestId);
+        if (rows.isEmpty()) return;
+        if (rows.size() != 1) throw new CustomerServiceConflictException("业务请求已绑定其他确认动作");
+        java.util.Map<String,Object> row = rows.get(0);
+        if (!java.util.Objects.equals(actorId, row.get("actor_id"))
+                || !java.util.Objects.equals(confirmation.getConfirmationId(), row.get("confirmation_id"))
+                || !java.util.Objects.equals(confirmation.getToolId(), row.get("tool_id"))
+                || !java.util.Objects.equals(confirmation.getAction(), row.get("action"))
+                || !java.util.Objects.equals(confirmation.getOrganizationId(), row.get("organization_id"))
+                || !java.util.Objects.equals(confirmation.getResource(), row.get("resource"))
+                || row.get("payload_hash") == null
+                || !confirmation.getPayloadHash().equalsIgnoreCase(row.get("payload_hash").toString())) {
+            throw new CustomerServiceConflictException("业务请求已绑定其他确认动作");
+        }
     }
 
     private void consumeConfirmation(CustomerServiceActor actor,

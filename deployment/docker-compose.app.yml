@@ -1,6 +1,7 @@
 x-agent: &agent
   build:
-    context: ../fitness-agent-service
+    context: ..
+    dockerfile: fitness-agent-service/Dockerfile
   image: ${FITNESS_REGISTRY:-fitness}/fitness-agent-service:${FITNESS_RELEASE_TAG:-local}
   env_file: ${FITNESS_CONFIG_DIR:?set FITNESS_CONFIG_DIR}/agent.env
   restart: unless-stopped
@@ -14,6 +15,13 @@ x-agent: &agent
       limits: {cpus: "2", memory: 8G}
 
 x-worker-environment: &worker-environment
+  AGENT_GATEWAY_BASE_URL: http://gateway:8081
+  # Workers keep only internal read/reconciliation channels, never MCP/write credentials.
+  AGENT_MCP_ENABLED: "false"
+  AGENT_MCP_URL: ""
+  AGENT_MCP_SERVICE_TOKEN: ""
+  AGENT_GATEWAY_HTTP_EXECUTION_SERVICE_TOKEN: ""
+  AGENT_GATEWAY_INTERNAL_SERVICE_TOKEN: ""
   AGENT_DB_POOL_SIZE: "2"
   AGENT_DB_MAX_OVERFLOW: "0"
   AGENT_CHECKPOINT_POOL_MIN_SIZE: "1"
@@ -41,15 +49,45 @@ services:
       AGENT_CHECKPOINT_POOL_MIN_SIZE: "1"
       AGENT_CHECKPOINT_POOL_MAX_SIZE: "3"
       AGENT_GATEWAY_BASE_URL: http://gateway:8081
+      AGENT_MCP_ENABLED: "true"
+      AGENT_MCP_URL: http://fitness-mcp:8001/mcp
+      AGENT_MCP_ALLOW_PRIVATE_HTTP: "true"
     depends_on:
       agent-migrate: {condition: service_completed_successfully}
       gateway: {condition: service_healthy}
+      fitness-mcp: {condition: service_started}
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8090/health/ready',timeout=5)"]
       interval: 15s
       timeout: 6s
       start_period: 180s
       retries: 3
+
+  fitness-mcp:
+    build:
+      context: ..
+      dockerfile: fitness-mcp-service/Dockerfile
+    image: ${FITNESS_REGISTRY:-fitness}/fitness-mcp-service:${FITNESS_RELEASE_TAG:-local}
+    env_file: ${FITNESS_CONFIG_DIR}/mcp.env
+    environment:
+      MCP_GATEWAY_BASE_URL: http://gateway:8081
+      MCP_RESOURCE_URL: http://fitness-mcp:8001/mcp
+      MCP_ALLOWED_HOSTS: '["fitness-mcp:8001","127.0.0.1:8001","localhost:8001"]'
+      MCP_ALLOWED_ORIGINS: '[]'
+    restart: unless-stopped
+    stop_grace_period: 120s
+    networks: [fitness]
+    depends_on:
+      gateway: {condition: service_healthy}
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8001/health/ready',timeout=3)"]
+      interval: 15s
+      timeout: 4s
+      start_period: 30s
+      retries: 3
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 512M}
 
   web:
     build: {context: ../fitness-web}
@@ -255,6 +293,17 @@ services:
     depends_on: {agent-migrate: {condition: service_completed_successfully}}
     healthcheck: *worker-health
     profiles: ["maintenance"]
+
+  memory-extraction-worker:
+    <<: *agent
+    command: ["python", "-m", "app.memory_extraction_worker_main"]
+    environment:
+      <<: *worker-environment
+      AGENT_MEMORY_EXTRACTION_WORKER_METRICS_PORT: "9100"
+      AGENT_LOCAL_MODEL_WARMUP_ENABLED: "false"
+      AGENT_GATEWAY_BASE_URL: http://gateway:8081
+    depends_on: {agent-migrate: {condition: service_completed_successfully}}
+    healthcheck: *worker-health
 
   memory-retention-worker:
     <<: *agent

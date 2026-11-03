@@ -14,7 +14,7 @@ from .models import (
     MemoryValidationError,
     validate_memory_owner,
 )
-from .repository import MemoryRepository
+from .repository import MemoryRepository, MemorySettings
 
 _MEMORY_TYPES: frozenset[str] = frozenset(
     {
@@ -56,6 +56,36 @@ class MemoryService:
         self.summary_repository = summary_repository
         self.checkpoint_cleaner = checkpoint_cleaner
 
+    async def get_settings(
+        self, *, identity: AgentIdentity, organization_id: str
+    ) -> MemorySettings:
+        validate_memory_owner(identity, organization_id)
+        return await self.repository.get_settings(
+            identity=identity, organization_id=organization_id
+        )
+
+    async def update_settings(
+        self,
+        *,
+        identity: AgentIdentity,
+        organization_id: str,
+        expected_revision: int,
+        extraction_enabled: bool | None,
+        personalization_enabled: bool | None,
+    ) -> MemorySettings:
+        validate_memory_owner(identity, organization_id)
+        if expected_revision < 0 or (
+            extraction_enabled is None and personalization_enabled is None
+        ):
+            raise MemoryValidationError("请选择要更新的 Memory 设置并提供有效版本")
+        return await self.repository.update_settings(
+            identity=identity,
+            organization_id=organization_id,
+            expected_revision=expected_revision,
+            extraction_enabled=extraction_enabled,
+            personalization_enabled=personalization_enabled,
+        )
+
     async def save(
         self,
         *,
@@ -69,7 +99,7 @@ class MemoryService:
         source_request_id: str,
         request_id: str | None = None,
     ) -> FitnessMemory:
-        """保存用户明确确认的结构化偏好；同一键再次保存表示纠正旧记忆。"""
+        """新增用户确认的结构化偏好；修改已有记忆须使用带版本的纠正操作。"""
 
         validate_memory_owner(identity, organization_id)
         normalized_type, normalized_key, content, expires_at = _normalize_memory_payload(
@@ -150,6 +180,15 @@ class MemoryService:
         validate_memory_owner(identity, organization_id)
         return await self.repository.list_active(identity=identity, organization_id=organization_id)
 
+    async def list_personalization(
+        self, *, identity: AgentIdentity, organization_id: str
+    ) -> list[FitnessMemory]:
+        """供模型使用的读取遵守主体机构的开关，管理与冲突比较仍可读取。"""
+        validate_memory_owner(identity, organization_id)
+        return await self.repository.list_active(
+            identity=identity, organization_id=organization_id, personalization_only=True
+        )
+
     async def list_authorized_student_training_context(
         self, *, student_id: str, organization_id: str
     ) -> list[FitnessMemory]:
@@ -201,10 +240,17 @@ class MemoryService:
         if self.summary_repository is None:
             return
         try:
-            thread_ids = await self.summary_repository.list_thread_ids_for_subject(subject_user_id)
             await self.summary_repository.invalidate_for_subject(subject_user_id)
-            if self.checkpoint_cleaner is not None and thread_ids:
-                await self.checkpoint_cleaner.delete_threads(thread_ids)
+            # Checkpoint 中的 messages 和 turn_base_messages 可能包含旧记忆，但也有
+            # tool call/result 与中断的业务确认；目前没有可靠的内容级依赖标注，不能
+            # 安全地选择性清除，也不能删除整个执行状态。调用方须在恢复上下文时执行
+            # 版本屏障/重建；现阶段旧状态仍有残留，不能声称撤销后完全不会复用。
+            if self.checkpoint_cleaner is not None:
+                import structlog
+
+                structlog.get_logger("memory.lifecycle").warning(
+                    "checkpoint_context_requires_rebuild", subject_user_id=subject_user_id
+                )
         except Exception:  # noqa: BLE001 - 派生缓存清理不能回滚已提交的 Memory 撤销
             # Memory 已经完成撤销；摘要清理失败必须可观测，但不能让用户重试造成
             # 版本冲突。后续请求也会在摘要读取失败时安全降级为不使用摘要。

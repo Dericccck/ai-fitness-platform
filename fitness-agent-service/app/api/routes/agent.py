@@ -12,8 +12,9 @@ from collections.abc import Awaitable, Callable
 from typing import Any, cast
 from uuid import uuid4
 
+import structlog
 from fastapi import APIRouter, Header, HTTPException, Request, status
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
 from app.agent.supervisor import (
@@ -30,10 +31,13 @@ from app.infrastructure.agent_context import (
     conversation_thread_id,
 )
 from app.infrastructure.gateway_client import GatewayRequestContext
+from app.memory.source import MemorySource, MemorySourceConflict, MemorySourceRepository
 from app.proactive.candidate_repository import ProactiveCandidateRepository
-from app.streaming.repository import RunConflict, request_digest
+from app.streaming.control import current_control, run_owner
+from app.streaming.repository import ChatRun, RunConflict, RunSessionBusy, request_digest
 
 router = APIRouter(prefix="/api/v1/agent", tags=["agent"])
+_logger = structlog.get_logger("agent.memory_source")
 
 
 class AgentChatRequest(BaseModel):
@@ -118,6 +122,24 @@ async def _chat_impl(
     request_id = normalize_context_id(x_request_id) or str(uuid4())
     trace_id = normalize_context_id(x_trace_id) or request_id
     supervisor = request.app.state.supervisor
+    memory_sources: MemorySourceRepository | None = getattr(
+        request.app.state, "memory_sources", None
+    )
+    memory_source: MemorySource | None = None
+    control = current_control()
+    thread_id = conversation_thread_id(payload.conversation_id, identity)
+    if memory_sources is not None:
+        try:
+            memory_source = await memory_sources.capture(
+                identity=identity,
+                thread_id=thread_id,
+                source_request_id=control.run_id if control is not None else request_id,
+                message=payload.message,
+            )
+        except MemorySourceConflict as exc:
+            raise HTTPException(409, "来源请求 ID 已绑定其他输入") from exc
+        except Exception as exc:  # noqa: BLE001 - 记忆辅助故障不阻断普通业务回答
+            _logger.warning("memory_source_capture_failed", error_type=type(exc).__name__)
     user_message = payload.message
     if payload.proactive_candidate_id is not None:
         candidate_repository = cast(
@@ -156,9 +178,12 @@ async def _chat_impl(
                 confirmation_token=x_confirmation_token,
             ),
             conversation_id=payload.conversation_id,
-            thread_id=conversation_thread_id(payload.conversation_id, identity),
+            thread_id=thread_id,
             locale=payload.locale,
             identity=identity,
+            # 自动提取只允许走受开关、身份和 epoch 保护的异步链路。
+            # 全局关闭时不能回退到旧同步提取，否则会绕过用户的提取开关。
+            defer_memory_extraction=True,
         )
         response = (
             await supervisor.stream(supervisor_request, emit)
@@ -179,6 +204,16 @@ async def _chat_impl(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail="Agent 服务暂时不可用",
         ) from exc
+
+    if memory_sources is not None and memory_source is not None and response.status == "COMPLETED":
+        if control is not None and control.completion is not None:
+            # 与流式运行终态、会话完成事实和摘要在同一数据库事务提交。
+            control.completion.memory_source = memory_source
+        elif control is None:
+            try:
+                await memory_sources.complete(memory_source)
+            except Exception as exc:  # noqa: BLE001 - 保留普通对话结果
+                _logger.warning("memory_extraction_enqueue_failed", error_type=type(exc).__name__)
 
     return AgentChatResponse(
         conversation_id=payload.conversation_id,
@@ -216,15 +251,7 @@ def _verified_identity(request: Request, signed: str | None) -> AgentIdentity:
 
 def _run_owner(identity: AgentIdentity) -> str:
     # 有效权限变化后不能继续读取旧范围的结果；不绑定临时签名/过期时间。
-    return request_digest(
-        {
-            "subject": identity.subject,
-            "organizations": sorted(identity.organization_ids),
-            "roles": sorted(identity.roles),
-            "capabilities": sorted(identity.capabilities),
-            "qualifications": sorted(identity.qualifications),
-        }
-    )
+    return run_owner(identity)
 
 
 @router.post("/chat/stream")
@@ -261,10 +288,22 @@ async def chat_stream(
 
     try:
         await manager.start(
-            payload.run_id, owner, request_digest(body.model_dump()), request_id, execute
+            payload.run_id,
+            owner,
+            request_digest(body.model_dump()),
+            request_id,
+            execute,
+            scope=request_digest(
+                {
+                    "owner": owner,
+                    "thread": conversation_thread_id(payload.conversation_id, identity),
+                }
+            ),
         )
     except RunConflict as exc:
         raise HTTPException(409, "任务 ID 已被使用，请勿修改原请求后重试") from exc
+    except RunSessionBusy as exc:
+        raise HTTPException(409, "上一任务正在执行或停止，请稍后继续") from exc
     except RuntimeError as exc:
         raise HTTPException(503, "任务服务暂时不可用") from exc
     return StreamingResponse(
@@ -286,9 +325,44 @@ async def get_chat_run(
     run = await request.app.state.chat_runs.repository.get(run_id, _run_owner(identity))
     if run is None:
         raise HTTPException(404, "未找到任务或结果已过期")
+    return _run_response(run)
+
+
+def _run_response(run: ChatRun) -> dict[str, Any]:
     return {
         "run_id": run.run_id,
         "status": run.status,
         "response": run.result,
         "error_code": run.error_code,
+        "stop_reason": run.stop_reason,
+        "cancel_requested_at": run.cancel_requested_at.isoformat()
+        if run.cancel_requested_at
+        else None,
+        "cancelled_at": run.cancelled_at.isoformat() if run.cancelled_at else None,
     }
+
+
+class CancelChatRunRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    cancel_request_id: str = Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9._:-]+$")
+
+
+@router.post("/runs/{run_id}/cancel")
+async def cancel_chat_run(
+    run_id: str,
+    payload: CancelChatRunRequest,
+    request: Request,
+    x_agent_context: str | None = Header(default=None),
+) -> JSONResponse:
+    identity = _verified_identity(request, x_agent_context)
+    try:
+        run = await request.app.state.chat_runs.cancel(
+            run_id, _run_owner(identity), payload.cancel_request_id
+        )
+    except Exception as exc:
+        raise HTTPException(503, "停止结果暂时无法确认，请保留任务记录并查询") from exc
+    if run is None:
+        raise HTTPException(404, "未找到任务或结果已过期")
+    return JSONResponse(
+        _run_response(run), status_code=(202 if run.status == "CANCEL_REQUESTED" else 200)
+    )

@@ -17,6 +17,7 @@ class ProductionConfigContractError(ValueError):
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 KEY_PATTERN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 TEMPLATES = {
+    "mcp": PROJECT_ROOT / "deployment/environments/mcp.production.env.example",
     "agent": PROJECT_ROOT / "deployment/environments/agent.production.env.example",
     "gateway": PROJECT_ROOT / "deployment/environments/gateway.production.env.example",
     "booking": PROJECT_ROOT / "deployment/environments/booking.production.env.example",
@@ -26,6 +27,18 @@ TEMPLATES = {
 }
 
 REQUIRED_KEYS = {
+    "mcp": {
+        "MCP_ENVIRONMENT",
+        "MCP_RESOURCE_URL",
+        "MCP_GATEWAY_BASE_URL",
+        "MCP_GATEWAY_SERVICE_TOKEN",
+        "MCP_SERVICE_CREDENTIALS_JSON",
+        "MCP_ALLOWED_HOSTS",
+        "MCP_ALLOWED_ORIGINS",
+        "MCP_CONTEXT_ALGORITHM",
+        "MCP_CONTEXT_JWKS_URL",
+        "MCP_ALLOW_INSECURE_HS256",
+    },
     "agent": {
         "AGENT_ENVIRONMENT",
         "AGENT_BROWSER_AUTH_ENABLED",
@@ -115,6 +128,10 @@ REQUIRED_KEYS = {
 }
 
 FIXED_VALUES = {
+    ("mcp", "MCP_ENVIRONMENT"): "production",
+    ("mcp", "MCP_CONTEXT_ALGORITHM"): "RS256",
+    ("mcp", "MCP_ALLOW_INSECURE_HS256"): "false",
+    ("gateway", "GATEWAY_ALLOW_LEGACY_SERVICE_TOKEN"): "false",
     ("agent", "AGENT_ENVIRONMENT"): "production",
     ("agent", "AGENT_BROWSER_AUTH_ENABLED"): "true",
     ("agent", "AGENT_BROWSER_AUTH_COOKIE_SECURE"): "true",
@@ -139,6 +156,12 @@ FIXED_VALUES = {
 }
 
 SENSITIVE_KEYS = {
+    "AGENT_MCP_SERVICE_TOKEN",
+    "AGENT_GATEWAY_QUERY_SERVICE_TOKEN",
+    "AGENT_GATEWAY_HTTP_EXECUTION_SERVICE_TOKEN",
+    "AGENT_GATEWAY_RECONCILIATION_SERVICE_TOKEN",
+    "MCP_GATEWAY_SERVICE_TOKEN",
+    "MCP_SERVICE_CREDENTIALS_JSON",
     "AGENT_BROWSER_AUTH_UPSTREAM_SERVICE_TOKEN",
     "DEEPSEEK_API_KEY",
     "AGENT_DATABASE_URL",
@@ -200,7 +223,9 @@ def validate_templates(templates: dict[str, Path] | None = None) -> None:
                 )
         for key, value in values.items():
             lowered = value.lower()
-            if any(marker in lowered for marker in ("127.0.0.1", "localhost", ":3307")):
+            if key != "MCP_ALLOWED_HOSTS" and any(
+                marker in lowered for marker in ("127.0.0.1", "localhost", ":3307")
+            ):
                 raise ProductionConfigContractError(
                     f"{service} 的 {key} 仍引用本地地址：请改为生产服务发现地址"
                 )
@@ -220,7 +245,7 @@ def main() -> int:
     except ProductionConfigContractError as exc:
         print(f"生产配置契约校验失败：{exc}")
         return 1
-    print("生产配置契约校验通过：5 个服务模板符合发布边界")
+    print(f"生产配置契约校验通过：{len(TEMPLATES)} 个服务模板符合发布边界")
     return 0
 
 

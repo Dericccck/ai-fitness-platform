@@ -1,0 +1,17 @@
+**/.git
+**/.venv
+**/__pycache__
+**/.pytest_cache
+**/.mypy_cache
+**/.ruff_cache
+**/node_modules
+**/target
+**/.env
+**/*.env
+**/.DS_Store
+.cache
+tmp
+output
+exports
+fitness-agent-service/var
+fitness-agent-service/data

@@ -10,10 +10,12 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from typing import Any, cast
+from uuid import uuid4
 
 from sqlalchemy import bindparam, text
 
 from app.infrastructure.database import Database
+from app.streaming.control import current_control
 
 from .models import (
     AuthorizationStatus,
@@ -24,6 +26,7 @@ from .models import (
     ConfirmationStateError,
     ExecutionStatus,
 )
+from .reconciliation_policy import RECONCILABLE_TOOL_IDS
 
 
 class ConfirmationNotFound(ConfirmationStateError):
@@ -48,23 +51,40 @@ class ConfirmationRepository:
                 risk_level, action, resource_type, resource_id, expected_resource_version,
                 request_id, payload_hash, display_summary, payload_ciphertext, payload_key_version,
                 authorization_status, execution_status, expires_at, actor_roles,
-                actor_organization_ids
+                actor_organization_ids, source_run_id, transport, contract_version
             ) VALUES (
                 :id, 1, :thread_id, :subject_user_id, :organization_id, :tool_id,
                 :risk_level, :action, :resource_type, :resource_id, :expected_resource_version,
                 :request_id, :payload_hash, CAST(:display_summary AS JSONB), :payload_ciphertext,
                 :payload_key_version, 'PENDING', 'NOT_STARTED', :expires_at,
-                :actor_roles, :actor_organization_ids
+                :actor_roles, :actor_organization_ids, :source_run_id, :transport, :contract_version
             )
             ON CONFLICT (request_id) DO NOTHING
             RETURNING *
             """
         )
         async with self._database.engine.begin() as connection:
+            control = current_control()
+            if control is not None:
+                control.check()
+                allowed = await connection.execute(
+                    text("""
+                    SELECT 1 FROM agent_chat_runs WHERE run_id=:id AND owner_hash=:owner
+                    AND status='RUNNING' AND execution_deadline > CURRENT_TIMESTAMP FOR UPDATE
+                """),
+                    {"id": control.run_id, "owner": control.owner},
+                )
+                if allowed.first() is None:
+                    control.cancelled = True
+                    control.check()
             row = (
                 (
                     await connection.execute(
-                        statement, _action_params(confirmation_id, action, expires_at)
+                        statement,
+                        {
+                            **_action_params(confirmation_id, action, expires_at),
+                            "source_run_id": control.run_id if control is not None else None,
+                        },
                     )
                 )
                 .mappings()
@@ -83,6 +103,53 @@ class ConfirmationRepository:
                 _event_for(record, "CREATED", action, actor_roles=action.actor_roles),
             )
             return record
+
+    async def cancel_for_run(self, run_id: str) -> None:
+        """执行者已退出后，只撤销该运行创建且尚未执行的确认单。"""
+        async with self._database.engine.begin() as connection:
+            run = (
+                (
+                    await connection.execute(
+                        text("""
+                SELECT cancel_request_id FROM agent_chat_runs
+                WHERE run_id=:id AND cancel_requested_at IS NOT NULL FOR UPDATE
+            """),
+                        {"id": run_id},
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if run is None:
+                return
+            rows = await connection.execute(
+                text("""
+                SELECT * FROM agent_action_confirmations WHERE source_run_id=:id
+                AND authorization_status IN ('PENDING','APPROVED')
+                AND execution_status='NOT_STARTED' ORDER BY id FOR UPDATE
+            """),
+                {"id": run_id},
+            )
+            now = datetime.now(UTC)
+            for row in rows.mappings():
+                record = _record_from_row(row)
+                if record.is_expired(now):
+                    changed = record.expire(now)
+                    event_type: ConfirmationEventType = "EXPIRED"
+                else:
+                    changed = record.cancel(now, f"{run['cancel_request_id']}:{record.id}")
+                    event_type = "CANCELLED"
+                await self._update_record(connection, changed, expected_version=record.version)
+                await self._insert_event(
+                    connection,
+                    _event_for(
+                        changed,
+                        event_type,
+                        None,
+                        actor_user_id=record.subject_user_id,
+                        actor_roles=record.actor_roles,
+                    ),
+                )
 
     async def get_for_subject(
         self, confirmation_id: str, subject_user_id: str, organization_ids: Sequence[str]
@@ -281,6 +348,24 @@ class ConfirmationRepository:
         """原子领取执行权；只有一个恢复请求可以从 NOT_STARTED 进入 RUNNING。"""
 
         async with self._database.engine.begin() as connection:
+            source = (
+                await connection.execute(
+                    text("""
+                SELECT source_run_id FROM agent_action_confirmations WHERE id=:id
+            """),
+                    {"id": confirmation_id},
+                )
+            ).scalar_one_or_none()
+            if source is not None:
+                ready = await connection.execute(
+                    text("""
+                    SELECT 1 FROM agent_chat_runs WHERE run_id=:id AND status='COMPLETED'
+                    FOR SHARE
+                """),
+                    {"id": source},
+                )
+                if ready.first() is None:
+                    raise ConfirmationStateError("来源对话尚未完成或已停止")
             row = await self._select_for_update_unscoped(connection, confirmation_id)
             record = _record_from_row(row)
             claimed = record.claim_execution(now)
@@ -314,7 +399,7 @@ class ConfirmationRepository:
                 if not error_code:
                     raise ConfirmationStateError("失败执行必须提供错误码")
                 finished = record.finish_failure(now, error_code, retryable)
-                event_type = "EXECUTION_FAILED"
+                event_type = "EXECUTION_UNKNOWN" if retryable else "EXECUTION_FAILED"
             await self._update_record(connection, finished, expected_version=record.version)
             await self._insert_event(
                 connection, _event_for(finished, event_type, None, trace_id=trace_id)
@@ -329,12 +414,124 @@ class ConfirmationRepository:
         async with self._database.engine.begin() as connection:
             row = await self._select_for_update_unscoped(connection, confirmation_id)
             record = _record_from_row(row)
+            # 成功/确定拒绝可能与取消或对账并发完成，不得被迟到的 UNKNOWN 覆盖。
+            if record.execution_status not in {"RUNNING", "FAILED_RETRYABLE"}:
+                return record
             unknown = record.mark_unknown(now)
             await self._update_record(connection, unknown, expected_version=record.version)
             await self._insert_event(
                 connection, _event_for(unknown, "EXECUTION_UNKNOWN", None, trace_id=trace_id)
             )
             return unknown
+
+    async def claim_reconciliation_batch(
+        self, *, older_than_seconds: int = 300, limit: int = 8, lease_seconds: int = 60
+    ) -> list[ConfirmationRecord]:
+        """原子领取到期的 Java 操作查询；持久化租约让多 Worker 公平分摊。"""
+
+        if older_than_seconds < 1 or not 1 <= limit <= 500 or not 1 <= lease_seconds <= 3600:
+            raise ValueError("对账领取参数无效")
+        statement = text("""
+            WITH due AS (
+                SELECT id FROM agent_action_confirmations
+                WHERE execution_status IN ('RUNNING', 'UNKNOWN', 'FAILED_RETRYABLE')
+                  AND tool_id=ANY(CAST(:tools AS TEXT[]))
+                  AND COALESCE(execution_started_at, finished_at, created_at)
+                      <= CURRENT_TIMESTAMP - (:age * INTERVAL '1 second')
+                  AND (reconciliation_next_attempt_at IS NULL
+                       OR reconciliation_next_attempt_at <= CURRENT_TIMESTAMP)
+                  AND (reconciliation_lease_until IS NULL
+                       OR reconciliation_lease_until <= CURRENT_TIMESTAMP)
+                ORDER BY COALESCE(reconciliation_next_attempt_at, execution_started_at,
+                                  finished_at, created_at), id
+                FOR UPDATE SKIP LOCKED
+                LIMIT :limit
+            )
+            UPDATE agent_action_confirmations c
+            SET reconciliation_claim_token=:claim_token,
+                reconciliation_lease_until=CURRENT_TIMESTAMP + (:lease * INTERVAL '1 second'),
+                reconciliation_last_attempt_at=CURRENT_TIMESTAMP,
+                reconciliation_attempts=reconciliation_attempts+1
+            FROM due WHERE c.id=due.id RETURNING c.*
+        """)
+        async with self._database.engine.begin() as connection:
+            rows = (
+                (
+                    await connection.execute(
+                        statement,
+                        {
+                            "tools": sorted(RECONCILABLE_TOOL_IDS),
+                            "age": older_than_seconds,
+                            "limit": limit,
+                            "lease": lease_seconds,
+                            "claim_token": str(uuid4()),
+                        },
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        return [_record_from_row(row) for row in rows]
+
+    async def finish_reconciliation_attempt(
+        self,
+        confirmation_id: str,
+        claim_token: str,
+        *,
+        retry_base_seconds: int = 30,
+        retry_max_seconds: int = 3600,
+    ) -> bool:
+        """只释放自己的查询租约，未核实结果指数退避；绝不改变业务执行状态。"""
+
+        if not claim_token or not 1 <= retry_base_seconds <= retry_max_seconds <= 86400:
+            raise ValueError("对账退避参数无效")
+        statement = text("""
+            UPDATE agent_action_confirmations
+            SET reconciliation_claim_token=NULL, reconciliation_lease_until=NULL,
+                reconciliation_next_attempt_at=CASE
+                    WHEN execution_status IN ('RUNNING','UNKNOWN','FAILED_RETRYABLE') THEN
+                        CURRENT_TIMESTAMP + (LEAST(:maximum,
+                            :base * POWER(2, LEAST(GREATEST(reconciliation_attempts-1,0),20)))
+                            * INTERVAL '1 second')
+                    ELSE NULL END
+            WHERE id=:id AND reconciliation_claim_token=:claim_token
+        """)
+        async with self._database.engine.begin() as connection:
+            result = await connection.execute(
+                statement,
+                {
+                    "id": confirmation_id,
+                    "claim_token": claim_token,
+                    "base": retry_base_seconds,
+                    "maximum": retry_max_seconds,
+                },
+            )
+            return bool(result.rowcount == 1)
+
+    async def reconciliation_stats(self) -> dict[str, int | float]:
+        """不含主体或业务 ID 的固定汇总，供后台缓存并更新监控指标。"""
+
+        statement = text("""
+            SELECT COUNT(*) FILTER (WHERE tool_id=ANY(CAST(:tools AS TEXT[]))) AS pending,
+                COALESCE(GREATEST(0, EXTRACT(EPOCH FROM CURRENT_TIMESTAMP -
+                    MIN(COALESCE(execution_started_at, finished_at, created_at))
+                    FILTER (WHERE tool_id=ANY(CAST(:tools AS TEXT[]))))),0) AS oldest_age_seconds,
+                COUNT(*) FILTER (WHERE tool_id IN ('fitness.memory.save.v1','fitness.memory.revoke.v1')
+                    AND execution_status='UNKNOWN') AS manual
+            FROM agent_action_confirmations
+            WHERE execution_status IN ('RUNNING','UNKNOWN','FAILED_RETRYABLE')
+        """)
+        async with self._database.engine.connect() as connection:
+            row = (
+                (await connection.execute(statement, {"tools": sorted(RECONCILABLE_TOOL_IDS)}))
+                .mappings()
+                .one()
+            )
+        return {
+            "pending": int(row["pending"]),
+            "oldest_age_seconds": float(row["oldest_age_seconds"]),
+            "manual": int(row["manual"]),
+        }
 
     async def list_stale_running(
         self, *, older_than_seconds: int = 300, limit: int = 100
@@ -346,9 +543,10 @@ class ConfirmationRepository:
         statement = text(
             """
             SELECT * FROM agent_action_confirmations
-            WHERE execution_status IN ('RUNNING', 'UNKNOWN')
-              AND execution_started_at <= CURRENT_TIMESTAMP - (:age * INTERVAL '1 second')
-            ORDER BY execution_started_at, id
+            WHERE execution_status IN ('RUNNING', 'UNKNOWN', 'FAILED_RETRYABLE')
+              AND COALESCE(execution_started_at, finished_at, created_at)
+                  <= CURRENT_TIMESTAMP - (:age * INTERVAL '1 second')
+            ORDER BY COALESCE(execution_started_at, finished_at, created_at), id
             LIMIT :limit
             """
         )
@@ -530,6 +728,8 @@ def _action_params(
         "expires_at": expires_at,
         "actor_roles": list(action.actor_roles),
         "actor_organization_ids": list(action.actor_organization_ids),
+        "transport": action.transport,
+        "contract_version": action.contract_version,
     }
 
 
@@ -591,6 +791,13 @@ def _record_from_row(row: Any) -> ConfirmationRecord:
         last_error_code=row["last_error_code"],
         actor_roles=tuple(row["actor_roles"] or ()),
         actor_organization_ids=tuple(row["actor_organization_ids"] or ()),
+        transport=row.get("transport", "http"),
+        contract_version=row.get("contract_version", "v1"),
+        reconciliation_next_attempt_at=row.get("reconciliation_next_attempt_at"),
+        reconciliation_last_attempt_at=row.get("reconciliation_last_attempt_at"),
+        reconciliation_attempts=row.get("reconciliation_attempts", 0),
+        reconciliation_lease_until=row.get("reconciliation_lease_until"),
+        reconciliation_claim_token=row.get("reconciliation_claim_token"),
     )
 
 

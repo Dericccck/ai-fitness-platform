@@ -12,7 +12,7 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import UTC, datetime
 from typing import Any, cast
 
 import structlog
@@ -23,6 +23,7 @@ from app.confirmation.cipher import AesGcmPayloadCipher, ConfirmationPayloadCiph
 from app.core.metrics import HttpMetrics
 from app.infrastructure.database import Database
 from app.infrastructure.model_gateway import JsonModelTurn, ModelGateway
+from app.streaming.completion import SummaryDraft, publish_summary
 
 _logger = structlog.get_logger("agent.session_summary")
 
@@ -47,6 +48,7 @@ class SessionSummaryRecord:
     summary_version: int
     message_count: int
     retention_until: datetime
+    source_run_id: str | None = None
 
 
 class SessionSummaryPayload(BaseModel):
@@ -66,13 +68,35 @@ class SessionSummaryRepository:
     def __init__(self, database: Database) -> None:
         self._database = database
 
+    async def current_memory_revision(self, subject_user_id: str) -> int:
+        """生成摘要前读取主体版本；发布时再次加锁校验。"""
+        async with self._database.engine.begin() as connection:
+            params = {"subject": subject_user_id}
+            await connection.execute(
+                text("""
+                INSERT INTO agent_memory_subject_fences (subject_user_id)
+                VALUES (:subject) ON CONFLICT DO NOTHING
+            """),
+                params,
+            )
+            return int(
+                (
+                    await connection.execute(
+                        text("""
+                SELECT revision FROM agent_memory_subject_fences WHERE subject_user_id=:subject
+            """),
+                        params,
+                    )
+                ).scalar_one()
+            )
+
     async def get_for_subject(
         self, thread_id: str, subject_user_id: str
     ) -> SessionSummaryRecord | None:
         statement = text(
             """
             SELECT thread_id, subject_user_id, summary_ciphertext, summary_key_version,
-                   summary_hash, summary_version, message_count, retention_until
+                   summary_hash, summary_version, message_count, retention_until, source_run_id
             FROM agent_session_summaries
             WHERE thread_id = :thread_id AND subject_user_id = :subject_user_id
             """
@@ -148,6 +172,10 @@ class SessionSummaryRepository:
             raise SessionSummaryScopeError("会话线程已绑定到其他主体")
         return _record_from_row(row)
 
+    async def publish(self, draft: SummaryDraft) -> None:
+        async with self._database.engine.begin() as connection:
+            await publish_summary(connection, draft, None)
+
     async def delete_due(self, *, limit: int) -> int:
         """删除已过保留期限的摘要，使用 SKIP LOCKED 支持多个清理实例并行。"""
 
@@ -190,7 +218,8 @@ class SessionSummaryRepository:
         if not subject_user_id.strip():
             raise ValueError("主体 ID 不能为空")
         statement = text(
-            "SELECT thread_id FROM agent_session_summaries WHERE subject_user_id = :subject_user_id"
+            "SELECT thread_id FROM agent_session_summaries WHERE subject_user_id = :subject_user_id "
+            "UNION SELECT thread_id FROM agent_chat_history_commits WHERE subject_user_id = :subject_user_id"
         )
         async with self._database.engine.connect() as connection:
             rows = (
@@ -235,7 +264,9 @@ class SessionSummaryService:
         """解密摘要；密钥版本或完整性不匹配时拒绝使用，而不是猜测内容。"""
 
         record = await self.repository.get_for_subject(thread_id, subject_user_id)
-        if record is None:
+        if record is None or (
+            record.retention_until is not None and record.retention_until <= datetime.now(UTC)
+        ):
             return None
         try:
             plaintext = self.cipher.decrypt(
@@ -251,15 +282,20 @@ class SessionSummaryService:
             return None
         return plaintext
 
-    async def maybe_summarize(
+    async def prepare_summary(
         self,
         *,
         thread_id: str,
         subject_user_id: str,
         messages: list[dict[str, Any]],
-    ) -> str | None:
-        """达到增量阈值后生成摘要；摘要失败不阻断本轮已完成的回答。"""
+        memory_revision: int | None = None,
+    ) -> SummaryDraft | None:
+        """仅使用读取历史之前捕获的版本；旧/未知版本不再生成摘要。"""
 
+        if memory_revision is None:
+            return None
+        if await self.repository.current_memory_revision(subject_user_id) != memory_revision:
+            return None
         conversation_messages = _conversation_messages(messages)
         existing_record = await self.repository.get_for_subject(thread_id, subject_user_id)
         previous_count = existing_record.message_count if existing_record else 0
@@ -306,21 +342,39 @@ class SessionSummaryService:
             summary.encode("utf-8"),
             associated_data=_associated_data(thread_id, summary_hash),
         )
-        try:
-            await self.repository.upsert(
-                thread_id=thread_id,
-                subject_user_id=subject_user_id,
-                summary_ciphertext=ciphertext,
-                summary_key_version=self.cipher.key_version,
-                summary_hash=summary_hash,
-                message_count=len(conversation_messages),
-                retention_days=self.retention_days,
-            )
-        except Exception:
-            self._record_event("failed")
-            raise
+        return SummaryDraft(
+            thread_id,
+            subject_user_id,
+            ciphertext,
+            self.cipher.key_version,
+            summary_hash,
+            len(conversation_messages),
+            self.retention_days,
+            existing_record.summary_version if existing_record else 0,
+            summary,
+            memory_revision,
+        )
+
+    async def maybe_summarize(
+        self,
+        *,
+        thread_id: str,
+        subject_user_id: str,
+        messages: list[dict[str, Any]],
+        memory_revision: int | None = None,
+    ) -> str | None:
+        """未受管理的兼容入口也按摘要基准版本提交。"""
+        draft = await self.prepare_summary(
+            thread_id=thread_id,
+            subject_user_id=subject_user_id,
+            messages=messages,
+            memory_revision=memory_revision,
+        )
+        if draft is None:
+            return None
+        await self.repository.publish(draft)
         self._record_event("stored")
-        return summary
+        return draft.plaintext
 
     async def _chat_json_with_usage(self, source: str) -> JsonModelTurn:
         """调用支持用量回传的网关；兼容只实现 chat_json 的测试替身。"""
@@ -456,6 +510,7 @@ def _record_from_row(row: Any) -> SessionSummaryRecord:
         summary_version=int(row["summary_version"]),
         message_count=int(row["message_count"]),
         retention_until=row["retention_until"],
+        source_run_id=row.get("source_run_id"),
     )
 
 

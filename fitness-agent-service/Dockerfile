@@ -10,13 +10,14 @@ ENV UV_COMPILE_BYTECODE=1 \
 WORKDIR /service
 
 # 先复制依赖描述，业务代码变化时仍可复用依赖安装层缓存。
-COPY pyproject.toml uv.lock .python-version ./
+COPY fitness-agent-service/pyproject.toml fitness-agent-service/uv.lock fitness-agent-service/.python-version ./
+COPY packages/fitness-tool-contracts /packages/fitness-tool-contracts
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-install-project --no-editable
 
-COPY app ./app
-COPY migrations ./migrations
-COPY alembic.ini ./
+COPY fitness-agent-service/app ./app
+COPY fitness-agent-service/migrations ./migrations
+COPY fitness-agent-service/alembic.ini ./
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --locked --no-dev --no-editable
 

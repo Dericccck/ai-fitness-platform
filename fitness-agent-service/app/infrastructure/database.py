@@ -1,6 +1,6 @@
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, cast
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import AsyncEngine, create_async_engine
@@ -192,6 +192,17 @@ class CheckpointStore:
         await self._pool.close()
         await self._fence_pool.close()
 
+    async def existing_threads(self, thread_ids: Sequence[str]) -> set[str]:
+        """仅查引用，支持 checkpoint 与 Agent 元数据使用不同数据库。"""
+        if not thread_ids:
+            return set()
+        async with self._pool.connection() as connection, connection.cursor() as cursor:
+            await cursor.execute(
+                "SELECT DISTINCT thread_id FROM checkpoints WHERE thread_id = ANY(%s)",
+                (list(thread_ids),),
+            )
+            return {str(cast(Any, row)["thread_id"]) for row in await cursor.fetchall()}
+
     async def delete_threads(self, thread_ids: Sequence[str]) -> int:
         """删除指定会话的 Checkpoint 派生状态。
 
@@ -244,8 +255,30 @@ class Database:
                 (
                     await connection.execute(
                         text("""
-                SELECT to_regclass('public.agent_model_usage') IS NOT NULL
+                SELECT to_regclass('public.agent_chat_history_commits') IS NOT NULL
+                   AND EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_schema='public' AND table_name='agent_session_summaries'
+                       AND column_name='source_run_id')
+                   AND to_regclass('public.agent_model_usage') IS NOT NULL
                    AND to_regclass('public.agent_chat_runs') IS NOT NULL
+                   AND EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_schema='public' AND table_name='agent_chat_runs'
+                       AND column_name='cancel_requested_at')
+                   AND EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_schema='public' AND table_name='agent_action_confirmations'
+                       AND column_name='source_run_id')
+                   AND EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_schema='public' AND table_name='agent_action_confirmations'
+                       AND column_name='transport')
+                   AND EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_schema='public' AND table_name='agent_action_confirmations'
+                       AND column_name='contract_version')
+                   AND EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_schema='public' AND table_name='agent_action_confirmations'
+                       AND column_name='reconciliation_next_attempt_at')
+                   AND EXISTS (SELECT 1 FROM information_schema.columns
+                     WHERE table_schema='public' AND table_name='agent_action_confirmations'
+                       AND column_name='reconciliation_lease_until')
             """)
                     )
                 ).scalar_one()

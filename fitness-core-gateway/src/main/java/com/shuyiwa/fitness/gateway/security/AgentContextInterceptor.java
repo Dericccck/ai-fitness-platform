@@ -25,7 +25,9 @@ public class AgentContextInterceptor implements HandlerInterceptor {
 
     @Override
     public boolean preHandle(HttpServletRequest request, HttpServletResponse response, Object handler) {
-        internalTokenVerifier.verify(request.getHeader(INTERNAL_TOKEN_HEADER));
+        String principal = internalTokenVerifier.verifyToolRequest(request.getHeader(INTERNAL_TOKEN_HEADER),
+                request.getMethod(), request.getRequestURI());
+        request.setAttribute("fitness.gateway.servicePrincipal", principal);
         AgentContext context = contextVerifier.verify(request.getHeader(AGENT_CONTEXT_HEADER));
         request.setAttribute(CONTEXT_REQUEST_ATTRIBUTE, context);
         request.setAttribute("fitness.gateway.requestId", request.getHeader("X-Request-ID"));

@@ -33,8 +33,9 @@ Agent 服务使用同一份镜像在不同环境运行，环境差异只能通�
 各环境的非敏感覆盖示例位于当前目录。完整变量说明以
 `fitness-agent-service/.env.example` 为准。
 
-Java 服务的生产配置契约也集中在本目录：
+Java 与 MCP 服务的生产配置契约也集中在本目录：
 
+- `mcp.production.env.example`：MCP资源地址、独立服务凭证哈希、scope与有效期、Host/JWKS；
 - `gateway.production.env.example`：Gateway 数据库只读账号、认证 JWKS、下游服务地址和内部 Token；
 - `booking.production.env.example`：预约数据库写账号、RabbitMQ 和 Outbox 发布器；
 - `training.production.env.example`：训练数据库写账号、RabbitMQ 和 Outbox 发布器；
@@ -44,12 +45,14 @@ Java 服务的生产配置契约也集中在本目录：
 数据库账号最小权限核对、服务间 Token 对应关系核对，以及所有 `*_SCHEMA_INIT_ENABLED=false`
 对应的独立迁移 Job 验证。
 
-部署平台完成 Secret 注入后，可将五份实际配置以 `agent.env`、`gateway.env`、`booking.env`、
-`training.env` 和 `customer-service.env` 放入仓库外部目录，并执行：
+部署平台完成 Secret 注入后，可将六份实际配置以 `agent.env`、`gateway.env`、`booking.env`、
+`training.env`、`customer-service.env` 和 `mcp.env` 放入仓库外部目录，并执行：
 
 ```bash
 PRODUCTION_ENV_DIR=/secure/release-config make production-runtime-config-check
 ```
 
 该检查会验证必填运行时值、生产固定开关、本地地址、开发凭证和 Agent/Gateway/下游服务
-共享 Token 一致性；不会打印 Secret。`/secure/release-config` 不应位于 Git 工作区内。
+下游 Token 一致性及 MCP/执行/查询/对账的独立身份、摘要、scope、资源绑定与有效期；不会打印 Secret。`/secure/release-config` 不应位于 Git 工作区内。
+
+完整接入与回退步骤见 [MCP运行指南](../../docs/mcp-integration.md)。

@@ -7,7 +7,7 @@ from app.main import app, http_metrics, lifespan
 
 
 async def run() -> None:
-    async with lifespan(app):
+    async with lifespan(app, role="worker"):
         settings = app.state.settings
         start_http_server(settings.knowledge_worker_metrics_port, registry=http_metrics.registry)
         await poll_worker(

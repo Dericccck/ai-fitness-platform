@@ -2,14 +2,16 @@
 
 仓库中的 production env.example 只能证明配置模板没有明显的开发默认值，不能证明
 部署平台真的注入了数据库、服务 Token、JWKS 和对象存储配置。本脚本读取部署平台
-导出的五份运行时配置文件，但只输出键名和校验结果，绝不输出等号右侧的 Secret。
+导出的六份运行时配置文件，但只输出键名和校验结果，绝不输出等号右侧的 Secret。
 配置文件应放在仓库外部或 CI 临时目录中，不能提交到 Git。
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
+import time
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -34,6 +36,7 @@ class ProductionRuntimeConfigError(ValueError):
 
 
 SERVICE_FILES = {
+    "mcp": "mcp.env",
     "agent": "agent.env",
     "gateway": "gateway.env",
     "booking": "booking.env",
@@ -44,6 +47,18 @@ SERVICE_FILES = {
 # 模板中有些兼容配置在 RS256/当前范围下可以为空，例如旧 HMAC 密钥和 OCR 地址。
 # 这里单独列出真正启动和运行闭环必需的值，避免把“兼容配置未使用”误判为生产故障。
 RUNTIME_REQUIRED_KEYS = {
+    "mcp": {
+        "MCP_ENVIRONMENT",
+        "MCP_RESOURCE_URL",
+        "MCP_GATEWAY_BASE_URL",
+        "MCP_GATEWAY_SERVICE_TOKEN",
+        "MCP_SERVICE_CREDENTIALS_JSON",
+        "MCP_ALLOWED_HOSTS",
+        "MCP_ALLOWED_ORIGINS",
+        "MCP_CONTEXT_ALGORITHM",
+        "MCP_CONTEXT_JWKS_URL",
+        "MCP_ALLOW_INSECURE_HS256",
+    },
     "agent": {
         "AGENT_ENVIRONMENT",
         "AGENT_BROWSER_AUTH_ENABLED",
@@ -72,7 +87,12 @@ RUNTIME_REQUIRED_KEYS = {
         "AGENT_CONFIRMATION_SIGNING_KEY_ID",
         "AGENT_CONFIRMATION_SIGNING_PRIVATE_KEY_PEM",
         "AGENT_GATEWAY_BASE_URL",
-        "AGENT_GATEWAY_INTERNAL_SERVICE_TOKEN",
+        "AGENT_MCP_ENABLED",
+        "AGENT_MCP_URL",
+        "AGENT_MCP_SERVICE_TOKEN",
+        "AGENT_GATEWAY_QUERY_SERVICE_TOKEN",
+        "AGENT_GATEWAY_HTTP_EXECUTION_SERVICE_TOKEN",
+        "AGENT_GATEWAY_RECONCILIATION_SERVICE_TOKEN",
         "GATEWAY_CONTEXT_SIGNING_ALGORITHM",
         "GATEWAY_CONTEXT_SIGNING_KEY_ID",
         "GATEWAY_CONTEXT_VERIFICATION_JWKS_URL",
@@ -90,7 +110,15 @@ RUNTIME_REQUIRED_KEYS = {
         "GATEWAY_DB_URL",
         "GATEWAY_DB_USERNAME",
         "GATEWAY_DB_PASSWORD",
-        "GATEWAY_INTERNAL_SERVICE_TOKEN",
+        "GATEWAY_ALLOW_LEGACY_SERVICE_TOKEN",
+        "GATEWAY_MCP_EXECUTION_TOKEN_SHA256",
+        "GATEWAY_MCP_EXECUTION_TOKEN_EXPIRES_AT",
+        "GATEWAY_AGENT_EXECUTION_TOKEN_SHA256",
+        "GATEWAY_AGENT_EXECUTION_TOKEN_EXPIRES_AT",
+        "GATEWAY_AGENT_QUERY_TOKEN_SHA256",
+        "GATEWAY_AGENT_QUERY_TOKEN_EXPIRES_AT",
+        "GATEWAY_RECONCILIATION_TOKEN_SHA256",
+        "GATEWAY_RECONCILIATION_TOKEN_EXPIRES_AT",
         "GATEWAY_CONTEXT_SIGNING_ALGORITHM",
         "GATEWAY_CONTEXT_VERIFICATION_JWKS_URL",
         "GATEWAY_CONFIRMATION_SIGNING_ALGORITHM",
@@ -165,7 +193,9 @@ def _check_value(service: str, key: str, value: str) -> None:
         raise ProductionRuntimeConfigError(f"{service} 缺少运行时配置：{key}")
     if any(marker.lower() in lowered for marker in _PLACEHOLDER_MARKERS):
         raise ProductionRuntimeConfigError(f"{service} 仍使用占位配置：{key}")
-    if any(marker in lowered for marker in ("127.0.0.1", "localhost", ":3307")):
+    if key != "MCP_ALLOWED_HOSTS" and any(
+        marker in lowered for marker in ("127.0.0.1", "localhost", ":3307")
+    ):
         raise ProductionRuntimeConfigError(f"{service} 仍引用本地地址：{key}")
     if any(marker in lowered for marker in ("fitness_dev_2026", "fitness_agent_secret")):
         raise ProductionRuntimeConfigError(f"{service} 仍使用开发凭证：{key}")
@@ -184,7 +214,7 @@ def _database_identity(value: str) -> tuple[str, str, str] | str:
 
 
 def validate_runtime_directory(env_dir: Path) -> None:
-    """校验五个服务的实际配置和服务间共享 Token 一致性。"""
+    """校验六个服务的配置、下游凭证及 MCP 独立身份契约。"""
 
     if not env_dir.is_dir():
         raise ProductionRuntimeConfigError(f"运行时配置目录不存在：{env_dir}")
@@ -239,7 +269,6 @@ def validate_runtime_directory(env_dir: Path) -> None:
     training = service_values["training"]
     customer_service = service_values["customer-service"]
     pairs = (
-        (agent, "AGENT_GATEWAY_INTERNAL_SERVICE_TOKEN", gateway, "GATEWAY_INTERNAL_SERVICE_TOKEN"),
         (gateway, "GATEWAY_TRAINING_SERVICE_TOKEN", training, "TRAINING_INTERNAL_SERVICE_TOKEN"),
         (gateway, "GATEWAY_BOOKING_SERVICE_TOKEN", booking, "BOOKING_INTERNAL_SERVICE_TOKEN"),
         (
@@ -252,6 +281,8 @@ def validate_runtime_directory(env_dir: Path) -> None:
     for left, left_key, right, right_key in pairs:
         if left[left_key] != right[right_key]:
             raise ProductionRuntimeConfigError(f"跨服务 Token 不一致：{left_key} 与 {right_key}")
+
+    _validate_mcp_trust(agent, service_values["mcp"], gateway)
 
     if agent["AGENT_RAG_OCR_BACKEND"] != "disabled":
         raise ProductionRuntimeConfigError("当前项目范围要求 AGENT_RAG_OCR_BACKEND=disabled")
@@ -273,6 +304,83 @@ def validate_runtime_directory(env_dir: Path) -> None:
             )
 
 
+def _validate_mcp_trust(
+    agent: dict[str, str], mcp: dict[str, str], gateway: dict[str, str]
+) -> None:
+    """Validate the five independent credentials without printing their values."""
+    try:
+        if agent["AGENT_MCP_ENABLED"].lower() not in {"true", "false"}:
+            raise ValueError()
+        endpoint = urlparse(agent["AGENT_MCP_URL"])
+        if (
+            endpoint.scheme not in {"http", "https"}
+            or not endpoint.hostname
+            or endpoint.username
+            or endpoint.password
+            or endpoint.path != "/mcp"
+            or endpoint.query
+            or endpoint.fragment
+        ):
+            raise ValueError()
+        if endpoint.scheme == "http" and agent.get("AGENT_MCP_ALLOW_PRIVATE_HTTP") != "true":
+            raise ValueError()
+        if agent["AGENT_MCP_URL"] != mcp["MCP_RESOURCE_URL"]:
+            raise ValueError()
+        if not mcp["MCP_CONTEXT_JWKS_URL"].startswith("https://"):
+            raise ValueError()
+        hosts = json.loads(mcp["MCP_ALLOWED_HOSTS"])
+        origins = json.loads(mcp["MCP_ALLOWED_ORIGINS"])
+        if (
+            not isinstance(hosts, list)
+            or not hosts
+            or not isinstance(origins, list)
+            or any(not isinstance(h, str) or not h or "*" in h for h in hosts)
+        ):
+            raise ValueError()
+        if endpoint.hostname not in hosts and endpoint.netloc not in hosts:
+            raise ValueError()
+        tokens = [
+            agent["AGENT_MCP_SERVICE_TOKEN"],
+            mcp["MCP_GATEWAY_SERVICE_TOKEN"],
+            agent["AGENT_GATEWAY_QUERY_SERVICE_TOKEN"],
+            agent["AGENT_GATEWAY_HTTP_EXECUTION_SERVICE_TOKEN"],
+            agent["AGENT_GATEWAY_RECONCILIATION_SERVICE_TOKEN"],
+        ]
+        if len(set(tokens)) != 5 or any(len(token) < 32 for token in tokens):
+            raise ValueError()
+        now = int(time.time())
+        for token, principal in [
+            (tokens[1], "MCP_EXECUTION"),
+            (tokens[2], "AGENT_QUERY"),
+            (tokens[3], "AGENT_EXECUTION"),
+            (tokens[4], "RECONCILIATION"),
+        ]:
+            if (
+                hashlib.sha256(token.encode()).hexdigest()
+                != gateway[f"GATEWAY_{principal}_TOKEN_SHA256"]
+                or int(gateway[f"GATEWAY_{principal}_TOKEN_EXPIRES_AT"]) <= now
+            ):
+                raise ValueError()
+        credentials = json.loads(mcp["MCP_SERVICE_CREDENTIALS_JSON"])
+        matches = [
+            entry
+            for entry in credentials
+            if entry.get("sha256") == hashlib.sha256(tokens[0].encode()).hexdigest()
+        ]
+        if (
+            len(matches) != 1
+            or not matches[0].get("principal")
+            or int(matches[0]["expires_at"]) <= now
+            or set(matches[0]["scopes"]) != {"fitness:read", "fitness:write"}
+            or matches[0]["resource"] != mcp["MCP_RESOURCE_URL"]
+        ):
+            raise ValueError()
+    except (ValueError, TypeError, KeyError, AttributeError):
+        raise ProductionRuntimeConfigError(
+            "MCP 地址、独立凭证、有效期、作用域或资源绑定不符合生产契约"
+        ) from None
+
+
 def build_parser() -> argparse.ArgumentParser:
     """构造运行时配置门禁命令。"""
 
@@ -281,7 +389,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--env-dir",
         type=Path,
         required=True,
-        help="仓库外部的运行时配置目录，需包含 agent.env 等五个文件",
+        help="仓库外部的运行时配置目录，需包含 agent.env、mcp.env 等六个文件",
     )
     return parser
 
@@ -295,7 +403,9 @@ def main() -> int:
     except ProductionRuntimeConfigError as exc:
         print(f"生产运行时配置校验失败：{exc}")
         return 1
-    print("生产运行时配置校验通过：5 个服务配置完整，固定开关和共享 Token 一致")
+    print(
+        f"生产运行时配置校验通过：{len(SERVICE_FILES)} 个服务配置完整，固定开关与独立凭证契约一致"
+    )
     return 0
 
 

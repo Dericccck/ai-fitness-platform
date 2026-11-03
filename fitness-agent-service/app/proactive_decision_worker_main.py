@@ -19,7 +19,7 @@ async def run() -> None:
     start_http_server(
         settings.proactive_decision_worker_metrics_port, registry=http_metrics.registry
     )
-    async with lifespan(app):
+    async with lifespan(app, role="worker"):
         worker = ProactiveDecisionWorker(
             app.state.database,
             app.state.proactive_candidates,

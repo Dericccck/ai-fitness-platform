@@ -76,6 +76,7 @@ def test_validate_real_repository_contract() -> None:
     root = Path(__file__).parents[1]
     alerts = (root.parent / "deployment/observability/fitness-agent-alerts.yml").read_text()
     metrics = (root / "app/core/metrics.py").read_text()
+    metrics += "\n" + (root / "app/core/mcp_metrics.py").read_text()
     prometheus = (root.parent / "deployment/observability/prometheus.yml").read_text()
 
     validate_alert_rules(alerts, metrics)

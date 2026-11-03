@@ -18,7 +18,7 @@ async def run() -> None:
         settings.confirmation_reconciliation_worker_metrics_port,
         registry=http_metrics.registry,
     )
-    async with lifespan(app):
+    async with lifespan(app, role="worker"):
         worker = ConfirmationReconciliationWorker(
             app.state.confirmation_service.repository,
             reconciler=app.state.confirmation_service,

@@ -178,6 +178,7 @@ public class TrainingPlanService {
         TrainingConfirmation confirmation = requireConfirmation(
                 actor, toolId, confirmationAction, plan.getOrganizationId(), plan.getId()
         );
+        repository.assertRequestBinding(actor.getRequestId(), actor.getUserId(), confirmation);
         if (repository.wasRequestApplied(plan.getId(), actor.getRequestId())) {
             // 客户端超时后重试时，第一次可能已经提交成功；幂等重试直接返回当前事实。
             return;

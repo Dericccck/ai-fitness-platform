@@ -11,7 +11,7 @@ from app.main import app, http_metrics, lifespan
 async def run() -> None:
     """复用 API 生命周期装配，但只轮询索引重建 Worker。"""
 
-    async with lifespan(app):
+    async with lifespan(app, role="worker"):
         settings = app.state.settings
         start_http_server(settings.knowledge_worker_metrics_port, registry=http_metrics.registry)
         worker = app.state.knowledge_reindex_worker

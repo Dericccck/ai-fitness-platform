@@ -8,8 +8,8 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping
-from dataclasses import dataclass
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
@@ -21,11 +21,18 @@ from app.confirmation.normalization import (
     ConfirmationNormalizationContext,
     ConfirmationResourceSnapshot,
 )
+from app.confirmation.reconciliation_policy import RECONCILABLE_TOOL_IDS
 from app.confirmation.repository import ConfirmationRepository
 from app.confirmation.request_body import gateway_confirmation_body
 from app.confirmation.token import ConfirmationTokenIssuer
 from app.infrastructure.agent_context import AgentIdentity
-from app.infrastructure.gateway_client import GatewayClient, GatewayRequestContext
+from app.infrastructure.gateway_client import (
+    GatewayClient,
+    GatewayRequestContext,
+    GatewayToolOperation,
+)
+
+JAVA_WRITE_TOOL_IDS = RECONCILABLE_TOOL_IDS
 
 
 @dataclass(frozen=True)
@@ -49,6 +56,7 @@ class ConfirmationService:
         token_issuer: ConfirmationTokenIssuer,
         *,
         ttl_seconds: int = 600,
+        route_selector: Callable[[str], tuple[str, str]] | None = None,
     ) -> None:
         self.repository = repository
         self.tools = tools
@@ -56,6 +64,7 @@ class ConfirmationService:
         self.cipher = cipher
         self.token_issuer = token_issuer
         self.ttl_seconds = ttl_seconds
+        self.route_selector = route_selector
 
     async def prepare(
         self,
@@ -108,6 +117,8 @@ class ConfirmationService:
             associated_data=normalized.payload_hash,
         )
         action = normalized.to_confirmation_action(ciphertext, self.cipher.key_version)
+        transport, contract_version = self._execution_route(tool_id)
+        action = replace(action, transport=transport, contract_version=contract_version)
         expires_at = datetime.now(UTC) + timedelta(seconds=self.ttl_seconds)
         return await self.repository.create(str(uuid4()), action, expires_at)
 
@@ -124,11 +135,12 @@ class ConfirmationService:
         if record.authorization_status != "APPROVED":
             raise ConfirmationStateError("只有已批准的确认单才能执行")
         if record.execution_status == "FAILED_RETRYABLE":
-            # 网络超时等可恢复失败不能直接复用旧 Token；先清空旧 JTI 和执行时间，
-            # 再为下一次尝试重新领取执行权。授权仍保持 APPROVED，不需要用户重复确认。
-            record = await self.repository.requeue_retryable(confirmation_id, trace_id)
+            # 兼容升级前的失败记录：保留原业务 ID/JTI，先查询事实，绝不签发新 JTI 重发。
+            await self.repository.mark_unknown(confirmation_id, datetime.now(UTC), trace_id)
+            raise ConfirmationStateError("历史执行结果未知，必须先对账")
         if record.execution_status != "NOT_STARTED":
             raise ConfirmationStateError("确认单尚未准备好执行")
+        self._validate_execution_route(record.transport, record.contract_version)
         jti = record.credential_jti or str(uuid4())
         if record.credential_jti is None:
             record = await self.repository.issue_credential_jti(
@@ -146,12 +158,18 @@ class ConfirmationService:
         if not isinstance(payload, dict):
             raise ConfirmationStateError("确认单 Payload 必须是对象")
 
-        tool_input = {str(key): value for key, value in payload.items()}
+        stored_payload = {str(key): value for key, value in payload.items()}
+        tool_input = _execution_tool_input(record, stored_payload)
         token = self.token_issuer.issue(
             record,
             resource=_token_resource(record, tool_input),
             jti=jti,
-            request_body=gateway_confirmation_body(record.tool_id, tool_input),
+            request_body=gateway_confirmation_body(
+                record.tool_id,
+                stored_payload,
+                contract_version=record.contract_version,
+                resource_id=record.resource_id,
+            ),
         )
         if record.execution_status == "NOT_STARTED":
             record = await self.repository.claim_execution(
@@ -196,42 +214,60 @@ class ConfirmationService:
         gateway_context: GatewayRequestContext,
         trace_id: str | None = None,
     ) -> ConfirmationRecord:
-        """查询下游预约操作；成功才补写确认结果，查不到仍保持 UNKNOWN/RUNNING。"""
+        """查询原业务操作，只有完整绑定的确定结果才收敛执行状态。"""
 
         record = await self.get_for_subject(confirmation_id, identity)
+        if record.execution_status == "FAILED_RETRYABLE":
+            record = await self.mark_execution_unknown(record.id, trace_id=trace_id)
         if record.execution_status not in {"RUNNING", "UNKNOWN"}:
             return record
-        if not record.tool_id.startswith("fitness.booking."):
+        if record.tool_id not in JAVA_WRITE_TOOL_IDS:
             return record
-        operation = await self.gateway.query_booking_operation(gateway_context, record.request_id)
-        if operation.status == "SUCCEEDED":
-            return await self.finish_execution(confirmation_id, success=True, trace_id=trace_id)
-        if operation.status == "FAILED":
-            return await self.finish_execution(
-                confirmation_id,
-                success=False,
-                trace_id=trace_id,
-                error_code="DOWNSTREAM_OPERATION_FAILED",
-            )
-        return record
+        operation = await self.gateway.query_tool_operation(
+            gateway_context,
+            operation_id=record.request_id,
+            tool_id=record.tool_id,
+            confirmation_id=record.id,
+            organization_id=record.organization_id,
+            payload_hash=record.payload_hash,
+        )
+        return await self._apply_operation_result(record, operation, trace_id=trace_id)
 
     async def reconcile_stored_execution(
         self, record: ConfirmationRecord, *, trace_id: str | None = None
     ) -> ConfirmationRecord:
         """后台对账使用服务身份，仍将结果绑定到确认单的机构和原始操作者。"""
 
+        if record.execution_status == "FAILED_RETRYABLE":
+            record = await self.mark_execution_unknown(record.id, trace_id=trace_id)
         if record.execution_status not in {"RUNNING", "UNKNOWN"}:
             return record
-        if not record.tool_id.startswith("fitness.booking."):
+        if record.tool_id not in JAVA_WRITE_TOOL_IDS:
             return record
-        operation = await self.gateway.reconcile_booking_operation(
+        operation = await self.gateway.reconcile_tool_operation(
             operation_id=record.request_id,
+            tool_id=record.tool_id,
+            confirmation_id=record.id,
             organization_id=record.organization_id,
             actor_id=record.subject_user_id,
+            payload_hash=record.payload_hash,
         )
-        if operation.organization_id is not None and (
-            operation.organization_id != record.organization_id
+        return await self._apply_operation_result(record, operation, trace_id=trace_id)
+
+    async def _apply_operation_result(
+        self,
+        record: ConfirmationRecord,
+        operation: GatewayToolOperation,
+        *,
+        trace_id: str | None,
+    ) -> ConfirmationRecord:
+        if (
+            operation.operation_id != record.request_id
+            or operation.tool_id != record.tool_id
+            or operation.confirmation_id != record.id
+            or operation.organization_id != record.organization_id
             or operation.actor_id != record.subject_user_id
+            or operation.payload_hash != record.payload_hash
         ):
             raise ConfirmationStateError("下游操作结果与确认单授权范围不匹配")
         if operation.status == "SUCCEEDED":
@@ -244,6 +280,25 @@ class ConfirmationService:
                 error_code="DOWNSTREAM_OPERATION_FAILED",
             )
         return record
+
+    def _execution_route(self, tool_id: str) -> tuple[str, str]:
+        route = (
+            ("local", "v1")
+            if tool_id.startswith("fitness.memory.")
+            else self.route_selector(tool_id)
+            if self.route_selector is not None
+            else ("http", "v1")
+        )
+        self._validate_execution_route(*route)
+        return route
+
+    @staticmethod
+    def _validate_execution_route(transport: str, contract_version: str) -> None:
+        # v1 是升级前 HTTP Payload builder；1 是共享 MCP/HTTP 契约的新稳定版本。
+        if transport not in {"http", "mcp", "local"} or contract_version not in {"v1", "1"}:
+            raise ConfirmationStateError("确认动作使用了不可用的执行契约，必须先处理旧动作")
+        if transport == "mcp" and contract_version != "1":
+            raise ConfirmationStateError("MCP 确认动作必须使用共享契约版本 1")
 
     async def get_for_subject(
         self, confirmation_id: str, identity: AgentIdentity
@@ -338,6 +393,37 @@ def _ensure_identity_snapshot(record: ConfirmationRecord, identity: AgentIdentit
     ) or record.actor_organization_ids != tuple(sorted(identity.organization_ids)):
         # 对外按“不可见”处理，避免通过确认接口探测其他授权快照。
         raise ConfirmationStateError("确认单身份范围已变更")
+
+
+def _execution_tool_input(
+    record: ConfirmationRecord, stored_payload: Mapping[str, Any]
+) -> dict[str, Any]:
+    """从已确认资源恢复路径参数，精确 HTTP body 仍保持单独的版本化构造。"""
+
+    result = dict(stored_payload)
+    resource_tools = {
+        "fitness.training.plan.submit_review.v1",
+        "fitness.training.plan.review.v1",
+        "fitness.training.plan.publish.v1",
+        "fitness.training.day.record_execution.v1",
+    }
+    if record.tool_id not in resource_tools:
+        return result
+    if not record.resource_id:
+        raise ConfirmationStateError("确认动作缺少已绑定的训练资源")
+    plan_id = record.resource_id
+    if record.tool_id == "fitness.training.day.record_execution.v1":
+        day_id = result.get("day_id")
+        suffix = f":{day_id}" if isinstance(day_id, str) and day_id else ""
+        if not suffix or not record.resource_id.endswith(suffix):
+            raise ConfirmationStateError("确认动作训练日与已绑定资源不匹配")
+        plan_id = record.resource_id[: -len(suffix)]
+        if not plan_id:
+            raise ConfirmationStateError("确认动作训练计划与已绑定资源不匹配")
+    if "plan_id" in result and result["plan_id"] != plan_id:
+        raise ConfirmationStateError("确认动作训练计划与已绑定资源不匹配")
+    result["plan_id"] = plan_id
+    return result
 
 
 def _organization_from_input(tool_id: str, raw_input: Mapping[str, Any]) -> str:

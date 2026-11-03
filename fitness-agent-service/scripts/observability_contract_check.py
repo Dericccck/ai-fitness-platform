@@ -20,6 +20,7 @@ SERVICE_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_ALERTS_PATH = SERVICE_ROOT.parent / "deployment/observability/fitness-agent-alerts.yml"
 DEFAULT_PROMETHEUS_PATH = SERVICE_ROOT.parent / "deployment/observability/prometheus.yml"
 DEFAULT_METRICS_PATH = SERVICE_ROOT / "app/core/metrics.py"
+DEFAULT_MCP_METRICS_PATH = SERVICE_ROOT / "app/core/mcp_metrics.py"
 ALERT_NAME_PATTERN = re.compile(r"^\s*-\s+alert:\s*([A-Za-z][A-Za-z0-9_]*)\s*$", re.MULTILINE)
 METRIC_PATTERN = re.compile(r"\bfitness_agent_[A-Za-z0-9_]+\b")
 METRIC_DEFINITION_PATTERN = re.compile(
@@ -40,6 +41,9 @@ EXPECTED_ALERTS = frozenset(
         "FitnessAgentSlowFirstAnswer",
         "FitnessAgentModelFailureRate",
         "FitnessAgentWorkerNotReady",
+        "FitnessMcpCatalogUnavailable",
+        "FitnessConfirmationReconciliationStalled",
+        "FitnessConfirmationManualReviewPending",
     }
 )
 
@@ -105,7 +109,8 @@ def validate_alert_rules(alerts_text: str, metrics_text: str) -> tuple[str, ...]
         raise ObservabilityContractError("告警名称存在重复")
 
     defined_metrics = {
-        f"fitness_agent_{name}" for name in METRIC_DEFINITION_PATTERN.findall(metrics_text)
+        name if name.startswith("fitness_agent_") else f"fitness_agent_{name}"
+        for name in METRIC_DEFINITION_PATTERN.findall(metrics_text)
     }
     referenced_metrics = {
         _metric_family_name(metric) for metric in METRIC_PATTERN.findall(alerts_text)
@@ -143,7 +148,7 @@ def validate_prometheus_config(prometheus_text: str) -> None:
 
     if "rule_files:" not in prometheus_text or "fitness-agent-alerts.yml" not in prometheus_text:
         raise ObservabilityContractError("Prometheus 未配置健身 Agent 告警规则文件")
-    for job_name in ("fitness-agent", "fitness-agent-workers"):
+    for job_name in ("fitness-agent", "fitness-agent-workers", "fitness-mcp"):
         if not re.search(rf"job_name:\s*{re.escape(job_name)}\s*$", prometheus_text, re.MULTILINE):
             raise ObservabilityContractError(f"Prometheus 缺少抓取任务：{job_name}")
 
@@ -154,6 +159,8 @@ def validate_static_contract(config: ObservabilityCheckConfig) -> tuple[str, ...
     alerts_text = _read(config.alerts_path, "告警规则文件")
     prometheus_text = _read(config.prometheus_path, "Prometheus 配置文件")
     metrics_text = _read(config.metrics_path, "指标定义文件")
+    if config.metrics_path.resolve() == DEFAULT_METRICS_PATH.resolve():
+        metrics_text += "\n" + _read(DEFAULT_MCP_METRICS_PATH, "MCP指标定义文件")
     names = validate_alert_rules(alerts_text, metrics_text)
     validate_prometheus_config(prometheus_text)
     return names

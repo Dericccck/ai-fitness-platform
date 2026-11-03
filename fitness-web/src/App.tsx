@@ -1,8 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { useVoice } from "./voice/useVoice";
+import type { VoiceConversation } from "./voice/useVoice";
+import { VoiceComposer, VoiceReply } from "./voice/VoiceControls";
 import {
   ApiError,
   approveKnowledgeJob,
   cancelDecisionAction,
+  cancelChatRun,
   closeDecisionCase,
   createBusinessObjective,
   createDecisionExperiment,
@@ -28,6 +32,7 @@ import {
   getKnowledgeJobs,
   getMemories,
   getMemoryCandidateInbox,
+  getMemorySettings,
   getNotifications,
   getOperationsAudits,
   getOperationsMetricCatalog,
@@ -46,6 +51,7 @@ import {
   recoverChatRun,
   uploadKnowledgeDocument,
   updateDecisionExperimentStatus,
+  updateMemorySettings,
 } from "./api";
 import type {
   Capability,
@@ -58,6 +64,7 @@ import type {
   InAppNotification,
   KnowledgeJob,
   MemoryCandidateInbox,
+  MemorySettings,
   NotificationPreference,
   NotificationDeliveryAttempt,
   OperationsAuditPage,
@@ -72,6 +79,28 @@ import type {
   DecisionExperiment,
 } from "./types";
 import type { FormEvent } from "react";
+import { cancelRegisteredRun, ChatRunCancelled, ChatRunTerminalError, readPendingChat, savePendingChat, clearPendingChat } from "./chatRun";
+
+type ActiveChatRun = {
+  runId: string;
+  cancelRequestId: string;
+  transport: AbortController;
+  lifetime: AbortController;
+  stopRequested: boolean;
+  submitting: boolean;
+  cancelAccepted: boolean;
+  cancelInFlight: boolean;
+  querying: boolean;
+  assistantId: string;
+  partialText: string;
+  autoVoice: boolean;
+};
+
+function activeChatRun(runId: string, submitting: boolean): ActiveChatRun {
+  return { runId, cancelRequestId: crypto.randomUUID(), transport: new AbortController(),
+    lifetime: new AbortController(), stopRequested: false, submitting, cancelAccepted:false,cancelInFlight:false,
+    querying:false,assistantId:stableId("assistant"),partialText:"",autoVoice:submitting };
+}
 
 const roleNames: Record<string, string> = {
   ORGANIZATION_ADMIN: "组织管理员",
@@ -174,8 +203,17 @@ function App() {
     },
   ]);
   const [input, setInput] = useState("");
+  const [voiceInput, setVoiceInput] = useState(false);
+  const voice = useVoice(!!catalog, activeView === "chat", text => {
+    setInput(current => current.trim() ? `${current}\n${text}` : text);
+    setVoiceInput(true);
+  });
   const [loading, setLoading] = useState(false);
   const [streamStage, setStreamStage] = useState("");
+  const [stopping, setStopping] = useState(false);
+  const [resultPending, setResultPending] = useState(false);
+  const [queryingResult, setQueryingResult] = useState(false);
+  const activeRun = useRef<ActiveChatRun | null>(null);
   const [loadingCatalog, setLoadingCatalog] = useState(true);
   const [error, setError] = useState("");
   const [identityOpen, setIdentityOpen] = useState(false);
@@ -188,6 +226,111 @@ function App() {
   const [authBusy, setAuthBusy] = useState(false);
   const [proactiveCandidateId, setProactiveCandidateId] = useState<string | undefined>();
   const conversationId = useMemo(initialConversationId, []);
+
+  useEffect(() => () => {
+    activeRun.current?.lifetime.abort();
+    activeRun.current?.transport.abort();
+    activeRun.current = null;
+  }, []);
+
+  useEffect(() => {
+    const changed = () => {
+      activeRun.current?.lifetime.abort(); activeRun.current?.transport.abort(); activeRun.current = null;
+      setMessages([]); setCatalog(null); setLoading(false); setStopping(false);
+      setInput(""); setVoiceInput(false);
+      setResultPending(false); setQueryingResult(false); setStreamStage(""); setIdentityOpen(true);
+      setError("账号授权范围已变化，请重新载入工作台");
+    };
+    window.addEventListener("fitness.scope-changed",changed);
+    return () => window.removeEventListener("fitness.scope-changed",changed);
+  },[]);
+
+  function persistOperation(operation: ActiveChatRun) {
+    savePendingChat(sessionStorage,{version:2,runId:operation.runId,conversationId,
+      cancelRequestId:operation.cancelRequestId,stopRequested:operation.stopRequested});
+  }
+
+  function observeRun(operation: ActiveChatRun, status: string) {
+    if (activeRun.current !== operation) return;
+    if (status === "CANCEL_REQUESTED" || status === "CANCELLED") {
+      operation.stopRequested = true; operation.cancelAccepted = true;
+      persistOperation(operation); setStopping(status === "CANCEL_REQUESTED");
+      if (status === "CANCEL_REQUESTED") setStreamStage("正在停止…");
+    }
+  }
+
+  function releaseOperation(operation: ActiveChatRun) {
+    if (activeRun.current !== operation) return;
+    clearPendingChat(sessionStorage,operation.runId);
+    activeRun.current = null; operation.lifetime.abort();
+    setLoading(false); setStopping(false); setResultPending(false); setQueryingResult(false); setStreamStage("");
+    setProactiveCandidateId(undefined);
+  }
+
+  function completeOperation(operation: ActiveChatRun, result: ChatResponse) {
+    if (activeRun.current !== operation) return;
+    setError("");
+    setMessages(current => current.map(item => item.id === operation.assistantId ? {
+      ...item,content:result.answer,route:result.route,confirmation:result.confirmation_id ? result : undefined,runId:operation.runId,
+    } : item));
+    releaseOperation(operation);
+    if (operation.autoVoice && !operation.stopRequested) voice.completed(operation.runId);
+  }
+
+  function failOperation(operation: ActiveChatRun, reason: unknown) {
+    if (activeRun.current !== operation || operation.lifetime.signal.aborted) return;
+    if (reason instanceof ChatRunCancelled) {
+      setError("");
+      setMessages(current => current.map(item => item.id === operation.assistantId ? {
+        ...item,content:operation.partialText || "本次回复已停止。",stopped:true,confirmation:undefined,
+      } : item));
+      releaseOperation(operation);
+    } else if (reason instanceof ChatRunTerminalError || (operation.submitting && reason instanceof ApiError && [400,409,422,429].includes(reason.status))) {
+      setMessages(current => current.map(item => item.id === operation.assistantId ? {
+        ...item,content:operation.partialText || "本次回复未完成，请核对操作结果后再继续。",
+      } : item));
+      setError(formatError(reason)); releaseOperation(operation);
+    } else {
+      setResultPending(true); setQueryingResult(false); setStopping(false);
+      setStreamStage("结果待确认，请重试查询"); setError(formatError(reason));
+      // 当前任务仍占用会话；保留文本和恢复记录，避免新提交覆盖原 run。
+      persistOperation(operation);
+    }
+  }
+
+  async function queryOperation(operation: ActiveChatRun) {
+    if (activeRun.current !== operation || operation.querying) return;
+    operation.querying = true; setQueryingResult(true); setError("");
+    setStreamStage(operation.stopRequested ? "正在核对停止结果" : "正在恢复上次回复");
+    try { completeOperation(operation,await recoverChatRun(operation.runId,operation.lifetime.signal,run => observeRun(operation,run.status))); }
+    catch (reason) { failOperation(operation,reason); }
+    finally { operation.querying = false; if (activeRun.current === operation) setQueryingResult(false); }
+  }
+
+  async function stopRun() {
+    voice.stopPlayback();
+    const operation = activeRun.current;
+    if (!operation || operation.cancelInFlight || operation.cancelAccepted) return;
+    operation.cancelInFlight = true;
+    operation.stopRequested = true; persistOperation(operation);
+    setStopping(true); setStreamStage("正在停止…"); setError("");
+    try {
+      const run = await cancelRegisteredRun(
+        () => cancelChatRun(operation.runId,operation.cancelRequestId,operation.lifetime.signal),
+        () => operation.submitting,operation.lifetime.signal);
+      if (activeRun.current !== operation) return;
+      observeRun(operation,run.status);
+      if (["CANCEL_REQUESTED","CANCELLED"].includes(run.status)) operation.transport.abort();
+      if (!operation.querying) await queryOperation(operation);
+    } catch (reason) {
+      if (activeRun.current !== operation || operation.lifetime.signal.aborted) return;
+      setStopping(false); setResultPending(true); setStreamStage("停止结果待确认，可重试查询或停止");
+      setError(formatError(reason));
+      // 请求可能已被服务端接受，转入同一 run 的查询，不重新发送对话。
+      operation.transport.abort();
+      if (!operation.querying) await queryOperation(operation);
+    } finally { operation.cancelInFlight = false; }
+  }
 
   useEffect(() => {
     getAuthState().then(({ config, authenticated }) => {
@@ -204,65 +347,53 @@ function App() {
   async function submit(event: FormEvent) {
     event.preventDefault();
     const message = input.trim();
-    if (!message || loading) return;
+    if (!message || loading || activeRun.current || voice.busy) return;
+    if (message.length > 4000) { setError("消息超过 4000 字符，请精简后发送"); return; }
+    if (readPendingChat(sessionStorage)) { setError("上次任务结果待确认，请先恢复查询"); return; }
+    voice.stopPlayback(); voice.clearNote();
     setError("");
     setInput("");
-    const assistantId = stableId("assistant");
-    const runId = crypto.randomUUID();
-    sessionStorage.setItem("fitness.pending-chat", JSON.stringify({ runId, conversationId }));
-    setMessages((current) => [...current,
-      { id: stableId("user"), role: "user", content: message },
-      { id: assistantId, role: "assistant", content: "正在准备回复…" }]);
-    setLoading(true);
-    setStreamStage("正在处理");
-    let streamedText = "";
+    const operation = activeChatRun(crypto.randomUUID(),true);
+    activeRun.current = operation; operation.querying = true; persistOperation(operation);
+    setResultPending(false);
+    setMessages(current => [...current,{id:stableId("user"),role:"user",content:message,voiceInput},
+      {id:operation.assistantId,role:"assistant",content:"正在准备回复…"}]);
+    setVoiceInput(false);
+    setLoading(true); setStreamStage("正在处理");
     try {
-      const result = await sendChatStream(conversationId, message, runId, (event) => {
-        if (event.event === "answer.delta" && event.data.text) {
-          streamedText += event.data.text;
-          setMessages((current) => current.map((item) => item.id === assistantId ? { ...item, content: streamedText } : item));
+      const result = await sendChatStream(conversationId,message,operation.runId,event => {
+        if (activeRun.current !== operation) return;
+        if (event.event === "run.started") operation.submitting = false;
+        if (event.event === "run.cancel_requested") observeRun(operation,"CANCEL_REQUESTED");
+        if (event.event === "answer.delta" && event.data.text && !operation.stopRequested) {
+          operation.partialText += event.data.text;
+          setMessages(current => current.map(item => item.id === operation.assistantId ? {...item,content:operation.partialText} : item));
         }
-        if (event.event === "stage.changed") {
-          const labels: Record<string, string> = { ROUTING: "正在理解问题", PREPARING_CONTEXT: "正在查找相关资料", QUERYING_BUSINESS: "正在查询业务信息", GENERATING: "正在组织回复" };
+        if (event.event === "stage.changed" && !operation.stopRequested) {
+          const labels: Record<string,string> = {ROUTING:"正在理解问题",PREPARING_CONTEXT:"正在查找相关资料",QUERYING_BUSINESS:"正在查询业务信息",GENERATING:"正在组织回复"};
           setStreamStage(labels[event.data.stage ?? ""] ?? "正在处理");
         }
-      }, proactiveCandidateId);
-      sessionStorage.removeItem("fitness.pending-chat");
-      setProactiveCandidateId(undefined);
-      setMessages((current) => current.map((item) => item.id === assistantId ? {
-        ...item, content: result.answer, route: result.route,
-        confirmation: result.confirmation_id ? result : undefined,
-      } : item));
-    } catch (reason: unknown) {
-      setMessages((current) => current.map((item) => item.id === assistantId ? {
-        ...item, content: "本次回复未完成，请核对操作结果后再继续。",
-      } : item));
-      setError(formatError(reason));
-    } finally {
-      setLoading(false);
-      setStreamStage("");
-    }
+      },proactiveCandidateId,{transport:operation.transport.signal,lifetime:operation.lifetime.signal,
+        onRun:run => observeRun(operation,run.status)});
+      completeOperation(operation,result);
+    } catch (reason) { failOperation(operation,reason); }
+    finally { operation.submitting = false; operation.querying = false; }
   }
 
   useEffect(() => {
-    if (!catalog) return;
-    const stored = sessionStorage.getItem("fitness.pending-chat");
-    if (!stored) return;
-    let pending: { runId: string; conversationId: string };
-    try { pending = JSON.parse(stored); } catch { sessionStorage.removeItem("fitness.pending-chat"); return; }
-    if (pending.conversationId !== conversationId) return;
-    let cancelled = false;
-    setLoading(true);
-    setStreamStage("正在恢复上次回复");
-    recoverChatRun(pending.runId).then((result) => {
-      if (cancelled) return;
-      sessionStorage.removeItem("fitness.pending-chat");
-      setMessages((current) => [...current, { id: stableId("assistant"), role: "assistant",
-        content: result.answer, route: result.route, confirmation: result.confirmation_id ? result : undefined }]);
-    }).catch((reason: unknown) => { if (!cancelled) setError(formatError(reason)); })
-      .finally(() => { if (!cancelled) { setLoading(false); setStreamStage(""); } });
-    return () => { cancelled = true; };
-  }, [catalog, conversationId]);
+    if (!catalog || activeRun.current) return;
+    const pending = readPendingChat(sessionStorage);
+    if (!pending || pending.conversationId !== conversationId) return;
+    const operation = activeChatRun(pending.runId,false);
+    operation.cancelRequestId = pending.cancelRequestId; operation.stopRequested = pending.stopRequested;
+    activeRun.current = operation; setLoading(true);
+    setMessages(current => [...current,{id:operation.assistantId,role:"assistant",content:"正在恢复上次回复…"}]);
+    void queryOperation(operation);
+    return () => {
+      operation.lifetime.abort(); operation.transport.abort();
+      if (activeRun.current === operation) activeRun.current = null;
+    };
+  },[catalog,conversationId]);
 
   const roles = catalog?.roles ?? [];
   const groups = catalog ? groupCapabilities(catalog.items) : [];
@@ -301,7 +432,7 @@ function App() {
       <main className="main-area">
         <header className="topbar">
           <div><span className="eyebrow">AI FITNESS PLATFORM</span><h1>{activeView === "chat" ? "智能健身助手" : activeView === "workspaces" ? "业务工作台" : activeView === "decisions" ? "经营决策中心" : activeView === "data" ? "数据中心" : "能力目录"}</h1></div>
-          <div className="topbar-meta"><span className="live-pill"><i /> {catalog ? "Agent 已连接" : "等待认证连接"}</span><span className="role-pill">{roles.map((role) => roleNames[role] ?? role).join(" / ") || "等待身份"}</span>{(authEnabled || demoIdentityAllowed) && <button disabled={loading || authBusy} onClick={() => setIdentityOpen(!identityOpen)}>{authEnabled ? "登录 / 切换账号" : "接入身份"}</button>}{authEnabled && catalog && <button disabled={loading || authBusy} onClick={async () => { setAuthBusy(true); try { await logout(); window.location.reload(); } catch (reason) { setError(formatError(reason)); } finally { setAuthBusy(false); } }}>退出登录</button>}</div>
+          <div className="topbar-meta"><span className="live-pill"><i /> {catalog ? "Agent 已连接" : "等待认证连接"}</span><span className="role-pill">{roles.map((role) => roleNames[role] ?? role).join(" / ") || "等待身份"}</span>{(authEnabled || demoIdentityAllowed) && <button disabled={(loading && !resultPending) || authBusy} onClick={() => setIdentityOpen(!identityOpen)}>{authEnabled ? "登录 / 切换账号" : "接入身份"}</button>}{authEnabled && catalog && <button disabled={(loading && !resultPending) || authBusy} onClick={async () => { setAuthBusy(true); try { await logout(); window.location.reload(); } catch (reason) { setError(formatError(reason)); } finally { setAuthBusy(false); } }}>退出登录</button>}</div>
         </header>
 
         {identityOpen && authEnabled && <form className="identity-form" onSubmit={async (event) => {
@@ -334,10 +465,10 @@ function App() {
             <div className="chat-panel">
               <div className="panel-heading"><div><span className="panel-kicker">CONVERSATION</span><h2>和你的健身助手聊聊</h2></div><span className="conversation-label">会话已持久化</span></div>
               <div className="message-list">
-                {messages.map((message) => <MessageBubble key={message.id} message={message} onDecision={setError} />)}
+                {messages.map((message) => <MessageBubble key={message.id} message={message} onDecision={setError} voice={voice} />)}
                 {loading && <div className="message-row assistant"><div className="assistant-avatar">F</div><div className="message-bubble" role="status">{streamStage || "正在处理"}</div></div>}
               </div>
-              <form className="composer" onSubmit={submit}><textarea value={input} onChange={(event) => setInput(event.target.value)} placeholder="例如：我今天适合做哪些热身动作？" rows={2} disabled={loading} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(event); } }} /><button type="submit" disabled={loading || !input.trim()}>{loading ? "处理中" : "发送"}<span>↗</span></button><small>Enter 发送 · Shift + Enter 换行</small></form>
+              <form className="composer" onSubmit={submit}><VoiceComposer voice={voice} disabled={loading} /><div className="composer-input-row"><textarea aria-label="发送给健身助手的消息" value={input} onChange={(event) => { setInput(event.target.value); if (!event.target.value.trim()) setVoiceInput(false); }} placeholder="例如：我今天适合做哪些热身动作？" rows={2} disabled={loading || voice.busy} onKeyDown={(event) => { if (event.key === "Enter" && !event.shiftKey) { event.preventDefault(); void submit(event); } }} /><div className="composer-actions">{resultPending && <button type="button" disabled={queryingResult} onClick={() => { if (activeRun.current) void queryOperation(activeRun.current); }}>{queryingResult ? "查询中…" : "重试查询"}</button>}<button type="button" className="stop-button" disabled={!loading || stopping || !!activeRun.current?.cancelAccepted} onClick={() => void stopRun()} aria-label="停止生成">{stopping ? "正在停止…" : activeRun.current?.cancelAccepted ? "停止已申请" : "停止"}<span aria-hidden="true">■</span></button><button type="submit" disabled={loading || voice.busy || !input.trim() || input.trim().length > 4000}>{loading ? "处理中" : "发送"}<span>↗</span></button></div></div><small>Enter 发送 · Shift + Enter 换行{input.length > 4000 && " · 内容过长，请精简"}</small></form>
             </div>
             <aside className="context-panel"><div className="panel-heading compact"><div><span className="panel-kicker">ACCESS</span><h3>当前可用能力</h3></div></div><div className="capability-list">{groups.slice(0, 5).map(([domain, items]) => <div className="capability-group" key={domain}><div className="group-title"><span>{domainIcons[domain] ?? "◇"}</span>{domainNames[domain] ?? domain}<em>{items.length}</em></div><div className="group-items">{items.slice(0, 3).map((item) => <span key={item.id}>{item.display_name}</span>)}</div></div>)}{!catalog && <div className="empty-state">配置 AgentContext 后加载能力目录</div>}</div><button className="text-button" onClick={() => setActiveView("capabilities")}>查看全部能力 <span>→</span></button></aside>
           </section>
@@ -347,7 +478,7 @@ function App() {
   );
 }
 
-function MessageBubble({ message, onDecision }: { message: ChatMessage; onDecision: (message: string) => void }) {
+function MessageBubble({ message, onDecision, voice }: { message: ChatMessage; onDecision: (message: string) => void; voice: VoiceConversation }) {
   const [confirmation, setConfirmation] = useState<Confirmation | null>(null);
   const [acting, setActing] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
@@ -397,7 +528,7 @@ function MessageBubble({ message, onDecision }: { message: ChatMessage; onDecisi
     }
   }
 
-  return <div className={`message-row ${message.role}`}><div className={message.role === "assistant" ? "assistant-avatar" : "user-avatar"}>{message.role === "assistant" ? "F" : "我"}</div><div className="message-content">{message.route && <span className="route-tag">{domainNames[message.route] ?? message.route}</span>}<div className="message-bubble">{message.content}</div>{message.confirmation && <ConfirmationCard response={message.confirmation} confirmation={confirmation} acting={acting} refreshing={refreshing} onRefresh={() => void refreshConfirmation()} onDecision={decide} />}</div></div>;
+  return <div className={`message-row ${message.role}`}><div className={message.role === "assistant" ? "assistant-avatar" : "user-avatar"}>{message.role === "assistant" ? "F" : "我"}</div><div className="message-content">{message.route && <span className="route-tag">{domainNames[message.route] ?? message.route}</span>}<div className="message-bubble">{message.content}</div>{message.voiceInput && <span className="voice-input-label">语音输入</span>}{message.role === "assistant" && message.runId && !message.stopped && <VoiceReply runId={message.runId} voice={voice} />}{message.stopped && <span className="stopped-label">回复已停止</span>}{message.confirmation && <ConfirmationCard response={message.confirmation} confirmation={confirmation} acting={acting} refreshing={refreshing} onRefresh={() => void refreshConfirmation()} onDecision={decide} />}</div></div>;
 }
 
 function ConfirmationCard({ response, confirmation, acting, refreshing, onRefresh, onDecision }: { response: ChatResponse; confirmation: Confirmation | null; acting: boolean; refreshing: boolean; onRefresh: () => void; onDecision: (decision: "APPROVE" | "REJECT") => void }) {
@@ -682,6 +813,7 @@ function DecisionCenterView({ catalog }: { catalog: CapabilityCatalog | null }) 
 type DataCenterState = {
   memoryInbox: MemoryCandidateInbox | null;
   memories: FitnessMemory[];
+  memorySettings: MemorySettings | null;
   notifications: InAppNotification[];
   preference: NotificationPreference | null;
   metricCatalog: OperationsMetricCatalog | null;
@@ -694,6 +826,7 @@ type DataCenterState = {
 const emptyDataCenter: DataCenterState = {
   memoryInbox: null,
   memories: [],
+  memorySettings: null,
   notifications: [],
   preference: null,
   metricCatalog: null,
@@ -717,6 +850,8 @@ function DataCenterView({ catalog, onOpenAgent }: { catalog: CapabilityCatalog |
   const [editingMemory, setEditingMemory] = useState<FitnessMemory | null>(null);
   const [memoryValue, setMemoryValue] = useState("");
   const [memoryUnit, setMemoryUnit] = useState("");
+  const [memorySettingsBusy, setMemorySettingsBusy] = useState(false);
+  const [memorySettingsMessage, setMemorySettingsMessage] = useState("");
   const decisionIds = useRef(new Map<string, string>());
   const isAdmin = Boolean(catalog?.roles.some((role) => ["SYSTEM_ADMIN", "ORGANIZATION_ADMIN", "ADMIN", "SUPER_ADMIN"].includes(role)));
 
@@ -726,8 +861,8 @@ function DataCenterView({ catalog, onOpenAgent }: { catalog: CapabilityCatalog |
       setLoading(true);
       const next: DataCenterState = { ...emptyDataCenter };
       const nextErrors: string[] = [];
-      const userResults = await Promise.allSettled([getMemoryCandidateInbox(), getMemories(), getNotifications(), getNotificationPreference()]);
-      const [inbox, memories, notifications, preference] = userResults;
+      const userResults = await Promise.allSettled([getMemoryCandidateInbox(), getMemories(), getNotifications(), getNotificationPreference(), getMemorySettings()]);
+      const [inbox, memories, notifications, preference, memorySettings] = userResults;
       if (inbox.status === "fulfilled") next.memoryInbox = inbox.value;
       else nextErrors.push(`Memory 收件箱：${formatError(inbox.reason)}`);
       if (memories.status === "fulfilled") next.memories = memories.value;
@@ -736,6 +871,8 @@ function DataCenterView({ catalog, onOpenAgent }: { catalog: CapabilityCatalog |
       else nextErrors.push(`通知中心：${formatError(notifications.reason)}`);
       if (preference.status === "fulfilled") next.preference = preference.value;
       else nextErrors.push(`通知偏好：${formatError(preference.reason)}`);
+      if (memorySettings.status === "fulfilled") next.memorySettings = memorySettings.value;
+      else nextErrors.push(`Memory 设置：${formatError(memorySettings.reason)}`);
 
       if (isAdmin) {
         const adminResults = await Promise.allSettled([getOperationsMetricCatalog(), getOperationsAudits(), getKnowledgeJobs(), getReindexJobs(), getNotificationDeliveryAttempts()]);
@@ -769,6 +906,31 @@ function DataCenterView({ catalog, onOpenAgent }: { catalog: CapabilityCatalog |
     const created = stableId(prefix);
     decisionIds.current.set(key, created);
     return created;
+  }
+
+  async function toggleMemorySetting(key: "extraction_enabled" | "personalization_enabled") {
+    const current = data.memorySettings;
+    if (!current || memorySettingsBusy || loading) return;
+    setMemorySettingsBusy(true);
+    setMemorySettingsMessage("");
+    try {
+      const result = await updateMemorySettings(current.revision, { [key]: !current[key] });
+      setData((previous) => ({ ...previous, memorySettings: result }));
+      setMemorySettingsMessage("设置已保存");
+    } catch (reason: unknown) {
+      const message = reason instanceof ApiError && reason.status === 409
+        ? "设置已变化，请核对最新状态后重新操作"
+        : `设置未能确认：${formatError(reason)}，请核对最新状态`;
+      try {
+        const latest = await getMemorySettings();
+        setData((previous) => ({ ...previous, memorySettings: latest }));
+      } catch {
+        setData((previous) => ({ ...previous, memorySettings: null }));
+      }
+      setMemorySettingsMessage(message);
+    } finally {
+      setMemorySettingsBusy(false);
+    }
   }
 
   async function decideCandidate(id: string, decision: "APPROVE" | "REJECT") {
@@ -965,13 +1127,20 @@ function DataCenterView({ catalog, onOpenAgent }: { catalog: CapabilityCatalog |
     <section className="data-page">
       <div className="catalog-intro">
         <div><span className="panel-kicker">SECURE DATA CENTER</span><h2>业务数据与治理状态</h2><p>这里展示服务端已经允许当前身份读取的资料。所有修改仍经过版本校验、幂等处理和审计。</p></div>
-        <button className="outline-button" onClick={() => setRefreshKey((value) => value + 1)} disabled={loading}>{loading ? "刷新中…" : "刷新数据"}</button>
+        <button className="outline-button" onClick={() => setRefreshKey((value) => value + 1)} disabled={loading || memorySettingsBusy}>{loading ? "刷新中…" : "刷新数据"}</button>
       </div>
       {errors.length > 0 && <div className="partial-warning"><strong>部分数据未加载</strong><span>{errors.join("；")}</span></div>}
       {editingMemory && <form className="memory-edit" onSubmit={submitMemoryCorrection}><div><span className="panel-kicker">MEMORY CORRECTION</span><h3>纠正「{editingMemory.memory_key}」</h3></div><input value={memoryValue} onChange={(event) => setMemoryValue(event.target.value)} placeholder="新的值" required /><input value={memoryUnit} onChange={(event) => setMemoryUnit(event.target.value)} placeholder="单位（可选）" /><button className="small-approve" type="submit" disabled={!memoryValue.trim() || busyId === editingMemory.id}>保存纠正</button><button className="outline-button" type="button" onClick={() => setEditingMemory(null)}>取消</button></form>}
       {isAdmin && <AdminGovernancePanel jobs={data.knowledgeJobs} deliveryAttempts={data.deliveryAttempts} selectedJob={selectedJob} report={selectedReport} busy={governanceBusy} message={governanceMessage} reviewComment={reviewComment} onCommentChange={setReviewComment} onOpenJob={(job) => void openKnowledgeJob(job)} onReview={(action) => void reviewKnowledgeJob(action)} onUpload={(form) => void uploadKnowledge(form)} />}
       <div className="data-grid">
-        <DataCard title="Memory 待确认" kicker="MEMORY INBOX" count={data.memoryInbox?.items.length ?? 0}><div className="data-list">{data.memoryInbox?.items.length ? data.memoryInbox.items.map(({ candidate }) => <div className="data-row" key={candidate.id}><div><strong>{candidate.memory_key}</strong><p>{candidate.value}{candidate.unit ? ` ${candidate.unit}` : ""}</p></div><div className="row-actions"><button className="small-reject" disabled={busyId === candidate.id} onClick={() => void decideCandidate(candidate.id, "REJECT")}>拒绝</button><button className="small-approve" disabled={busyId === candidate.id} onClick={() => void decideCandidate(candidate.id, "APPROVE")}>{busyId === candidate.id ? "处理中…" : "确认"}</button></div></div>) : <EmptyRow text="暂无待确认候选" />}</div></DataCard>
+        <DataCard title="Memory 设置" kicker="MEMORY SETTINGS" count={data.memorySettings ? Number(data.memorySettings.extraction_enabled && data.memorySettings.extraction_config_enabled) + Number(data.memorySettings.personalization_enabled) : 0}>
+          <div className="data-list">
+            <div className="preference-row"><div><strong>自动提取记忆候选</strong><p>{!data.memorySettings ? "未加载" : !data.memorySettings.extraction_config_enabled ? `服务配置未启用 · 个人设置${data.memorySettings.extraction_enabled ? "开启" : "关闭"}` : `${data.memorySettings.extraction_enabled ? "个人设置已开启" : "个人设置已关闭"} · 关闭后停止从新对话提取候选`}</p></div><button className="outline-button" disabled={!data.memorySettings?.extraction_config_enabled || memorySettingsBusy || loading} onClick={() => void toggleMemorySetting("extraction_enabled")}>{data.memorySettings?.extraction_enabled ? "关闭" : "开启"}</button></div>
+            <div className="preference-row"><div><strong>个性化使用记忆</strong><p>{data.memorySettings ? (data.memorySettings.personalization_enabled ? "已开启" : "已关闭") : "未加载"} · 关闭后停止主动读取已确认记忆</p></div><button className="outline-button" disabled={!data.memorySettings || memorySettingsBusy || loading} onClick={() => void toggleMemorySetting("personalization_enabled")}>{data.memorySettings?.personalization_enabled ? "关闭" : "开启"}</button></div>
+            {memorySettingsMessage && <p role="status">{memorySettingsMessage}</p>}
+          </div>
+        </DataCard>
+        <DataCard title="Memory 待确认" kicker="MEMORY INBOX" count={data.memoryInbox?.items.length ?? 0}><div className="data-list">{data.memoryInbox?.items.length ? data.memoryInbox.items.map(({ candidate }) => <div className="data-row" key={candidate.id}><div><strong>{candidate.action === "UPDATE" ? "修改" : candidate.action === "NEEDS_CLARIFICATION" ? "需要进一步确认" : "新增"} · {candidate.slot_code ?? candidate.memory_key}</strong>{candidate.previous_value && <p>原内容：{candidate.previous_value}</p>}<p>建议内容：{candidate.value}{candidate.unit ? ` ${candidate.unit}` : ""}</p>{candidate.evidence_quote && <p>依据：{candidate.evidence_quote}</p>}{candidate.clarification_reason && <p>{candidate.clarification_reason}</p>}{candidate.action === "NEEDS_CLARIFICATION" && <p>请在对话中说明具体含义，再重新提交。</p>}</div><div className="row-actions"><button className="small-reject" disabled={busyId === candidate.id} onClick={() => void decideCandidate(candidate.id, "REJECT")}>拒绝</button><button className="small-approve" disabled={busyId === candidate.id || candidate.action === "NEEDS_CLARIFICATION"} onClick={() => void decideCandidate(candidate.id, "APPROVE")}>{busyId === candidate.id ? "处理中…" : "确认"}</button></div></div>) : <EmptyRow text="暂无待确认候选" />}</div></DataCard>
         <DataCard title="已确认 Memory" kicker="ACTIVE MEMORY" count={data.memories.length}><div className="data-list">{data.memories.length ? data.memories.map((memory) => <div className="data-row" key={memory.id}><div><strong>{memory.memory_key}</strong><p>{JSON.stringify(memory.content)}</p></div><div className="row-actions"><span className="status-chip">{memory.status}</span><button className="outline-button" disabled={busyId === memory.id} onClick={() => beginMemoryCorrection(memory)}>纠正</button><button className="small-reject" disabled={busyId === memory.id} onClick={() => void revokeActiveMemory(memory)}>撤销</button></div></div>) : <EmptyRow text="暂无有效 Memory" />}</div></DataCard>
         <DataCard title="通知中心" kicker="IN-APP NOTIFICATIONS" count={data.notifications.filter((item) => !item.read_at).length}>
           <div className="data-list">{data.notifications.length ? data.notifications.slice(0, 8).map((notification) => <NotificationItem key={notification.id} notification={notification} busy={busyId === notification.id} onRead={() => void readNotification(notification)} onOpenAgent={() => void openProactiveNotification(notification)} onRespond={(responseType, responseValue) => void respondToSuggestion(notification, responseType, responseValue)} />) : <EmptyRow text="暂无站内通知" />}</div>

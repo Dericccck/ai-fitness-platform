@@ -232,3 +232,35 @@ async def test_expired_pending_candidate_cannot_be_approved() -> None:
             decision="APPROVE",
             decision_request_id="decision-4",
         )
+
+
+@pytest.mark.asyncio
+async def test_atomic_candidate_approval_invalidates_derived_summary() -> None:
+    service, candidates, _ = build_service()
+    await service.propose(
+        user_message="请记住我只有弹力带", identity=IDENTITY,
+        thread_id="fitness:thread-hash", source_request_id="request-5",
+    )
+    invalidated: list[str] = []
+
+    class SummaryRepository:
+        async def invalidate_for_subject(self, subject_user_id: str) -> int:
+            invalidated.append(subject_user_id)
+            return 1
+
+    async def approve_atomic(candidate_id: str, **kwargs: object):
+        previous = candidates.records[candidate_id]
+        approved = MemoryCandidateRecord(**{
+            **previous.__dict__, "status": "APPROVED",
+            "decision_request_id": kwargs["decision_request_id"],
+        })
+        candidates.records[candidate_id] = approved
+        return approved, None
+
+    candidates.approve_atomic = approve_atomic  # type: ignore[attr-defined]
+    service.memory_service.summary_repository = SummaryRepository()
+    await service.decide(
+        "candidate-1", identity=IDENTITY,
+        decision="APPROVE", decision_request_id="decision-5",
+    )
+    assert invalidated == [IDENTITY.subject]

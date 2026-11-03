@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from datetime import UTC, datetime, timedelta
+from types import SimpleNamespace
 from uuid import uuid4
 
 import pytest
@@ -46,21 +47,41 @@ async def test_memory_repository_writes_audit_and_revoke_is_idempotent() -> None
             organization_id="org-1",
             memory_type="TRAINING_PREFERENCE",
             memory_key="preferred_style",
-            content={"key": "preferred_style", "value": "错误重试内容"},
+            content={"key": "preferred_style", "value": "力量训练"},
             expires_at=None,
             source_request_id=f"memory-save:{suffix}:1",
         )
         assert retried.version == first.version
         assert retried.content["value"] == "力量训练"
 
-        corrected = await repository.save(
+        with pytest.raises(MemoryVersionConflictError):
+            await repository.save(
+                identity=identity,
+                organization_id="org-1",
+                memory_type="TRAINING_PREFERENCE",
+                memory_key="preferred_style",
+                content={"key": "preferred_style", "value": "错误重试内容"},
+                expires_at=None,
+                source_request_id=f"memory-save:{suffix}:1",
+            )
+        with pytest.raises(MemoryVersionConflictError):
+            await repository.save(
+                identity=identity,
+                organization_id="org-1",
+                memory_type="TRAINING_PREFERENCE",
+                memory_key="preferred_style",
+                content={"key": "preferred_style", "value": "自重训练"},
+                expires_at=None,
+                source_request_id=f"memory-save:{suffix}:2",
+            )
+        corrected = await repository.correct(
             identity=identity,
             organization_id="org-1",
-            memory_type="TRAINING_PREFERENCE",
-            memory_key="preferred_style",
+            memory_id=first.id,
+            expected_version=first.version,
             content={"key": "preferred_style", "value": "自重训练"},
             expires_at=None,
-            source_request_id=f"memory-save:{suffix}:2",
+            source_request_id=f"memory-correct:{suffix}:0",
         )
         assert corrected.version == 2
 
@@ -78,12 +99,22 @@ async def test_memory_repository_writes_audit_and_revoke_is_idempotent() -> None
             organization_id="org-1",
             memory_id=corrected.id,
             expected_version=corrected.version,
-            content={"key": "preferred_style", "value": "错误重试内容"},
+            content={"key": "preferred_style", "value": "器械训练"},
             expires_at=None,
             source_request_id=f"memory-correct:{suffix}:1",
         )
         assert corrected_again.version == 3
         assert retried_correction.content["value"] == "器械训练"
+        with pytest.raises(MemoryVersionConflictError):
+            await repository.correct(
+                identity=identity,
+                organization_id="org-1",
+                memory_id=corrected.id,
+                expected_version=corrected.version,
+                content={"key": "preferred_style", "value": "错误重试内容"},
+                expires_at=None,
+                source_request_id=f"memory-correct:{suffix}:1",
+            )
         with pytest.raises(MemoryVersionConflictError):
             await repository.correct(
                 identity=identity,
@@ -150,5 +181,109 @@ async def test_memory_repository_writes_audit_and_revoke_is_idempotent() -> None
             await connection.execute(
                 text("DELETE FROM agent_memories WHERE subject_user_id = :subject"),
                 {"subject": identity.subject},
+            )
+            await connection.execute(
+                text("DELETE FROM agent_memory_profiles WHERE subject_user_id = :subject"),
+                {"subject": identity.subject},
+            )
+        await database.close()
+
+
+async def test_candidate_updates_are_versioned_and_old_epoch_is_fenced() -> None:
+    database = Database(Settings(_env_file=None))
+    repository = MemoryRepository(database)
+    suffix = str(uuid4())
+    identity = AgentIdentity(
+        subject=f"memory-slot-{suffix}",
+        organization_ids=frozenset({"org-1"}),
+        roles=frozenset({"STUDENT"}),
+        issued_at=1,
+        expires_at=2,
+    )
+
+    def candidate(
+        value: str, *, action: str = "ADD", target: str | None = None, version: int | None = None
+    ) -> SimpleNamespace:
+        return SimpleNamespace(
+            memory_type="SCHEDULE_PREFERENCE",
+            memory_key="available_windows",
+            slot_code="available_windows",
+            value=value,
+            unit=None,
+            action=action,
+            target_memory_id=target,
+            expected_version=version,
+        )
+
+    try:
+        async with database.engine.begin() as connection:
+            first = await repository.apply_candidate_on_connection(
+                connection,
+                identity=identity,
+                organization_id="org-1",
+                candidate=candidate("周末上午"),
+                operation_id=f"{suffix}:a",
+                expected_epoch=0,
+            )
+        async with database.engine.begin() as connection:
+            second = await repository.apply_candidate_on_connection(
+                connection,
+                identity=identity,
+                organization_id="org-1",
+                candidate=candidate("周末下午"),
+                operation_id=f"{suffix}:b",
+                expected_epoch=0,
+            )
+        assert first.id != second.id
+        async with database.engine.begin() as connection:
+            with pytest.raises(MemoryVersionConflictError):
+                await repository.apply_candidate_on_connection(
+                    connection,
+                    identity=identity,
+                    organization_id="org-1",
+                    candidate=candidate("周末下午"),
+                    operation_id=f"{suffix}:duplicate",
+                    expected_epoch=0,
+                )
+        async with database.engine.begin() as connection:
+            updated = await repository.apply_candidate_on_connection(
+                connection,
+                identity=identity,
+                organization_id="org-1",
+                candidate=candidate("周末晚上", action="UPDATE", target=first.id, version=1),
+                operation_id=f"{suffix}:update",
+                expected_epoch=0,
+            )
+        assert updated.id == first.id and updated.version == 2
+        await repository.revoke(
+            identity=identity,
+            organization_id="org-1",
+            memory_id=updated.id,
+            expected_version=2,
+            source_request_id=f"{suffix}:revoke",
+        )
+        async with database.engine.begin() as connection:
+            with pytest.raises(MemoryVersionConflictError):
+                await repository.apply_candidate_on_connection(
+                    connection,
+                    identity=identity,
+                    organization_id="org-1",
+                    candidate=candidate("周末晚上"),
+                    operation_id=f"{suffix}:stale",
+                    expected_epoch=0,
+                )
+    finally:
+        async with database.engine.begin() as connection:
+            await connection.execute(
+                text("DELETE FROM agent_memory_events WHERE subject_user_id = :s"),
+                {"s": identity.subject},
+            )
+            await connection.execute(
+                text("DELETE FROM agent_memories WHERE subject_user_id = :s"),
+                {"s": identity.subject},
+            )
+            await connection.execute(
+                text("DELETE FROM agent_memory_profiles WHERE subject_user_id = :s"),
+                {"s": identity.subject},
             )
         await database.close()

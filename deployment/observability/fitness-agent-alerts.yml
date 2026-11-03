@@ -143,3 +143,33 @@ groups:
         annotations:
           summary: "必需 Worker 未就绪"
           description: "已明确启用的 Worker 连续 3 分钟未就绪或无法抓取；检查启动、租约、SIGTERM 和依赖配置。"
+
+  - name: fitness-mcp-reliability
+    rules:
+      - alert: FitnessMcpCatalogUnavailable
+        expr: fitness_agent_mcp_enabled == 1 and fitness_agent_mcp_catalog_available == 0
+        for: 3m
+        labels:
+          severity: warning
+          service: fitness-agent
+        annotations:
+          summary: MCP目录不可用或契约不匹配
+          description: 检查服务状态、有效凭证和冻结的工具Schema，禁止自动写入回退。
+      - alert: FitnessConfirmationReconciliationStalled
+        expr: fitness_agent_confirmation_reconciliation_backlog > 0 and fitness_agent_confirmation_reconciliation_oldest_seconds > 600
+        for: 5m
+        labels:
+          severity: warning
+          service: fitness-agent
+        annotations:
+          summary: 业务写入结果长期未核实
+          description: 检查对账Worker、服务身份及下游事务证据；保留原ID与JTI，不重复写入。
+      - alert: FitnessConfirmationManualReviewPending
+        expr: fitness_agent_confirmation_manual_review_backlog > 0
+        for: 10m
+        labels:
+          severity: warning
+          service: fitness-agent
+        annotations:
+          summary: 本地确认动作需要人工核实
+          description: 按原业务ID检查事实和审计，不因未知而重放动作。

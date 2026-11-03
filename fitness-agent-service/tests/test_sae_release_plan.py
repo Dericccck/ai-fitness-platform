@@ -19,11 +19,12 @@ def test_offline_plan_uses_topology_and_independent_worker_entrypoint() -> None:
     assert plan["executed"] is False and plan["cloud_verified"] is False
     assert [stage["parallel_updates"][0]["application"] for stage in plan["stages"][1:]] == [
         "gateway",
+        "mcp",
         "agent-api",
         "notification-worker",
         "web",
     ]
-    worker = plan["stages"][3]["parallel_updates"][0]
+    worker = plan["stages"][4]["parallel_updates"][0]
     assert worker["parameters"]["CommandArgs"] == '["-m", "app.notification_worker_main"]'
 
 

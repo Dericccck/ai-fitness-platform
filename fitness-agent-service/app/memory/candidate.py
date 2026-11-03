@@ -61,6 +61,15 @@ class MemoryCandidateExtractionError(RuntimeError):
     """候选提取结果无法安全解析或校验。"""
 
 
+class MemoryCandidateSnapshotEntry(BaseModel):
+    """Identity and version of an active memory observed during comparison."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    memory_id: str = Field(min_length=1, max_length=128)
+    version: int = Field(ge=1)
+
+
 class MemoryCandidate(BaseModel):
     """单条待确认候选，只允许映射到当前 Memory 白名单。"""
 
@@ -70,6 +79,20 @@ class MemoryCandidate(BaseModel):
     memory_key: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]{0,63}$")
     value: str = Field(min_length=1, max_length=500)
     unit: str | None = Field(default=None, max_length=16)
+    # 可选字段兼容历史密文候选；新提取链要求服务端目录和原文证据。
+    slot_code: str | None = Field(default=None, max_length=64)
+    action: Literal["ADD", "UPDATE", "NOOP", "NEEDS_CLARIFICATION"] = "ADD"
+    target_memory_id: str | None = Field(default=None, max_length=128)
+    expected_version: int | None = Field(default=None, ge=1)
+    previous_value: str | None = Field(default=None, max_length=500)
+    clarification_reason: str | None = Field(default=None, max_length=200)
+    evidence_quote: str | None = Field(default=None, max_length=500)
+    source_message_id: str | None = Field(default=None, max_length=128)
+    write_epoch: int | None = Field(default=None, ge=0)
+    base_revision: int | None = Field(default=None, ge=0)
+    conflict_snapshot: list[MemoryCandidateSnapshotEntry] | None = Field(
+        default=None, max_length=50
+    )
 
     def to_context_line(self) -> str:
         """生成只读候选上下文，不包含模型自由解释或授权结论。"""
@@ -188,6 +211,69 @@ class MemoryCandidateExtractionService:
                 "extraction_filtered", len(envelope.candidates) - len(candidates)
             )
         return candidates
+
+    async def propose_controlled(self, user_message: str) -> tuple[MemoryCandidate, ...]:
+        """异步链使用受控目录和逐字来源校验；空结果与提取错误分开。"""
+        from .registry import SLOT_REGISTRY
+
+        slots = {name: definition.memory_type for name, definition in SLOT_REGISTRY.items()}
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "仅从用户原话中提取明确、稳定且低敏的个人健身偏好；临时请求、"
+                    "健康诊断、疼痛、预约、合同、支付、推断均不得提取。"
+                    '仅返回JSON对象：{"candidates":[{"memory_type":"类型",'
+                    '"memory_key":"槽位","slot_code":"槽位",'
+                    '"value":"原意","unit":null,"evidence_quote":"逐字原文"}]}。'
+                    "没有明确长期表达时返回空数组；每条 evidence_quote 必须逐字来自用户原文。"
+                    "以下是唯一允许的槽位到类型映射：" + json.dumps(slots, ensure_ascii=False)
+                ),
+            },
+            {"role": "user", "content": user_message},
+        ]
+        try:
+            raw = await self.models.chat_json(messages)
+            envelope = MemoryCandidateEnvelope.model_validate(json.loads(raw))
+        except (json.JSONDecodeError, ValidationError, ModelResponseError) as exc:
+            raise MemoryCandidateExtractionError("Memory 候选未通过结构化校验") from exc
+        safe: list[MemoryCandidate] = []
+        seen: set[tuple[str, str, str]] = set()
+        for candidate in envelope.candidates:
+            slot = candidate.slot_code
+            quote = candidate.evidence_quote
+            if (
+                not slot
+                or slots.get(slot) != candidate.memory_type
+                or not quote
+                or quote not in user_message
+                or candidate.memory_key != slot
+                or any(term in candidate.value or term in quote for term in _FORBIDDEN_TERMS)
+                or any(ord(char) < 32 for char in candidate.value)
+            ):
+                continue
+            identity = (candidate.memory_type, slot, " ".join(candidate.value.split()))
+            if not identity[2] or identity in seen:
+                continue
+            seen.add(identity)
+            # 模型不能决定更新目标、内部版本或写入 epoch。
+            safe.append(
+                candidate.model_copy(
+                    update={
+                        "value": identity[2],
+                        "action": "ADD",
+                        "target_memory_id": None,
+                        "expected_version": None,
+                        "previous_value": None,
+                        "clarification_reason": None,
+                        "source_message_id": None,
+                        "write_epoch": None,
+                        "base_revision": None,
+                        "conflict_snapshot": None,
+                    }
+                )
+            )
+        return tuple(safe)
 
 
 def build_candidate_context(

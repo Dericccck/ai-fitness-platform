@@ -9,6 +9,7 @@ import type {
   KnowledgeReviewReport,
   KnowledgeJob,
   MemoryCandidateInbox,
+  MemorySettings,
   NotificationDeliveryAttempt,
   NotificationPreference,
   OperationsAuditPage,
@@ -20,9 +21,12 @@ import type {
   ActionRun,
   DecisionEffect,
   DecisionExperiment,
+  VoiceConfig,
+  VoiceManifest,
 } from "./types";
 import { SseParser } from "./sse";
 import { AuthClient } from "./auth";
+import { ChatRunCancelled, ChatRunPending, ChatRunTerminalError, waitForChatRun } from "./chatRun";
 
 const baseUrl = (import.meta.env.VITE_AGENT_API_BASE_URL ?? "").replace(/\/$/, "");
 const configuredContext = import.meta.env.DEV ? import.meta.env.VITE_AGENT_CONTEXT?.trim() ?? "" : "";
@@ -32,6 +36,7 @@ const browserAuth = new AuthClient(baseUrl, fetch.bind(globalThis), () => {
   sessionStorage.removeItem("fitness-web-conversation-id");
   sessionStorage.removeItem("fitness-agent-context");
   sessionStorage.removeItem("fitness-agent-organization");
+  window.dispatchEvent(new Event("fitness.scope-changed"));
 });
 export async function getAuthState() {
   const config = await browserAuth.configuration();
@@ -45,12 +50,14 @@ export const logout = () => browserAuth.logout();
 export class ApiError extends Error {
   readonly status: number;
   readonly requestId: string | null;
+  readonly retryAfterMs: number;
 
-  constructor(message: string, status: number, requestId: string | null) {
+  constructor(message: string, status: number, requestId: string | null, retryAfterMs = 0) {
     super(message);
     this.name = "ApiError";
     this.status = status;
     this.requestId = requestId;
+    this.retryAfterMs = retryAfterMs;
   }
 }
 
@@ -107,6 +114,7 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
   try {
     response = await fetch(`${baseUrl}${path}`, { ...init, headers, credentials: "same-origin" });
   } catch {
+    if (init.signal?.aborted) throw init.signal.reason;
     throw new ApiError("无法连接 Agent 服务，请确认 8090 端口服务正在运行", 0, id);
   }
 
@@ -119,7 +127,9 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
       429: "请求过于频繁，请稍后再试",
       503: "Agent 服务暂时不可用，请稍后再试",
     };
-    throw new ApiError(messages[response.status] ?? `请求失败（HTTP ${response.status}）`, response.status, responseRequestId);
+    const retryAfter = response.headers.get("Retry-After");
+    const retryAfterMs = retryAfter ? (/^\d+$/.test(retryAfter) ? Number(retryAfter)*1000 : Math.max(0,Date.parse(retryAfter)-Date.now())) : 0;
+    throw new ApiError(messages[response.status] ?? `请求失败（HTTP ${response.status}）`, response.status, responseRequestId, retryAfterMs);
   }
   if (response.status === 204) return undefined as T;
   return (await response.json()) as T;
@@ -127,6 +137,61 @@ async function request<T>(path: string, init: RequestInit = {}): Promise<T> {
 
 export function getCapabilities(): Promise<CapabilityCatalog> {
   return request<CapabilityCatalog>("/api/v1/agent/capabilities");
+}
+
+async function voiceRequest(path: string, init: RequestInit, binary = false): Promise<unknown> {
+  const id = requestId();
+  const headers = await browserAuth.headers(init.method ?? "GET", context);
+  new Headers(init.headers).forEach((value, name) => headers.set(name, value));
+  headers.set("X-Request-ID", id);
+  headers.set("X-Trace-ID", id);
+  headers.set("Accept", binary ? "audio/wav" : "application/json");
+  init.signal?.throwIfAborted();
+  let response: Response;
+  try {
+    response = await fetch(`${baseUrl}/api/v1/agent/voice${path}`, {
+      ...init, headers, credentials: "same-origin", cache: "no-store",
+    });
+  } catch {
+    if (init.signal?.aborted) throw init.signal.reason;
+    throw new ApiError("语音服务连接失败，请重试", 0, id);
+  }
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({})) as { message?: string };
+    const message = response.status === 401 ? "身份已失效，请重新登录" :
+      response.status === 403 ? "当前身份无权使用语音" : body.message ?? `语音请求失败（HTTP ${response.status}）`;
+    throw new ApiError(message, response.status, response.headers.get("X-Request-ID") ?? id,
+      Number(response.headers.get("Retry-After") ?? 0) * 1000);
+  }
+  return binary ? response.blob() : response.json();
+}
+
+function voiceSignal(signal?: AbortSignal, timeout = 80_000): AbortSignal {
+  const deadline = AbortSignal.timeout(timeout);
+  return signal ? AbortSignal.any([signal, deadline]) : deadline;
+}
+
+export function getVoiceConfig(signal?: AbortSignal): Promise<VoiceConfig> {
+  return voiceRequest("/config", { signal: voiceSignal(signal, 15_000) }) as Promise<VoiceConfig>;
+}
+
+export function transcribeRecording(audio: Blob, signal?: AbortSignal): Promise<{ text: string; duration_ms: number }> {
+  return voiceRequest("/transcriptions", {
+    method: "POST", headers: { "Content-Type": "audio/wav" }, body: audio, signal: voiceSignal(signal),
+  }) as Promise<{ text: string; duration_ms: number }>;
+}
+
+export function getVoiceManifest(runId: string, signal?: AbortSignal): Promise<VoiceManifest> {
+  return voiceRequest(`/replies/${encodeURIComponent(runId)}`, {
+    signal: voiceSignal(signal, 15_000),
+  }) as Promise<VoiceManifest>;
+}
+
+export function getVoiceSegment(runId: string, index: number, revision: string, signal?: AbortSignal): Promise<Blob> {
+  return voiceRequest(`/replies/${encodeURIComponent(runId)}/segments/${index}`, {
+    method: "POST", headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ revision }), signal: voiceSignal(signal),
+  }, true) as Promise<Blob>;
 }
 
 export function sendChat(conversationId: string, message: string, proactiveCandidateId?: string): Promise<ChatResponse> {
@@ -141,26 +206,31 @@ export function sendChat(conversationId: string, message: string, proactiveCandi
   });
 }
 
-export function getChatRun(runId: string): Promise<ChatRun> {
-  return request<ChatRun>(`/api/v1/agent/runs/${encodeURIComponent(runId)}`, { signal: AbortSignal.timeout(10_000) });
+export function getChatRun(runId: string, signal?: AbortSignal): Promise<ChatRun> {
+  return request<ChatRun>(`/api/v1/agent/runs/${encodeURIComponent(runId)}`, {
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
+  });
 }
 
-export async function recoverChatRun(runId: string): Promise<ChatResponse> {
-  const deadline = Date.now() + 300_000;
-  while (Date.now() < deadline) {
-    const run = await getChatRun(runId);
-    if (run.status === "COMPLETED" && run.response) return run.response;
-    if (run.status !== "RUNNING") {
-      throw new ApiError("本次处理未完成，请先核对业务结果后再发起新操作", 503, runId);
-    }
-    await new Promise((resolve) => setTimeout(resolve, 1000));
+export function cancelChatRun(runId: string, cancelRequestId: string, signal?: AbortSignal): Promise<ChatRun> {
+  return request<ChatRun>(`/api/v1/agent/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: "POST", body: JSON.stringify({ cancel_request_id: cancelRequestId }),
+    signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(10_000)]) : AbortSignal.timeout(10_000),
+  });
+}
+
+export async function recoverChatRun(runId: string, signal?: AbortSignal, onRun?: (run: ChatRun) => void): Promise<ChatResponse> {
+  try { return await waitForChatRun(() => getChatRun(runId, signal), signal, undefined, undefined, { onRun }); }
+  catch (error) {
+    if (error instanceof ChatRunCancelled || error instanceof ChatRunPending || error instanceof ChatRunTerminalError || signal?.aborted || error instanceof ApiError) throw error;
+    throw new ApiError(error instanceof Error ? error.message : "任务结果暂时无法确认", 503, runId);
   }
-  throw new ApiError("处理仍未结束，请保留本次任务记录并稍后查询", 503, runId);
 }
 
 export async function sendChatStream(
   conversationId: string, message: string, runId: string,
   onEvent: (event: ChatStreamEvent) => void, proactiveCandidateId?: string,
+  signals: { transport?: AbortSignal; lifetime?: AbortSignal; onRun?: (run: ChatRun) => void } = {},
 ): Promise<ChatResponse> {
   const id = requestId();
   const controller = new AbortController();
@@ -175,7 +245,9 @@ export async function sendChatStream(
     headers.set("X-Trace-ID", id);
     serverFailed = false;
     const response = await fetch(`${baseUrl}/api/v1/agent/chat/stream`, {
-      method: "POST", signal: controller.signal, credentials: "same-origin", headers,
+      method: "POST", signal: AbortSignal.any([
+        controller.signal, ...[signals.transport, signals.lifetime].filter((signal): signal is AbortSignal => !!signal),
+      ]), credentials: "same-origin", headers,
       body: JSON.stringify({ conversation_id: conversationId, message, locale: "zh-CN",
         run_id: runId, proactive_candidate_id: proactiveCandidateId }),
     });
@@ -194,19 +266,19 @@ export async function sendChatStream(
         if (event.run_id !== runId || event.event !== frame.event) throw new Error("流式事件不匹配");
         onEvent(event);
         if (event.event === "run.completed" && event.data.response) return event.data.response;
-        if (event.event === "run.failed") {
+        if (event.event === "run.failed" || event.event === "run.cancelled") {
           serverFailed = true;
           // 终态通知可能先于客户端收到，或持久化 ACK 不确定；以数据库终态为准。
-          return await recoverChatRun(runId);
+          return await recoverChatRun(runId, signals.lifetime, signals.onRun);
         }
-        if (event.event === "stream.reset") return await recoverChatRun(runId);
+        if (event.event === "stream.reset") return await recoverChatRun(runId, signals.lifetime, signals.onRun);
       }
       if (done) break;
     }
   } catch (error: unknown) {
-    if (serverFailed) throw error;
+    if (serverFailed || signals.lifetime?.aborted || error instanceof ChatRunCancelled) throw error;
     // 网络故障只查询已提交任务，绝不重新 POST 对话或重复业务写入。
-    return await recoverChatRun(runId);
+    return await recoverChatRun(runId, signals.lifetime, signals.onRun);
   } finally {
     clearTimeout(timer);
     if (reader) {
@@ -214,7 +286,7 @@ export async function sendChatStream(
       reader.releaseLock();
     }
   }
-  return await recoverChatRun(runId);
+  return await recoverChatRun(runId, signals.lifetime, signals.onRun);
 }
 
 export function getConfirmation(id: string): Promise<Confirmation> {
@@ -252,6 +324,18 @@ export function decideMemoryCandidate(
 
 export function getMemories(): Promise<FitnessMemory[]> {
   return request<FitnessMemory[]>(withOrganization("/api/v1/agent/memories"));
+}
+
+export function getMemorySettings(): Promise<MemorySettings> {
+  return request<MemorySettings>(withOrganization("/api/v1/agent/memories/settings"));
+}
+
+export function updateMemorySettings(
+  revision: number, change: Partial<Pick<MemorySettings, "extraction_enabled" | "personalization_enabled">>,
+): Promise<MemorySettings> {
+  return request<MemorySettings>(withOrganization("/api/v1/agent/memories/settings"), {
+    method: "PATCH", body: JSON.stringify({ expected_revision: revision, ...change }),
+  });
 }
 
 export function correctMemory(id: string, value: string, unit: string | null, expectedVersion: number, decisionRequestId: string): Promise<FitnessMemory> {

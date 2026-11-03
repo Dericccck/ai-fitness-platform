@@ -819,6 +819,7 @@ def build_fitness_tool_registry(
     operations_metrics: HttpMetrics | None = None,
     operations_decision_snapshot_sink: Any | None = None,
     telemetry: Any | None = None,
+    availability_checker: Any | None = None,
 ) -> ToolRegistry:
     """创建进程级健身工具注册表。
 
@@ -827,7 +828,7 @@ def build_fitness_tool_registry(
     角色、确认和幂等元数据，而不是让模型或业务 Agent 自由调用 HTTP 客户端。
     """
 
-    registry = ToolRegistry(telemetry=telemetry)
+    registry = ToolRegistry(telemetry=telemetry, availability_checker=availability_checker)
 
     # 延迟导入是有意的：生成服务需要复用本文件中的训练计划 Schema，若在模块顶部
     # 导入会形成循环依赖。函数执行时本模块已经完成加载，仍然保持单一 Schema 来源。
@@ -989,7 +990,7 @@ def build_fitness_tool_registry(
         if memory_service is None or context.identity is None:
             raise RuntimeError("Memory 服务和已验证的 AgentContext 均为必需项")
         data = cast(ListMemoryToolInput, raw)
-        memories = await memory_service.list_active(
+        memories = await memory_service.list_personalization(
             identity=context.identity, organization_id=data.organization_id
         )
         return [_memory_view(memory) for memory in memories]

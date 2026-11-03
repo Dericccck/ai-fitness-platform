@@ -14,7 +14,7 @@ async def run() -> None:
 
     settings = Settings()
     start_http_server(settings.memory_candidate_worker_metrics_port, registry=http_metrics.registry)
-    async with lifespan(app):
+    async with lifespan(app, role="worker"):
         worker = app.state.memory_candidate_expiry_worker
         await poll_worker(worker.run_once, interval=settings.memory_candidate_expiry_poll_seconds)
 
