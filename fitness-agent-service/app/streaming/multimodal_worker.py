@@ -142,7 +142,21 @@ class MultimodalWorker:
         except MultimodalOutcomeUnknown:
             outcome = "unknown"
             await self.repository.fail(lease, outcome_unknown=True, code="PROVIDER_OUTCOME_UNKNOWN")
-        except (MultimodalResponseError, MultimodalUnavailable):
+        except (MultimodalResponseError, MultimodalUnavailable) as exc:
+            # Only fixed reason codes are logged; model output and validation inputs may contain
+            # private user data or signed media URLs and must never enter operational logs.
+            reasons = {
+                "动作识别结果不符合契约": "identification_contract",
+                "动作分析结果不符合来源或结构契约": "report_contract",
+                "视觉模型返回的结构化结果无效或不完整": "response_contract",
+                "视觉模型请求失败，请稍后重试": "provider_rejected",
+                "视觉模型服务繁忙，请稍后重试": "capacity",
+            }
+            logger.warning(
+                "multimodal_analysis_rejected",
+                error_type=type(exc).__name__,
+                reason=reasons.get(str(exc), "other"),
+            )
             outcome = "model_failed"
             await self.repository.fail(lease, outcome_unknown=False, code="MODEL_FAILED")
         except Exception as exc:  # noqa: BLE001 - 不把用户数据、URL 或供应商响应写入日志

@@ -60,7 +60,7 @@ export default function Login() {
             {configured ? (
               <>
                 <Text style={[S.body, { marginTop: 14 }]}>
-                  {desktopSimulation ? "本机模拟：账号 demo，密码 demo，机构 org-1。不会调用真实模型。" : "使用健身平台账户登录，查看和管理你的训练对话。"}
+                  {desktopSimulation ? "本机联调：账号 demo，密码 demo，机构 org-1。模型和存储取决于服务端配置，可能产生费用。" : "使用健身平台账户登录，查看和管理你的训练对话。"}
                 </Text>
                 <TextInput
                   accessibilityLabel="账号"

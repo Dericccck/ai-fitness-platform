@@ -117,6 +117,30 @@ async def test_timeout_is_unknown_and_never_retried() -> None:
     await gateway.close()
 
 
+async def test_provider_rejection_logs_status_without_sensitive_response() -> None:
+    from structlog.testing import capture_logs
+
+    gateway = MultimodalGateway(
+        configured(),
+        client=httpx.AsyncClient(
+            transport=httpx.MockTransport(
+                lambda _: httpx.Response(403, text="private-provider-response")
+            )
+        ),
+    )
+    try:
+        with capture_logs() as events, pytest.raises(MultimodalUnavailable):
+            await gateway.generate_json(system_prompt="JSON", user_prompt="分析", media=[video()])
+        assert any(
+            item.get("event") == "multimodal_provider_rejected" and item.get("status_code") == 403
+            for item in events
+        )
+        assert "private-provider-response" not in str(events)
+        assert "test-only-key" not in str(events) and "signature=secret" not in str(events)
+    finally:
+        await gateway.close()
+
+
 async def test_oversized_provider_response_records_unknown_usage() -> None:
     ledger = []
 

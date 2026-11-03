@@ -107,7 +107,7 @@ export default function Home() {
         <View style={styles.notice}>
           <Feather name="info" size={16} color="#789067" />
           <Text style={styles.noticeText}>
-            当前为页面演示，不会上传素材，也不会生成真实动作判断。
+            页面演示不会上传素材；下方本机联调可能调用真实服务。
           </Text>
         </View>
         {configured && (
@@ -122,7 +122,7 @@ export default function Home() {
             <View style={{ flex: 1 }}>
               <Text style={styles.recentTitle}>{desktopSimulation ? "进入本机联调" : "进入真实训练对话"}</Text>
               <Text style={styles.recentSub}>
-                {desktopSimulation ? "本机上传及报告流程，不调用真实模型" : loggedIn ? "上传素材并查看真实报告" : "登录后使用已配置的服务"}
+                {desktopSimulation ? "本机测试环境，请勿上传私人素材" : loggedIn ? "上传素材并查看真实报告" : "登录后使用已配置的服务"}
               </Text>
             </View>
             <Feather name="chevron-right" size={18} color={C.muted} />

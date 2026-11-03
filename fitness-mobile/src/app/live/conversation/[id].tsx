@@ -354,7 +354,7 @@ export default function LiveConversation() {
     );
   return (
     <SafeAreaView style={S.screen} edges={["top", "bottom"]}>
-      <TopBar title="动作分析" subtitle={desktopSimulation ? "本机模拟 · 未调用模型" : "真实服务"} />
+      <TopBar title="动作分析" subtitle={desktopSimulation ? "本机联调 · 测试身份" : "真实服务"} />
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === "ios" ? "padding" : undefined}

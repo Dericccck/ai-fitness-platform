@@ -110,7 +110,7 @@ export default function LiveConversations() {
     );
   return (
     <SafeAreaView style={S.screen} edges={["top", "bottom"]}>
-      <TopBar title="训练对话" subtitle={desktopSimulation ? "本机模拟 · 未调用模型" : "真实服务"} />
+      <TopBar title="训练对话" subtitle={desktopSimulation ? "本机联调 · 测试身份" : "真实服务"} />
       <ScrollView contentContainerStyle={styles.content}>
         <Text style={S.eyebrow}>YOUR TRAINING JOURNEY</Text>
         <Text style={[S.h1, { marginTop: 8 }]}>

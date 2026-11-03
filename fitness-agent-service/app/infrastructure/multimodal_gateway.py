@@ -205,6 +205,7 @@ class MultimodalGateway:
                                         if len(response_body) > 2 * 1024 * 1024:
                                             raise MultimodalResponseError("视觉模型返回内容过大")
                     if status_code != 200:
+                        logger.warning("multimodal_provider_rejected", status_code=status_code)
                         if status_code == 429 or status_code >= 500:
                             self.protection.breaker.failure(probe=probe)
                         else:
