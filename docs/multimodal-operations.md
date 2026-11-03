@@ -1,0 +1,27 @@
+# 多模态服务部署与故障处理
+
+本说明是仓库中的部署契约，不代表已接通云服务。模型、OSS 与认证密钥只通过服务端 Secret Manager 注入，禁止写入 App、日志或 Git。微信小程序与设备验收不在此次范围。
+
+## 启用条件
+
+1. 在后端配置已开通视觉能力的百炼模型、私有 OSS 的域名、地域及最小权限身份、可信认证上游、PostgreSQL、Redis 和既有身份/消息加密密钥。环境变量名见 `deployment/environments/agent.production.env.example`。开启 `AGENT_MOBILE_AUTH_ENABLED`、`AGENT_MULTIMODAL_ENABLED`、`AGENT_MULTIMODAL_API_ENABLED`；默认均关闭。
+2. 对目标数据库先备份并完成 Alembic 迁移；当前多模态迁移至 `20261103_0057`。在隔离测试库验证过回退再升级，不等于生产回滚时可以丢弃已有用户数据。
+3. 在每个 API 节点本地部署 `media-validator` 和多模态 Worker。Compose 提供 `multimodal` profile；生产 API 必须设置 `AGENT_MULTIMODAL_VALIDATOR_SOCKET=/run/fitness-validator/validator.sock` 与 `AGENT_MULTIMODAL_VALIDATOR_TEMP_DIR=/var/fitness-media`。API、Worker 与本节点隔离容器必须共享正确的两个卷，不跨节点共享 Unix socket。解析容器不连接网络、不接收服务密钥，素材卷只读，根文件系统只读、非 root、丢弃 capabilities，并设置进程数、内存和 CPU 限额。生产运行时还需保留 seccomp、主机和网络策略。
+4. 私有 OSS 桶必须启用版本控制，模型只能访问短期签名的固定版本。按企业保留政策配置桶生命周期；暂存版本不得早于上传凭证及安全缓冲期过期而被清理。最终对象的生命周期不得短于应用已承诺的保留期。验证版本和删除标记的清理，以及缓存、备份的保留边界。API 临时共享卷应加密并限制宿主机访问；正常请求结束时删除临时文件，Worker 回收异常退出留下的过期临时文件。
+5. Redis 应具备持久化和非淘汰策略，所有 Worker 的 `AGENT_MULTIMODAL_GLOBAL_MAX_CONCURRENCY`、`AGENT_MULTIMODAL_DAILY_MAX_CALLS` 应一致。日限额按 UTC 日计算，限制调用次数而不是金额；识别动作和生成报告可能分别调用模型。仍需设置供应商侧预算告警与账单监控。
+6. 在受控环境验证媒体隔离、上传大小与权限、认证撤销、状态恢复、实际 OSS 上传/读取/删除，以及真实图片和视频模型调用。用经授权且有标注的样本评价识别质量和安全提示；真实模型结果不是医学诊断，也不保证动作安全。
+
+## 历史会话与删除
+
+用户可从 App 列出当前身份范围内已提交的旧文本会话并显式关联。关联后仅提取最近六条通过身份、提交状态和记忆版本检查的文字，不复制旧 checkpoint；多模态报告不写回原文本会话。解除关联保留双方原记录；删除多模态会话会处理其素材与报告，原文本会话按其原有生命周期保留。系统没有自动合并所有旧记录。若旧 checkpoint 已清理或不可验证，关联会失败，不会绕过检查。
+
+用户删除素材后，关联多模态内容先失效，再异步删除 OSS 所有版本和删除标记；上传凭证到期后还会再次清理。模型供应商已接收的请求无法由本项目撤回，需按实际供应商的数据处理协议执行。
+
+## 故障处理
+
+- 隔离解析服务不可用或繁忙：API 返回可重试错误，上传会话不会被误判为非法；先恢复同节点容器和 socket，再使用原上传任务重试。
+- 任务状态 `UNKNOWN`：供应商可能已接收或计费。先核对供应商与用量账本，不要自动重放；用户确认后再创建新的分析任务。
+- 删除任务重试：检查 OSS 授权、版本控制、网络、Worker 与 `fitness_agent_multimodal_cleanup_total`，在确认清理完成前不要将其报告为物理删除完成。
+- Redis 不可用：模型并发和每日次数保护采取拒绝调用的方式；恢复 Redis 及其持久数据后再放量。
+- 关联历史不可用：确认 checkpoint 和已提交记录仍存在、身份和机构范围未变；可解除关联继续使用多模态会话，不能跳过权限或记忆版本检查。
+- Worker 指标与告警配置见 `deployment/observability/README.md`。告警规则只使用低基数状态标签，不记录素材 URL、用户问题或账号。

@@ -43,6 +43,10 @@ services:
 
   agent-api:
     <<: *agent
+    volumes:
+      - ${FITNESS_MODELS_DIR:?set FITNESS_MODELS_DIR}:/models:ro
+      - fitness-media-input:/var/fitness-media
+      - fitness-media-socket:/run/fitness-validator
     environment:
       AGENT_DB_POOL_SIZE: "5"
       AGENT_DB_MAX_OVERFLOW: "5"
@@ -199,6 +203,48 @@ services:
     depends_on: {agent-migrate: {condition: service_completed_successfully}}
     healthcheck: *worker-health
 
+  media-validator:
+    image: ${FITNESS_REGISTRY:-fitness}/fitness-agent-service:${FITNESS_RELEASE_TAG:-local}
+    build:
+      context: ..
+      dockerfile: fitness-agent-service/Dockerfile
+    command: ["python", "-m", "app.media.validator_main"]
+    profiles: ["multimodal"]
+    network_mode: none
+    read_only: true
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    pids_limit: 32
+    tmpfs:
+      - /tmp:rw,noexec,nosuid,nodev,size=256m,mode=1777
+    volumes:
+      - fitness-media-input:/var/fitness-media:ro
+      - fitness-media-socket:/run/fitness-validator
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import httpx; c=httpx.Client(transport=httpx.HTTPTransport(uds='/run/fitness-validator/validator.sock')); assert c.get('http://validator/health',timeout=2).status_code==200"]
+      interval: 15s
+      timeout: 3s
+      start_period: 30s
+      retries: 3
+    deploy:
+      resources:
+        limits: {cpus: "1", memory: 1536M}
+
+  multimodal-worker:
+    <<: *agent
+    volumes:
+      - ${FITNESS_MODELS_DIR:?set FITNESS_MODELS_DIR}:/models:ro
+      - fitness-media-input:/var/fitness-media
+    command: ["python", "-m", "app.multimodal_worker_main"]
+    environment:
+      <<: *worker-environment
+      AGENT_MULTIMODAL_WORKER_METRICS_PORT: "9100"
+      AGENT_LOCAL_MODEL_WARMUP_ENABLED: "false"
+    depends_on: {agent-migrate: {condition: service_completed_successfully}}
+    healthcheck: *worker-health
+    profiles: ["multimodal"]
+
   proactive-worker:
     <<: *agent
     command: ["python", "-m", "app.proactive_worker_main"]
@@ -349,6 +395,10 @@ services:
     volumes:
       - ./observability/alertmanager.yml:/etc/alertmanager/alertmanager.yml:ro
     networks: [fitness]
+
+volumes:
+  fitness-media-input: {}
+  fitness-media-socket: {}
 
 networks:
   fitness: {}

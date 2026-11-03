@@ -46,6 +46,8 @@ dependencies = [
     # 在线 OTEL 评测导出器在服务进程中运行；仅离线 Judge/仪表盘仍放在可选额外依赖。
     "trulens-core==2.10.0",
     "uvicorn[standard]>=0.32,<1.0",
+    "oss2>=2.19,<3",
+    "pillow>=10,<13",
 ]
 
 [project.optional-dependencies]

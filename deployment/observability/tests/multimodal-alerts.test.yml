@@ -1,0 +1,23 @@
+rule_files:
+  - /etc/prometheus/fitness-agent-alerts.yml
+
+evaluation_interval: 30s
+
+tests:
+  - interval: 30s
+    input_series:
+      - series: 'fitness_agent_multimodal_runs_total{job="fitness-agent-workers",outcome="unknown"}'
+        values: '0 0 0 1 1 1 1 1 1 1'
+    alert_rule_test:
+      - eval_time: 1m
+        alertname: FitnessMultimodalUnknownOutcome
+        exp_alerts: []
+      - eval_time: 3m
+        alertname: FitnessMultimodalUnknownOutcome
+        exp_alerts:
+          - exp_labels:
+              severity: warning
+              service: fitness-agent
+            exp_annotations:
+              summary: 多模态模型调用结果未确认
+              description: 先核对供应商记录和计费，再决定是否手动重新提交；不要自动重放。

@@ -95,6 +95,119 @@ class Settings(BaseSettings):
     voice_tts_organization_requests_per_minute: int = Field(default=600, ge=1, le=10000)
     voice_cache_max_bytes: int = Field(default=33554432, ge=0, le=268435456)
 
+    # 独立多模态通道：默认关闭，不能借用文本模型或自动伪造视觉分析。
+    multimodal_enabled: bool = False
+    multimodal_api_key: str = Field(default="", repr=False)
+    multimodal_base_url: str = ""
+    multimodal_model: str = "qwen3.7-plus-2026-05-26"
+    multimodal_media_hosts: list[str] = Field(default_factory=list)
+    multimodal_video_fps: float = Field(default=2.0, ge=0.1, le=10.0)
+    multimodal_timeout_seconds: float = Field(default=90.0, gt=0, le=240)
+    multimodal_max_output_tokens: int = Field(default=4096, ge=256, le=8192)
+    multimodal_max_text_chars: int = Field(default=12000, ge=1000, le=50000)
+    multimodal_max_concurrency: int = Field(default=4, ge=1, le=32)
+    multimodal_global_max_concurrency: int = Field(default=4, ge=1, le=128)
+    multimodal_daily_max_calls: int = Field(default=2000, ge=1, le=1000000)
+    multimodal_worker_metrics_port: int = Field(default=8103, ge=1, le=65535)
+    multimodal_validator_socket: str = ""
+    multimodal_validator_temp_dir: str = ""
+    multimodal_queue_timeout_seconds: float = Field(default=2, gt=0, le=30)
+    multimodal_prompt_version: str = "movement-analysis-v1"
+    multimodal_api_enabled: bool = False
+    multimodal_oss_endpoint: str = ""
+    multimodal_oss_bucket: str = ""
+    multimodal_oss_region: str = ""
+    multimodal_oss_access_key_id: str = Field(default="", repr=False)
+    multimodal_oss_access_key_secret: str = Field(default="", repr=False)
+    multimodal_oss_security_token: str = Field(default="", repr=False)
+    mobile_auth_enabled: bool = False
+    mobile_access_ttl_seconds: int = Field(default=900, ge=60, le=3600)
+    mobile_session_ttl_seconds: int = Field(default=2592000, ge=900, le=7776000)
+
+    @model_validator(mode="after")
+    def validate_multimodal_api(self) -> "Settings":
+        if not self.multimodal_api_enabled:
+            return self
+        if not self.multimodal_enabled or not self.mobile_auth_enabled:
+            raise ValueError("启用多模态接口必须同时启用模型与移动认证")
+        if bool(self.multimodal_validator_socket) != bool(self.multimodal_validator_temp_dir):
+            raise ValueError("媒体隔离服务 socket 与临时目录必须同时配置")
+        if self.environment == "production" and not self.multimodal_validator_socket:
+            raise ValueError("生产环境多模态接口必须配置媒体隔离服务")
+        if self.multimodal_validator_socket:
+            from pathlib import Path
+
+            if (
+                not Path(self.multimodal_validator_socket).is_absolute()
+                or not Path(self.multimodal_validator_temp_dir).is_absolute()
+            ):
+                raise ValueError("媒体隔离服务 socket 与临时目录必须使用绝对路径")
+        if not all(
+            (
+                self.multimodal_oss_endpoint,
+                self.multimodal_oss_bucket,
+                self.multimodal_oss_region,
+                self.multimodal_oss_access_key_id,
+                self.multimodal_oss_access_key_secret,
+            )
+        ):
+            raise ValueError("启用多模态接口必须配置私有 OSS")
+        expected_host = (
+            f"{self.multimodal_oss_bucket}.oss-{self.multimodal_oss_region}.aliyuncs.com"
+        )
+        if expected_host not in self.multimodal_media_hosts:
+            raise ValueError("多模态可信媒体域名必须包含私有 OSS 域名")
+        return self
+
+    @model_validator(mode="after")
+    def validate_mobile_auth(self) -> "Settings":
+        if not self.mobile_auth_enabled:
+            return self
+        url = urlparse(self.browser_auth_upstream_url)
+        if (
+            url.scheme != "https"
+            or not url.hostname
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+            or not self.browser_auth_upstream_service_token.strip()
+        ):
+            raise ValueError("启用移动端认证必须配置受信任 HTTPS 认证服务及服务凭据")
+        return self
+
+    @model_validator(mode="after")
+    def validate_multimodal(self) -> "Settings":
+        if not self.multimodal_enabled:
+            return self
+        url = urlparse(self.multimodal_base_url)
+        if (
+            url.scheme != "https"
+            or not url.hostname
+            or url.username
+            or url.password
+            or url.query
+            or url.fragment
+            or url.path.rstrip("/") != "/compatible-mode/v1"
+        ):
+            raise ValueError("多模态地址必须是 HTTPS compatible-mode/v1 端点")
+        if not self.multimodal_api_key.strip() or not self.multimodal_media_hosts:
+            raise ValueError("启用多模态必须配置密钥和受信任的媒体域名")
+        for host in self.multimodal_media_hosts:
+            parsed = urlparse(f"https://{host}")
+            if (
+                not host
+                or parsed.hostname != host.lower()
+                or parsed.port is not None
+                or parsed.username
+                or parsed.password
+                or parsed.path
+                or parsed.query
+                or parsed.fragment
+            ):
+                raise ValueError("多模态媒体域名只能填写不含端口的完整域名")
+        return self
+
     @model_validator(mode="after")
     def validate_voice(self) -> "Settings":
         if not self.voice_enabled:

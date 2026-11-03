@@ -173,3 +173,33 @@ groups:
         annotations:
           summary: 本地确认动作需要人工核实
           description: 按原业务ID检查事实和审计，不因未知而重放动作。
+
+  - name: fitness-multimodal-reliability
+    rules:
+      - alert: FitnessMultimodalUnknownOutcome
+        expr: sum(increase(fitness_agent_multimodal_runs_total{outcome="unknown"}[10m])) > 0
+        for: 1m
+        labels:
+          severity: warning
+          service: fitness-agent
+        annotations:
+          summary: 多模态模型调用结果未确认
+          description: 先核对供应商记录和计费，再决定是否手动重新提交；不要自动重放。
+      - alert: FitnessMultimodalCleanupRetries
+        expr: sum(increase(fitness_agent_multimodal_cleanup_total{outcome="retry"}[15m])) >= 3
+        for: 5m
+        labels:
+          severity: warning
+          service: fitness-agent
+        annotations:
+          summary: 多模态素材清理持续失败
+          description: 检查 OSS 权限、版本控制、网络和删除队列，避免私有素材长期残留。
+      - alert: FitnessMultimodalModelErrors
+        expr: sum(increase(fitness_agent_multimodal_runs_total{outcome=~"model_failed|internal_error"}[10m])) >= 5
+        for: 5m
+        labels:
+          severity: warning
+          service: fitness-agent
+        annotations:
+          summary: 多模态分析连续失败
+          description: 检查模型可用性、配额、认证与 Worker 日志；日志不得包含素材地址或正文。

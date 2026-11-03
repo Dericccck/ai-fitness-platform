@@ -29,8 +29,12 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
 WORKDIR /service
 
 # 固定非 root UID/GID，便于 Kubernetes securityContext 和挂载卷权限保持一致。
-RUN groupadd --gid 10001 agent \
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 agent \
     && useradd --uid 10001 --gid 10001 --no-create-home --shell /usr/sbin/nologin agent
+
+RUN install -d -m 0700 -o agent -g agent /var/fitness-media /run/fitness-validator
 
 COPY --from=builder --chown=agent:agent /service /service
 

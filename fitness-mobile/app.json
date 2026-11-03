@@ -1,0 +1,40 @@
+{
+  "expo": {
+    "name": "Move Well 健身助手",
+    "slug": "fitness-mobile",
+    "version": "1.0.0",
+    "scheme": "movewell",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "ios": {
+      "supportsTablet": true
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#E6F4FE",
+        "foregroundImage": "./assets/android-icon-foreground.png",
+        "backgroundImage": "./assets/android-icon-background.png",
+        "monochromeImage": "./assets/android-icon-monochrome.png"
+      },
+      "predictiveBackGestureEnabled": false
+    },
+    "web": {
+      "favicon": "./assets/favicon.png"
+    },
+    "plugins": [
+      "expo-router",
+      "expo-font",
+      "expo-video",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "选择你希望在健身助手中预览的图片或视频。",
+          "cameraPermission": "使用相机拍摄你希望在健身助手中预览的素材。",
+          "microphonePermission": "拍摄视频时可录制声音；动作分析仅处理画面。"
+        }
+      ],
+      "expo-secure-store"
+    ]
+  }
+}

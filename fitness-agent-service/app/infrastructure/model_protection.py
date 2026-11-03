@@ -123,3 +123,35 @@ class ModelProtection:
                     yield
         finally:
             self.semaphore.release()
+
+
+class RedisDailyModelBudget:
+    """Shared UTC-day call cap. Attempts are never refunded after reservation."""
+
+    _RESERVE = """
+    local clock = redis.call('TIME')
+    local day = math.floor(tonumber(clock[1]) / 86400)
+    local field = tostring(day)
+    local current = tonumber(redis.call('HGET', KEYS[1], field) or '0')
+    if current >= tonumber(ARGV[1]) then return 0 end
+    redis.call('HINCRBY', KEYS[1], field, 1)
+    redis.call('HDEL', KEYS[1], tostring(day - 2))
+    redis.call('EXPIRE', KEYS[1], 172800)
+    return 1
+    """
+
+    def __init__(self, client: Redis, *, provider: str, limit: int) -> None:
+        self.client = client
+        self.limit = limit
+        digest = hashlib.sha256(provider.encode()).hexdigest()[:24]
+        self.key = f"fitness:agent:model-daily-calls:{digest}"
+
+    async def reserve(self) -> None:
+        try:
+            acquired = await cast(
+                Awaitable[Any], self.client.eval(self._RESERVE, 1, self.key, str(self.limit))
+            )
+        except Exception as exc:
+            raise ModelCapacityError("共享模型调用预算不可用") from exc
+        if int(acquired) != 1:
+            raise ModelCapacityError("模型当日调用额度已用完")

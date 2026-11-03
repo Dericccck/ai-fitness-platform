@@ -55,7 +55,7 @@
   "messages": [
     {"role": "system", "content": "按movement-analysis.v1要求输出JSON；只依据可见画面和提供的知识，无法判断时明确说明。"},
     {"role": "user", "content": [
-      {"type": "video_url", "video_url": {"url": "SIGNED_HTTPS_URL_CREATED_BY_SERVER", "fps": 2}},
+      {"type": "video_url", "video_url": {"url": "SIGNED_HTTPS_URL_CREATED_BY_SERVER"}, "fps": 2},
       {"type": "text", "text": "用户问题：这是坐姿划船，我有哪些地方需要调整？\n授权知识片段及citation_id：由本次检索填入。"}
     ]}
   ],

@@ -10,6 +10,7 @@ from prometheus_client import CONTENT_TYPE_LATEST, generate_latest
 from starlette.responses import Response
 
 from app.agent.fitness_tools import build_fitness_tool_registry
+from app.agent.movement_analysis import MovementAnalysisService
 from app.agent.operations_audit import OperationsAuditRepository
 from app.agent.routing import HybridIntentRouter
 from app.agent.supervisor import Supervisor
@@ -32,6 +33,8 @@ from app.api.routes.health import router as health_router
 from app.api.routes.knowledge_review import router as knowledge_review_router
 from app.api.routes.memories import router as memories_router
 from app.api.routes.memory_candidates import router as memory_candidates_router
+from app.api.routes.mobile_auth import router as mobile_auth_router
+from app.api.routes.mobile_media import router as mobile_media_router
 from app.api.routes.notifications import router as notifications_router
 from app.api.routes.rag import router as rag_router
 from app.api.routes.voice import router as voice_router
@@ -45,6 +48,7 @@ from app.core.config import Settings, get_settings
 from app.core.logging import configure_logging
 from app.core.mcp_metrics import McpRuntimeMetrics
 from app.core.metrics import HttpMetrics, MetricsMiddleware
+from app.core.multimodal_metrics import MultimodalMetrics
 from app.core.telemetry import configure_tracing
 from app.decision.repository import DecisionRepository
 from app.decision.service import DecisionPlatformService
@@ -57,10 +61,17 @@ from app.infrastructure.database import CheckpointStore, Database
 from app.infrastructure.gateway_client import GatewayClient
 from app.infrastructure.jwks import JwksPublicKeyProvider
 from app.infrastructure.mcp_client import McpBusinessToolsClient
+from app.infrastructure.mobile_auth import MobileAuthService
 from app.infrastructure.model_gateway import ModelGateway
-from app.infrastructure.model_protection import RedisModelLease
+from app.infrastructure.model_protection import RedisDailyModelBudget, RedisModelLease
 from app.infrastructure.model_usage import ModelUsageRepository
+from app.infrastructure.multimodal_gateway import MultimodalGateway
 from app.infrastructure.reranker import RerankerClient
+from app.media.deletion import MediaDeletionRepository
+from app.media.deletion_worker import MediaDeletionWorker
+from app.media.repository import MediaRepository
+from app.media.service import MediaService
+from app.media.storage import OssMediaStorage
 from app.memory.candidate import MemoryCandidateExtractionService
 from app.memory.candidate_repository import MemoryCandidateRepository
 from app.memory.candidate_service import MemoryCandidateService
@@ -90,6 +101,9 @@ from app.rag.service import RagService
 from app.rag.storage import DocumentStorage, LocalDocumentStorage, S3DocumentStorage
 from app.rag.worker import KnowledgeIngestionWorker
 from app.session_summary import SessionSummaryRepository, SessionSummaryService
+from app.streaming.durable_multimodal import DurableMultimodalRepository
+from app.streaming.legacy_bridge import LegacyConversationBridge
+from app.streaming.multimodal_worker import MultimodalWorker
 from app.streaming.repository import ChatRunRepository
 from app.streaming.service import ChatRunManager
 from app.voice.service import VoiceError, VoiceMetrics, VoiceService
@@ -104,6 +118,7 @@ http_metrics = HttpMetrics.create(
 )
 voice_metrics = VoiceMetrics(http_metrics.registry)
 mcp_metrics = McpRuntimeMetrics(http_metrics.registry)
+multimodal_metrics = MultimodalMetrics(http_metrics.registry)
 
 
 @asynccontextmanager
@@ -346,6 +361,83 @@ async def lifespan(app: FastAPI, *, role: str = "api") -> AsyncIterator[None]:
         if settings.browser_auth_enabled
         else None
     )
+    app.state.mobile_auth_upstream = None
+    app.state.mobile_auth = None
+    if settings.mobile_auth_enabled:
+        app.state.mobile_auth_upstream = app.state.browser_auth or BrowserAuthService(
+            settings,
+            app.state.cache.client,
+            app.state.confirmation_cipher,
+            app.state.context_verifier,
+        )
+        app.state.mobile_auth = MobileAuthService(
+            settings,
+            app.state.cache.client,
+            app.state.confirmation_cipher,
+            app.state.context_verifier,
+            app.state.mobile_auth_upstream,
+        )
+    app.state.multimodal_gateway = None
+    app.state.multimodal_repository = None
+    app.state.multimodal_worker = None
+    app.state.media_service = None
+    app.state.media_deletion = None
+    app.state.media_deletion_worker = None
+    if settings.multimodal_api_enabled:
+        storage = OssMediaStorage(
+            endpoint=settings.multimodal_oss_endpoint,
+            bucket_name=settings.multimodal_oss_bucket,
+            region=settings.multimodal_oss_region,
+            access_key_id=settings.multimodal_oss_access_key_id,
+            access_key_secret=settings.multimodal_oss_access_key_secret,
+            security_token=settings.multimodal_oss_security_token,
+        )
+        media_repository = MediaRepository(app.state.database)
+        app.state.media_service = MediaService(
+            media_repository,
+            storage,
+            validator_socket=settings.multimodal_validator_socket,
+            validator_temp_dir=settings.multimodal_validator_temp_dir,
+        )
+        app.state.media_deletion = MediaDeletionRepository(
+            app.state.database, app.state.confirmation_cipher
+        )
+        app.state.media_deletion_worker = MediaDeletionWorker(
+            app.state.database, storage, metrics=multimodal_metrics
+        )
+        app.state.multimodal_repository = DurableMultimodalRepository(
+            app.state.database, app.state.confirmation_cipher
+        )
+        app.state.multimodal_gateway = MultimodalGateway(
+            settings,
+            usage_sink=app.state.model_usage_repository.write
+            if settings.llm_usage_ledger_enabled
+            else None,
+        )
+        app.state.multimodal_gateway.protection.shared = RedisModelLease(
+            app.state.cache.client,
+            provider=f"multimodal:{settings.multimodal_base_url}/{settings.multimodal_model}",
+            limit=settings.multimodal_global_max_concurrency,
+            ttl=settings.multimodal_timeout_seconds + 60,
+        )
+        app.state.multimodal_gateway.call_budget = RedisDailyModelBudget(
+            app.state.cache.client,
+            provider=f"multimodal:{settings.multimodal_base_url}/{settings.multimodal_model}",
+            limit=settings.multimodal_daily_max_calls,
+        )
+        app.state.multimodal_worker = MultimodalWorker(
+            app.state.multimodal_repository,
+            media_repository,
+            storage,
+            MovementAnalysisService(
+                app.state.multimodal_gateway,
+                app.state.rag_service,
+                prompt_version=settings.multimodal_prompt_version,
+                memory_service=app.state.memory_service,
+            ),
+            app.state.mobile_auth.identity,
+            metrics=multimodal_metrics,
+        )
     # 候选正文和确认单参数使用同一套 AES-GCM 密钥管理边界，但通过不同 Repository
     # 隔离业务职责。候选只有 PENDING/APPROVED 等状态元数据可被 SQL 判断，value/unit
     # 必须解密后才能交给批准逻辑，避免数据库泄露用户偏好原文。
@@ -420,6 +512,11 @@ async def lifespan(app: FastAPI, *, role: str = "api") -> AsyncIterator[None]:
         # Checkpointer 在服务启动阶段创建官方表结构；如果数据库不可用则拒绝启动，
         # 避免服务看似在线却丢失会话状态。
         await app.state.checkpoint_store.start()
+        app.state.legacy_bridge = LegacyConversationBridge(
+            app.state.checkpoint_store.saver, app.state.chat_runs.repository
+        )
+        if app.state.multimodal_worker is not None:
+            app.state.multimodal_worker.legacy_bridge = app.state.legacy_bridge
         if settings.local_model_warmup_enabled:
             # 预热失败或超时时直接拒绝进入 ready，避免实例看似可用、
             # 实际把模型缺失或内存问题暴露给第一个用户。
@@ -475,8 +572,15 @@ async def lifespan(app: FastAPI, *, role: str = "api") -> AsyncIterator[None]:
         # 即使请求处理出现异常，FastAPI 仍会进入 finally，确保连接被关闭。
         await app.state.models.close()
         await app.state.voice.close()
+        if app.state.multimodal_gateway is not None:
+            await app.state.multimodal_gateway.close()
         if app.state.browser_auth is not None:
             await app.state.browser_auth.close()
+        if (
+            app.state.mobile_auth_upstream is not None
+            and app.state.mobile_auth_upstream is not app.state.browser_auth
+        ):
+            await app.state.mobile_auth_upstream.close()
         if app.state.mcp_tools is not None:
             await app.state.mcp_tools.close()
         await app.state.gateway.close()
@@ -507,6 +611,8 @@ from redis.exceptions import RedisError
 
 app.add_exception_handler(RedisError, auth_error)
 app.include_router(auth_router)
+app.include_router(mobile_auth_router)
+app.include_router(mobile_media_router)
 app.include_router(agent_router)
 app.include_router(voice_router)
 app.include_router(capabilities_router)

@@ -21,6 +21,7 @@ DEFAULT_ALERTS_PATH = SERVICE_ROOT.parent / "deployment/observability/fitness-ag
 DEFAULT_PROMETHEUS_PATH = SERVICE_ROOT.parent / "deployment/observability/prometheus.yml"
 DEFAULT_METRICS_PATH = SERVICE_ROOT / "app/core/metrics.py"
 DEFAULT_MCP_METRICS_PATH = SERVICE_ROOT / "app/core/mcp_metrics.py"
+DEFAULT_MULTIMODAL_METRICS_PATH = SERVICE_ROOT / "app/core/multimodal_metrics.py"
 ALERT_NAME_PATTERN = re.compile(r"^\s*-\s+alert:\s*([A-Za-z][A-Za-z0-9_]*)\s*$", re.MULTILINE)
 METRIC_PATTERN = re.compile(r"\bfitness_agent_[A-Za-z0-9_]+\b")
 METRIC_DEFINITION_PATTERN = re.compile(
@@ -44,6 +45,9 @@ EXPECTED_ALERTS = frozenset(
         "FitnessMcpCatalogUnavailable",
         "FitnessConfirmationReconciliationStalled",
         "FitnessConfirmationManualReviewPending",
+        "FitnessMultimodalUnknownOutcome",
+        "FitnessMultimodalCleanupRetries",
+        "FitnessMultimodalModelErrors",
     }
 )
 
@@ -161,6 +165,7 @@ def validate_static_contract(config: ObservabilityCheckConfig) -> tuple[str, ...
     metrics_text = _read(config.metrics_path, "指标定义文件")
     if config.metrics_path.resolve() == DEFAULT_METRICS_PATH.resolve():
         metrics_text += "\n" + _read(DEFAULT_MCP_METRICS_PATH, "MCP指标定义文件")
+        metrics_text += "\n" + _read(DEFAULT_MULTIMODAL_METRICS_PATH, "多模态指标定义文件")
     names = validate_alert_rules(alerts_text, metrics_text)
     validate_prometheus_config(prometheus_text)
     return names

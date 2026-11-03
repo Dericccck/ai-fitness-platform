@@ -97,7 +97,7 @@ class ChatRunRepository:
                 active = await connection.execute(
                     text("""
                     SELECT 1 FROM agent_chat_runs WHERE conversation_scope_hash=:scope
-                    AND status IN ('RUNNING','CANCEL_REQUESTED')
+                    AND status IN ('QUEUED','RUNNING','CANCEL_REQUESTED')
                 """),
                     {"scope": scope},
                 )
@@ -169,6 +169,7 @@ class ChatRunRepository:
                 THEN 'CANCEL_ACK_TIMEOUT' ELSE 'EXECUTION_LOST' END,
               stop_reason=COALESCE(stop_reason,'EXECUTION_LOST'), updated_at=CURRENT_TIMESTAMP
             WHERE (run_id=ANY(CAST(:ids AS TEXT[])) OR conversation_scope_hash=:scope)
+              AND executor_kind='LEGACY'
               AND ((status='RUNNING' AND execution_deadline < CURRENT_TIMESTAMP)
                OR (status='CANCEL_REQUESTED' AND cancel_deadline < CURRENT_TIMESTAMP))
         """),
@@ -180,11 +181,14 @@ class ChatRunRepository:
             await self._expire(connection, [run_id])
             await connection.execute(
                 text("""
-                UPDATE agent_chat_runs SET status='CANCEL_REQUESTED',
+                UPDATE agent_chat_runs SET
+                  status=CASE WHEN status='QUEUED' THEN 'CANCELLED' ELSE 'CANCEL_REQUESTED' END,
                   cancel_request_id=:request, cancel_requested_at=CURRENT_TIMESTAMP,
-                  cancel_deadline=CURRENT_TIMESTAMP + INTERVAL '10 seconds',
+                  cancel_deadline=CASE WHEN status='RUNNING'
+                    THEN CURRENT_TIMESTAMP + INTERVAL '10 seconds' ELSE NULL END,
+                  cancelled_at=CASE WHEN status='QUEUED' THEN CURRENT_TIMESTAMP ELSE NULL END,
                   stop_reason='USER_CANCELLED', updated_at=CURRENT_TIMESTAMP
-                WHERE run_id=:id AND owner_hash=:owner AND status='RUNNING'
+                WHERE run_id=:id AND owner_hash=:owner AND status IN ('QUEUED','RUNNING')
                   AND expires_at > CURRENT_TIMESTAMP
             """),
                 {"id": run_id, "owner": owner, "request": request_id},
@@ -246,6 +250,7 @@ class ChatRunRepository:
                     key_version=:version, error_code=:error, stop_reason=:reason,
                     updated_at=CURRENT_TIMESTAMP
                 WHERE run_id=:id AND owner_hash=:owner AND status='RUNNING'
+                  AND executor_kind='LEGACY'
                 RETURNING run_id
             """),
                 {
@@ -369,7 +374,7 @@ class ChatRunRepository:
                         DELETE FROM agent_chat_history_commits
                         WHERE thread_id=:thread_id AND owner_hash=:owner_hash AND version=:version
                         AND NOT EXISTS (SELECT 1 FROM agent_chat_runs WHERE conversation_scope_hash=:scope
-                          AND status IN ('RUNNING','CANCEL_REQUESTED')) RETURNING thread_id
+                          AND status IN ('QUEUED','RUNNING','CANCEL_REQUESTED')) RETURNING thread_id
                     """),
                         params,
                     )
