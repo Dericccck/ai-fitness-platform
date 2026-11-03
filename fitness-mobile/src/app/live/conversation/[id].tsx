@@ -1,4 +1,4 @@
-import React, { useCallback, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   AppState,
   KeyboardAvoidingView,
@@ -70,12 +70,24 @@ export default function LiveConversation() {
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [preview, setPreview] = useState<MediaItem | null>(null);
+  const [previewHeaders, setPreviewHeaders] = useState<Record<string, string> | undefined>();
+  const disposablePreview = useRef<string | null>(null);
   const [revision, setRevision] = useState(0);
   const sending = useRef(false);
   const stopRequested = useRef(false);
   const older = useRef<RemoteMessage[]>([]);
   const cursor = useRef<string | null>(null);
   const loadedOlder = useRef(false);
+
+  const closePreview = useCallback(() => {
+    if (disposablePreview.current) URL.revokeObjectURL(disposablePreview.current);
+    disposablePreview.current = null;
+    setPreviewHeaders(undefined);
+    setPreview(null);
+  }, []);
+  useEffect(() => () => {
+    if (disposablePreview.current) URL.revokeObjectURL(disposablePreview.current);
+  }, []);
 
   useFocusEffect(
     useCallback(() => {
@@ -368,10 +380,13 @@ export default function LiveConversation() {
   }
   async function previewMedia(media: RemoteMedia) {
     try {
-      const uri = await mobileApi.preview(media.asset_id);
+      const result = await mobileApi.preview(media.asset_id);
+      closePreview();
+      if (result.disposable) disposablePreview.current = result.uri;
+      setPreviewHeaders(result.headers);
       setPreview({
         id: media.asset_id,
-        uri,
+        uri: result.uri,
         kind: media.kind,
         name: media.kind === "video" ? "视频" : "图片",
       });
@@ -382,6 +397,7 @@ export default function LiveConversation() {
   async function deleteMedia(media: RemoteMedia) {
     try {
       await mobileApi.removeMedia(media.asset_id);
+      if (preview?.id === media.asset_id) closePreview();
       setRevision((value) => value + 1);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "删除未完成。");
@@ -635,7 +651,7 @@ export default function LiveConversation() {
             <View style={styles.draftRow}>
               {draft.map((item) => (
                 <View style={styles.draft} key={item.id}>
-                  <Pressable onPress={() => setPreview(item)}>
+                  <Pressable onPress={() => { closePreview(); setPreview(item); }}>
                     <Text numberOfLines={1} style={styles.refText}>
                       {item.kind === "image" ? "图片" : "视频"} · {item.name}
                     </Text>
@@ -728,7 +744,8 @@ export default function LiveConversation() {
       </Modal>
       <MediaPreview
         media={preview}
-        close={() => setPreview(null)}
+        headers={previewHeaders}
+        close={closePreview}
         caption={
           preview?.uri.startsWith("https://")
             ? "通过短期授权地址查看"

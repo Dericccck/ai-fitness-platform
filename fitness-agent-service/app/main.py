@@ -404,6 +404,9 @@ async def lifespan(app: FastAPI, *, role: str = "api") -> AsyncIterator[None]:
             validator_socket=settings.multimodal_validator_socket,
             validator_temp_dir=settings.multimodal_validator_temp_dir,
         )
+        app.state.media_gateway_semaphore = asyncio.Semaphore(
+            settings.multimodal_gateway_upload_concurrency
+        )
         app.state.media_deletion = MediaDeletionRepository(
             app.state.database, app.state.confirmation_cipher
         )

@@ -194,6 +194,31 @@ class OssMediaStorage:
         except Exception as exc:
             raise MediaStorageError("无法读取媒体对象") from exc
 
+    def open_version_range(self, version: StoredVersion, start: int, end: int) -> Any:
+        _validate_key(version.key, "final")
+        _validate_version(version.version_id)
+        if not 0 <= start <= end < version.size:
+            raise MediaStorageError("媒体读取范围无效")
+        try:
+            return self._bucket.get_object(
+                version.key, byte_range=(start, end), params={"versionId": version.version_id}
+            )
+        except Exception as exc:
+            raise MediaStorageError("无法读取媒体对象") from exc
+
+    def put_gateway_upload(self, key: str, stream: Any, *, size: int, content_type: str) -> None:
+        """Write one bounded server-mediated upload; caller must hold a durable one-shot claim."""
+        _validate_key(key, "staging")
+        if not 0 < size <= 100 * 1024 * 1024:
+            raise MediaStorageError("媒体大小无效")
+        try:
+            result = self._bucket.put_object(key, stream, headers={"Content-Type": content_type})
+            _validate_version(result.headers.get("x-oss-version-id", ""))
+        except MediaStorageError:
+            raise
+        except Exception as exc:
+            raise MediaStorageError("素材上传结果未确认") from exc
+
     def copy_to_final(self, source: StoredVersion, final_key: str) -> StoredVersion:
         _validate_key(source.key, "staging")
         _validate_key(final_key, "final")

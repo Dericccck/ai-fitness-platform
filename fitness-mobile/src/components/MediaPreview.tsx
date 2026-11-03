@@ -5,8 +5,8 @@ import { Feather } from "@expo/vector-icons";
 import { VideoView, useVideoPlayer } from "expo-video";
 import { MediaItem } from "../domain/types";
 
-function Video({ uri }: { uri: string }) {
-  const player = useVideoPlayer(uri);
+function Video({ uri, headers }: { uri: string; headers?: Record<string, string> }) {
+  const player = useVideoPlayer(headers ? { uri, headers, useCaching: false } : uri);
   return (
     <VideoView
       player={player}
@@ -20,10 +20,12 @@ function Video({ uri }: { uri: string }) {
 export function MediaPreview({
   media,
   close,
+  headers,
   caption = "仅在本机预览 · 演示模式不会上传素材",
 }: {
   media: MediaItem | null;
   close: () => void;
+  headers?: Record<string, string>;
   caption?: string;
 }) {
   return (
@@ -44,12 +46,12 @@ export function MediaPreview({
         {media &&
           (media.kind === "image" ? (
             <Image
-              source={{ uri: media.uri }}
+              source={{ uri: media.uri, headers, cache: "reload" }}
               style={styles.media}
               resizeMode="contain"
             />
           ) : (
-            <Video uri={media.uri} />
+            <Video uri={media.uri} headers={headers} />
           ))}
         <Text style={styles.caption}>{caption}</Text>
       </SafeAreaView>

@@ -110,6 +110,9 @@ class Settings(BaseSettings):
     multimodal_daily_max_calls: int = Field(default=2000, ge=1, le=1000000)
     multimodal_user_max_assets: int = Field(default=200, ge=1, le=100000)
     multimodal_user_max_bytes: int = Field(default=2 * 1024**3, ge=1, le=1024**4)
+    multimodal_upload_mode: Literal["direct", "gateway"] = "direct"
+    multimodal_gateway_upload_concurrency: int = Field(default=2, ge=1, le=16)
+    multimodal_gateway_upload_timeout_seconds: int = Field(default=180, ge=30, le=600)
     multimodal_worker_metrics_port: int = Field(default=8103, ge=1, le=65535)
     multimodal_validator_socket: str = ""
     multimodal_validator_temp_dir: str = ""
@@ -132,6 +135,10 @@ class Settings(BaseSettings):
             return self
         if not self.multimodal_enabled or not self.mobile_auth_enabled:
             raise ValueError("启用多模态接口必须同时启用模型与移动认证")
+        if self.environment == "production" and self.multimodal_upload_mode != "gateway":
+            raise ValueError("生产环境多模态上传必须使用受控上传网关")
+        if self.environment == "production" and not self.chat_rate_limit_enabled:
+            raise ValueError("生产环境多模态接口必须启用请求限流")
         if bool(self.multimodal_validator_socket) != bool(self.multimodal_validator_temp_dir):
             raise ValueError("媒体隔离服务 socket 与临时目录必须同时配置")
         if self.environment == "production" and not self.multimodal_validator_socket:

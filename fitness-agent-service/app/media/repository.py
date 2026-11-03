@@ -26,6 +26,10 @@ class MediaQuotaExceeded(RuntimeError):
     """The account has reached the configured logical media quota."""
 
 
+class MediaTransferAlreadyStarted(RuntimeError):
+    """The one-shot transfer was previously claimed; do not replay it."""
+
+
 @dataclass(frozen=True)
 class UploadRecord:
     upload_id: str
@@ -261,6 +265,42 @@ class MediaRepository:
             )
             if row is None:
                 raise MediaAccessError("上传任务不存在或无法访问")
+            return _upload(row)
+
+    async def claim_gateway_transfer(self, identity: AgentIdentity, upload_id: str) -> UploadRecord:
+        """Claim exactly one storage write per upload session, including across crashes."""
+        upload_id, owner = _uuid(upload_id), run_owner(identity)
+        async with self.database.engine.begin() as connection:
+            await self._lock_upload_asset(connection, upload_id)
+            row = (
+                (
+                    await connection.execute(
+                        text("""SELECT u.*,a.conversation_id,a.content_type,a.size_bytes
+                FROM agent_media_uploads u JOIN agent_media_assets a ON a.asset_id=u.asset_id
+                JOIN agent_chat_conversations c ON c.conversation_id=a.conversation_id
+                WHERE u.upload_id=:id AND u.owner_hash=:owner AND a.owner_hash=:owner
+                  AND c.owner_hash=:owner AND c.deleted_at IS NULL AND a.deleted_at IS NULL
+                  AND a.expires_at>CURRENT_TIMESTAMP AND u.expires_at>CURRENT_TIMESTAMP
+                  AND u.status='ISSUED' FOR UPDATE OF u"""),
+                        {"id": upload_id, "owner": owner},
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if row is None:
+                raise MediaAccessError("上传任务不可用或正在处理")
+            inserted = (
+                await connection.execute(
+                    text("""INSERT INTO agent_media_gateway_attempts
+                (upload_id,owner_hash) VALUES (:id,:owner) ON CONFLICT DO NOTHING RETURNING upload_id"""),
+                    {"id": upload_id, "owner": owner},
+                )
+            ).first()
+            if inserted is None:
+                raise MediaTransferAlreadyStarted(
+                    "上传已开始或结果未确认，请检查状态；如需重传请新建素材"
+                )
             return _upload(row)
 
     async def claim_verification(

@@ -2,21 +2,25 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
+import re
+import tempfile
 from typing import Any
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import String, bindparam, text
+from starlette.responses import StreamingResponse
 
 from app.api.chat_protection import enforce_chat_quota
 from app.api.routes.mobile_auth import bearer
 from app.api.routes.mobile_auth import service as auth_service
 from app.infrastructure.agent_context import AgentIdentity, conversation_thread_id
 from app.media.metadata import MediaInspectionUnavailable, MediaValidationError
-from app.media.repository import MediaAccessError, MediaQuotaExceeded
-from app.media.storage import MediaObjectNotFound, MediaStorageError
+from app.media.repository import MediaAccessError, MediaQuotaExceeded, MediaTransferAlreadyStarted
+from app.media.storage import MediaObjectNotFound, MediaStorageError, StoredVersion
 from app.streaming.control import run_owner
 from app.streaming.durable_multimodal import DurableAccessError
 from app.streaming.legacy_bridge import LegacyConversationUnavailable
@@ -63,6 +67,8 @@ async def _auth(request: Request, response: Response) -> tuple[str, AgentIdentit
 def _error(exc: Exception) -> HTTPException:
     if isinstance(exc, MediaQuotaExceeded):
         return HTTPException(429, str(exc))
+    if isinstance(exc, MediaTransferAlreadyStarted):
+        return HTTPException(409, str(exc))
     if isinstance(exc, MediaObjectNotFound):
         return HTTPException(404, "暂存素材尚未上传")
     if isinstance(exc, (MediaAccessError, DurableAccessError)):
@@ -237,13 +243,27 @@ async def create_upload(
     _, identity = await _auth(request, response)
     await enforce_chat_quota(request, identity)
     try:
-        result = await request.app.state.media_service.initiate(
-            identity=identity,
-            conversation_id=payload.conversation_id,
-            idempotency_key=str(payload.idempotency_key),
-            content_type=payload.content_type,
-            size=payload.size,
-        )
+        service = request.app.state.media_service
+        mode = getattr(request.app.state.settings, "multimodal_upload_mode", "direct")
+        if mode == "gateway":
+            from app.media.service import UploadResult
+
+            record = await service.repository.create_upload(
+                identity=identity,
+                conversation_id=payload.conversation_id,
+                idempotency_key=str(payload.idempotency_key),
+                content_type=payload.content_type,
+                size=payload.size,
+            )
+            result = UploadResult(record, None)
+        else:
+            result = await service.initiate(
+                identity=identity,
+                conversation_id=payload.conversation_id,
+                idempotency_key=str(payload.idempotency_key),
+                content_type=payload.content_type,
+                size=payload.size,
+            )
     except (
         MediaAccessError,
         MediaQuotaExceeded,
@@ -257,6 +277,7 @@ async def create_upload(
         "upload_id": result.record.upload_id,
         "asset_id": result.record.asset_id,
         "status": result.record.status,
+        "upload_mode": mode,
         "upload": {
             "url": policy.host,
             "form_data": policy.form_data,
@@ -266,6 +287,76 @@ async def create_upload(
         if policy
         else None,
     }
+
+
+@router.put("/media/uploads/{upload_id}/content")
+async def gateway_upload(upload_id: UUID, request: Request, response: Response) -> dict[str, Any]:
+    """Receive a bounded body once; the application alone holds OSS write credentials."""
+    _, identity = await _auth(request, response)
+    settings = request.app.state.settings
+    if getattr(settings, "multimodal_upload_mode", "direct") != "gateway":
+        raise HTTPException(404, "上传方式不可用")
+    await enforce_chat_quota(request, identity)
+    service = request.app.state.media_service
+    try:
+        current = await service.repository.get_upload(identity, str(upload_id))
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+        if content_type != current.content_type:
+            raise HTTPException(415, "上传类型与素材声明不一致")
+        length = request.headers.get("content-length")
+        if length is not None and (not length.isdigit() or int(length) != current.expected_size):
+            raise HTTPException(422, "上传大小与素材声明不一致")
+        semaphore = request.app.state.media_gateway_semaphore
+        try:
+            await asyncio.wait_for(semaphore.acquire(), timeout=1)
+        except TimeoutError:
+            raise HTTPException(503, "上传服务繁忙，请稍后重试") from None
+        try:
+            record = await service.repository.claim_gateway_transfer(identity, str(upload_id))
+            with tempfile.TemporaryFile() as temporary:
+                count = 0
+                try:
+                    async with asyncio.timeout(settings.multimodal_gateway_upload_timeout_seconds):
+                        async for chunk in request.stream():
+                            count += len(chunk)
+                            if count > record.expected_size:
+                                raise HTTPException(413, "上传内容超过声明大小")
+                            temporary.write(chunk)
+                except TimeoutError:
+                    raise HTTPException(408, "上传超时，请新建素材后重试") from None
+                if count != record.expected_size:
+                    raise HTTPException(422, "上传内容不完整，请新建素材后重试")
+                temporary.seek(0)
+                transfer = asyncio.create_task(
+                    asyncio.to_thread(
+                        service.storage.put_gateway_upload,
+                        record.staging_key,
+                        temporary,
+                        size=record.expected_size,
+                        content_type=record.content_type,
+                    )
+                )
+                try:
+                    await asyncio.shield(transfer)
+                except asyncio.CancelledError:
+                    # Keep the temporary file alive until the underlying storage write finishes.
+                    await asyncio.shield(transfer)
+                    raise
+            asset = await service.complete(identity, str(upload_id))
+            return {
+                "status": "READY" if asset else "VERIFYING",
+                "asset_id": asset.asset_id if asset else None,
+            }
+        finally:
+            semaphore.release()
+    except (
+        MediaAccessError,
+        MediaTransferAlreadyStarted,
+        MediaStorageError,
+        MediaValidationError,
+        MediaInspectionUnavailable,
+    ) as exc:
+        raise _error(exc) from exc
 
 
 @router.get("/media/uploads/{upload_id}")
@@ -302,10 +393,92 @@ async def complete_upload(upload_id: UUID, request: Request, response: Response)
 async def preview(asset_id: UUID, request: Request, response: Response) -> dict[str, str]:
     _, identity = await _auth(request, response)
     try:
+        if getattr(request.app.state.settings, "multimodal_upload_mode", "direct") == "gateway":
+            await request.app.state.media_service.repository.ready_asset(identity, str(asset_id))
+            return {"mode": "gateway", "url": f"/api/v1/mobile/agent/media/{asset_id}/content"}
         url = await request.app.state.media_service.signed_preview(identity, str(asset_id))
     except (MediaAccessError, MediaStorageError) as exc:
         raise _error(exc) from exc
-    return {"url": url}
+    return {"mode": "direct", "url": url}
+
+
+def _preview_range(value: str | None, size: int) -> tuple[int, int, bool]:
+    if value is None:
+        return 0, size - 1, False
+    match = re.fullmatch(r"bytes=(\d{0,20})-(\d{0,20})", value)
+    if not match or not any(match.groups()):
+        raise ValueError("无效读取范围")
+    first, last = match.groups()
+    if not first:
+        suffix = int(last)
+        if suffix <= 0:
+            raise ValueError("无效读取范围")
+        return max(0, size - suffix), size - 1, True
+    start = int(first)
+    end = min(int(last), size - 1) if last else size - 1
+    if start >= size or end < start:
+        raise ValueError("无效读取范围")
+    return start, end, True
+
+
+@router.get("/media/{asset_id}/content")
+async def preview_content(
+    asset_id: UUID, request: Request, response: Response
+) -> StreamingResponse:
+    ref, identity = await _auth(request, response)
+    if getattr(request.app.state.settings, "multimodal_upload_mode", "direct") != "gateway":
+        raise HTTPException(404, "预览方式不可用")
+    service = request.app.state.media_service
+    try:
+        asset = await service.repository.ready_asset(identity, str(asset_id))
+        try:
+            start, end, partial = _preview_range(request.headers.get("range"), asset.size)
+        except ValueError:
+            raise HTTPException(
+                416, "无效读取范围", headers={"Content-Range": f"bytes */{asset.size}"}
+            ) from None
+        version = StoredVersion(
+            asset.final_key, asset.final_version, asset.size, asset.content_type
+        )
+        source = await asyncio.to_thread(service.storage.open_version_range, version, start, end)
+    except (MediaAccessError, MediaStorageError) as exc:
+        raise _error(exc) from exc
+
+    async def body():
+        remaining = end - start + 1
+        try:
+            while remaining:
+                current_identity = await auth_service(request).identity(ref)
+                if current_identity is None or run_owner(current_identity) != run_owner(identity):
+                    return
+                try:
+                    current = await service.repository.ready_asset(current_identity, str(asset_id))
+                except MediaAccessError:
+                    return
+                if (
+                    current.revision != asset.revision
+                    or current.final_version != asset.final_version
+                ):
+                    return
+                chunk = await asyncio.to_thread(source.read, min(1024 * 1024, remaining))
+                if not chunk:
+                    return
+                remaining -= len(chunk)
+                yield chunk
+        finally:
+            await asyncio.to_thread(source.close)
+
+    headers = {
+        "Cache-Control": "private, no-store",
+        "X-Content-Type-Options": "nosniff",
+        "Accept-Ranges": "bytes",
+        "Content-Length": str(end - start + 1),
+    }
+    if partial:
+        headers["Content-Range"] = f"bytes {start}-{end}/{asset.size}"
+    return StreamingResponse(
+        body(), status_code=206 if partial else 200, media_type=asset.content_type, headers=headers
+    )
 
 
 @router.delete("/media/{asset_id}", status_code=202)

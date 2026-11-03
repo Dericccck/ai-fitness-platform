@@ -1,7 +1,7 @@
 import * as SecureStore from "./vault";
 import { desktopSimulation } from "./vault";
 import { Platform } from "react-native";
-import { File } from "expo-file-system";
+import { File, UploadType, type UploadTask } from "expo-file-system";
 import type { MediaItem } from "../domain/types";
 
 const SESSION_KEY = "fitness.mobile.session.v1";
@@ -79,6 +79,7 @@ type UploadSession = {
   upload_id: string;
   asset_id: string;
   status: string;
+  upload_mode?: "direct" | "gateway";
   upload: UploadPolicy | null;
 };
 
@@ -166,6 +167,7 @@ export class MobileApi {
   private generation = 0;
   private vault: Promise<void> = Promise.resolve();
   private uploads = new Set<XMLHttpRequest>();
+  private nativeUploads = new Set<UploadTask>();
   private listeners = new Set<(loggedIn: boolean) => void>();
 
   subscribe(listener: (loggedIn: boolean) => void): () => void {
@@ -255,7 +257,7 @@ export class MobileApi {
     if (Platform.OS === "web" && !desktopSimulation)
       throw new Error("真实登录需要在 iOS 或 Android App 中进行。");
     const generation = ++this.generation;
-    this.uploads.forEach((xhr) => xhr.abort());
+    this.abortUploads();
     this.session = null;
     this.notify();
     await this.vaultOperation(() => SecureStore.deleteItemAsync(SESSION_KEY));
@@ -340,14 +342,14 @@ export class MobileApi {
       this.generation++;
       this.session = null;
       this.notify();
-      this.uploads.forEach((xhr) => xhr.abort());
+      this.abortUploads();
       await this.vaultOperation(() => SecureStore.deleteItemAsync(SESSION_KEY));
       throw error;
     }
     this.generation++;
     this.session = null;
     this.notify();
-    this.uploads.forEach((xhr) => xhr.abort());
+    this.abortUploads();
     await this.vaultOperation(() => SecureStore.deleteItemAsync(SESSION_KEY));
     try {
       await rawRequest("/api/v1/mobile-auth/logout", "POST", undefined, token);
@@ -404,17 +406,79 @@ export class MobileApi {
   async removeMedia(id: string): Promise<void> {
     await this.request(`${AGENT}/media/${encodeURIComponent(id)}`, "DELETE");
   }
-  async preview(id: string): Promise<string> {
-    return (
-      await this.request<{ url: string }>(
-        `${AGENT}/media/${encodeURIComponent(id)}/preview`,
-        "POST",
-      )
-    ).url;
+  async preview(id: string): Promise<{ uri: string; headers?: Record<string, string>; disposable?: boolean }> {
+    const generation = this.generation;
+    const path = `${AGENT}/media/${encodeURIComponent(id)}/content`;
+    const result = await this.request<{ url: string; mode?: string }>(`${AGENT}/media/${encodeURIComponent(id)}/preview`, "POST");
+    if (result.mode !== "gateway") return { uri: result.url };
+    if (result.url !== path) throw new Error("素材预览地址无效。");
+    const token = await this.access();
+    if (generation !== this.generation) throw new Error("账户已变化，请重新登录。");
+    if (desktopSimulation) {
+      const response = await fetch(baseUrl() + path, { headers: { Authorization: `Bearer ${token}` }, credentials: "omit", cache: "no-store" });
+      if (!response.ok) throw new Error("素材暂时无法查看。");
+      const blob = await response.blob();
+      if (generation !== this.generation) throw new Error("账户已变化，请重新登录。");
+      return { uri: URL.createObjectURL(blob), disposable: true };
+    }
+    return { uri: baseUrl() + path, headers: { Authorization: `Bearer ${token}` } };
   }
 
   abortUploads(): void {
     this.uploads.forEach((xhr) => xhr.abort());
+    this.nativeUploads.forEach((task) => task.cancel());
+  }
+
+  private async gatewayTransfer(item: MediaItem, uploadId: string, onProgress: (value: number) => void): Promise<void> {
+    const generation = this.generation;
+    const token = await this.access();
+    if (generation !== this.generation) throw new Error("账户已变化，请重新选择素材。");
+    const target = `${baseUrl()}${AGENT}/media/uploads/${encodeURIComponent(uploadId)}/content`;
+    if (desktopSimulation) {
+      const blob = await (await fetch(item.uri)).blob();
+      if (blob.size !== item.size) throw new Error("素材已发生变化，请重新选择。");
+      await new Promise<void>((resolve, reject) => {
+        const xhr = new XMLHttpRequest();
+        this.uploads.add(xhr);
+        xhr.open("PUT", target);
+        xhr.setRequestHeader("Authorization", `Bearer ${token}`);
+        xhr.setRequestHeader("Content-Type", item.mimeType!);
+        xhr.timeout = 240000;
+        xhr.upload.onprogress = (event) => { if (event.lengthComputable) onProgress(event.loaded / event.total); };
+        xhr.onload = () => {
+          this.uploads.delete(xhr);
+          if (xhr.status >= 200 && xhr.status < 300) resolve();
+          else {
+            let detail = "上传未完成，请检查状态后重新选择素材。";
+            try { const data = JSON.parse(xhr.responseText); if (typeof data.detail === "string" && data.detail.length <= 200) detail = data.detail; } catch { /* no structured error */ }
+            reject(new ApiError(xhr.status, detail));
+          }
+        };
+        xhr.onerror = xhr.ontimeout = xhr.onabort = () => {
+          this.uploads.delete(xhr);
+          reject(new Error("上传结果未确认，请检查状态；如需重传请新建素材。"));
+        };
+        xhr.send(blob);
+      });
+      return;
+    }
+    const task = new File(item.uri).createUploadTask(target, {
+      httpMethod: "PUT", uploadType: UploadType.BINARY_CONTENT, mimeType: item.mimeType,
+      headers: { Authorization: `Bearer ${token}` }, sessionType: "foreground",
+      onProgress: ({ bytesSent, totalBytes }) => { if (totalBytes > 0) onProgress(bytesSent / totalBytes); },
+    });
+    this.nativeUploads.add(task);
+    try {
+      const result = await task.uploadAsync();
+      if (result.status < 200 || result.status >= 300) {
+        let detail = "上传未完成，请检查状态后重新选择素材。";
+        try { const data = JSON.parse(result.body); if (typeof data.detail === "string" && data.detail.length <= 200) detail = data.detail; } catch { /* no structured error */ }
+        throw new ApiError(result.status, detail);
+      }
+    } finally {
+      this.nativeUploads.delete(task);
+      task.release();
+    }
   }
 
   async upload(
@@ -461,6 +525,21 @@ export class MobileApi {
       } catch (error) {
         if (!(error instanceof ApiError && error.status === 404)) throw error;
       }
+    }
+    if (session.upload_mode === "gateway") {
+      try {
+        await this.gatewayTransfer(item, session.upload_id, onProgress);
+      } catch (error) {
+        try {
+          if (generation !== this.generation) throw error;
+          const recovered = await this.request<{ status: string; asset_id: string | null }>(`${AGENT}/media/uploads/${session.upload_id}/complete`, "POST");
+          if (recovered.status === "READY" && recovered.asset_id) return recovered.asset_id;
+        } catch { /* one-shot transfer is never automatically replayed */ }
+        throw error;
+      }
+      const done = await this.request<{ status: string; asset_id: string | null }>(`${AGENT}/media/uploads/${session.upload_id}/complete`, "POST");
+      if (done.status !== "READY" || !done.asset_id) throw new Error("素材仍在准备，请稍后重试。");
+      return done.asset_id;
     }
     if (!session.upload) throw new Error("上传任务正在处理，请稍后重试。");
     const policy = session.upload;

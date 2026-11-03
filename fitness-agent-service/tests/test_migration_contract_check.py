@@ -11,8 +11,8 @@ def test_repository_migration_chain_is_single_and_bidirectional() -> None:
     assert result.passed is True
     # 0038：主动事件版本；0039：确认结果未知；0040：通知重放；0041：会话 fencing；
     # 0042：主动式 Agent 闭环；0043：候选数据库契约；0044：经营决策平台。
-    assert len(result.revisions) == 57
-    assert result.heads == ("20261103_0057",)
+    assert len(result.revisions) == 58
+    assert result.heads == ("20261103_0058",)
 
 
 def test_migration_contract_rejects_unknown_parent_and_multiple_heads(tmp_path: Path) -> None:
