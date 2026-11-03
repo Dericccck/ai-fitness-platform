@@ -8,14 +8,14 @@ from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
-from sqlalchemy import text
+from sqlalchemy import String, bindparam, text
 
 from app.api.chat_protection import enforce_chat_quota
 from app.api.routes.mobile_auth import bearer
 from app.api.routes.mobile_auth import service as auth_service
 from app.infrastructure.agent_context import AgentIdentity, conversation_thread_id
 from app.media.metadata import MediaInspectionUnavailable, MediaValidationError
-from app.media.repository import MediaAccessError
+from app.media.repository import MediaAccessError, MediaQuotaExceeded
 from app.media.storage import MediaObjectNotFound, MediaStorageError
 from app.streaming.control import run_owner
 from app.streaming.durable_multimodal import DurableAccessError
@@ -61,6 +61,8 @@ async def _auth(request: Request, response: Response) -> tuple[str, AgentIdentit
 
 
 def _error(exc: Exception) -> HTTPException:
+    if isinstance(exc, MediaQuotaExceeded):
+        return HTTPException(429, str(exc))
     if isinstance(exc, MediaObjectNotFound):
         return HTTPException(404, "暂存素材尚未上传")
     if isinstance(exc, (MediaAccessError, DurableAccessError)):
@@ -92,6 +94,7 @@ async def capabilities(request: Request, response: Response) -> dict[str, Any]:
 @router.post("/conversations", status_code=201)
 async def create_conversation(request: Request, response: Response) -> dict[str, str]:
     _, identity = await _auth(request, response)
+    await enforce_chat_quota(request, identity)
     conversation_id = str(uuid4())
     await request.app.state.multimodal_repository.create_conversation(identity, conversation_id)
     return {"conversation_id": conversation_id}
@@ -161,21 +164,44 @@ async def unlink_legacy_conversation(
 
 
 @router.get("/conversations")
-async def list_conversations(request: Request, response: Response) -> dict[str, Any]:
+async def list_conversations(
+    request: Request, response: Response, before: str | None = None
+) -> dict[str, Any]:
     _, identity = await _auth(request, response)
+    if before is not None and not 1 <= len(before) <= 128:
+        raise HTTPException(422, "无效分页标识")
     async with request.app.state.database.engine.connect() as connection:
+        owner = run_owner(identity)
+        if before:
+            anchor = (
+                await connection.execute(
+                    text(
+                        "SELECT updated_at FROM agent_chat_conversations WHERE conversation_id=:id AND owner_hash=:owner"
+                    ),
+                    {"id": before, "owner": owner},
+                )
+            ).scalar_one_or_none()
+            if anchor is None:
+                raise HTTPException(422, "分页标识已失效，请刷新")
+        else:
+            anchor = None
         rows = (
             (
                 await connection.execute(
                     text("""SELECT conversation_id,created_at,updated_at,legacy_linked FROM agent_chat_conversations
-              WHERE owner_hash=:owner AND deleted_at IS NULL ORDER BY updated_at DESC LIMIT 100"""),
-                    {"owner": run_owner(identity)},
+              WHERE owner_hash=:owner AND deleted_at IS NULL
+                AND (CAST(:anchor AS timestamptz) IS NULL OR (updated_at,conversation_id) < (:anchor,:before))
+              ORDER BY updated_at DESC,conversation_id DESC LIMIT 101"""),
+                    {"owner": owner, "anchor": anchor, "before": before},
                 )
             )
             .mappings()
             .all()
         )
+    has_more = len(rows) > 100
+    rows = rows[:100]
     return {
+        "next_cursor": str(rows[-1]["conversation_id"]) if has_more else None,
         "conversations": [
             {
                 "conversation_id": row["conversation_id"],
@@ -184,7 +210,7 @@ async def list_conversations(request: Request, response: Response) -> dict[str, 
                 "legacy_linked": bool(row["legacy_linked"]),
             }
             for row in rows
-        ]
+        ],
     }
 
 
@@ -218,7 +244,13 @@ async def create_upload(
             content_type=payload.content_type,
             size=payload.size,
         )
-    except (MediaAccessError, MediaStorageError, RunConflict, ValueError) as exc:
+    except (
+        MediaAccessError,
+        MediaQuotaExceeded,
+        MediaStorageError,
+        RunConflict,
+        ValueError,
+    ) as exc:
         raise _error(exc) from exc
     policy = result.policy
     return {
@@ -385,8 +417,16 @@ async def cancel_run(
 
 
 @router.get("/conversations/{conversation_id}/messages")
-async def messages(conversation_id: str, request: Request, response: Response) -> dict[str, Any]:
+async def messages(
+    conversation_id: str,
+    request: Request,
+    response: Response,
+    before: str | None = None,
+    run_id: UUID | None = None,
+) -> dict[str, Any]:
     _, identity = await _auth(request, response)
+    if before is not None and (not 1 <= len(before) <= 128 or run_id is not None):
+        raise HTTPException(422, "无效分页标识")
     owner = run_owner(identity)
     async with request.app.state.database.engine.begin() as connection:
         exists = (
@@ -398,18 +438,46 @@ async def messages(conversation_id: str, request: Request, response: Response) -
         ).first()
         if exists is None:
             raise HTTPException(404, "会话不存在或无法访问")
+        anchor = None
+        if before:
+            anchor = (
+                (
+                    await connection.execute(
+                        text("""SELECT created_at,role,message_id
+                FROM agent_chat_messages WHERE message_id=:before AND conversation_id=:id AND owner_hash=:owner"""),
+                        {"before": before, "id": conversation_id, "owner": owner},
+                    )
+                )
+                .mappings()
+                .first()
+            )
+            if anchor is None:
+                raise HTTPException(422, "分页标识已失效，请刷新")
         rows = (
             (
                 await connection.execute(
                     text("""SELECT message_id,run_id,role,status,content_ciphertext,key_version,schema_version,created_at
               FROM agent_chat_messages WHERE conversation_id=:id AND owner_hash=:owner AND deleted_at IS NULL
-              ORDER BY created_at,CASE role WHEN 'user' THEN 0 ELSE 1 END,message_id LIMIT 200"""),
-                    {"id": conversation_id, "owner": owner},
+                AND (CAST(:run AS text) IS NULL OR run_id=:run)
+                AND (CAST(:anchor_time AS timestamptz) IS NULL OR (created_at,CASE role WHEN 'user' THEN 0 ELSE 1 END,message_id)
+                    < (:anchor_time,:anchor_role,:before))
+              ORDER BY created_at DESC,CASE role WHEN 'user' THEN 0 ELSE 1 END DESC,message_id DESC LIMIT 201"""),
+                    {
+                        "id": conversation_id,
+                        "owner": owner,
+                        "run": str(run_id) if run_id else None,
+                        "anchor_time": anchor["created_at"] if anchor else None,
+                        "anchor_role": (0 if anchor["role"] == "user" else 1) if anchor else None,
+                        "before": before,
+                    },
                 )
             )
             .mappings()
             .all()
         )
+        has_more = len(rows) > 200
+        rows = list(reversed(rows[:200]))
+        next_cursor = str(rows[0]["message_id"]) if has_more else None
         media = (
             (
                 await connection.execute(
@@ -417,8 +485,16 @@ async def messages(conversation_id: str, request: Request, response: Response) -
               FROM agent_chat_message_media mm JOIN agent_chat_messages m ON m.message_id=mm.message_id
               JOIN agent_media_assets a ON a.asset_id=mm.asset_id
               WHERE m.conversation_id=:id AND m.owner_hash=:owner AND a.owner_hash=:owner
-                AND m.deleted_at IS NULL AND a.deleted_at IS NULL ORDER BY mm.ordinal"""),
-                    {"id": conversation_id, "owner": owner},
+                AND m.deleted_at IS NULL AND a.deleted_at IS NULL
+                AND mm.dependency_type IN ('ATTACHMENT','ANALYSIS')
+                AND m.message_id IN :message_ids ORDER BY mm.ordinal""").bindparams(
+                        bindparam("message_ids", expanding=True, type_=String())
+                    ),
+                    {
+                        "id": conversation_id,
+                        "owner": owner,
+                        "message_ids": [str(row["message_id"]) for row in rows],
+                    },
                 )
             )
             .mappings()
@@ -456,7 +532,7 @@ async def messages(conversation_id: str, request: Request, response: Response) -
                     "media": grouped.get(str(row["message_id"]), []),
                 }
             )
-        if bool(exists[0]):
+        if bool(exists[0]) and not has_more and run_id is None:
             bridge = getattr(request.app.state, "legacy_bridge", None)
             if bridge is None:
                 raise HTTPException(503, "历史对话服务暂不可用")
@@ -499,4 +575,4 @@ async def messages(conversation_id: str, request: Request, response: Response) -
                 }
                 for index, item in enumerate(legacy)
             ] + result
-        return {"conversation_id": conversation_id, "messages": result}
+        return {"conversation_id": conversation_id, "messages": result, "next_cursor": next_cursor}

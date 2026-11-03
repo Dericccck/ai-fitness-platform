@@ -13,6 +13,8 @@ export default function LiveConversations() {
   const router = useRouter();
   const { loggedIn, logout } = useAccount();
   const [items, setItems] = useState<RemoteConversation[]>([]);
+  const [cursor, setCursor] = useState<string | null>(null);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
   const [showLink, setShowLink] = useState(false);
@@ -21,9 +23,10 @@ export default function LiveConversations() {
   const load = useCallback(async () => {
     const version = mobileApi.version;
     try {
-      const value = await mobileApi.conversations();
+      const value = await mobileApi.conversationsPage();
       if (version === mobileApi.version) {
-        setItems(value);
+        setItems(value.conversations);
+        setCursor(value.next_cursor);
         setError("");
       }
     } catch (reason) {
@@ -31,6 +34,19 @@ export default function LiveConversations() {
         setError(reason instanceof Error ? reason.message : "无法加载对话。");
     }
   }, []);
+  async function loadMore() {
+    if (!cursor || loadingMore) return;
+    const version = mobileApi.version;
+    setLoadingMore(true);
+    try {
+      const page = await mobileApi.conversationsPage(cursor);
+      if (version !== mobileApi.version) return;
+      setItems((old) => [...old, ...page.conversations.filter((item) => !old.some((v) => v.conversation_id === item.conversation_id))]);
+      setCursor(page.next_cursor);
+    } catch (reason) {
+      if (version === mobileApi.version) setError(reason instanceof Error ? reason.message : "无法加载更多对话。");
+    } finally { setLoadingMore(false); }
+  }
   useFocusEffect(
     useCallback(() => {
       if (loggedIn) void load();
@@ -209,6 +225,9 @@ export default function LiveConversations() {
             <Text style={S.body}>从一个想了解的动作开始。</Text>
           </View>
         )}
+        {cursor ? <Pressable accessibilityRole="button" onPress={() => { void loadMore(); }} disabled={loadingMore}>
+          <Text style={styles.link}>{loadingMore ? "正在加载…" : "加载更多对话"}</Text>
+        </Pressable> : null}
         <Pressable onPress={signOut} style={styles.signout}>
           <Text style={styles.link}>退出当前账户</Text>
         </Pressable>

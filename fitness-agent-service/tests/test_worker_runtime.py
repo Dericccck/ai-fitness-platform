@@ -39,6 +39,20 @@ async def test_idle_worker_shutdown_does_not_wait_for_poll_interval() -> None:
     await asyncio.wait_for(task, timeout=0.1)
 
 
+async def test_busy_worker_drains_backlog_without_idle_delay() -> None:
+    stop = asyncio.Event()
+    calls = []
+
+    async def run_once() -> bool:
+        calls.append(1)
+        if len(calls) == 3:
+            stop.set()
+        return True
+
+    await asyncio.wait_for(poll_worker(run_once, interval=30, busy_interval=0.001, stop=stop), 1)
+    assert len(calls) == 3
+
+
 def test_real_sigterm_process_finishes_inflight_batch_and_exits() -> None:
     code = """
 import asyncio

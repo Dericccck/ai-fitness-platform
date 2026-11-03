@@ -132,6 +132,7 @@ async def lifespan(app: FastAPI, *, role: str = "api") -> AsyncIterator[None]:
     """
 
     settings = get_settings()
+    multimodal_metrics.api_enabled.set(int(settings.multimodal_api_enabled))
     app.state.trulens_telemetry = TruLensTelemetry(settings)
 
     # app.state 承担轻量依赖容器的职责。数据库、Checkpoint、Redis、Tool Registry 和
@@ -392,7 +393,11 @@ async def lifespan(app: FastAPI, *, role: str = "api") -> AsyncIterator[None]:
             access_key_secret=settings.multimodal_oss_access_key_secret,
             security_token=settings.multimodal_oss_security_token,
         )
-        media_repository = MediaRepository(app.state.database)
+        media_repository = MediaRepository(
+            app.state.database,
+            max_assets=settings.multimodal_user_max_assets,
+            max_bytes=settings.multimodal_user_max_bytes,
+        )
         app.state.media_service = MediaService(
             media_repository,
             storage,

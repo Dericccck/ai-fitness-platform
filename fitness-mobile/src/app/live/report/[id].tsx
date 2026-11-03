@@ -27,7 +27,7 @@ export default function LiveReport() {
       (async () => {
         try {
           // 历史投影的保留期可能长于运行状态，因此优先从会话读取。
-          const messages = await mobileApi.messages(conversationId);
+          const messages = await mobileApi.messages(conversationId, id);
           const item = messages.find(
             (message) =>
               message.run_id === id &&

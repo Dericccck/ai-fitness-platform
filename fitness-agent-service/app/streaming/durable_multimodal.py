@@ -460,7 +460,7 @@ class DurableMultimodalRepository:
             rows = (
                 (
                     await connection.execute(
-                        text("""SELECT m.message_id,m.role,m.content_ciphertext,m.key_version
+                        text("""SELECT m.message_id,m.run_id,m.role,m.content_ciphertext,m.key_version
                 FROM agent_chat_messages m JOIN agent_chat_runs r ON r.run_id=m.run_id
                 WHERE m.conversation_id=:conversation AND m.owner_hash=:owner AND m.run_id!=:run
                   AND m.deleted_at IS NULL AND m.status='COMMITTED' AND r.status='COMPLETED'
@@ -478,6 +478,7 @@ class DurableMultimodalRepository:
                 .all()
             )
             result = []
+            source_runs: set[str] = set()
             for row in reversed(rows):
                 value = self.cipher.decrypt(
                     bytes(row["content_ciphertext"]),
@@ -488,6 +489,29 @@ class DurableMultimodalRepository:
                     value = str(json.loads(value).get("summary", ""))
                 if value:
                     result.append({"role": str(row["role"]), "content": value[:500]})
+                    source_runs.add(str(row["run_id"]))
+            if source_runs:
+                # Propagate the complete asset lineage of every context message to the
+                # current assistant message. Existing direct links remain unchanged.
+                # The conversation share lock fences concurrent asset deletion.
+                await connection.execute(
+                    text("""INSERT INTO agent_chat_message_media
+                        (message_id,asset_id,asset_revision,ordinal,dependency_type)
+                      SELECT target.message_id,dep.asset_id,dep.asset_revision,dep.ordinal,'CONTEXT'
+                      FROM agent_chat_messages source
+                      JOIN agent_chat_message_media dep ON dep.message_id=source.message_id
+                      JOIN agent_chat_messages target ON target.run_id=:run AND target.role='assistant'
+                        AND target.owner_hash=:owner AND target.conversation_id=:conversation
+                      WHERE source.run_id=ANY(CAST(:source_runs AS TEXT[]))
+                        AND source.owner_hash=:owner AND source.conversation_id=:conversation
+                      ON CONFLICT (message_id,asset_id) DO NOTHING"""),
+                    {
+                        "run": lease.run_id,
+                        "owner": lease.owner_hash,
+                        "conversation": conversation,
+                        "source_runs": sorted(source_runs),
+                    },
+                )
             return result[-8:]
 
     async def heartbeat(self, lease: DispatchLease, *, lease_seconds: int = 30) -> bool:

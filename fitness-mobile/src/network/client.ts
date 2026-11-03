@@ -358,12 +358,8 @@ export class MobileApi {
     }
   }
 
-  async conversations(): Promise<RemoteConversation[]> {
-    return (
-      await this.request<{ conversations: RemoteConversation[] }>(
-        AGENT + "/conversations",
-      )
-    ).conversations;
+  async conversationsPage(before?: string): Promise<{ conversations: RemoteConversation[]; next_cursor: string | null }> {
+    return this.request(`${AGENT}/conversations${before ? `?before=${encodeURIComponent(before)}` : ""}`);
   }
   async createConversation(): Promise<string> {
     return (
@@ -388,12 +384,12 @@ export class MobileApi {
       "DELETE",
     );
   }
-  async messages(id: string): Promise<RemoteMessage[]> {
-    return (
-      await this.request<{ messages: RemoteMessage[] }>(
-        `${AGENT}/conversations/${encodeURIComponent(id)}/messages`,
-      )
-    ).messages;
+  async messagesPage(id: string, before?: string, runId?: string): Promise<{ messages: RemoteMessage[]; next_cursor: string | null }> {
+    const query = before ? `?before=${encodeURIComponent(before)}` : runId ? `?run_id=${encodeURIComponent(runId)}` : "";
+    return this.request(`${AGENT}/conversations/${encodeURIComponent(id)}/messages${query}`);
+  }
+  async messages(id: string, runId?: string): Promise<RemoteMessage[]> {
+    return (await this.messagesPage(id, undefined, runId)).messages;
   }
   async run(id: string): Promise<RemoteRun> {
     return this.request(`${AGENT}/runs/${encodeURIComponent(id)}`);

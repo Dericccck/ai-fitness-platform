@@ -29,9 +29,9 @@
       [
         "expo-image-picker",
         {
-          "photosPermission": "选择你希望在健身助手中预览的图片或视频。",
-          "cameraPermission": "使用相机拍摄你希望在健身助手中预览的素材。",
-          "microphonePermission": "拍摄视频时可录制声音；动作分析仅处理画面。"
+          "photosPermission": "选择图片或视频进行健身分析；选择的原文件会上传并交由模型服务处理。",
+          "cameraPermission": "拍摄图片或视频进行健身分析；确认发送后原文件会上传并交由模型服务处理。",
+          "microphonePermission": "拍摄视频时录制声音；上传视频可能包含声音，并会交由模型服务处理。"
         }
       ],
       "expo-secure-store"

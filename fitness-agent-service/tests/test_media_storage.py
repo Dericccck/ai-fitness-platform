@@ -138,6 +138,29 @@ def test_delete_all_versions_paginates_and_never_deletes_a_neighboring_key():
     assert deleted == [("final/user/asset", "v1"), ("final/user/asset", "marker-v2")]
 
 
+def test_many_versions_are_deleted_in_bounded_batches_before_retry():
+    bucket = FakeBucket()
+    deleted = []
+    page = 0
+
+    def list_versions(*, prefix, max_keys, key_marker, versionid_marker):
+        nonlocal page
+        page += 1
+        return SimpleNamespace(
+            versions=[SimpleNamespace(key=prefix, versionid=f"v{page}")],
+            delete_marker=[],
+            is_truncated=True,
+            next_key_marker=prefix,
+            next_versionid_marker=f"v{page}",
+        )
+
+    bucket.list_object_versions = list_versions
+    bucket.delete_object = lambda key, params: deleted.append(params["versionId"])
+    with pytest.raises(MediaStorageError, match="尚未清理完毕"):
+        storage(bucket).delete_all_versions("final/user/asset")
+    assert len(deleted) == 100 and page == 100
+
+
 def test_inspect_image_detects_spoofing_truncation_and_pixel_limit():
     result = io.BytesIO()
     Image.new("RGB", (8, 6), "red").save(result, format="PNG")

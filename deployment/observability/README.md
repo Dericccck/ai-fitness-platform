@@ -104,4 +104,4 @@ make trulens-agent-runtime-check ARGS='--execute'
 
 ### 多模态 Worker
 
-启用多模态后，单独运行 `python -m app.multimodal_worker_main`；Worker 默认在 8103 暴露 Prometheus 指标，端口可由 `AGENT_MULTIMODAL_WORKER_METRICS_PORT` 配置。Compose 中提供了 `multimodal` profile 和默认标记为非必需的 file-SD 目标；生产启用后应按实际拓扑配置抓取并将目标设置为 `required="true"`。关注 `fitness_agent_multimodal_runs_total`、`fitness_agent_multimodal_run_seconds` 和 `fitness_agent_multimodal_cleanup_total`；规则覆盖未知模型结果、模型失败和删除反复重试。用量账本记录每次模型调用的 run ID；每日调用限额按 Redis UTC 日计算，不代表货币预算。
+启用多模态后，单独运行 `python -m app.multimodal_worker_main`；Worker 默认在 8103 暴露 Prometheus 指标，端口可由 `AGENT_MULTIMODAL_WORKER_METRICS_PORT` 配置。Compose 中提供 `multimodal` profile；API 启用多模态且所有带 `profile="multimodal"` 标签的 Worker 不可用时触发专用告警。生产必须按实际拓扑配置抓取并保留此标签，配置真实值班接收器并演练。关注 `fitness_agent_multimodal_runs_total`、`fitness_agent_multimodal_run_seconds` 和 `fitness_agent_multimodal_cleanup_total`；规则覆盖未知模型结果、模型失败和删除反复重试。用量账本记录每次模型调用的 run ID；每日调用限额按 Redis UTC 日计算，不代表货币预算。

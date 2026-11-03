@@ -271,10 +271,52 @@ async def test_recognition_rag_and_final_model_receive_actual_video() -> None:
         call["media"][0].asset_id == "asset-1" for call in gateway.calls
     )
     assert rag.scopes[0].subject == "user-1" and rag.scopes[0].organization_ids == {"org-1"}
+    assert "TRAINING_GUIDE" in rag.scopes[0].document_types
     assert (
         output.knowledge_status == "USED" and output.knowledge_citations[0].citation_id == "doc-1:0"
     )
     assert "internal://private" not in output.model_dump_json()
+    assert output.limitations
+
+
+async def test_long_input_is_bounded_before_final_model_call() -> None:
+    chunks = tuple(
+        KnowledgeChunk(
+            f"chunk-{i}",
+            f"doc-{i}",
+            0,
+            "训" * 1400,
+            "internal://x",
+            "训练指南",
+            "TRAINING_GUIDE",
+            1,
+            0.9,
+            {},
+        )
+        for i in range(4)
+    )
+    gateway = FakeGateway([{"name": "划船", "identification": "IDENTIFIED"}, report()])
+    service = MovementAnalysisService(
+        gateway, FakeRag(RagSearchResult(chunks)), prompt_version="v1"
+    )  # type: ignore[arg-type]
+    await service.analyze(
+        identity=identity(),
+        question="问" * 4000,
+        media=[video()],
+        history=[{"role": "user", "content": "前" * 200}] * 6,
+    )
+    assert len(gateway.calls) == 2
+    assert all(
+        len(call["system_prompt"]) + len(call["user_prompt"]) <= 12000 for call in gateway.calls
+    )
+
+
+def test_multiple_images_are_explicitly_mapped_to_their_asset_ids() -> None:
+    gateway = MultimodalGateway(configured())
+    images = [replace(video(), asset_id=f"image-{i}", kind="image") for i in range(2)]
+    parts = gateway._media_parts(images)
+    assert parts[0]["text"].endswith("image-0") and parts[1]["type"] == "image_url"
+    assert parts[2]["text"].endswith("image-1") and parts[3]["type"] == "image_url"
 
 
 @pytest.mark.parametrize(

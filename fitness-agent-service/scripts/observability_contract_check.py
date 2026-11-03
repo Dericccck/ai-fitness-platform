@@ -42,6 +42,7 @@ EXPECTED_ALERTS = frozenset(
         "FitnessAgentSlowFirstAnswer",
         "FitnessAgentModelFailureRate",
         "FitnessAgentWorkerNotReady",
+        "FitnessAgentMultimodalWorkerUnavailable",
         "FitnessMcpCatalogUnavailable",
         "FitnessConfirmationReconciliationStalled",
         "FitnessConfirmationManualReviewPending",

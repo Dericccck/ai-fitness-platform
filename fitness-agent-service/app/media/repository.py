@@ -22,6 +22,10 @@ class MediaAccessError(RuntimeError):
     """不存在或不属于当前授权范围。"""
 
 
+class MediaQuotaExceeded(RuntimeError):
+    """The account has reached the configured logical media quota."""
+
+
 @dataclass(frozen=True)
 class UploadRecord:
     upload_id: str
@@ -81,8 +85,14 @@ def _upload(row: Mapping[Any, Any]) -> UploadRecord:
 
 
 class MediaRepository:
-    def __init__(self, database: Database) -> None:
+    def __init__(
+        self, database: Database, *, max_assets: int = 200, max_bytes: int = 2 * 1024**3
+    ) -> None:
+        if max_assets < 1 or max_bytes < 1:
+            raise ValueError("媒体配额必须为正数")
         self.database = database
+        self.max_assets = max_assets
+        self.max_bytes = max_bytes
 
     async def _lock_upload_asset(self, connection: AsyncConnection, upload_id: str) -> None:
         """与发布、删除保持会话→素材→上传记录的锁顺序。"""
@@ -147,6 +157,28 @@ class MediaRepository:
                 ):
                     raise MediaAccessError("上传任务已失效")
                 return _upload(existing)
+            # Lock on stable subject so concurrent uploads in different conversations
+            # cannot each pass the aggregate quota independently.
+            await connection.execute(
+                text("SELECT pg_advisory_xact_lock(hashtextextended(:key,0))"),
+                {"key": f"media-user-quota:{identity.subject}"},
+            )
+            usage = (
+                (
+                    await connection.execute(
+                        text("""SELECT count(*) AS count,COALESCE(sum(size_bytes),0) AS bytes
+                  FROM agent_media_assets WHERE subject_user_id=:subject AND deleted_at IS NULL"""),
+                        {"subject": identity.subject},
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            if (
+                int(usage["count"]) >= self.max_assets
+                or int(usage["bytes"]) + size > self.max_bytes
+            ):
+                raise MediaQuotaExceeded("素材数量或容量已达上限，请删除不需要的素材后重试")
             conversation = (
                 await connection.execute(
                     text("""

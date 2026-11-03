@@ -65,7 +65,7 @@ export default function Profile() {
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>素材与隐私</Text>
               <Text style={styles.rowSub}>
-                演示素材不上传；进程结束后清除引用
+                演示素材不上传；真实分析会上传原文件供模型处理
               </Text>
             </View>
           </View>

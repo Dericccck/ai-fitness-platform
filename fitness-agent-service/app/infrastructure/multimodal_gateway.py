@@ -106,7 +106,7 @@ class MultimodalGateway:
             raise MultimodalResponseError("视频分析每次只能使用一个视频")
         allowed = {host.lower() for host in self.settings.multimodal_media_hosts}
         parts: list[dict[str, Any]] = []
-        for item in media:
+        for index, item in enumerate(media, start=1):
             try:
                 url = urlsplit(item.url)
                 valid = (
@@ -124,6 +124,10 @@ class MultimodalGateway:
                 valid = False
             if not valid:
                 raise MultimodalResponseError("媒体引用无效或不属于受信任的存储")
+            if len(media) > 1:
+                parts.append(
+                    {"type": "text", "text": f"第{index}张图片的asset_id：{item.asset_id}"}
+                )
             if item.kind == "video":
                 # 百炼 OpenAI 兼容协议要求 fps 与 video_url 同级。
                 parts.append(

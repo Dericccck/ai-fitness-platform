@@ -108,6 +108,8 @@ class Settings(BaseSettings):
     multimodal_max_concurrency: int = Field(default=4, ge=1, le=32)
     multimodal_global_max_concurrency: int = Field(default=4, ge=1, le=128)
     multimodal_daily_max_calls: int = Field(default=2000, ge=1, le=1000000)
+    multimodal_user_max_assets: int = Field(default=200, ge=1, le=100000)
+    multimodal_user_max_bytes: int = Field(default=2 * 1024**3, ge=1, le=1024**4)
     multimodal_worker_metrics_port: int = Field(default=8103, ge=1, le=65535)
     multimodal_validator_socket: str = ""
     multimodal_validator_temp_dir: str = ""

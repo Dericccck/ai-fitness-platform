@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import io
 import os
 from dataclasses import replace
@@ -14,7 +15,7 @@ from PIL import Image
 from app.confirmation.cipher import AesGcmPayloadCipher
 from app.infrastructure.agent_context import AgentIdentity
 from app.media.metadata import MediaValidationError
-from app.media.repository import MediaAccessError, MediaRepository
+from app.media.repository import MediaAccessError, MediaQuotaExceeded, MediaRepository
 from app.media.service import MediaService
 from app.media.storage import OssMediaStorage
 from app.streaming.durable_multimodal import DurableMultimodalRepository
@@ -62,6 +63,36 @@ def make_storage(bucket):
         security_token="test-token",
         bucket=bucket,
     )
+
+
+async def test_upload_quota_is_atomic_across_conversations_and_idempotent():
+    db = database()
+    identity = AgentIdentity(
+        "quota-" + uuid4().hex, frozenset({"org"}), frozenset({"STUDENT"}), 1, 9999999999
+    )
+    repo = MediaRepository(db, max_assets=1, max_bytes=10)
+    conversations = [str(uuid4()), str(uuid4())]
+    keys = [str(uuid4()), str(uuid4())]
+    try:
+        chat = DurableMultimodalRepository(db, AesGcmPayloadCipher(b"x" * 32, "v1"))
+        for conversation in conversations:
+            await chat.create_conversation(identity, conversation)
+
+        async def create(index):
+            return await repo.create_upload(
+                identity=identity,
+                conversation_id=conversations[index],
+                idempotency_key=keys[index],
+                content_type="image/png",
+                size=10,
+            )
+
+        results = await asyncio.gather(create(0), create(1), return_exceptions=True)
+        assert sum(isinstance(result, MediaQuotaExceeded) for result in results) == 1
+        winner = next(i for i, result in enumerate(results) if not isinstance(result, Exception))
+        assert (await create(winner)).upload_id == results[winner].upload_id
+    finally:
+        await db.close()
 
 
 async def test_upload_complete_is_idempotent_and_owner_scoped():

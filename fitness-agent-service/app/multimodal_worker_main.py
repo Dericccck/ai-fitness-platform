@@ -30,10 +30,16 @@ async def run() -> None:
 
         await asyncio.gather(
             poll_worker(app.state.multimodal_worker.run_once, interval=1.0),
-            poll_worker(app.state.media_deletion_worker.run_once, interval=3.0),
-            poll_worker(app.state.media_deletion.expire_one, interval=30.0),
-            poll_worker(app.state.media_deletion.expire_abandoned_upload, interval=30.0),
-            poll_worker(app.state.media_deletion_worker.cleanup_staging_once, interval=30.0),
+            poll_worker(app.state.media_deletion_worker.run_once, interval=3.0, busy_interval=0.1),
+            poll_worker(app.state.media_deletion.expire_one, interval=30.0, busy_interval=0.1),
+            poll_worker(
+                app.state.media_deletion.expire_abandoned_upload, interval=30.0, busy_interval=0.1
+            ),
+            poll_worker(
+                app.state.media_deletion_worker.cleanup_staging_once,
+                interval=30.0,
+                busy_interval=0.1,
+            ),
             poll_worker(reap, interval=5.0),
             poll_worker(cleanup_temp, interval=60.0),
         )

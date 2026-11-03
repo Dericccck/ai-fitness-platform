@@ -43,6 +43,14 @@ import { useAccount } from "../../../state/AccountContext";
 import { desktopSimulation } from "../../../network/vault";
 
 const active = new Set(["QUEUED", "RUNNING", "CANCEL_REQUESTED"]);
+const failures: Record<string, string> = {
+  AUTH_EXPIRED: "登录状态已失效，请重新登录后再试。",
+  MEDIA_UNAVAILABLE: "素材已失效、被删除或暂时不可访问，请重新选择。",
+  MEMORY_CHANGED: "对话设置已变化，请重新发起分析。",
+  MODEL_FAILED: "分析服务暂时不可用，请稍后再试。",
+  EXECUTION_TIMEOUT: "任务等待超时，请稍后重新分析。",
+  INTERNAL_ERROR: "服务暂时不可用，请稍后再试。",
+};
 
 export default function LiveConversation() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -57,26 +65,40 @@ export default function LiveConversation() {
   const [working, setWorking] = useState(false);
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
+  const [pollError, setPollError] = useState("");
+  const [olderCursor, setOlderCursor] = useState<string | null>(null);
+  const [loadingOlder, setLoadingOlder] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
   const [preview, setPreview] = useState<MediaItem | null>(null);
   const [revision, setRevision] = useState(0);
   const sending = useRef(false);
   const stopRequested = useRef(false);
+  const older = useRef<RemoteMessage[]>([]);
+  const cursor = useRef<string | null>(null);
+  const loadedOlder = useRef(false);
 
   useFocusEffect(
     useCallback(() => {
       if (!loggedIn) return;
       let alive = true;
       let timer: ReturnType<typeof setTimeout> | undefined;
+      let refreshing = false;
+      let failures = 0;
       const version = mobileApi.version;
+      older.current = [];
+      loadedOlder.current = false;
+      cursor.current = null;
+      setOlderCursor(null);
       async function refresh() {
-        if (!alive || version !== mobileApi.version) return;
+        if (!alive || version !== mobileApi.version || refreshing) return;
         if (AppState.currentState !== "active") {
           timer = setTimeout(refresh, 5000);
           return;
         }
+        refreshing = true;
         try {
-          const history = await mobileApi.messages(id);
+          const page = await mobileApi.messagesPage(id);
+          const history = page.messages;
           const waiting = history.filter(
             (m) => m.role === "assistant" && m.status === "PENDING",
           );
@@ -97,7 +119,14 @@ export default function LiveConversation() {
             }),
           );
           if (!alive || version !== mobileApi.version) return;
-          setMessages(history);
+          failures = 0;
+          setPollError("");
+          if (!loadedOlder.current) {
+            cursor.current = page.next_cursor;
+            setOlderCursor(page.next_cursor);
+          }
+          const newestIds = new Set(history.map((item) => item.message_id));
+          setMessages([...older.current.filter((item) => !newestIds.has(item.message_id)), ...history]);
           setStates(
             Object.fromEntries(runResults.map((run) => [run.run_id, run])),
           );
@@ -118,10 +147,13 @@ export default function LiveConversation() {
           if (runResults.some((run) => active.has(run.status)))
             timer = setTimeout(refresh, 4000);
         } catch (reason) {
-          if (alive && version === mobileApi.version)
-            setError(
-              reason instanceof Error ? reason.message : "无法读取会话。",
-            );
+          if (alive && version === mobileApi.version) {
+            failures += 1;
+            setPollError(reason instanceof Error ? reason.message : "无法读取会话。");
+            if (failures <= 6) timer = setTimeout(refresh, Math.min(30000, 2000 * 2 ** (failures - 1)));
+          }
+        } finally {
+          refreshing = false;
         }
       }
       void refresh();
@@ -140,6 +172,28 @@ export default function LiveConversation() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, [id, loggedIn, revision]),
   );
+
+  async function loadOlder() {
+    const before = cursor.current;
+    if (!before || loadingOlder) return;
+    const version = mobileApi.version;
+    setLoadingOlder(true);
+    try {
+      const page = await mobileApi.messagesPage(id, before);
+      if (version !== mobileApi.version) return;
+      loadedOlder.current = true;
+      cursor.current = page.next_cursor;
+      setOlderCursor(page.next_cursor);
+      const ids = new Set(older.current.map((item) => item.message_id));
+      older.current = [...page.messages.filter((item) => !ids.has(item.message_id)), ...older.current];
+      setMessages((current) => {
+        const existing = new Set(current.map((item) => item.message_id));
+        return [...page.messages.filter((item) => !existing.has(item.message_id)), ...current];
+      });
+    } catch (reason) {
+      if (version === mobileApi.version) setPollError(reason instanceof Error ? reason.message : "无法加载更早消息。");
+    } finally { setLoadingOlder(false); }
+  }
 
   async function choose(source: "library" | "photo" | "video") {
     setPickerOpen(false);
@@ -374,10 +428,13 @@ export default function LiveConversation() {
             <View style={{ flex: 1 }}>
               <Text style={styles.title}>从一个问题开始</Text>
               <Text style={styles.muted}>
-                选择图片或视频，告诉我你希望了解什么。视频可能包含声音，本功能只分析画面。
+                图片或视频原文件会上传到私有存储，并提供给模型服务分析；文件可能包含声音和位置信息。请先确认素材适合上传。
               </Text>
             </View>
           </View>
+          {olderCursor ? <Pressable accessibilityRole="button" disabled={loadingOlder} onPress={() => { void loadOlder(); }}>
+            <Text style={styles.link}>{loadingOlder ? "正在加载…" : "加载更早消息"}</Text>
+          </Pressable> : null}
           {messages.map((message) => {
             const run = states[message.run_id];
             if (message.role === "user")
@@ -398,7 +455,7 @@ export default function LiveConversation() {
                         onPress={() =>
                           confirmAction(
                             "删除素材",
-                            "素材和相关报告将无法查看，存储版本会异步清理。",
+                            "素材及依赖它的分析和后续内容将无法查看，存储版本会异步清理；已签发的预览链接可能在短时间内仍可使用。",
                             () => {
                               void deleteMedia(media);
                             },
@@ -467,9 +524,9 @@ export default function LiveConversation() {
                     : run?.status === "CANCELLED"
                       ? "已停止"
                       : run?.status === "UNKNOWN"
-                        ? "本次结果未确认，可重新分析"
+                        ? "本次结果未确认；重新分析可能产生额外费用。"
                         : run?.status === "FAILED"
-                          ? "分析未完成，请重试"
+                          ? failures[run.error_code || ""] || "分析未完成，请稍后重试。"
                           : run?.status === "EXPIRED"
                             ? "任务已过期"
                             : "正在准备…";
@@ -552,6 +609,14 @@ export default function LiveConversation() {
             <Text accessibilityLiveRegion="polite" style={styles.error}>
               {error}
             </Text>
+          ) : null}
+          {pollError ? (
+            <View style={styles.actions}>
+              <Text accessibilityLiveRegion="polite" style={styles.error}>{pollError}</Text>
+              <Pressable accessibilityRole="button" onPress={() => setRevision((v) => v + 1)}>
+                <Text style={styles.link}>刷新状态</Text>
+              </Pressable>
+            </View>
           ) : null}
           {reference.length > 0 && (
             <View style={styles.reference}>

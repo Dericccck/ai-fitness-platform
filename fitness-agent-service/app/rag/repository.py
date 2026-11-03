@@ -432,7 +432,7 @@ class KnowledgeRepository:
     ) -> list[KnowledgeChunk]:
         """使用 pgvector 余弦距离召回已授权候选。"""
 
-        if not scope.organization_ids or not scope.roles:
+        if not scope.organization_ids or not scope.roles or scope.document_types == frozenset():
             return []
 
         role_clauses = [
@@ -440,6 +440,9 @@ class KnowledgeRepository:
             for index, _ in enumerate(sorted(scope.roles))
         ]
         role_parameters = {f"role_{index}": role for index, role in enumerate(sorted(scope.roles))}
+        type_filter = (
+            "AND c.document_type IN :document_types" if scope.document_types is not None else ""
+        )
         statement = text(
             """
             SELECT
@@ -461,6 +464,7 @@ class KnowledgeRepository:
             LEFT JOIN knowledge_parents p ON p.id = c.parent_id AND p.document_id = c.document_id
             WHERE d.status = 'PUBLISHED'
               AND c.embedding IS NOT NULL
+              {type_filter}
               AND c.visibility = d.visibility
               AND c.effective_from <= CURRENT_TIMESTAMP
               AND (c.effective_to IS NULL OR c.effective_to > CURRENT_TIMESTAMP)
@@ -476,8 +480,10 @@ class KnowledgeRepository:
               )
             ORDER BY c.embedding <=> CAST(:embedding AS vector)
             LIMIT :limit
-            """.format(role_filter=" OR ".join(role_clauses))
+            """.format(role_filter=" OR ".join(role_clauses), type_filter=type_filter)
         ).bindparams(bindparam("organization_ids", expanding=True))
+        if scope.document_types is not None:
+            statement = statement.bindparams(bindparam("document_types", expanding=True))
         params: dict[str, Any] = {
             "embedding": _vector_literal(embedding),
             "organization_ids": sorted(scope.organization_ids),
@@ -486,6 +492,8 @@ class KnowledgeRepository:
             "limit": limit,
             **role_parameters,
         }
+        if scope.document_types is not None:
+            params["document_types"] = sorted(scope.document_types)
         async with self._database.engine.connect() as connection:
             result = await connection.execute(statement, params)
             rows = result.mappings().all()
@@ -500,7 +508,12 @@ class KnowledgeRepository:
     ) -> list[KnowledgeChunk]:
         """使用全文检索和 pg_trgm 相似度召回已授权词法候选。"""
 
-        if not query.strip() or not scope.organization_ids or not scope.roles:
+        if (
+            not query.strip()
+            or not scope.organization_ids
+            or not scope.roles
+            or scope.document_types == frozenset()
+        ):
             return []
         role_clauses = [
             f"c.allowed_roles && ARRAY[:keyword_role_{index}]::text[]"
@@ -509,6 +522,9 @@ class KnowledgeRepository:
         role_parameters = {
             f"keyword_role_{index}": role for index, role in enumerate(sorted(scope.roles))
         }
+        type_filter = (
+            "AND c.document_type IN :document_types" if scope.document_types is not None else ""
+        )
         statement = text(
             """
             SELECT
@@ -525,6 +541,7 @@ class KnowledgeRepository:
             JOIN knowledge_documents d ON d.id = c.document_id
             LEFT JOIN knowledge_parents p ON p.id = c.parent_id AND p.document_id = c.document_id
             WHERE d.status = 'PUBLISHED'
+              {type_filter}
               AND c.visibility = d.visibility
               AND c.effective_from <= CURRENT_TIMESTAMP
               AND (c.effective_to IS NULL OR c.effective_to > CURRENT_TIMESTAMP)
@@ -544,8 +561,10 @@ class KnowledgeRepository:
               )
             ORDER BY similarity DESC
             LIMIT :limit
-            """.format(role_filter=" OR ".join(role_clauses))
+            """.format(role_filter=" OR ".join(role_clauses), type_filter=type_filter)
         ).bindparams(bindparam("organization_ids", expanding=True))
+        if scope.document_types is not None:
+            statement = statement.bindparams(bindparam("document_types", expanding=True))
         params: dict[str, Any] = {
             "query": query.strip(),
             "organization_ids": sorted(scope.organization_ids),
@@ -554,6 +573,8 @@ class KnowledgeRepository:
             "limit": limit,
             **role_parameters,
         }
+        if scope.document_types is not None:
+            params["document_types"] = sorted(scope.document_types)
         async with self._database.engine.connect() as connection:
             rows = (await connection.execute(statement, params)).mappings().all()
         return _rows_to_chunks(rows)

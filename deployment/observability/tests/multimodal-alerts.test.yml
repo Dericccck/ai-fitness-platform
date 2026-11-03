@@ -6,6 +6,33 @@ evaluation_interval: 30s
 tests:
   - interval: 30s
     input_series:
+      - series: 'fitness_agent_multimodal_api_enabled{job="fitness-agent"}'
+        values: '1x10'
+      - series: 'fitness_agent_worker_ready{job="fitness-agent-workers",profile="multimodal"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 2m
+        alertname: FitnessAgentMultimodalWorkerUnavailable
+        exp_alerts: []
+      - eval_time: 4m
+        alertname: FitnessAgentMultimodalWorkerUnavailable
+        exp_alerts:
+          - exp_labels:
+              severity: critical
+              service: fitness-agent
+            exp_annotations:
+              summary: 多模态 Worker 不可用
+              description: 多模态 API 已启用但没有可用的多模态 Worker；分析任务与素材清理可能积压。
+  - interval: 30s
+    input_series:
+      - series: 'fitness_agent_multimodal_api_enabled{job="fitness-agent"}'
+        values: '0x10'
+    alert_rule_test:
+      - eval_time: 4m
+        alertname: FitnessAgentMultimodalWorkerUnavailable
+        exp_alerts: []
+  - interval: 30s
+    input_series:
       - series: 'fitness_agent_multimodal_runs_total{job="fitness-agent-workers",outcome="unknown"}'
         values: '0 0 0 1 1 1 1 1 1 1'
     alert_rule_test:

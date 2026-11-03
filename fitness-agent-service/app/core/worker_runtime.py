@@ -22,7 +22,11 @@ _metrics: ContextVar[HttpMetrics | None] = ContextVar("worker_metrics", default=
 
 
 async def poll_worker(
-    run_once: Callable[[], Awaitable[Any]], *, interval: float, stop: asyncio.Event | None = None
+    run_once: Callable[[], Awaitable[Any]],
+    *,
+    interval: float,
+    stop: asyncio.Event | None = None,
+    busy_interval: float | None = None,
 ) -> None:
     event = stop or _stop.get() or asyncio.Event()
     metrics = _metrics.get()
@@ -31,11 +35,12 @@ async def poll_worker(
     try:
         while not event.is_set():
             with collect_usage(f"worker:{run_once.__module__}:{uuid4().hex}"):
-                await run_once()  # SIGTERM 不直接取消在途批次。
+                worked = await run_once()  # SIGTERM 不直接取消在途批次。
             if event.is_set():
                 return
             try:
-                await asyncio.wait_for(event.wait(), timeout=interval)
+                delay = busy_interval if busy_interval is not None and worked else interval
+                await asyncio.wait_for(event.wait(), timeout=delay)
             except TimeoutError:
                 pass
     finally:

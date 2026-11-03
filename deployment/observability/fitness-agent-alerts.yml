@@ -144,6 +144,16 @@ groups:
           summary: "必需 Worker 未就绪"
           description: "已明确启用的 Worker 连续 3 分钟未就绪或无法抓取；检查启动、租约、SIGTERM 和依赖配置。"
 
+      - alert: FitnessAgentMultimodalWorkerUnavailable
+        expr: max(fitness_agent_multimodal_api_enabled{job="fitness-agent"}) == 1 and on() ((sum(fitness_agent_worker_ready{job="fitness-agent-workers",profile="multimodal"}) or vector(0)) < 1)
+        for: 3m
+        labels:
+          severity: critical
+          service: fitness-agent
+        annotations:
+          summary: "多模态 Worker 不可用"
+          description: "多模态 API 已启用但没有可用的多模态 Worker；分析任务与素材清理可能积压。"
+
   - name: fitness-mcp-reliability
     rules:
       - alert: FitnessMcpCatalogUnavailable

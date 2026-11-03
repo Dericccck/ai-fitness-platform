@@ -16,6 +16,8 @@ class RetrievalScope:
     subject: str
     organization_ids: frozenset[str]
     roles: frozenset[str]
+    # An optional server-selected restriction; it never widens the ACL scope.
+    document_types: frozenset[str] | None = None
 
 
 @dataclass(frozen=True)

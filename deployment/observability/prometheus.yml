@@ -48,3 +48,8 @@ scrape_configs:
         labels:
           service: fitness-agent-worker
           environment: local
+      - targets: ["host.docker.internal:8103"]
+        labels:
+          service: fitness-agent-worker
+          environment: local
+          profile: multimodal

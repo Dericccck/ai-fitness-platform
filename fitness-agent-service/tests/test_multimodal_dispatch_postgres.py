@@ -379,6 +379,81 @@ async def test_worker_executes_only_with_live_authorization() -> None:
         await db.close()
 
 
+async def test_context_asset_lineage_is_propagated_and_deleted_transitively() -> None:
+    db = database()
+    cipher = AesGcmPayloadCipher(b"x" * 32, "test-v1")
+    repo = DurableMultimodalRepository(db, cipher)
+    identity = AgentIdentity(
+        "lineage-user", frozenset({"org-1"}), frozenset({"STUDENT"}), 1, 9999999999
+    )
+    conversation = str(uuid4())
+
+    class Storage:
+        def signed_read_url(self, stored, *, ttl_seconds):
+            return "https://assets.example/private"
+
+    class Analysis:
+        async def analyze(self, **kwargs):
+            return MovementReport.model_validate(
+                {
+                    "exercise": {"name": "深蹲", "identification": "IDENTIFIED"},
+                    "assessment": "INSUFFICIENT_EVIDENCE",
+                    "summary": "画面不足",
+                    "source_assets": [{"asset_id": kwargs["media"][0].asset_id, "revision": 1}],
+                    "model_version": "v1",
+                    "prompt_version": "v1",
+                    "knowledge_status": "EMPTY",
+                }
+            )
+
+    async def authorize(ref):
+        return identity
+
+    try:
+        await repo.create_conversation(identity, conversation)
+        first_asset = await ready_asset(db, identity, conversation)
+        second_asset = await ready_asset(db, identity, conversation)
+        worker = MultimodalWorker(repo, MediaRepository(db), Storage(), Analysis(), authorize)  # type: ignore[arg-type]
+        runs = []
+        for index in range(7):
+            run_id = str(uuid4())
+            runs.append(run_id)
+            await repo.submit(
+                identity=identity,
+                conversation_id=conversation,
+                run_id=run_id,
+                client_message_id=str(uuid4()),
+                question=f"分析 {index}",
+                asset_ids=[first_asset if index == 0 else second_asset],
+                auth_session_ref="a" * 64,
+                model="v1",
+                prompt_version="v1",
+            )
+            assert await worker.run_once()
+        async with db.engine.connect() as connection:
+            inherited = (
+                await connection.execute(
+                    text("""SELECT count(*) FROM agent_chat_message_media mm
+                JOIN agent_chat_messages m ON m.message_id=mm.message_id
+                WHERE m.run_id=:run AND mm.asset_id=:asset AND mm.dependency_type='CONTEXT'"""),
+                    {"run": runs[-1], "asset": first_asset},
+                )
+            ).scalar_one()
+            assert inherited == 1
+        await MediaDeletionRepository(db, cipher).request(identity, first_asset)
+        async with db.engine.connect() as connection:
+            remaining = (
+                await connection.execute(
+                    text("""SELECT count(*) FROM agent_movement_reports
+                WHERE run_id=ANY(CAST(:runs AS TEXT[])) AND report_ciphertext IS NOT NULL"""),
+                    {"runs": runs},
+                )
+            ).scalar_one()
+            assert remaining == 0
+    finally:
+        await db.close()
+
+
 async def test_deletion_blocks_provider_dispatch_for_an_already_claimed_run() -> None:
     db = database()
     cipher = AesGcmPayloadCipher(b"x" * 32, "test-v1")

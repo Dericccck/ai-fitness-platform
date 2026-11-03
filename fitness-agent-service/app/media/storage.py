@@ -245,8 +245,9 @@ class OssMediaStorage:
         _validate_key(key)
         versions: list[str] = []
         key_marker, version_marker = "", ""
+        more_pages = False
         try:
-            for _ in range(101):
+            for _ in range(100):
                 page = self._bucket.list_object_versions(
                     prefix=key,
                     max_keys=100,
@@ -257,8 +258,6 @@ class OssMediaStorage:
                     if item.key == key:
                         _validate_version(item.versionid)
                         versions.append(item.versionid)
-                if len(versions) > 10000:
-                    raise MediaStorageError("媒体版本过多，需要人工清理")
                 if not page.is_truncated:
                     break
                 next_markers = (page.next_key_marker, page.next_versionid_marker)
@@ -266,9 +265,14 @@ class OssMediaStorage:
                     raise MediaStorageError("媒体版本分页无效")
                 key_marker, version_marker = next_markers
             else:
-                raise MediaStorageError("媒体版本分页超出限制")
+                # Commit bounded progress; the durable worker retries from the start.
+                more_pages = True
             for version in versions:
                 self.delete_version(key, version)
+            if more_pages:
+                if not versions:
+                    raise MediaStorageError("媒体版本分页未能取得可清理的版本")
+                raise MediaStorageError("媒体版本尚未清理完毕，请重试")
             return len(versions)
         except MediaStorageError:
             raise
