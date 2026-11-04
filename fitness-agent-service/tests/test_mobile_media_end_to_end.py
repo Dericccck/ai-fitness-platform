@@ -43,7 +43,8 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-async def test_mobile_upload_submit_worker_history_and_delete() -> None:
+@pytest.mark.parametrize("upload_mode", ["direct", "gateway"])
+async def test_mobile_upload_submit_worker_history_and_delete(upload_mode: str) -> None:
     db = database()
     auth, redis, _ = await make_service()
     cipher = AesGcmPayloadCipher(b"x" * 32, "v1")
@@ -51,7 +52,14 @@ async def test_mobile_upload_submit_worker_history_and_delete() -> None:
     media_repository = MediaRepository(db)
     data = io.BytesIO()
     Image.new("RGB", (8, 6), "red").save(data, format="PNG")
-    bucket = FakeBucket(data.getvalue())
+
+    class GatewayBucket(FakeBucket):
+        def put_object(self, key, stream, headers):
+            assert headers == {"Content-Type": "image/png"}
+            assert stream.read() == self.data
+            return SimpleNamespace(headers={"x-oss-version-id": "source-v1"})
+
+    bucket = GatewayBucket(data.getvalue())
     storage = make_storage(bucket)
     captured = []
     change_revision = [False]
@@ -111,6 +119,8 @@ async def test_mobile_upload_submit_worker_history_and_delete() -> None:
         multimodal_api_enabled=True,
         multimodal_knowledge_enabled=True,
         multimodal_training_links_enabled=True,
+        multimodal_upload_mode=upload_mode,
+        multimodal_gateway_upload_timeout_seconds=30,
         multimodal_model="model-v1",
         multimodal_prompt_version="v1",
         chat_rate_limit_enabled=False,
@@ -121,6 +131,7 @@ async def test_mobile_upload_submit_worker_history_and_delete() -> None:
     app.state.confirmation_cipher = cipher
     app.state.multimodal_repository = repository
     app.state.media_service = MediaService(media_repository, storage)
+    app.state.media_gateway_semaphore = asyncio.Semaphore(2)
     app.state.media_deletion = MediaDeletionRepository(db, cipher)
     app.state.chat_runs = SimpleNamespace(repository=runs, cancel=cancel)
 
@@ -266,6 +277,13 @@ async def test_mobile_upload_submit_worker_history_and_delete() -> None:
             )
             assert linked_upload.status_code == 201
             uploaded = linked_upload.json()
+            if upload_mode == "gateway":
+                transfer = await client.put(
+                    f"/api/v1/mobile/agent/media/uploads/{uploaded['upload_id']}/content",
+                    headers={**headers, "Content-Type": "image/png"},
+                    content=bucket.data,
+                )
+                assert transfer.status_code == 200 and transfer.json()["status"] == "READY"
             assert (
                 await client.post(
                     f"/api/v1/mobile/agent/media/uploads/{uploaded['upload_id']}/complete",
@@ -311,10 +329,19 @@ async def test_mobile_upload_submit_worker_history_and_delete() -> None:
                     "size": len(bucket.data),
                 },
             )
-            assert upload.status_code == 201 and upload.json()["upload"]["url"].startswith(
-                "https://"
-            )
+            assert upload.status_code == 201
+            if upload_mode == "direct":
+                assert upload.json()["upload"]["url"].startswith("https://")
+            else:
+                assert upload.json()["upload"] is None
             asset, upload_id = upload.json()["asset_id"], upload.json()["upload_id"]
+            if upload_mode == "gateway":
+                transfer = await client.put(
+                    f"/api/v1/mobile/agent/media/uploads/{upload_id}/content",
+                    headers={**headers, "Content-Type": "image/png"},
+                    content=bucket.data,
+                )
+                assert transfer.status_code == 200 and transfer.json()["status"] == "READY"
             completed = await client.post(
                 f"/api/v1/mobile/agent/media/uploads/{upload_id}/complete", headers=headers
             )

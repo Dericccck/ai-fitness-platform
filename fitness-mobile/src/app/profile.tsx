@@ -68,6 +68,9 @@ export default function Profile() {
               <Text style={styles.rowSub}>
                 {configured ? "分析会上传原文件供模型处理" : "演示素材不会上传"}
               </Text>
+              {configured ? <Text style={styles.rowSub}>
+                素材默认在 30 天后进入清理流程。删除后会停止在应用中访问，并异步清理存储；模型服务已接收的数据按服务商规则处理。
+              </Text> : null}
             </View>
           </View>
           <View style={styles.divider} />

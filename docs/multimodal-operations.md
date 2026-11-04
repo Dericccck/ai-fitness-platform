@@ -5,11 +5,17 @@
 ## 启用条件
 
 1. 在后端配置已开通视觉能力的百炼模型、私有 OSS 的域名、地域及最小权限身份、可信认证上游、PostgreSQL、Redis 和既有身份/消息加密密钥。环境变量名见 `deployment/environments/agent.production.env.example`。开启 `AGENT_MOBILE_AUTH_ENABLED`、`AGENT_MULTIMODAL_ENABLED`、`AGENT_MULTIMODAL_API_ENABLED`；默认均关闭。
-2. 对目标数据库先备份并完成 Alembic 迁移；当前多模态迁移至 `20261103_0057`。在隔离测试库验证过回退再升级，不等于生产回滚时可以丢弃已有用户数据。
+2. 对目标数据库先备份并完成 Alembic 迁移；当前仓库涉及的多模态迁移包括 `20261104_0060`（完整迁移以 Alembic 当前 head 为准）。在隔离测试库验证过回退再升级，不等于生产回滚时可以丢弃已有用户数据；0060 的回退会删除关联与审计表，见上线门禁。
 3. 在每个 API 节点本地部署 `media-validator` 和多模态 Worker。Compose 提供 `multimodal` profile；生产 API 必须设置 `AGENT_MULTIMODAL_VALIDATOR_SOCKET=/run/fitness-validator/validator.sock` 与 `AGENT_MULTIMODAL_VALIDATOR_TEMP_DIR=/var/fitness-media`。API、Worker 与本节点隔离容器必须共享正确的两个卷，不跨节点共享 Unix socket。解析容器不连接网络、不接收服务密钥，素材卷只读，根文件系统只读、非 root、丢弃 capabilities，并设置进程数、内存和 CPU 限额。生产运行时还需保留 seccomp、主机和网络策略。
 4. 私有 OSS 桶必须启用版本控制，模型只能访问短期签名的固定版本。按企业保留政策配置桶生命周期；暂存版本不得早于上传凭证及安全缓冲期过期而被清理。最终对象的生命周期不得短于应用已承诺的保留期。验证版本和删除标记的清理，以及缓存、备份的保留边界。API 临时共享卷应加密并限制宿主机访问；正常请求结束时删除临时文件，Worker 回收异常退出留下的过期临时文件。
 5. Redis 应具备持久化和非淘汰策略，所有 Worker 的 `AGENT_MULTIMODAL_GLOBAL_MAX_CONCURRENCY`、`AGENT_MULTIMODAL_DAILY_MAX_CALLS` 应一致。日限额按 UTC 日计算，限制调用次数而不是金额；识别动作和生成报告可能分别调用模型。仍需设置供应商侧预算告警与账单监控。
 6. 在受控环境验证媒体隔离、上传大小与权限、认证撤销、状态恢复、实际 OSS 上传/读取/删除，以及真实图片和视频模型调用。用经授权且有标注的样本评价识别质量和安全提示；真实模型结果不是医学诊断，也不保证动作安全。
+
+## 受控端到端验收
+
+`python -m scripts.multimodal_acceptance_check --base-url <服务根地址> --sample <授权测试文件> --mode knowledge` 默认只检查参数，不请求服务。设置环境变量 `MULTIMODAL_ACCEPTANCE_ACCESS_TOKEN` 为专用测试账号的短期移动端访问令牌，并加 `--execute`，才会在目标环境创建新的测试会话、通过服务端中转上传文件、提交一次知识解读、检查报告来源和历史，再请求删除本次创建的素材和会话。将 `--mode` 改为 `movement` 验证动作分析；图片和视频各需独立运行。不要使用真实用户素材或生产账号，不要将令牌写进命令参数、日志或仓库。此工具可能产生模型调用与存储费用，不自动重试结果不明的写请求。
+
+通过仅表示 API 链路和报告结构通过，不代表使用了真实供应商或判断质量合格；须另外确认目标环境连接了真实 OSS 和模型，并人工复核结果。删除请求和 OSS 版本物理清理是不同阶段；若输出清理未确认的会话编号，应由授权运维在原环境追踪清理。进程被中断，或创建会话的响应丢失时，也可能遗留测试数据，应检查测试账号并按保留政策处理。
 
 ## 历史会话与删除
 
