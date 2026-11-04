@@ -24,6 +24,7 @@ export type RemoteConversation = {
 export type RemoteLegacyConversation = { thread_id: string; updated_at: string };
 export type RecoverableConversation = { conversation_id: string; updated_at: string };
 export type TrainingPlanSelection = { plan_id: string; title: string; version: number; days: { day_id: string; title: string; items: { item_id: string; exercise_name: string }[] }[] };
+export type TrainingPlanSummary = { plan_id: string; title: string };
 export type TrainingReportLink = { linked: false } | { linked: true; plan_id: string; plan_title: string; day_id: string; day_title: string; item_id: string; exercise_name: string };
 export type TrainingLinkedReport = { run_id: string; conversation_id: string; day_id: string; item_id: string; created_at: string };
 export type RemoteMedia = {
@@ -394,6 +395,9 @@ export class MobileApi {
   }
   async trainingPlan(id: string): Promise<TrainingPlanSelection> {
     return this.request(`${AGENT}/training/plans/${encodeURIComponent(id)}`);
+  }
+  async trainingPlans(before?: string): Promise<{ plans: TrainingPlanSummary[]; next_cursor: string | null }> {
+    return this.request(`${AGENT}/training/plans${before ? `?before=${encodeURIComponent(before)}` : ""}`);
   }
   async trainingPlanReports(id: string, before?: string): Promise<{ reports: TrainingLinkedReport[]; next_cursor: string | null }> {
     return this.request(`${AGENT}/training/plans/${encodeURIComponent(id)}/reports${before ? `?before=${encodeURIComponent(before)}` : ""}`);

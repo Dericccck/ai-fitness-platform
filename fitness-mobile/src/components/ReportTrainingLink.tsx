@@ -1,12 +1,13 @@
-import React, { useCallback, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
 import { Pressable, StyleSheet, Text, TextInput, View } from "react-native";
 import { useFocusEffect, useRouter } from "expo-router";
 import { C, S } from "./ui";
-import { mobileApi, type TrainingLinkedReport, type TrainingPlanSelection, type TrainingReportLink } from "../network/client";
+import { mobileApi, type TrainingLinkedReport, type TrainingPlanSelection, type TrainingPlanSummary, type TrainingReportLink } from "../network/client";
 
 /** A report association is personal; training completion is never written here. */
 export function ReportTrainingLink({ runId }: { runId: string }) {
   const router = useRouter();
+  const focusGeneration = useRef(0);
   const [enabled, setEnabled] = useState(false);
   const [existing, setExisting] = useState<TrainingReportLink | null>(null);
   const [planId, setPlanId] = useState("");
@@ -17,9 +18,13 @@ export function ReportTrainingLink({ runId }: { runId: string }) {
   const [executions, setExecutions] = useState<{ status: string; execution_date: string }[] | null>(null);
   const [reports, setReports] = useState<TrainingLinkedReport[]>([]);
   const [reportsCursor, setReportsCursor] = useState<string | null>(null);
+  const [plans, setPlans] = useState<TrainingPlanSummary[] | null>(null);
+  const [plansCursor, setPlansCursor] = useState<string | null>(null);
   useFocusEffect(useCallback(() => {
     let alive = true;
+    const focus = ++focusGeneration.current;
     const version = mobileApi.version;
+    setBusy(false);
     setEnabled(false);
     setExisting(null);
     setPlan(null);
@@ -28,6 +33,7 @@ export function ReportTrainingLink({ runId }: { runId: string }) {
     setCanClear(false);
     setExecutions(null);
     setReports([]); setReportsCursor(null);
+    setPlans(null); setPlansCursor(null);
     void mobileApi.trainingLinksEnabled().then(async (value) => {
       if (!alive || version !== mobileApi.version) return;
       setEnabled(value);
@@ -38,63 +44,89 @@ export function ReportTrainingLink({ runId }: { runId: string }) {
     }).catch((reason) => {
       if (alive && version === mobileApi.version) { setError(reason instanceof Error ? reason.message : "无法读取关联信息。"); setCanClear(true); }
     });
-    return () => { alive = false; };
+    return () => { alive = false; if (focusGeneration.current === focus) focusGeneration.current++; };
   }, [runId]));
-  async function loadPlan() {
+  async function loadPlans(before?: string) {
     if (busy) return;
     const version = mobileApi.version;
-    setBusy(true); setError(""); setPlan(null);
+    const focus = focusGeneration.current;
+    const current = () => focusGeneration.current === focus && version === mobileApi.version;
+    setBusy(true); setError("");
     try {
-      const [value, page] = await Promise.all([mobileApi.trainingPlan(planId.trim()), mobileApi.trainingPlanReports(planId.trim())]);
-      if (version === mobileApi.version) { setPlan(value); setReports(page.reports); setReportsCursor(page.next_cursor); }
+      const page = await mobileApi.trainingPlans(before);
+      if (current()) {
+        setPlans((old) => before ? [...(old ?? []), ...page.plans.filter((p) => !old?.some((v) => v.plan_id === p.plan_id))] : page.plans);
+        setPlansCursor(page.next_cursor);
+      }
     } catch (reason) {
-      if (version === mobileApi.version) setError(reason instanceof Error ? reason.message : "无法读取计划。");
-    } finally { setBusy(false); }
+      if (current()) setError(reason instanceof Error ? reason.message : "无法读取我的计划。");
+    } finally { if (current()) setBusy(false); }
+  }
+  async function loadPlan(selectedId = planId.trim()) {
+    if (busy) return;
+    const version = mobileApi.version;
+    const focus = focusGeneration.current;
+    const current = () => focusGeneration.current === focus && version === mobileApi.version;
+    setBusy(true); setError(""); setPlan(null); setPlanId(selectedId);
+    try {
+      const [value, page] = await Promise.all([mobileApi.trainingPlan(selectedId), mobileApi.trainingPlanReports(selectedId)]);
+      if (current()) { setPlan(value); setReports(page.reports); setReportsCursor(page.next_cursor); }
+    } catch (reason) {
+      if (current()) setError(reason instanceof Error ? reason.message : "无法读取计划。");
+    } finally { if (current()) setBusy(false); }
   }
   async function moreReports() {
     if (!plan || !reportsCursor || busy) return;
     const version = mobileApi.version;
+    const focus = focusGeneration.current;
+    const current = () => focusGeneration.current === focus && version === mobileApi.version;
     setBusy(true); setError("");
     try {
       const page = await mobileApi.trainingPlanReports(plan.plan_id, reportsCursor);
-      if (version === mobileApi.version) { setReports((old) => [...old, ...page.reports.filter((r) => !old.some((v) => v.run_id === r.run_id))]); setReportsCursor(page.next_cursor); }
+      if (current()) { setReports((old) => [...old, ...page.reports.filter((r) => !old.some((v) => v.run_id === r.run_id))]); setReportsCursor(page.next_cursor); }
     } catch (reason) {
-      if (version === mobileApi.version) setError(reason instanceof Error ? reason.message : "无法读取更多报告。");
-    } finally { setBusy(false); }
+      if (current()) setError(reason instanceof Error ? reason.message : "无法读取更多报告。");
+    } finally { if (current()) setBusy(false); }
   }
   async function choose(dayId: string, itemId: string) {
     if (!plan || busy) return;
     const version = mobileApi.version;
+    const focus = focusGeneration.current;
+    const current = () => focusGeneration.current === focus && version === mobileApi.version;
     setBusy(true); setError("");
     try {
       await mobileApi.saveTrainingLink(runId, plan.plan_id, dayId, itemId);
       const link = await mobileApi.trainingLink(runId);
-      if (version === mobileApi.version) { setExisting(link); setPlan(null); setExecutions(null); }
+      if (current()) { setExisting(link); setPlan(null); setExecutions(null); }
     } catch (reason) {
-      if (version === mobileApi.version) setError(reason instanceof Error ? reason.message : "关联未完成。");
-    } finally { setBusy(false); }
+      if (current()) setError(reason instanceof Error ? reason.message : "关联未完成。");
+    } finally { if (current()) setBusy(false); }
   }
   async function remove() {
     if (busy) return;
     const version = mobileApi.version;
+    const focus = focusGeneration.current;
+    const current = () => focusGeneration.current === focus && version === mobileApi.version;
     setBusy(true); setError("");
     try {
       await mobileApi.removeTrainingLink(runId);
-      if (version === mobileApi.version) { setExisting({ linked: false }); setCanClear(false); setExecutions(null); }
+      if (current()) { setExisting({ linked: false }); setCanClear(false); setExecutions(null); }
     } catch (reason) {
-      if (version === mobileApi.version) setError(reason instanceof Error ? reason.message : "解除关联未完成。");
-    } finally { setBusy(false); }
+      if (current()) setError(reason instanceof Error ? reason.message : "解除关联未完成。");
+    } finally { if (current()) setBusy(false); }
   }
   async function loadExecutions() {
     if (busy) return;
     const version = mobileApi.version;
+    const focus = focusGeneration.current;
+    const current = () => focusGeneration.current === focus && version === mobileApi.version;
     setBusy(true); setError("");
     try {
       const items = await mobileApi.trainingExecutions(runId);
-      if (version === mobileApi.version) setExecutions(items);
+      if (current()) setExecutions(items);
     } catch (reason) {
-      if (version === mobileApi.version) setError(reason instanceof Error ? reason.message : "无法读取训练记录。");
-    } finally { setBusy(false); }
+      if (current()) setError(reason instanceof Error ? reason.message : "无法读取训练记录。");
+    } finally { if (current()) setBusy(false); }
   }
   if (!enabled) return null;
   return <View style={styles.container}>
@@ -107,8 +139,13 @@ export function ReportTrainingLink({ runId }: { runId: string }) {
       <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void remove(); }}><Text style={styles.link}>解除关联</Text></Pressable>
     </View> : null}
     {canClear && !existing?.linked ? <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void remove(); }}><Text style={styles.link}>清除不可读取的关联</Text></Pressable> : null}
-    <TextInput value={planId} onChangeText={setPlanId} placeholder="输入训练计划编号" autoCapitalize="none" maxLength={128} style={styles.input} />
-    <Pressable accessibilityRole="button" disabled={busy || !planId.trim()} onPress={() => { void loadPlan(); }}><Text style={styles.link}>{busy ? "处理中…" : "查找我的计划"}</Text></Pressable>
+    <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void loadPlans(); }}><Text style={styles.link}>{busy ? "处理中…" : plans ? "刷新我的计划" : "选择我的训练计划"}</Text></Pressable>
+    {plans ? <View style={styles.card}>
+      {plans.length ? plans.map((item) => <Pressable key={item.plan_id} accessibilityRole="button" disabled={busy} onPress={() => { void loadPlan(item.plan_id); }}><Text style={styles.link}>{item.title}</Text></Pressable>) : <Text style={S.body}>暂无可关联的已发布训练计划。</Text>}
+      {plansCursor ? <Pressable accessibilityRole="button" disabled={busy} onPress={() => { void loadPlans(plansCursor); }}><Text style={styles.link}>加载更多计划</Text></Pressable> : null}
+    </View> : null}
+    <TextInput value={planId} onChangeText={setPlanId} placeholder="或输入训练计划编号" autoCapitalize="none" maxLength={128} style={styles.input} />
+    <Pressable accessibilityRole="button" disabled={busy || !planId.trim()} onPress={() => { void loadPlan(); }}><Text style={styles.link}>按编号查找</Text></Pressable>
     {plan ? <View style={styles.card}><Text style={styles.text}>{plan.title}</Text>{plan.days.map((day) => <View key={day.day_id}>
       <Text style={styles.text}>{day.title}</Text>{day.items.map((item) => <Pressable key={item.item_id} accessibilityRole="button" disabled={busy} onPress={() => { void choose(day.day_id, item.item_id); }}><Text style={styles.link}>{item.exercise_name} · 关联</Text></Pressable>)}
     </View>)}

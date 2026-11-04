@@ -67,6 +67,11 @@ T = TypeVar("T", bound=BaseModel)
 _BUSINESS_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
+class GatewayPersonalPlanSummary(BaseModel):
+    id: str = Field(pattern=r"^[A-Za-z0-9_-]{1,128}$")
+    title: str = Field(max_length=128)
+
+
 def _instant_parameter(value: datetime) -> str:
     """把 Python datetime 编码为 Java Instant 可解析的 RFC3339 字符串。"""
 
@@ -502,6 +507,18 @@ class GatewayClient:
             service_scope="query",
         )
 
+    async def list_personal_training_plans(
+        self, context: GatewayRequestContext, before: str | None
+    ) -> list[GatewayPersonalPlanSummary]:
+        params = {"before": before} if before is not None else {}
+        return await self._get_list(
+            "/internal/agent-tools/v1/training/plans/mine",
+            context,
+            params,
+            GatewayPersonalPlanSummary,
+            service_scope="query",
+        )
+
     async def create_training_draft(
         self, context: GatewayRequestContext, payload: dict[str, Any]
     ) -> GatewayTrainingPlan:
@@ -597,8 +614,12 @@ class GatewayClient:
         context: GatewayRequestContext,
         params: dict[str, Any],
         model: type[T],
+        *,
+        service_scope: Literal["execute", "query"] = "execute",
     ) -> list[T]:
-        response_json = await self._request(path, context, params, method="GET")
+        response_json = await self._request(
+            path, context, params, method="GET", service_scope=service_scope
+        )
         if not isinstance(response_json, list):
             raise GatewayProtocolError("Gateway 列表响应不符合工具契约")
         try:

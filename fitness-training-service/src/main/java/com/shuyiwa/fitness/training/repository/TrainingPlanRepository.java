@@ -7,6 +7,7 @@ import com.shuyiwa.fitness.training.domain.TrainingItem;
 import com.shuyiwa.fitness.training.domain.TrainingPlan;
 import com.shuyiwa.fitness.training.domain.TrainingPlanStatus;
 import com.shuyiwa.fitness.training.api.TrainingApiException;
+import com.shuyiwa.fitness.training.api.TrainingPlanSummary;
 import com.shuyiwa.fitness.training.security.TrainingConfirmation;
 import org.springframework.dao.DuplicateKeyException;
 import org.springframework.dao.EmptyResultDataAccessException;
@@ -37,6 +38,15 @@ public class TrainingPlanRepository {
 
     public TrainingPlanRepository(JdbcTemplate jdbc) {
         this.jdbc = jdbc;
+    }
+
+    public List<TrainingPlanSummary> findPersonalPublished(String organizationId, String studentId,
+                                                            String coachId, String before) {
+        String sql = "SELECT id, title FROM training_plan WHERE organization_id = ? AND student_id = ? "
+                + "AND status = 'PUBLISHED' AND (? IS NULL OR id < ?) "
+                + "AND (? IS NULL OR coach_id = ?) ORDER BY id DESC LIMIT 51";
+        return jdbc.query(sql, new Object[]{organizationId, studentId, before, before, coachId, coachId},
+                (rs, row) -> new TrainingPlanSummary(rs.getString("id"), rs.getString("title")));
     }
 
     /** 读取当前启用的受控动作策略；不存在即表示 Agent 不能使用该动作。 */

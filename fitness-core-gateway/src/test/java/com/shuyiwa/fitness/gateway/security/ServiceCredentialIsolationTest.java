@@ -96,6 +96,9 @@ public class ServiceCredentialIsolationTest {
     }
     @Test public void scopeCheckIsMethodAndRouteSpecific() {
         String base = "/internal/agent-tools/v1/";
+        assertEquals("agent-query", verifier.verifyToolRequest("query-token", "GET", base + "training/plans/mine"));
+        try { verifier.verifyToolRequest("worker-token", "GET", base + "training/plans/mine"); fail("worker reached personal plans"); }
+        catch (GatewayForbiddenException expected) { }
         for (String route : Arrays.asList("appointments", "training/plans/drafts", "training/plans/p/publish",
                 "training/plans/p/submit-review", "training/plans/p/review", "training/plans/p/days/d/execution",
                 "appointments/a/cancel", "appointments/a/reschedule", "customer-service/tickets")) {

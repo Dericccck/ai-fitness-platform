@@ -50,6 +50,24 @@ def test_default_client_does_not_inherit_environment_proxy(monkeypatch: pytest.M
     assert captured["trust_env"] is False
 
 
+async def test_personal_plan_list_uses_query_credential_and_validates_response() -> None:
+    async def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/internal/agent-tools/v1/training/plans/mine"
+        assert request.url.params["before"] == "plan-2"
+        assert request.headers["X-Internal-Service-Token"] == "query-token"
+        assert request.headers["X-Agent-Context"] == "signed-context"
+        return httpx.Response(200, json=[{"id": "plan-1", "title": "我的计划"}])
+
+    async with httpx.AsyncClient(
+        transport=httpx.MockTransport(handler), base_url="http://gateway.test"
+    ) as http_client:
+        client = GatewayClient(
+            build_settings(gateway_query_service_token="query-token"), http_client
+        )
+        plans = await client.list_personal_training_plans(context(), "plan-2")
+    assert [(p.id, p.title) for p in plans] == [("plan-1", "我的计划")]
+
+
 async def test_client_sends_service_and_signed_context_headers() -> None:
     async def handler(request: httpx.Request) -> httpx.Response:
         assert request.headers["X-Internal-Service-Token"] == "service-token"

@@ -9,6 +9,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestHeader;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestParam;
 
 /**
  * 训练领域 Tool Gateway 接口。
@@ -24,6 +25,13 @@ public class TrainingToolController {
 
     public TrainingToolController(TrainingServiceClient client) {
         this.client = client;
+    }
+
+    @GetMapping("/mine")
+    public java.util.List<TrainingServiceClient.PersonalPlanSummary> mine(AgentContext context,
+            @RequestHeader("X-Request-ID") String requestId,
+            @RequestParam(value = "before", required = false) String before) {
+        return client.listPersonalPlans(context, requestId, before);
     }
 
     @GetMapping("/{planId}")

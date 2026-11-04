@@ -10,6 +10,7 @@ import org.springframework.web.bind.annotation.RequestBody;
 import org.springframework.web.bind.annotation.RequestMapping;
 import org.springframework.web.bind.annotation.ResponseStatus;
 import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.bind.annotation.RequestParam;
 
 /** 结构化训练计划内部 API；所有写操作都必须经过训练服务状态机。 */
 @RestController
@@ -42,6 +43,12 @@ public class TrainingPlanController {
     @PostMapping("/{planId}/publish")
     public TrainingPlanView publish(TrainingActor actor, @PathVariable String planId) {
         return service.publish(actor, planId);
+    }
+
+    @GetMapping("/mine")
+    public java.util.List<TrainingPlanSummary> mine(TrainingActor actor,
+            @RequestParam(value = "before", required = false) String before) {
+        return service.listPersonalPublished(actor, before);
     }
 
     @GetMapping("/{planId}")

@@ -115,6 +115,39 @@ async def _report(conn, run_id: str, owner: str, *, lock: bool = False):
     return str(row)
 
 
+@router.get("/training/plans")
+async def personal_training_plans(
+    request: Request, response: Response, before: str | None = None
+) -> dict[str, Any]:
+    ref, identity = await _auth(request, response)
+    _enabled(request)
+    await enforce_chat_quota(request, identity)
+    if before is not None and not re.fullmatch(_ID, before):
+        raise HTTPException(422, "分页标识无效")
+    signed = await auth_service(request).signed_context(ref, identity)
+    gateway = getattr(request.app.state, "gateway", None)
+    if gateway is None:
+        raise HTTPException(503, "训练服务暂时不可用")
+    request_id = str(uuid4())
+    try:
+        plans = await gateway.list_personal_training_plans(
+            GatewayRequestContext(
+                signed_context=signed, request_id=request_id, trace_id=request_id
+            ),
+            before,
+        )
+    except GatewayForbiddenError:
+        raise HTTPException(403, "当前账号无法查看个人训练计划") from None
+    except GatewayClientError:
+        raise HTTPException(503, "训练服务暂时不可用") from None
+    if len(plans) > 51:
+        raise HTTPException(503, "训练服务返回异常")
+    return {
+        "plans": [{"plan_id": p.id, "title": p.title} for p in plans[:50]],
+        "next_cursor": plans[49].id if len(plans) > 50 else None,
+    }
+
+
 @router.get("/training/plans/{plan_id}")
 async def training_plan(plan_id: str, request: Request, response: Response) -> dict[str, Any]:
     ref, identity = await _auth(request, response)

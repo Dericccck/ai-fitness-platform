@@ -47,6 +47,20 @@ public class TrainingServiceClient {
                 "/internal/training/v1/plans/" + planId, null).toToolView();
     }
 
+    public static class PersonalPlanSummary {
+        public String id;
+        public String title;
+    }
+
+    public List<PersonalPlanSummary> listPersonalPlans(AgentContext context, String requestId, String before) {
+        if (before != null && !before.matches("[A-Za-z0-9_-]{1,128}")) {
+            throw new IllegalArgumentException("分页标识无效");
+        }
+        String path = "/internal/training/v1/plans/mine" + (before == null ? "" : "?before=" + before);
+        return Arrays.asList(exchangeTyped(context, requestId, null, HttpMethod.GET, path, null,
+                PersonalPlanSummary[].class));
+    }
+
     public ToolViews.TrainingPlanView createDraft(AgentContext context, String requestId,
                                                   String confirmationToken,
                                                   TrainingToolInputs.DraftInput input) {

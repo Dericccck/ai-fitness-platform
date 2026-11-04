@@ -3,6 +3,7 @@ package com.shuyiwa.fitness.training.service;
 import com.shuyiwa.fitness.training.api.TrainingApiException;
 import com.shuyiwa.fitness.training.api.TrainingPlanRequest;
 import com.shuyiwa.fitness.training.api.TrainingPlanView;
+import com.shuyiwa.fitness.training.api.TrainingPlanSummary;
 import com.shuyiwa.fitness.training.api.TrainingReviewRequest;
 import com.shuyiwa.fitness.training.api.TrainingDayExecutionRequest;
 import com.shuyiwa.fitness.training.api.TrainingDayExecutionView;
@@ -38,6 +39,19 @@ public class TrainingPlanService {
 
     public TrainingPlanService(TrainingPlanRepository repository) {
         this.repository = repository;
+    }
+
+    public List<TrainingPlanSummary> listPersonalPublished(TrainingActor actor, String before) {
+        if (!actor.hasRole(TrainingActor.STUDENT) || actor.getOrganizationIds().size() != 1) {
+            throw forbidden("当前主体没有个人训练计划权限");
+        }
+        if (before != null && !before.matches("[A-Za-z0-9_-]{1,128}")) {
+            throw invalid("分页标识无效");
+        }
+        String organizationId = actor.getOrganizationIds().iterator().next();
+        String coachId = !actor.isAdministrator() && actor.hasRole(TrainingActor.COACH)
+                ? actor.getUserId() : null;
+        return repository.findPersonalPublished(organizationId, actor.getUserId(), coachId, before);
     }
 
     @Transactional
