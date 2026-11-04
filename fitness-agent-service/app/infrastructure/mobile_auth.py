@@ -57,6 +57,8 @@ def _check_token(token: str) -> str:
 class MobileAuthService:
     """所有令牌轮换和上游刷新共用 family 锁及密文 CAS。"""
 
+    _IDENTITY_LOCK_WAIT_SECONDS = 6.0
+    _IDENTITY_LOCK_POLL_SECONDS = 0.1
     _CREATE = """
       if redis.call('exists',KEYS[1]) ~= 0 or redis.call('exists',KEYS[2]) ~= 0
          or redis.call('exists',KEYS[3]) ~= 0 then return 0 end
@@ -97,6 +99,20 @@ class MobileAuthService:
     ) -> None:
         self.settings, self.redis, self.cipher = settings, redis, cipher
         self.verifier, self.upstream = verifier, upstream
+
+    def _fresh(self, identity: AgentIdentity) -> bool:
+        # Limit the window before asking the trusted issuer to re-check account scope.
+        return identity.issued_at >= int(time.time()) - self.settings.mobile_context_max_age_seconds
+
+    def _cache_usable(self, identity: AgentIdentity) -> bool:
+        return identity.expires_at > int(time.time()) + 60 and self._fresh(identity)
+
+    async def _discard_upstream_session(self, refresh_token: str) -> None:
+        # A rejected login must not deliberately leave a usable upstream session behind.
+        try:
+            await self.upstream._upstream("logout", {"refresh_token": refresh_token})
+        except BrowserAuthError:
+            pass
 
     @staticmethod
     def _family(ref: str) -> str:
@@ -177,8 +193,12 @@ class MobileAuthService:
         context, upstream_refresh, identity = self.upstream._validated(
             await self.upstream._upstream("login", credentials)
         )
+        if not self._fresh(identity):
+            await self._discard_upstream_session(upstream_refresh)
+            raise BrowserAuthError(503, "认证服务返回的身份信息已过期")
         organization = credentials["organization_id"]
         if identity.organization_ids != frozenset({organization}):
+            await self._discard_upstream_session(upstream_refresh)
             raise BrowserAuthError(403, "当前账号不能访问所选机构")
         ref = _hash(secrets.token_urlsafe(32))
         access, refresh = secrets.token_urlsafe(32), secrets.token_urlsafe(32)
@@ -192,17 +212,23 @@ class MobileAuthService:
             organization,
             int(time.time()) + lifetime,
         )
-        if not await self.redis.eval(
-            self._CREATE,
-            3,
-            self._family(ref),
-            self._access(session.access_hash),
-            self._refresh(session.refresh_hash),
-            self._encode(self._family(ref), session),
-            str(lifetime),
-            ref,
-            str(min(lifetime, self.settings.mobile_access_ttl_seconds)),
-        ):
+        try:
+            created = await self.redis.eval(
+                self._CREATE,
+                3,
+                self._family(ref),
+                self._access(session.access_hash),
+                self._refresh(session.refresh_hash),
+                self._encode(self._family(ref), session),
+                str(lifetime),
+                ref,
+                str(min(lifetime, self.settings.mobile_access_ttl_seconds)),
+            )
+        except Exception:
+            await self._discard_upstream_session(upstream_refresh)
+            raise
+        if not created:
+            await self._discard_upstream_session(upstream_refresh)
             raise BrowserAuthError(503, "无法创建移动会话")
         return MobileTokens(
             access,
@@ -219,16 +245,33 @@ class MobileAuthService:
             session, _ = await self._load(ref)
             try:
                 identity = self.verifier.verify(session.context)
-                if identity.expires_at > int(time.time()) + 60:
+                if self._cache_usable(identity):
                     return identity
             except AgentContextVerificationError:
                 identity = None
-            lock, owner = await self._lock(ref)
+            # Another request may already be refreshing the same upstream token. Wait for
+            # its result instead of causing an active analysis to fail on a transient 409.
+            deadline = asyncio.get_running_loop().time() + self._IDENTITY_LOCK_WAIT_SECONDS
+            while True:
+                try:
+                    lock, owner = await self._lock(ref)
+                    break
+                except BrowserAuthError as exc:
+                    if exc.status != 409 or asyncio.get_running_loop().time() >= deadline:
+                        raise
+                    await asyncio.sleep(self._IDENTITY_LOCK_POLL_SECONDS)
+                    session, _ = await self._load(ref)
+                    try:
+                        identity = self.verifier.verify(session.context)
+                        if self._cache_usable(identity):
+                            return identity
+                    except AgentContextVerificationError:
+                        pass
             try:
                 session, raw = await self._load(ref)
                 try:
                     identity = self.verifier.verify(session.context)
-                    if identity.expires_at > int(time.time()) + 60:
+                    if self._cache_usable(identity):
                         return identity
                 except AgentContextVerificationError:
                     identity = None
@@ -241,23 +284,34 @@ class MobileAuthService:
                 except (BrowserAuthError, asyncio.CancelledError, TimeoutError):
                     await asyncio.shield(self._revoke(ref, session, raw))
                     raise
-                if identity.subject != session.subject or identity.organization_ids != frozenset(
-                    {session.organization}
+                if (
+                    identity.subject != session.subject
+                    or identity.organization_ids != frozenset({session.organization})
+                    or not self._fresh(identity)
                 ):
-                    await self._revoke(ref, session, raw)
+                    try:
+                        await self._revoke(ref, session, raw)
+                    finally:
+                        await self._discard_upstream_session(upstream_refresh)
                     return None
                 updated = replace(session, context=context, upstream_refresh=upstream_refresh)
                 remaining = updated.absolute_expiry - int(time.time())
-                if remaining <= 0 or not await self.redis.eval(
-                    self._CAS,
-                    2,
-                    self._family(ref),
-                    lock,
-                    raw,
-                    owner,
-                    self._encode(self._family(ref), updated),
-                    str(remaining),
-                ):
+                try:
+                    saved = remaining > 0 and await self.redis.eval(
+                        self._CAS,
+                        2,
+                        self._family(ref),
+                        lock,
+                        raw,
+                        owner,
+                        self._encode(self._family(ref), updated),
+                        str(remaining),
+                    )
+                except Exception:
+                    await self._discard_upstream_session(upstream_refresh)
+                    raise
+                if not saved:
+                    await self._discard_upstream_session(upstream_refresh)
                     return None
                 return identity
             finally:

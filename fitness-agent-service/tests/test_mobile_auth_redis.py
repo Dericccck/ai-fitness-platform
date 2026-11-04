@@ -3,7 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import hashlib
+import hmac
+import json
 import os
+import time
+from dataclasses import replace
 from uuid import uuid4
 
 import httpx
@@ -61,6 +67,274 @@ async def make_service() -> tuple[MobileAuthService, Redis, list[str]]:
         client=httpx.AsyncClient(transport=httpx.MockTransport(upstream)),
     )
     return MobileAuthService(settings, redis, cipher, verifier, backend), redis, calls
+
+
+def old_but_unexpired_context() -> str:
+    now = int(time.time())
+    payload = json.dumps(
+        {
+            "sub": "user-1",
+            "orgs": ["org-1"],
+            "roles": ["STUDENT"],
+            "iat": now - 100,
+            "exp": now + 150,
+            "nonce": "test-nonce",
+        }
+    ).encode()
+    signature = hmac.new(SECRET.encode(), payload, hashlib.sha256).digest()
+    encode = lambda value: base64.urlsafe_b64encode(value).decode().rstrip("=")
+    return encode(payload) + "." + encode(signature)
+
+
+async def test_stale_context_is_refreshed_before_authenticated_access():
+    service, redis, calls = await make_service()
+    marker = uuid4().hex
+    try:
+        tokens = await service.login(
+            {"username": marker, "password": "test-only", "organization_id": "org-1"}, marker
+        )
+        # Authenticate once to obtain the internal family, then simulate passage of time.
+        ref, _ = await service.authenticate(tokens.access_token)
+        session, _ = await service._load(ref)
+        await redis.set(
+            service._family(ref),
+            service._encode(
+                service._family(ref), replace(session, context=old_but_unexpired_context())
+            ),
+            ex=300,
+        )
+        before = calls.count("/sessions/refresh")
+        _, identity = await service.authenticate(tokens.access_token)
+        assert identity.subject == "user-1" and calls.count("/sessions/refresh") == before + 1
+    finally:
+        await service.upstream.close()
+        await redis.aclose()
+
+
+async def test_concurrent_stale_context_refresh_does_not_duplicate_upstream_rotation():
+    service, redis, calls = await make_service()
+    marker = uuid4().hex
+    try:
+        tokens = await service.login(
+            {"username": marker, "password": "test-only", "organization_id": "org-1"}, marker
+        )
+        ref, _ = await service.authenticate(tokens.access_token)
+        session, _ = await service._load(ref)
+        await redis.set(
+            service._family(ref),
+            service._encode(
+                service._family(ref), replace(session, context=old_but_unexpired_context())
+            ),
+            ex=300,
+        )
+        before = calls.count("/sessions/refresh")
+        outcomes = await asyncio.gather(
+            *(service.authenticate(tokens.access_token) for _ in range(8)), return_exceptions=True
+        )
+        assert calls.count("/sessions/refresh") == before + 1
+        assert all(isinstance(value, tuple) for value in outcomes)
+        assert (await service.authenticate(tokens.access_token))[1].subject == "user-1"
+    finally:
+        await service.upstream.close()
+        await redis.aclose()
+
+
+async def test_busy_refresh_never_returns_stale_identity():
+    service, redis, _ = await make_service()
+    marker = uuid4().hex
+    ref = None
+    try:
+        tokens = await service.login(
+            {"username": marker, "password": "test-only", "organization_id": "org-1"}, marker
+        )
+        ref, _ = await service.authenticate(tokens.access_token)
+        session, _ = await service._load(ref)
+        await redis.set(
+            service._family(ref),
+            service._encode(
+                service._family(ref), replace(session, context=old_but_unexpired_context())
+            ),
+            ex=300,
+        )
+        await redis.set(service._family(ref) + ":lock", "other-request", ex=15)
+        service._IDENTITY_LOCK_WAIT_SECONDS = 0.15
+        with pytest.raises(BrowserAuthError) as exc:
+            await service.authenticate(tokens.access_token)
+        assert exc.value.status == 409
+    finally:
+        if ref:
+            await redis.delete(service._family(ref) + ":lock")
+        await service.upstream.close()
+        await redis.aclose()
+
+
+async def test_logout_during_upstream_refresh_cannot_restore_the_session():
+    service, redis, _ = await make_service()
+    marker = uuid4().hex
+    refresh_started = asyncio.Event()
+    release_refresh = asyncio.Event()
+    cancelled_tokens = []
+    try:
+        tokens = await service.login(
+            {"username": marker, "password": "test-only", "organization_id": "org-1"}, marker
+        )
+        ref, _ = await service.authenticate(tokens.access_token)
+        session, _ = await service._load(ref)
+        await redis.set(
+            service._family(ref),
+            service._encode(
+                service._family(ref), replace(session, context=old_but_unexpired_context())
+            ),
+            ex=300,
+        )
+        await service.upstream.client.aclose()
+
+        async def upstream(request):
+            if request.url.path.endswith("/refresh"):
+                refresh_started.set()
+                await release_refresh.wait()
+                return httpx.Response(
+                    200,
+                    json={
+                        "agent_context": signed_context(ttl=300),
+                        "refresh_token": "replacement-refresh-token-test-only",
+                    },
+                )
+            cancelled_tokens.append(json.loads(request.content)["refresh_token"])
+            return httpx.Response(200, json={"ok": True})
+
+        service.upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        refresh = asyncio.create_task(service.identity(ref))
+        await asyncio.wait_for(refresh_started.wait(), timeout=2)
+        waiter = asyncio.create_task(service.identity(ref))
+        await service.logout(tokens.access_token)
+        release_refresh.set()
+        assert await refresh is None
+        assert await waiter is None
+        assert set(cancelled_tokens) == {
+            "private-upstream-refresh-token-test-only",
+            "replacement-refresh-token-test-only",
+        }
+        with pytest.raises(BrowserAuthError):
+            await service.authenticate(tokens.access_token)
+    finally:
+        release_refresh.set()
+        await service.upstream.close()
+        await redis.aclose()
+
+
+async def test_stale_login_context_cannot_create_a_mobile_session():
+    service, redis, _ = await make_service()
+    marker = uuid4().hex
+    try:
+        await service.upstream.client.aclose()
+
+        calls = []
+
+        async def upstream(request):
+            calls.append(request.url.path)
+            return httpx.Response(
+                200,
+                json={
+                    "agent_context": old_but_unexpired_context(),
+                    "refresh_token": "test-only-refresh-token-long-enough",
+                },
+            )
+
+        service.upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        with pytest.raises(BrowserAuthError) as exc:
+            await service.login(
+                {"username": marker, "password": "test-only", "organization_id": "org-1"},
+                marker,
+            )
+        assert exc.value.status == 503
+        assert calls == ["/sessions/login", "/sessions/logout"]
+    finally:
+        await service.upstream.close()
+        await redis.aclose()
+
+
+@pytest.mark.parametrize("create_result", ["rejected", "unavailable"])
+async def test_failed_mobile_session_creation_revokes_upstream(create_result):
+    service, redis, calls = await make_service()
+    marker = uuid4().hex
+
+    class FailCreate:
+        async def eval(self, script, *args):
+            if script == service._CREATE:
+                if create_result == "unavailable":
+                    raise ConnectionError("isolated test")
+                return 0
+            return await redis.eval(script, *args)
+
+    service.redis = FailCreate()
+    try:
+        with pytest.raises((BrowserAuthError, ConnectionError)):
+            await service.login(
+                {"username": marker, "password": "test-only", "organization_id": "org-1"},
+                marker,
+            )
+        assert calls == ["/sessions/login", "/sessions/logout"]
+    finally:
+        await service.upstream.close()
+        await redis.aclose()
+
+
+@pytest.mark.parametrize("mode", ["stale", "forbidden", "wrong_org", "wrong_user"])
+async def test_revoked_stale_or_wrong_scope_never_restores_session(mode):
+    service, redis, _ = await make_service()
+    marker = uuid4().hex
+    try:
+        tokens = await service.login(
+            {"username": marker, "password": "test-only", "organization_id": "org-1"}, marker
+        )
+        ref, _ = await service.authenticate(tokens.access_token)
+        session, _ = await service._load(ref)
+        await redis.set(
+            service._family(ref),
+            service._encode(
+                service._family(ref), replace(session, context=old_but_unexpired_context())
+            ),
+            ex=300,
+        )
+        await service.upstream.client.aclose()
+        upstream_paths = []
+
+        async def upstream(request):
+            upstream_paths.append(request.url.path)
+            if request.url.path.endswith("/logout"):
+                return httpx.Response(200, json={"ok": True})
+            if mode == "forbidden":
+                return httpx.Response(401, json={})
+            context = (
+                old_but_unexpired_context()
+                if mode == "stale"
+                else signed_context(
+                    subject="other-user" if mode == "wrong_user" else "user-1",
+                    orgs=["other-org"] if mode == "wrong_org" else ["org-1"],
+                    ttl=300,
+                )
+            )
+            return httpx.Response(
+                200,
+                json={
+                    "agent_context": context,
+                    "refresh_token": "test-only-refresh-token-long-enough",
+                },
+            )
+
+        service.upstream.client = httpx.AsyncClient(transport=httpx.MockTransport(upstream))
+        with pytest.raises(BrowserAuthError):
+            await service.authenticate(tokens.access_token)
+        assert await service.identity(ref) is None
+        assert upstream_paths == (
+            ["/sessions/refresh"]
+            if mode == "forbidden"
+            else ["/sessions/refresh", "/sessions/logout"]
+        )
+    finally:
+        await service.upstream.close()
+        await redis.aclose()
 
 
 async def test_rotation_replay_revokes_family_and_never_stores_secrets_in_plaintext() -> None:

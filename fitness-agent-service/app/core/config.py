@@ -134,6 +134,7 @@ class Settings(BaseSettings):
     mobile_auth_enabled: bool = False
     mobile_access_ttl_seconds: int = Field(default=900, ge=60, le=3600)
     mobile_session_ttl_seconds: int = Field(default=2592000, ge=900, le=7776000)
+    mobile_context_max_age_seconds: int = Field(default=60, ge=10, le=300)
 
     @model_validator(mode="after")
     def validate_multimodal_api(self) -> "Settings":
