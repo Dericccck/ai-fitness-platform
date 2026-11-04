@@ -122,7 +122,9 @@ class Settings(BaseSettings):
     # Historical content may include information permitted by earlier roles.
     # Enable only after explicitly approving the organization's recovery policy.
     multimodal_owner_recovery_enabled: bool = False
+    multimodal_recovery_audit_retention_days: int = Field(default=90, ge=7, le=3650)
     multimodal_knowledge_enabled: bool = False
+    multimodal_training_links_enabled: bool = False
     multimodal_oss_endpoint: str = ""
     multimodal_oss_bucket: str = ""
     multimodal_oss_region: str = ""

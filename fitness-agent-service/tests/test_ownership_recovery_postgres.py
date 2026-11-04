@@ -378,3 +378,41 @@ async def test_recoverable_pagination_is_scope_checked_and_survives_recovering_a
             await service.available(replace(new, subject="other"), first["next_cursor"])
     finally:
         await db.close()
+
+
+async def test_successful_recovery_is_audited_atomically_and_retention_is_bounded():
+    import hashlib
+
+    db = database()
+    try:
+        cipher, _repo, old, new, conversation, _run, _asset, _client = await build(db)
+        service = OwnershipRecovery(db, cipher)
+        assert await service.recover(new, conversation)
+        assert not await service.recover(new, conversation)
+        async with db.engine.begin() as conn:
+            rows = (
+                (
+                    await conn.execute(
+                        text("""SELECT actor_hash,conversation_hash,previous_owner_hash,outcome
+                FROM agent_recovery_audit WHERE conversation_hash=:hash ORDER BY created_at,outcome"""),
+                        {"hash": hashlib.sha256(conversation.encode()).hexdigest()},
+                    )
+                )
+                .mappings()
+                .all()
+            )
+            assert {r["outcome"] for r in rows} == {"RECOVERED", "NOOP"}
+            recovered = next(r for r in rows if r["outcome"] == "RECOVERED")
+            assert recovered["actor_hash"] == run_owner(new) and recovered[
+                "previous_owner_hash"
+            ] == run_owner(old)
+            assert conversation not in str(rows)
+            await conn.execute(
+                text(
+                    "UPDATE agent_recovery_audit SET created_at=CURRENT_TIMESTAMP-INTERVAL '91 days' WHERE conversation_hash=:hash"
+                ),
+                {"hash": hashlib.sha256(conversation.encode()).hexdigest()},
+            )
+        assert await service.cleanup_audit(90) >= 2
+    finally:
+        await db.close()

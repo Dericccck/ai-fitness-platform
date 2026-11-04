@@ -9,6 +9,7 @@ import tempfile
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
+import structlog
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import String, bindparam, text
@@ -33,6 +34,7 @@ from app.streaming.ownership_recovery import (
 from app.streaming.repository import RunConflict, RunSessionBusy
 
 router = APIRouter(prefix="/api/v1/mobile/agent", tags=["mobile-multimodal"])
+logger = structlog.get_logger(__name__)
 
 
 class StrictInput(BaseModel):
@@ -103,6 +105,9 @@ async def capabilities(request: Request, response: Response) -> dict[str, Any]:
         "audio_analysis": False,
         "knowledge_analysis_enabled": getattr(
             request.app.state.settings, "multimodal_knowledge_enabled", False
+        ),
+        "training_links_enabled": getattr(
+            request.app.state.settings, "multimodal_training_links_enabled", False
         ),
         "owner_recovery_enabled": getattr(
             request.app.state.settings, "multimodal_owner_recovery_enabled", False
@@ -176,13 +181,23 @@ async def recover_conversation(
     recovery = OwnershipRecovery(
         request.app.state.database, request.app.state.multimodal_repository.cipher
     )
+
+    async def audit_failure(outcome: str) -> None:
+        try:
+            await recovery.record_failure(identity, conversation_id, outcome)
+        except Exception as exc:  # noqa: BLE001 - audit failure must not expose private data
+            logger.error("recovery_audit_unavailable", error_type=type(exc).__name__)
+
     try:
         return {"recovered": await recovery.recover(identity, conversation_id)}
     except RecoveryUnavailable:
+        await audit_failure("UNAVAILABLE")
         raise HTTPException(404, "会话不存在或无法访问") from None
     except RecoveryConflict as exc:
+        await audit_failure("CONFLICT")
         raise HTTPException(409, str(exc)) from None
     except IntegrityError:
+        await audit_failure("INTEGRITY_ERROR")
         # Conflicting concurrent uploads or inconsistent old data must roll back;
         # never expose database or identity details to the caller.
         raise HTTPException(409, "会话数据存在冲突，请稍后重试或联系管理员") from None

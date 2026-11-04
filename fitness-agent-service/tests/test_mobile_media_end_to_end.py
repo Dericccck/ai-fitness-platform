@@ -20,6 +20,7 @@ from app.agent.movement_models import KnowledgeReport, MovementReport
 from app.api.routes.auth import auth_error
 from app.api.routes.mobile_auth import router as auth_router
 from app.api.routes.mobile_media import router as media_router
+from app.api.routes.mobile_training import router as training_router
 from app.confirmation.cipher import AesGcmPayloadCipher
 from app.infrastructure.agent_context import conversation_thread_id
 from app.infrastructure.browser_auth import BrowserAuthError
@@ -109,6 +110,7 @@ async def test_mobile_upload_submit_worker_history_and_delete() -> None:
     app.state.settings = SimpleNamespace(
         multimodal_api_enabled=True,
         multimodal_knowledge_enabled=True,
+        multimodal_training_links_enabled=True,
         multimodal_model="model-v1",
         multimodal_prompt_version="v1",
         chat_rate_limit_enabled=False,
@@ -121,9 +123,28 @@ async def test_mobile_upload_submit_worker_history_and_delete() -> None:
     app.state.media_service = MediaService(media_repository, storage)
     app.state.media_deletion = MediaDeletionRepository(db, cipher)
     app.state.chat_runs = SimpleNamespace(repository=runs, cancel=cancel)
+
+    class Gateway:
+        async def get_training_plan(self, context, plan_id):
+            verified = auth.verifier.verify(context.signed_context)
+            assert verified.subject == "user-1" and plan_id == "plan-1"
+            item = SimpleNamespace(id="item-1", exercise_name="划船")
+            day = SimpleNamespace(id="day-1", title="第一天", items=[item])
+            return SimpleNamespace(
+                id=plan_id,
+                student_id="user-1",
+                organization_id="org-1",
+                status="PUBLISHED",
+                title="我的计划",
+                version=1,
+                days=[day],
+            )
+
+    app.state.gateway = Gateway()
     app.add_exception_handler(BrowserAuthError, auth_error)
     app.include_router(auth_router)
     app.include_router(media_router)
+    app.include_router(training_router)
     worker = MultimodalWorker(
         repository,
         media_repository,
@@ -316,6 +337,19 @@ async def test_mobile_upload_submit_worker_history_and_delete() -> None:
                 run.json()["status"] == "COMPLETED"
                 and run.json()["response"]["report"]["summary"] == "画面不足"
             )
+            link_payload = {"plan_id": "plan-1", "day_id": "day-1", "item_id": "item-1"}
+            assert (
+                await client.put(
+                    f"/api/v1/mobile/agent/runs/{run_id}/training-link",
+                    headers=headers,
+                    json=link_payload,
+                )
+            ).status_code == 200
+            assert (
+                await client.get(
+                    f"/api/v1/mobile/agent/runs/{run_id}/training-link", headers=headers
+                )
+            ).json()["exercise_name"] == "划船"
             history = await client.get(
                 f"/api/v1/mobile/agent/conversations/{conversation}/messages", headers=headers
             )
@@ -395,6 +429,11 @@ async def test_mobile_upload_submit_worker_history_and_delete() -> None:
             assert knowledge_messages[-1]["content"]["key_points"][0]["text"] == "注意训练节奏"
             deleted = await client.delete(f"/api/v1/mobile/agent/media/{asset}", headers=headers)
             assert deleted.status_code == 202
+            assert (
+                await client.get(
+                    f"/api/v1/mobile/agent/runs/{run_id}/training-link", headers=headers
+                )
+            ).status_code == 404
             after = await client.get(f"/api/v1/mobile/agent/runs/{run_id}", headers=headers)
             assert after.json()["response"] == {"content_deleted": True}
             history = await client.get(

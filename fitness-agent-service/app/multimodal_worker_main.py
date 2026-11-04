@@ -7,6 +7,7 @@ from prometheus_client import start_http_server
 from app.core.worker_runtime import poll_worker, run_worker_process
 from app.main import app, http_metrics, lifespan
 from app.media.metadata import remove_stale_sandbox_files
+from app.streaming.ownership_recovery import OwnershipRecovery
 
 
 async def run() -> None:
@@ -28,6 +29,14 @@ async def run() -> None:
                 )
             )
 
+        async def cleanup_recovery_audit() -> bool:
+            recovery = OwnershipRecovery(app.state.database, app.state.multimodal_repository.cipher)
+            return bool(
+                await recovery.cleanup_audit(
+                    app.state.settings.multimodal_recovery_audit_retention_days
+                )
+            )
+
         await asyncio.gather(
             poll_worker(app.state.multimodal_worker.run_once, interval=1.0),
             poll_worker(app.state.media_deletion_worker.run_once, interval=3.0, busy_interval=0.1),
@@ -42,6 +51,7 @@ async def run() -> None:
             ),
             poll_worker(reap, interval=5.0),
             poll_worker(cleanup_temp, interval=60.0),
+            poll_worker(cleanup_recovery_audit, interval=3600.0, busy_interval=0.1),
         )
 
 

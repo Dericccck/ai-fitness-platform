@@ -128,6 +128,11 @@ class MediaDeletionRepository:
                 {"id": conversation_id, "owner": owner},
             )
             await connection.execute(
+                text("""DELETE FROM agent_report_training_links WHERE report_id IN
+                  (SELECT report_id FROM agent_movement_reports WHERE conversation_id=:id AND owner_hash=:owner)"""),
+                {"id": conversation_id, "owner": owner},
+            )
+            await connection.execute(
                 text("""UPDATE agent_movement_reports SET report_ciphertext=NULL,key_version=NULL,
                   deleted_at=COALESCE(deleted_at,CURRENT_TIMESTAMP)
                   WHERE conversation_id=:id AND owner_hash=:owner"""),
@@ -280,6 +285,18 @@ class MediaDeletionRepository:
                   AND status NOT IN ('READY','REJECTED','EXPIRED','CANCELLED')"""),
                 {"asset": asset_id},
             )
+            affected_runs = (
+                (
+                    await connection.execute(
+                        text("""SELECT DISTINCT m.run_id FROM agent_chat_messages m
+                      JOIN agent_chat_message_media mm ON mm.message_id=m.message_id
+                      WHERE mm.asset_id=:asset AND m.owner_hash=:owner AND m.run_id IS NOT NULL"""),
+                        {"asset": asset_id, "owner": owner},
+                    )
+                )
+                .scalars()
+                .all()
+            )
             runs = (
                 (
                     await connection.execute(
@@ -344,6 +361,33 @@ class MediaDeletionRepository:
                       WHERE run_id=:run AND owner_hash=:owner"""),
                     {"run": run_id, "owner": owner},
                 )
+            # Chat runs expire before conversations and reports. Invalidate every
+            # dependent retained message/report even if its run was already purged.
+            params = {"runs": list(affected_runs), "owner": owner, "asset": asset_id}
+            await connection.execute(
+                text("""DELETE FROM agent_report_training_links WHERE report_id IN
+                (SELECT report_id FROM agent_movement_reports WHERE owner_hash=:owner
+                 AND run_id=ANY(CAST(:runs AS TEXT[])))"""),
+                params,
+            )
+            await connection.execute(
+                text("""UPDATE agent_chat_messages SET content_ciphertext=NULL,key_version=NULL,
+                status='DELETED',deleted_at=COALESCE(deleted_at,CURRENT_TIMESTAMP),updated_at=CURRENT_TIMESTAMP
+                WHERE owner_hash=:owner AND (run_id=ANY(CAST(:runs AS TEXT[])) OR message_id IN
+                  (SELECT message_id FROM agent_chat_message_media WHERE asset_id=:asset))"""),
+                params,
+            )
+            await connection.execute(
+                text("""UPDATE agent_movement_reports SET report_ciphertext=NULL,key_version=NULL,
+                deleted_at=COALESCE(deleted_at,CURRENT_TIMESTAMP) WHERE owner_hash=:owner
+                AND run_id=ANY(CAST(:runs AS TEXT[]))"""),
+                params,
+            )
+            await connection.execute(
+                text("""UPDATE agent_chat_request_keys SET content_deleted=true
+                WHERE owner_hash=:owner AND run_id=ANY(CAST(:runs AS TEXT[]))"""),
+                params,
+            )
             deletion_id = str(uuid4())
             await connection.execute(
                 text("""INSERT INTO agent_media_deletions

@@ -5,6 +5,7 @@ import { useFocusEffect, useLocalSearchParams, useRouter } from "expo-router";
 import { Feather } from "@expo/vector-icons";
 import { Button, C, S, TopBar } from "../../../components/ui";
 import { mobileApi, type RemoteReport } from "../../../network/client";
+import { ReportTrainingLink } from "../../../components/ReportTrainingLink";
 
 const labels: Record<string, string> = {
   NEEDS_ADJUSTMENT: "有值得关注的细节",
@@ -167,6 +168,7 @@ export default function LiveReport() {
                 )}
               </View>
             </View>
+            {!("key_points" in report) ? <ReportTrainingLink runId={id} /> : null}
             <View style={styles.disclaimer}>
               <Feather name="info" size={16} color="#7f937d" />
               <Text style={styles.disclaimerText}>

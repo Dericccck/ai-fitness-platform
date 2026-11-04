@@ -23,6 +23,9 @@ export type RemoteConversation = {
 };
 export type RemoteLegacyConversation = { thread_id: string; updated_at: string };
 export type RecoverableConversation = { conversation_id: string; updated_at: string };
+export type TrainingPlanSelection = { plan_id: string; title: string; version: number; days: { day_id: string; title: string; items: { item_id: string; exercise_name: string }[] }[] };
+export type TrainingReportLink = { linked: false } | { linked: true; plan_id: string; plan_title: string; day_id: string; day_title: string; item_id: string; exercise_name: string };
+export type TrainingLinkedReport = { run_id: string; conversation_id: string; day_id: string; item_id: string; created_at: string };
 export type RemoteMedia = {
   asset_id: string;
   kind: "image" | "video";
@@ -385,6 +388,27 @@ export class MobileApi {
   }
   async knowledgeAnalysisEnabled(): Promise<boolean> {
     return (await this.request<{ knowledge_analysis_enabled?: boolean }>(AGENT + "/capabilities")).knowledge_analysis_enabled === true;
+  }
+  async trainingLinksEnabled(): Promise<boolean> {
+    return (await this.request<{ training_links_enabled?: boolean }>(AGENT + "/capabilities")).training_links_enabled === true;
+  }
+  async trainingPlan(id: string): Promise<TrainingPlanSelection> {
+    return this.request(`${AGENT}/training/plans/${encodeURIComponent(id)}`);
+  }
+  async trainingPlanReports(id: string, before?: string): Promise<{ reports: TrainingLinkedReport[]; next_cursor: string | null }> {
+    return this.request(`${AGENT}/training/plans/${encodeURIComponent(id)}/reports${before ? `?before=${encodeURIComponent(before)}` : ""}`);
+  }
+  async trainingLink(runId: string): Promise<TrainingReportLink> {
+    return this.request(`${AGENT}/runs/${encodeURIComponent(runId)}/training-link`);
+  }
+  async saveTrainingLink(runId: string, planId: string, dayId: string, itemId: string): Promise<void> {
+    await this.request(`${AGENT}/runs/${encodeURIComponent(runId)}/training-link`, "PUT", { plan_id: planId, day_id: dayId, item_id: itemId });
+  }
+  async removeTrainingLink(runId: string): Promise<void> {
+    await this.request(`${AGENT}/runs/${encodeURIComponent(runId)}/training-link`, "DELETE");
+  }
+  async trainingExecutions(runId: string): Promise<{ status: string; execution_date: string }[]> {
+    return (await this.request<{ executions: { status: string; execution_date: string }[] }>(`${AGENT}/runs/${encodeURIComponent(runId)}/training-executions`)).executions;
   }
   async recoverableConversations(before?: string): Promise<{ conversations: RecoverableConversation[]; next_cursor: string | null }> {
     return this.request(`${AGENT}/conversations/recoverable${before ? `?before=${encodeURIComponent(before)}` : ""}`);

@@ -280,6 +280,30 @@ class MobileAuthService:
             raise BrowserAuthError(401, "移动会话已失效，请重新登录")
         return str(ref), identity
 
+    async def signed_context(self, ref: str, expected: AgentIdentity) -> str:
+        """Return only an upstream-signed, still-authorized context to trusted server code."""
+        current = await self.identity(ref)
+        if current is None:
+            raise BrowserAuthError(401, "移动会话已失效，请重新登录")
+        session, _ = await self._load(ref)
+        try:
+            verified = self.verifier.verify(session.context)
+        except AgentContextVerificationError as exc:
+            raise BrowserAuthError(401, "移动会话已失效，请重新登录") from exc
+
+        def scope(value: AgentIdentity) -> tuple:
+            return (
+                value.subject,
+                value.organization_ids,
+                value.roles,
+                value.capabilities,
+                value.qualifications,
+            )
+
+        if scope(expected) != scope(current) or scope(current) != scope(verified):
+            raise BrowserAuthError(401, "账户权限已变化，请重试")
+        return session.context
+
     async def rotate(self, refresh_token: str) -> MobileTokens:
         digest = _check_token(refresh_token)
         ref = await self.redis.get(self._refresh(digest))

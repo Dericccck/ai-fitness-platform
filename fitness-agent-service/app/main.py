@@ -35,6 +35,7 @@ from app.api.routes.memories import router as memories_router
 from app.api.routes.memory_candidates import router as memory_candidates_router
 from app.api.routes.mobile_auth import router as mobile_auth_router
 from app.api.routes.mobile_media import router as mobile_media_router
+from app.api.routes.mobile_training import router as mobile_training_router
 from app.api.routes.notifications import router as notifications_router
 from app.api.routes.rag import router as rag_router
 from app.api.routes.voice import router as voice_router
@@ -621,6 +622,7 @@ app.add_exception_handler(RedisError, auth_error)
 app.include_router(auth_router)
 app.include_router(mobile_auth_router)
 app.include_router(mobile_media_router)
+app.include_router(mobile_training_router)
 app.include_router(agent_router)
 app.include_router(voice_router)
 app.include_router(capabilities_router)

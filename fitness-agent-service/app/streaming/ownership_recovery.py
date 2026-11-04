@@ -6,8 +6,10 @@ scope may invoke this. This is not a migration of legacy text checkpoints.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
+from uuid import uuid4
 
 from sqlalchemy import text
 
@@ -29,6 +31,58 @@ class OwnershipRecovery:
     def __init__(self, database: Database, cipher: AesGcmPayloadCipher) -> None:
         self.database = database
         self.cipher = cipher
+
+    async def _audit(
+        self,
+        conn,
+        identity: AgentIdentity,
+        conversation_id: str,
+        outcome: str,
+        old: str | None = None,
+    ) -> None:
+        await conn.execute(
+            text("""INSERT INTO agent_recovery_audit
+            (event_id,actor_hash,conversation_hash,previous_owner_hash,outcome)
+            VALUES (:event,:actor,:conversation,:previous,:outcome)"""),
+            {
+                "event": str(uuid4()),
+                "actor": run_owner(identity),
+                "conversation": hashlib.sha256(conversation_id.encode()).hexdigest(),
+                "previous": old,
+                "outcome": outcome,
+            },
+        )
+
+    async def record_failure(
+        self, identity: AgentIdentity, conversation_id: str, outcome: str
+    ) -> None:
+        if outcome not in {"UNAVAILABLE", "CONFLICT", "INTEGRITY_ERROR"}:
+            raise ValueError("invalid audit outcome")
+        # Bound arbitrary path input before hashing; never persist raw IDs or content.
+        if not re.fullmatch(r"[A-Za-z0-9._:-]{1,128}", conversation_id):
+            return
+        async with self.database.engine.begin() as conn:
+            await self._audit(conn, identity, conversation_id, outcome)
+
+    async def cleanup_audit(self, retention_days: int = 90, batch_size: int = 500) -> int:
+        if not 7 <= retention_days <= 3650 or not 1 <= batch_size <= 5000:
+            raise ValueError("invalid audit retention")
+        async with self.database.engine.begin() as conn:
+            result = await conn.execute(
+                text("""DELETE FROM agent_recovery_audit WHERE event_id IN (
+                SELECT event_id FROM agent_recovery_audit
+                WHERE created_at < CURRENT_TIMESTAMP - :days * INTERVAL '1 day'
+                ORDER BY created_at,event_id LIMIT :batch FOR UPDATE SKIP LOCKED)"""),
+                {"days": retention_days, "batch": batch_size},
+            )
+            repaired = await conn.execute(
+                text("""DELETE FROM agent_lineage_repair_audit WHERE event_id IN (
+                SELECT event_id FROM agent_lineage_repair_audit
+                WHERE created_at < CURRENT_TIMESTAMP - :days * INTERVAL '1 day'
+                ORDER BY created_at,event_id LIMIT :batch FOR UPDATE SKIP LOCKED)"""),
+                {"days": retention_days, "batch": batch_size},
+            )
+            return result.rowcount + repaired.rowcount
 
     async def available(self, identity: AgentIdentity, before: str | None = None) -> dict:
         if len(identity.organization_ids) != 1:
@@ -107,6 +161,7 @@ class OwnershipRecovery:
                 raise RecoveryUnavailable()
             old = row["owner_hash"]
             if old == target:
+                await self._audit(conn, identity, conversation_id, "NOOP")
                 return False
             if (
                 row["legacy_linked"]
@@ -271,4 +326,5 @@ class OwnershipRecovery:
                     ),
                     args,
                 )
+            await self._audit(conn, identity, conversation_id, "RECOVERED", old)
             return True

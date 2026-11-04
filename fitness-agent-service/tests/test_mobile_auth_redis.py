@@ -156,3 +156,27 @@ async def test_mobile_http_login_refresh_and_logout_are_no_store() -> None:
     finally:
         await service.upstream.close()
         await redis.aclose()
+
+
+async def test_signed_context_is_server_only_scope_checked_and_revoked_on_logout() -> None:
+    from dataclasses import replace
+
+    service, redis, _ = await make_service()
+    marker = uuid4().hex
+    try:
+        tokens = await service.login(
+            {"username": marker, "password": "test-only", "organization_id": "org-1"}, marker
+        )
+        ref, identity = await service.authenticate(tokens.access_token)
+        signed = await service.signed_context(ref, identity)
+        assert service.verifier.verify(signed).subject == identity.subject
+        with pytest.raises(BrowserAuthError):
+            await service.signed_context(ref, replace(identity, roles=frozenset({"COACH"})))
+        with pytest.raises(BrowserAuthError):
+            await service.signed_context(ref, replace(identity, subject="other"))
+        await service.logout(tokens.access_token)
+        with pytest.raises(BrowserAuthError):
+            await service.signed_context(ref, identity)
+    finally:
+        await service.upstream.close()
+        await redis.aclose()
