@@ -1,22 +1,44 @@
 import { desktopSimulation } from "../network/vault";
-import React from "react";
+import React, { useCallback, useState } from "react";
 import { Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { SafeAreaView } from "react-native-safe-area-context";
 import { Feather, MaterialCommunityIcons } from "@expo/vector-icons";
-import { useRouter } from "expo-router";
+import { useFocusEffect, useRouter } from "expo-router";
 import { BottomNav, C, DemoPill, S } from "../components/ui";
 import { useDemo } from "../state/DemoContext";
 import { useAccount } from "../state/AccountContext";
+import { mobileApi, type RemoteConversation } from "../network/client";
 
 export default function Home() {
   const router = useRouter();
   const { createConversation, conversations } = useDemo();
-  const { configured, loggedIn } = useAccount();
-  const start = () =>
+  const { configured, loggedIn, ready } = useAccount();
+  const [recent, setRecent] = useState<RemoteConversation | null>(null);
+  const [recentError, setRecentError] = useState(false);
+  useFocusEffect(useCallback(() => {
+    let active = true;
+    const version = mobileApi.version;
+    setRecent(null);
+    setRecentError(false);
+    if (configured && loggedIn) {
+      void mobileApi.conversationsPage().then((page) => {
+        if (active && version === mobileApi.version) setRecent(page.conversations[0] ?? null);
+      }).catch(() => {
+        if (active && version === mobileApi.version) setRecentError(true);
+      });
+    }
+    return () => { active = false; };
+  }, [configured, loggedIn]));
+  const start = () => {
+    if (configured) {
+      if (ready) router.push(loggedIn ? "/live" : "/login");
+      return;
+    }
     router.push({
       pathname: "/conversation/[id]",
       params: { id: createConversation() },
     });
+  };
   return (
     <SafeAreaView style={S.screen} edges={["top", "bottom"]}>
       <ScrollView
@@ -31,7 +53,7 @@ export default function Home() {
             <Text style={styles.brand}>MOVE WELL</Text>
             <Text style={styles.brandSub}>你的智能训练伙伴</Text>
           </View>
-          <DemoPill />
+          {!configured ? <DemoPill /> : null}
         </View>
         <View style={styles.greeting}>
           <Text style={S.eyebrow}>A LITTLE BETTER, EVERY DAY</Text>
@@ -107,7 +129,7 @@ export default function Home() {
         <View style={styles.notice}>
           <Feather name="info" size={16} color="#789067" />
           <Text style={styles.noticeText}>
-            页面演示不会上传素材；下方本机联调可能调用真实服务。
+            {configured ? "素材将上传并提交给已配置的分析服务。" : "页面演示不会上传素材。"}
           </Text>
         </View>
         {configured && (
@@ -137,7 +159,13 @@ export default function Home() {
             <Text style={styles.link}>查看全部 →</Text>
           </Pressable>
         </View>
-        {conversations.some((c) => c.runs.length) ? (
+        {configured && loggedIn && recent ? (
+          <Pressable style={styles.recent} accessibilityRole="button" onPress={() => router.push({ pathname: "/live/conversation/[id]", params: { id: recent.conversation_id } })}>
+            <View style={styles.recentIcon}><Feather name="message-square" size={18} color={C.green} /></View>
+            <View style={{ flex: 1 }}><Text style={styles.recentTitle}>继续你的训练对话</Text><Text style={styles.recentSub}>{new Date(recent.updated_at).toLocaleString("zh-CN")}</Text></View>
+            <Feather name="chevron-right" size={18} color={C.muted} />
+          </Pressable>
+        ) : !configured && conversations.some((c) => c.runs.length) ? (
           <Pressable
             style={styles.recent}
             onPress={() => router.push("/records")}
@@ -157,8 +185,8 @@ export default function Home() {
               <Feather name="bookmark" size={18} color={C.green} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.recentTitle}>你的训练记录会出现在这里</Text>
-              <Text style={styles.recentSub}>从一次好奇的提问开始</Text>
+              <Text style={styles.recentTitle}>{recentError ? "暂时无法加载最近对话" : configured && !loggedIn ? "登录后查看训练对话" : "你的训练对话会出现在这里"}</Text>
+              <Text style={styles.recentSub}>{recentError ? "可在记录页重试" : "从一次好奇的提问开始"}</Text>
             </View>
           </View>
         )}

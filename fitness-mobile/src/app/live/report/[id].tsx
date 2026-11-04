@@ -24,6 +24,8 @@ export default function LiveReport() {
     useCallback(() => {
       let alive = true;
       const version = mobileApi.version;
+      setReport(null);
+      setError("");
       (async () => {
         try {
           // 历史投影的保留期可能长于运行状态，因此优先从会话读取。
@@ -57,7 +59,7 @@ export default function LiveReport() {
   );
   return (
     <SafeAreaView style={S.screen} edges={["top", "bottom"]}>
-      <TopBar title="训练动作报告" />
+      <TopBar title={report && "key_points" in report ? "知识解读报告" : "训练动作报告"} />
       <ScrollView contentContainerStyle={styles.content}>
         {error ? (
           <Text style={styles.error}>{error}</Text>
@@ -67,14 +69,14 @@ export default function LiveReport() {
           <>
             <Text style={S.eyebrow}>MOVEMENT REVIEW</Text>
             <Text style={[S.h1, { marginTop: 8 }]}>
-              {report.exercise.name || "训练动作"}
+              {"key_points" in report ? "健身知识解读" : report.exercise.name || "训练动作"}
             </Text>
             <View style={styles.summary}>
               <View style={styles.icon}>
                 <Feather name="activity" size={19} color={C.bright} />
               </View>
               <Text style={styles.tag}>
-                {labels[report.assessment] || "分析结果"}
+                {"key_points" in report ? "素材解读" : labels[report.assessment] || "分析结果"}
               </Text>
               <Text style={styles.summaryText}>{report.summary}</Text>
             </View>
@@ -97,6 +99,15 @@ export default function LiveReport() {
             ) : (
               <Text style={S.body}>本次没有足够的画面观察。</Text>
             )}
+            {"key_points" in report ? <>
+              <Text style={styles.section}>知识要点</Text>
+              {report.key_points.length ? report.key_points.map((item, index) => (
+                <View style={styles.card} key={`${index}-${item.text}`}><View style={{ flex: 1 }}>
+                  <Text style={styles.body}>{item.text}</Text>
+                  <Text style={styles.small}>{item.basis_type === "MEDIA" ? "素材可见内容" : "一般训练说明"}</Text>
+                </View></View>
+              )) : <Text style={S.body}>本次没有提取到可确认的知识要点。</Text>}
+            </> : <>
             <Text style={styles.section}>调整建议</Text>
             {report.adjustments.length ? (
               report.adjustments.map((item, index) => (
@@ -115,6 +126,7 @@ export default function LiveReport() {
             ) : (
               <Text style={S.body}>本次没有生成调整建议。</Text>
             )}
+            </>}
             {report.limitations.length > 0 && (
               <>
                 <Text style={styles.section}>判断限制</Text>

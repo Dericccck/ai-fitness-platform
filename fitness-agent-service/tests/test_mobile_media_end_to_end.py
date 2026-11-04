@@ -16,7 +16,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from PIL import Image
 from sqlalchemy import text
 
-from app.agent.movement_models import MovementReport
+from app.agent.movement_models import KnowledgeReport, MovementReport
 from app.api.routes.auth import auth_error
 from app.api.routes.mobile_auth import router as auth_router
 from app.api.routes.mobile_media import router as media_router
@@ -79,6 +79,24 @@ async def test_mobile_upload_submit_worker_history_and_delete() -> None:
                 }
             )
 
+        async def analyze_knowledge(self, **kwargs):
+            captured.append(kwargs)
+            return KnowledgeReport.model_validate(
+                {
+                    "summary": "画面中的训练知识",
+                    "key_points": [{"text": "注意训练节奏", "basis_type": "MEDIA"}],
+                    "source_assets": [
+                        {
+                            "asset_id": kwargs["media"][0].asset_id,
+                            "revision": kwargs["media"][0].revision,
+                        }
+                    ],
+                    "model_version": "model-v1",
+                    "prompt_version": "v1",
+                    "knowledge_status": "EMPTY",
+                }
+            )
+
     runs = ChatRunRepository(db, cipher, timeout=60, retention_hours=1)
 
     async def cancel(run_id, owner, request_id):
@@ -90,6 +108,7 @@ async def test_mobile_upload_submit_worker_history_and_delete() -> None:
     app.state.legacy_bridge = legacy_bridge
     app.state.settings = SimpleNamespace(
         multimodal_api_enabled=True,
+        multimodal_knowledge_enabled=True,
         multimodal_model="model-v1",
         multimodal_prompt_version="v1",
         chat_rate_limit_enabled=False,
@@ -348,6 +367,32 @@ async def test_mobile_upload_submit_worker_history_and_delete() -> None:
             ).json()
             assert fenced["status"] == "FAILED" and fenced["error_code"] == "MEMORY_CHANGED"
             assert fenced["response"] is None
+            change_revision[0] = False
+            knowledge = {
+                **body,
+                "run_id": str(uuid4()),
+                "client_message_id": str(uuid4()),
+                "message": "解读图片知识",
+                "analysis_mode": "knowledge",
+            }
+            assert (
+                await client.post("/api/v1/mobile/agent/runs", headers=headers, json=knowledge)
+            ).status_code == 202
+            assert await worker.run_once()
+            knowledge_run = (
+                await client.get(
+                    f"/api/v1/mobile/agent/runs/{knowledge['run_id']}", headers=headers
+                )
+            ).json()
+            assert knowledge_run["response"]["report"]["schema_version"] == "fitness-knowledge.v1"
+            knowledge_messages = (
+                await client.get(
+                    f"/api/v1/mobile/agent/conversations/{conversation}/messages",
+                    headers=headers,
+                    params={"run_id": knowledge["run_id"]},
+                )
+            ).json()["messages"]
+            assert knowledge_messages[-1]["content"]["key_points"][0]["text"] == "注意训练节奏"
             deleted = await client.delete(f"/api/v1/mobile/agent/media/{asset}", headers=headers)
             assert deleted.status_code == 202
             after = await client.get(f"/api/v1/mobile/agent/runs/{run_id}", headers=headers)

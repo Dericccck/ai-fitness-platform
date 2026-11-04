@@ -46,6 +46,8 @@ EXPO_PUBLIC_DESKTOP_SIMULATION=1 EXPO_PUBLIC_AGENT_BASE_URL=http://127.0.0.1:809
 
 在后端安全环境配置模型服务、版本控制开启的私有 OSS、可信上游认证、数据库、Redis、加密及身份签名配置，完成迁移并分别启动 API 和 `python -m app.multimodal_worker_main`。三个特性开关 `AGENT_MULTIMODAL_ENABLED`、`AGENT_MOBILE_AUTH_ENABLED`、`AGENT_MULTIMODAL_API_ENABLED` 默认关闭。使用 `AGENT_MULTIMODAL_GLOBAL_MAX_CONCURRENCY` 和 `AGENT_MULTIMODAL_DAILY_MAX_CALLS` 配置共享并发和每日调用次数上限；每日调用额度按 UTC 日计算，不等同于金额上限。生产多模态接口必须配置无网络媒体解析容器；部署步骤、存储清理和故障恢复见 [运维说明](../docs/multimodal-operations.md)。完整依赖和上线前剩余事项见 [实现状态](../docs/multimodal-implementation-status-20261103.md)。
 
+知识图片／视频解读使用独立开关 `AGENT_MULTIMODAL_KNOWLEDGE_ENABLED`，默认关闭。先确保全部 Worker 已升级并停止旧版本，再在隔离环境开启；正式启用前还需要实际模型与客户端验收，发布和回滚顺序见 [上线门禁](../docs/multimodal-production-readiness-20261103.md)。
+
 ## 检查
 
 ```sh

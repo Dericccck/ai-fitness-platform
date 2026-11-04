@@ -10,7 +10,8 @@ import { useAccount } from "../state/AccountContext";
 
 export default function Profile() {
   const { clear } = useDemo();
-  const { configured, loggedIn } = useAccount();
+  const { configured, loggedIn, logout } = useAccount();
+  const [error, setError] = React.useState("");
   const router = useRouter();
   return (
     <SafeAreaView style={S.screen} edges={["top", "bottom"]}>
@@ -20,7 +21,7 @@ export default function Profile() {
             <Text style={S.eyebrow}>YOUR SPACE</Text>
             <Text style={[S.h1, { marginTop: 7 }]}>我的空间</Text>
           </View>
-          <DemoPill />
+          {!configured ? <DemoPill /> : null}
         </View>
         <View style={styles.userCard}>
           <View style={styles.avatar}>
@@ -35,7 +36,7 @@ export default function Profile() {
             <Text style={styles.sub}>在这里，按自己的节奏进步</Text>
           </View>
         </View>
-        <Text style={styles.group}>关于这次体验</Text>
+        <Text style={styles.group}>{configured ? "账户与服务" : "关于这次体验"}</Text>
         <View style={styles.list}>
           <Pressable
             accessibilityRole="button"
@@ -65,7 +66,7 @@ export default function Profile() {
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>素材与隐私</Text>
               <Text style={styles.rowSub}>
-                演示素材不上传；真实分析会上传原文件供模型处理
+                {configured ? "分析会上传原文件供模型处理" : "演示素材不会上传"}
               </Text>
             </View>
           </View>
@@ -88,7 +89,7 @@ export default function Profile() {
             accessibilityRole="button"
             style={styles.row}
             onPress={() =>
-              confirmAction(
+              configured ? router.push(loggedIn ? "/records" : "/login") : confirmAction(
                 "清除演示数据",
                 "将清除当前运行中所有对话和素材引用。",
                 clear,
@@ -99,13 +100,17 @@ export default function Profile() {
               <Feather name="trash-2" size={18} color="#a86c4a" />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.rowTitle}>清除演示记录</Text>
-              <Text style={styles.rowSub}>不会删除系统相册中的原文件</Text>
+              <Text style={styles.rowTitle}>{configured ? "管理训练对话和素材" : "清除演示记录"}</Text>
+              <Text style={styles.rowSub}>{configured ? "可在训练对话中删除内容" : "不会删除系统相册中的原文件"}</Text>
             </View>
             <Feather name="chevron-right" size={17} color={C.muted} />
           </Pressable>
         </View>
-        <Text style={styles.version}>MOVE WELL · PREVIEW 1.0</Text>
+        {configured && loggedIn ? <Pressable accessibilityRole="button" onPress={() => confirmAction("退出账户", "退出后需要重新登录才能查看训练对话。", () => { void logout().then(() => router.replace("/")).catch((reason) => setError(reason instanceof Error ? reason.message : "退出状态未确认。")); })} style={styles.row}>
+          <Text style={styles.rowTitle}>退出当前账户</Text>
+        </Pressable> : null}
+        {error ? <Text style={styles.rowSub}>{error}</Text> : null}
+        <Text style={styles.version}>MOVE WELL · {configured ? "训练服务" : "演示"}</Text>
       </ScrollView>
       <BottomNav active="profile" />
     </SafeAreaView>

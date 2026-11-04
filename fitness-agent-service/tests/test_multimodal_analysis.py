@@ -437,3 +437,119 @@ async def test_context_uses_only_authorized_communication_memory_and_bounded_his
     prompt = gateway.calls[0]["user_prompt"]
     assert "第一次问题" in prompt and "之前的回答" in prompt and "回答简短" in prompt
     assert "私人的目标" not in prompt
+
+
+def knowledge_report(**updates: Any) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "summary": "画面介绍了训练注意事项。",
+        "observations": [
+            {
+                "id": "a",
+                "asset_id": "asset-1",
+                "description": "画面有训练说明",
+                "evidence_type": "VIDEO",
+                "time_range": {"start_seconds": 1, "end_seconds": 3},
+            }
+        ],
+        "key_points": [{"text": "画面建议控制节奏", "basis_type": "MEDIA", "citation_ids": []}],
+        "limitations": [],
+        "follow_up_question": None,
+    }
+    result.update(updates)
+    return result
+
+
+async def test_knowledge_media_uses_dedicated_prompt_without_movement_identification():
+    gateway = FakeGateway([knowledge_report()])
+    rag = FakeRag()
+    service = MovementAnalysisService(gateway, rag, prompt_version="v1")
+    result = await service.analyze_knowledge(
+        identity=identity(), question="视频讲了什么？", media=[video()]
+    )
+    assert result.schema_version == "fitness-knowledge.v1"
+    assert result.key_points[0].text == "画面建议控制节奏"
+    assert result.audio_used is False and result.limitations
+    assert len(gateway.calls) == 1 and gateway.calls[0]["kind"] == "knowledge_interpretation"
+    assert "不要假定画面是用户本人" in gateway.calls[0]["system_prompt"]
+    assert rag.scopes[0].subject == identity().subject
+
+
+@pytest.mark.parametrize(
+    "changes",
+    [
+        {
+            "observations": [
+                {"id": "a", "asset_id": "other", "description": "x", "evidence_type": "VIDEO"}
+            ]
+        },
+        {
+            "observations": [
+                {
+                    "id": "a",
+                    "asset_id": "asset-1",
+                    "description": "x",
+                    "evidence_type": "VIDEO",
+                    "time_range": {"start_seconds": 1, "end_seconds": 21},
+                }
+            ]
+        },
+        {
+            "key_points": [
+                {"text": "x", "basis_type": "GENERAL_GUIDANCE", "citation_ids": ["forged"]}
+            ]
+        },
+    ],
+)
+async def test_knowledge_media_rejects_forged_sources_and_invalid_timestamps(changes):
+    service = MovementAnalysisService(
+        FakeGateway([knowledge_report(**changes)]), FakeRag(), prompt_version="v1"
+    )
+    with pytest.raises(MultimodalResponseError):
+        await service.analyze_knowledge(identity=identity(), question="讲什么？", media=[video()])
+
+
+async def test_knowledge_media_only_accepts_authorized_retrieval_citations():
+    chunk = KnowledgeChunk(
+        "chunk-1",
+        "doc-1",
+        0,
+        "训练知识",
+        "internal://private",
+        "训练指南",
+        "TRAINING_GUIDE",
+        1,
+        0.9,
+        {},
+    )
+    rag = FakeRag(RagSearchResult((chunk,)))
+    model = knowledge_report(
+        key_points=[
+            {
+                "text": "训练应循序渐进",
+                "basis_type": "GENERAL_GUIDANCE",
+                "citation_ids": ["doc-1:0"],
+            }
+        ]
+    )
+    gateway = FakeGateway([model])
+    service = MovementAnalysisService(gateway, rag, prompt_version="v1")
+    output = await service.analyze_knowledge(
+        identity=identity(), question="说明是什么？", media=[video()]
+    )
+    assert (
+        output.knowledge_status == "USED" and output.knowledge_citations[0].citation_id == "doc-1:0"
+    )
+    assert "internal://private" not in gateway.calls[0]["user_prompt"]
+    assert rag.scopes[0].organization_ids == identity().organization_ids
+
+
+async def test_knowledge_retrieval_outage_is_not_reported_as_knowledge_used():
+    class UnavailableRag:
+        async def search(self, query, scope):
+            raise RuntimeError("sensitive internal detail")
+
+    gateway = FakeGateway([knowledge_report()])
+    output = await MovementAnalysisService(
+        gateway, UnavailableRag(), prompt_version="v1"
+    ).analyze_knowledge(identity=identity(), question="解释", media=[video()])
+    assert output.knowledge_status == "UNAVAILABLE" and output.knowledge_citations == []

@@ -115,13 +115,21 @@ class MultimodalWorker:
                 return
             dispatched = True
             with collect_usage(lease.run_id, run_id=lease.run_id):
-                report = await self.analysis.analyze(
-                    identity=identity,
-                    question=lease.payload["question"],
-                    media=references,
-                    exercise_hint=lease.payload["exercise_hint"] or None,
-                    history=history,
-                )
+                if lease.payload.get("analysis_mode", "movement") == "knowledge":
+                    report = await self.analysis.analyze_knowledge(
+                        identity=identity,
+                        question=lease.payload["question"],
+                        media=references,
+                        history=history,
+                    )
+                else:
+                    report = await self.analysis.analyze(
+                        identity=identity,
+                        question=lease.payload["question"],
+                        media=references,
+                        exercise_hint=lease.payload["exercise_hint"] or None,
+                        history=history,
+                    )
             if await self._identity(lease) is None:
                 await self.repository.fail(lease, outcome_unknown=False, code="AUTH_EXPIRED")
                 outcome = "auth_expired"

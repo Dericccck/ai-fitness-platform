@@ -15,6 +15,7 @@ export type PendingSend = {
   runId: string;
   clientMessageId: string;
   question: string;
+  analysisMode?: "movement" | "knowledge";
   media: MediaItem[];
   uploadKeys: string[];
   uploadIds: string[];

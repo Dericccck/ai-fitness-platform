@@ -10,7 +10,7 @@ from uuid import UUID, uuid4
 
 from sqlalchemy import text
 
-from app.agent.movement_models import MovementReport
+from app.agent.movement_models import KnowledgeReport, MovementReport
 from app.confirmation.cipher import AesGcmPayloadCipher
 from app.infrastructure.agent_context import AgentIdentity, conversation_thread_id
 from app.infrastructure.database import Database
@@ -174,6 +174,7 @@ class DurableMultimodalRepository:
         prompt_version: str,
         exercise_hint: str = "",
         retry_of: str | None = None,
+        analysis_mode: str = "movement",
     ) -> SubmitResult:
         conversation_id = _conversation(conversation_id)
         run_id, client_message_id = _uuid(run_id), _uuid(client_message_id)
@@ -182,6 +183,10 @@ class DurableMultimodalRepository:
             raise ValueError("素材数量无效或包含重复项")
         if not question.strip() or len(question) > 4000 or len(exercise_hint) > 100:
             raise ValueError("问题或动作名称长度无效")
+        if analysis_mode not in {"movement", "knowledge"} or (
+            analysis_mode == "knowledge" and exercise_hint
+        ):
+            raise ValueError("分析类型或动作名称无效")
         if not re.fullmatch(r"[0-9a-f]{64}", auth_session_ref):
             raise ValueError("必须提供服务端授权会话引用摘要")
         if not model or len(model) > 128 or not prompt_version or len(prompt_version) > 128:
@@ -195,6 +200,9 @@ class DurableMultimodalRepository:
             "exercise_hint": exercise_hint,
             "retry_of": retry_of,
         }
+        # Keep existing idempotency digests unchanged for movement requests.
+        if analysis_mode == "knowledge":
+            input_data["analysis_mode"] = analysis_mode
         input_digest = request_digest(input_data)
         scope = request_digest(
             {"owner": owner, "thread": conversation_thread_id(conversation_id, identity)}
@@ -304,7 +312,7 @@ class DurableMultimodalRepository:
                 text("""INSERT INTO agent_chat_messages
                     (message_id,conversation_id,owner_hash,run_id,role,status,content_ciphertext,key_version,schema_version)
                     VALUES (:message,:conversation,:owner,:run,'user','COMMITTED',:content,:key,'text.v1'),
-                           (:assistant,:conversation,:owner,:run,'assistant','PENDING',NULL,NULL,'movement-analysis.v1')"""),
+                           (:assistant,:conversation,:owner,:run,'assistant','PENDING',NULL,NULL,:assistant_schema)"""),
                 {
                     "message": message_id,
                     "assistant": assistant_id,
@@ -313,6 +321,9 @@ class DurableMultimodalRepository:
                     "run": run_id,
                     "content": encrypted,
                     "key": self.cipher.key_version,
+                    "assistant_schema": "fitness-knowledge.v1"
+                    if analysis_mode == "knowledge"
+                    else "movement-analysis.v1",
                 },
             )
             for index, asset in enumerate(manifest):
@@ -655,10 +666,14 @@ class DurableMultimodalRepository:
             )
             return True
 
-    async def publish(self, lease: DispatchLease, report: MovementReport) -> bool:
+    async def publish(self, lease: DispatchLease, report: MovementReport | KnowledgeReport) -> bool:
         """只允许持有效租约的执行者发布仍属于原授权版本的结果。"""
         conversation_id = _conversation(lease.payload["conversation_id"])
         manifest = lease.payload["manifest"]
+        if (lease.payload.get("analysis_mode", "movement") == "knowledge") != isinstance(
+            report, KnowledgeReport
+        ):
+            raise ValueError("报告类型与任务不一致")
         expected = {item["asset_id"]: (item["revision"], item["version"]) for item in manifest}
         if len(expected) != len(manifest) or {
             (asset.asset_id, asset.revision) for asset in report.source_assets
@@ -789,8 +804,13 @@ class DurableMultimodalRepository:
             )
             await connection.execute(
                 text("""UPDATE agent_chat_messages SET status='COMMITTED',content_ciphertext=:content,
-                  key_version=:key,updated_at=CURRENT_TIMESTAMP WHERE message_id=:id"""),
-                {"content": encrypted_message, "key": self.cipher.key_version, "id": assistant},
+                  key_version=:key,schema_version=:schema,updated_at=CURRENT_TIMESTAMP WHERE message_id=:id"""),
+                {
+                    "content": encrypted_message,
+                    "key": self.cipher.key_version,
+                    "id": assistant,
+                    "schema": report.schema_version,
+                },
             )
             await connection.execute(
                 text("""UPDATE agent_chat_runs SET status='COMPLETED',stage='COMPLETED',

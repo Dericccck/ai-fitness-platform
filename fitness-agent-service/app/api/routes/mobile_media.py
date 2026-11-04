@@ -6,7 +6,7 @@ import asyncio
 import json
 import re
 import tempfile
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from fastapi import APIRouter, HTTPException, Request, Response
@@ -53,6 +53,7 @@ class RunInput(StrictInput):
     message: str = Field(min_length=1, max_length=4000)
     media_ids: list[UUID] = Field(min_length=1, max_length=3)
     exercise_hint: str = Field(default="", max_length=100)
+    analysis_mode: Literal["movement", "knowledge"] = "movement"
 
 
 class LinkLegacyInput(StrictInput):
@@ -100,6 +101,9 @@ async def capabilities(request: Request, response: Response) -> dict[str, Any]:
         "video_min_seconds": 2,
         "video_max_seconds": 120,
         "audio_analysis": False,
+        "knowledge_analysis_enabled": getattr(
+            request.app.state.settings, "multimodal_knowledge_enabled", False
+        ),
         "owner_recovery_enabled": getattr(
             request.app.state.settings, "multimodal_owner_recovery_enabled", False
         ),
@@ -570,6 +574,10 @@ async def deletion_status(
 async def submit_run(payload: RunInput, request: Request, response: Response) -> dict[str, Any]:
     ref, identity = await _auth(request, response)
     await enforce_chat_quota(request, identity)
+    if payload.analysis_mode == "knowledge" and not getattr(
+        request.app.state.settings, "multimodal_knowledge_enabled", False
+    ):
+        raise HTTPException(503, "知识素材解读暂未启用")
     try:
         result = await request.app.state.multimodal_repository.submit(
             identity=identity,
@@ -582,6 +590,7 @@ async def submit_run(payload: RunInput, request: Request, response: Response) ->
             model=request.app.state.settings.multimodal_model,
             prompt_version=request.app.state.settings.multimodal_prompt_version,
             exercise_hint=payload.exercise_hint,
+            **({"analysis_mode": "knowledge"} if payload.analysis_mode == "knowledge" else {}),
         )
     except (DurableAccessError, RunConflict, RunSessionBusy, ValueError) as exc:
         raise _error(exc) from exc

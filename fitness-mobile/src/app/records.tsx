@@ -7,11 +7,15 @@ import { BottomNav, C, DemoPill, S } from "../components/ui";
 import { confirmAction } from "../components/confirm";
 import { titleFor } from "../domain/types";
 import { useDemo } from "../state/DemoContext";
+import { useAccount } from "../state/AccountContext";
+import LiveConversations from "../components/LiveConversations";
 
 export default function Records() {
   const router = useRouter();
   const { conversations, createConversation, removeConversation } = useDemo();
+  const { configured } = useAccount();
   const records = conversations.filter((c) => c.runs.length > 0);
+  if (configured) return <LiveConversations embedded />;
   return (
     <SafeAreaView style={S.screen} edges={["top", "bottom"]}>
       <ScrollView contentContainerStyle={S.content}>

@@ -29,9 +29,8 @@ export type RemoteMedia = {
   content_type: string;
   status: string;
 };
-export type RemoteReport = {
-  exercise: { name: string; identification: string };
-  assessment: string;
+type RemoteReportBase = {
+  schema_version?: string;
   summary: string;
   observations: {
     id: string;
@@ -39,26 +38,32 @@ export type RemoteReport = {
     evidence_type: string;
     time_range: { start_seconds: number; end_seconds: number } | null;
   }[];
+  limitations: string[];
+  follow_up_question: string | null;
+  knowledge_citations: { citation_id: string; title: string; source_page?: number | null }[];
+  knowledge_status: string;
+};
+export type RemoteMovementReport = RemoteReportBase & {
+  exercise: { name: string; identification: string };
+  assessment: string;
   adjustments: {
     advice: string;
     basis_type: string;
     related_observation_ids: string[];
     citation_ids: string[];
   }[];
-  limitations: string[];
-  follow_up_question: string | null;
-  knowledge_citations: {
-    citation_id: string;
-    title: string;
-    source_page?: number | null;
-  }[];
-  knowledge_status: string;
 };
+export type RemoteKnowledgeReport = RemoteReportBase & {
+  schema_version: "fitness-knowledge.v1";
+  key_points: { text: string; basis_type: "MEDIA" | "GENERAL_GUIDANCE"; citation_ids: string[] }[];
+};
+export type RemoteReport = RemoteMovementReport | RemoteKnowledgeReport;
 export type RemoteMessage = {
   message_id: string;
   run_id: string;
   role: "user" | "assistant";
   status: string;
+  schema_version?: string;
   content: string | RemoteReport | null;
   created_at: string | null;
   media: RemoteMedia[];
@@ -378,6 +383,9 @@ export class MobileApi {
   async ownerRecoveryEnabled(): Promise<boolean> {
     return (await this.request<{ owner_recovery_enabled?: boolean }>(AGENT + "/capabilities")).owner_recovery_enabled === true;
   }
+  async knowledgeAnalysisEnabled(): Promise<boolean> {
+    return (await this.request<{ knowledge_analysis_enabled?: boolean }>(AGENT + "/capabilities")).knowledge_analysis_enabled === true;
+  }
   async recoverableConversations(before?: string): Promise<{ conversations: RecoverableConversation[]; next_cursor: string | null }> {
     return this.request(`${AGENT}/conversations/recoverable${before ? `?before=${encodeURIComponent(before)}` : ""}`);
   }
@@ -413,8 +421,11 @@ export class MobileApi {
       { cancel_request_id: cancelRequestId },
     );
   }
-  async removeMedia(id: string): Promise<void> {
-    await this.request(`${AGENT}/media/${encodeURIComponent(id)}`, "DELETE");
+  async removeMedia(id: string): Promise<string> {
+    return (await this.request<{ deletion_id: string }>(`${AGENT}/media/${encodeURIComponent(id)}`, "DELETE")).deletion_id;
+  }
+  async deletionStatus(id: string): Promise<{ status: string; cleared_once: boolean }> {
+    return this.request(`${AGENT}/deletions/${encodeURIComponent(id)}`);
   }
   async preview(id: string): Promise<{ uri: string; headers?: Record<string, string>; disposable?: boolean }> {
     const generation = this.generation;
@@ -638,6 +649,7 @@ export class MobileApi {
     clientMessageId: string,
     question: string,
     mediaIds: string[],
+    analysisMode: "movement" | "knowledge" = "movement",
   ): Promise<void> {
     const result = await this.request<{ run_id: string; content_deleted?: boolean }>(AGENT + "/runs", "POST", {
       conversation_id: conversationId,
@@ -645,6 +657,7 @@ export class MobileApi {
       client_message_id: clientMessageId,
       message: question,
       media_ids: mediaIds,
+      ...(analysisMode === "knowledge" ? { analysis_mode: analysisMode } : {}),
     });
     if (result.content_deleted || result.run_id !== runId) throw new Error("提交状态与原任务不一致，请刷新对话。");
   }

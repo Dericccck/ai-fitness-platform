@@ -107,3 +107,27 @@ class MovementReport(ModelMovementReport):
     model_version: str
     prompt_version: str
     knowledge_status: Literal["USED", "EMPTY", "UNAVAILABLE"]
+
+
+class KnowledgePoint(StrictModel):
+    text: str = Field(min_length=1, max_length=500)
+    basis_type: Literal["MEDIA", "GENERAL_GUIDANCE"]
+    citation_ids: list[str] = Field(default_factory=list, max_length=4)
+
+
+class ModelKnowledgeReport(StrictModel):
+    summary: str = Field(min_length=1, max_length=1000)
+    observations: list[Observation] = Field(default_factory=list, max_length=8)
+    key_points: list[KnowledgePoint] = Field(default_factory=list, max_length=6)
+    limitations: list[str] = Field(default_factory=list, max_length=8)
+    follow_up_question: str | None = Field(default=None, max_length=500)
+
+
+class KnowledgeReport(ModelKnowledgeReport):
+    schema_version: Literal["fitness-knowledge.v1"] = "fitness-knowledge.v1"
+    knowledge_citations: list[KnowledgeReference] = Field(default_factory=list)
+    source_assets: list[SourceAsset] = Field(min_length=1, max_length=3)
+    audio_used: Literal[False] = False
+    model_version: str
+    prompt_version: str
+    knowledge_status: Literal["USED", "EMPTY", "UNAVAILABLE"]

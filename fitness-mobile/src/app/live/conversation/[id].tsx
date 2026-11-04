@@ -59,6 +59,9 @@ export default function LiveConversation() {
   const [messages, setMessages] = useState<RemoteMessage[]>([]);
   const [states, setStates] = useState<Record<string, RemoteRun>>({});
   const [question, setQuestion] = useState("");
+  const [analysisMode, setAnalysisMode] = useState<"movement" | "knowledge">("movement");
+  const [knowledgeCapability, setKnowledgeCapability] = useState<{ version: number; enabled: boolean } | null>(null);
+  const knowledgeEnabled = loggedIn && knowledgeCapability?.version === mobileApi.version && knowledgeCapability.enabled;
   const [draft, setDraft] = useState<MediaItem[]>([]);
   const [reference, setReference] = useState<RemoteMedia[]>([]);
   const [pending, setPending] = useState<PendingSend | null>(null);
@@ -66,6 +69,7 @@ export default function LiveConversation() {
   const [status, setStatus] = useState("");
   const [error, setError] = useState("");
   const [pollError, setPollError] = useState("");
+  const [deletion, setDeletion] = useState<{ id: string; status: string; clearedOnce: boolean } | null>(null);
   const [olderCursor, setOlderCursor] = useState<string | null>(null);
   const [loadingOlder, setLoadingOlder] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
@@ -78,6 +82,7 @@ export default function LiveConversation() {
   const older = useRef<RemoteMessage[]>([]);
   const cursor = useRef<string | null>(null);
   const loadedOlder = useRef(false);
+  const visibleScope = useRef("");
 
   const closePreview = useCallback(() => {
     if (disposablePreview.current) URL.revokeObjectURL(disposablePreview.current);
@@ -88,6 +93,14 @@ export default function LiveConversation() {
   useEffect(() => () => {
     if (disposablePreview.current) URL.revokeObjectURL(disposablePreview.current);
   }, []);
+  useEffect(() => {
+    let alive = true;
+    const version = mobileApi.version;
+    if (loggedIn) void mobileApi.knowledgeAnalysisEnabled().then((enabled) => {
+      if (alive && version === mobileApi.version) setKnowledgeCapability({ version, enabled });
+    }).catch(() => {});
+    return () => { alive = false; };
+  }, [loggedIn]);
 
   useFocusEffect(
     useCallback(() => {
@@ -97,6 +110,17 @@ export default function LiveConversation() {
       let refreshing = false;
       let failures = 0;
       const version = mobileApi.version;
+      const scopeKey = `${version}:${id}`;
+      if (visibleScope.current !== scopeKey) {
+        visibleScope.current = scopeKey;
+        setMessages([]);
+        setStates({});
+        setPending(null);
+        setDraft([]);
+        setReference([]);
+        setQuestion("");
+        setDeletion(null);
+      }
       older.current = [];
       loadedOlder.current = false;
       cursor.current = null;
@@ -276,6 +300,7 @@ export default function LiveConversation() {
       if (!saved && existing)
         throw new Error("还有一条未确认的发送，请先返回对应对话继续或清除。");
       if (!task) {
+        if (analysisMode === "knowledge" && !knowledgeEnabled) throw new Error("知识素材解读暂未启用。");
         const issue = validateSelection(draft);
         if (issue) throw new Error(issue);
         if (!draft.length && !reference.length)
@@ -284,7 +309,8 @@ export default function LiveConversation() {
           conversationId: id,
           runId: Crypto.randomUUID(),
           clientMessageId: Crypto.randomUUID(),
-          question: question.trim() || DEFAULT_QUESTION,
+          question: question.trim() || (analysisMode === "knowledge" ? "请解读素材中的健身知识，并说明无法确认的内容。" : DEFAULT_QUESTION),
+          analysisMode,
           media: [...draft],
           uploadKeys: draft.map(() => Crypto.randomUUID()),
           uploadIds: draft.map(() => ""),
@@ -340,6 +366,7 @@ export default function LiveConversation() {
         task.clientMessageId,
         task.question,
         task.assetIds,
+        task.analysisMode || "movement",
       );
       if (version !== mobileApi.version) throw new Error("账户已变化。");
       await clearPending(scope, task.runId);
@@ -395,12 +422,25 @@ export default function LiveConversation() {
     }
   }
   async function deleteMedia(media: RemoteMedia) {
+    const version = mobileApi.version;
     try {
-      await mobileApi.removeMedia(media.asset_id);
+      const deletionId = await mobileApi.removeMedia(media.asset_id);
+      if (version !== mobileApi.version) return;
+      setDeletion({ id: deletionId, status: "PENDING", clearedOnce: false });
       if (preview?.id === media.asset_id) closePreview();
       setRevision((value) => value + 1);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "删除未完成。");
+      if (version === mobileApi.version) setError(reason instanceof Error ? reason.message : "删除未完成。");
+    }
+  }
+  async function checkDeletion() {
+    if (!deletion) return;
+    const version = mobileApi.version;
+    try {
+      const result = await mobileApi.deletionStatus(deletion.id);
+      if (version === mobileApi.version) setDeletion({ id: deletion.id, status: result.status, clearedOnce: result.cleared_once });
+    } catch (reason) {
+      if (version === mobileApi.version) setError(reason instanceof Error ? reason.message : "无法查询清理状态。");
     }
   }
   async function cancel(runId: string) {
@@ -498,7 +538,7 @@ export default function LiveConversation() {
             if (report)
               return (
                 <View key={message.message_id} style={styles.answer}>
-                  <Text style={styles.tag}>动作分析</Text>
+                  <Text style={styles.tag}>{"key_points" in report ? "知识解读" : "动作分析"}</Text>
                   <Text style={styles.title}>{report.summary}</Text>
                   {report.observations.slice(0, 3).map((item) => (
                     <Text key={item.id} style={styles.muted}>
@@ -524,6 +564,7 @@ export default function LiveConversation() {
                       );
                       setReference(original?.media || []);
                       setDraft([]);
+                      setAnalysisMode("key_points" in report ? "knowledge" : "movement");
                     }}
                   >
                     <Text style={styles.link}>继续分析这些素材</Text>
@@ -564,6 +605,7 @@ export default function LiveConversation() {
                             item.role === "user",
                         );
                         setReference(original?.media || []);
+                        setAnalysisMode(message.schema_version === "fitness-knowledge.v1" ? "knowledge" : "movement");
                         setQuestion(
                           typeof original?.content === "string"
                             ? original.content
@@ -626,6 +668,12 @@ export default function LiveConversation() {
               {error}
             </Text>
           ) : null}
+          {deletion ? <View style={styles.actions}>
+            <Text accessibilityLiveRegion="polite" style={styles.muted}>
+              {deletion.status === "COMPLETED" ? "存储版本清理已完成。" : deletion.status === "FAILED" ? "素材已隐藏，但存储清理遇到问题，请联系管理员。" : deletion.clearedOnce ? "素材已隐藏，存储版本已初次清理，后续复查中。" : "素材已隐藏，存储版本等待清理。"}
+            </Text>
+            {deletion.status !== "COMPLETED" ? <Pressable accessibilityRole="button" onPress={() => { void checkDeletion(); }}><Text style={styles.link}>查询清理进度</Text></Pressable> : null}
+          </View> : null}
           {pollError ? (
             <View style={styles.actions}>
               <Text accessibilityLiveRegion="polite" style={styles.error}>{pollError}</Text>
@@ -668,6 +716,10 @@ export default function LiveConversation() {
               ))}
             </View>
           )}
+          {knowledgeEnabled && !pending ? <View style={styles.actions}>
+            <Pressable accessibilityRole="button" accessibilityState={{ selected: analysisMode === "movement" }} onPress={() => setAnalysisMode("movement")}><Text style={styles.link}>{analysisMode === "movement" ? "● " : "○ "}动作分析</Text></Pressable>
+            <Pressable accessibilityRole="button" accessibilityState={{ selected: analysisMode === "knowledge" }} onPress={() => setAnalysisMode("knowledge")}><Text style={styles.link}>{analysisMode === "knowledge" ? "● " : "○ "}知识素材解读</Text></Pressable>
+          </View> : null}
           <View style={styles.composer}>
             <Pressable
               accessibilityLabel="添加素材"
