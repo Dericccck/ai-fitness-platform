@@ -5,7 +5,7 @@ import { Feather } from "@expo/vector-icons";
 import { useFocusEffect, useRouter } from "expo-router";
 import { Button, C, S, TopBar } from "../../components/ui";
 import { confirmAction } from "../../components/confirm";
-import { mobileApi, type RemoteConversation, type RemoteLegacyConversation } from "../../network/client";
+import { mobileApi, type RecoverableConversation, type RemoteConversation, type RemoteLegacyConversation } from "../../network/client";
 import { desktopSimulation } from "../../network/vault";
 import { useAccount } from "../../state/AccountContext";
 
@@ -20,6 +20,11 @@ export default function LiveConversations() {
   const [showLink, setShowLink] = useState(false);
   const [legacyItems, setLegacyItems] = useState<RemoteLegacyConversation[]>([]);
   const [legacyLoading, setLegacyLoading] = useState(false);
+  const [showRecovery, setShowRecovery] = useState(false);
+  const [recoveryEnabled, setRecoveryEnabled] = useState(false);
+  const [recoveryItems, setRecoveryItems] = useState<RecoverableConversation[]>([]);
+  const [recoveryCursor, setRecoveryCursor] = useState<string | null>(null);
+  const [recoveryLoading, setRecoveryLoading] = useState(false);
   const load = useCallback(async () => {
     const version = mobileApi.version;
     try {
@@ -49,7 +54,17 @@ export default function LiveConversations() {
   }
   useFocusEffect(
     useCallback(() => {
-      if (loggedIn) void load();
+      setShowRecovery(false);
+      setRecoveryItems([]);
+      setRecoveryCursor(null);
+      setRecoveryEnabled(false);
+      if (loggedIn) {
+        void load();
+        const version = mobileApi.version;
+        void mobileApi.ownerRecoveryEnabled().then((enabled) => {
+          if (version === mobileApi.version) setRecoveryEnabled(enabled);
+        }).catch(() => { /* The rest of the conversation list remains available. */ });
+      }
     }, [load, loggedIn]),
   );
   async function start() {
@@ -73,6 +88,49 @@ export default function LiveConversations() {
     try { setLegacyItems(await mobileApi.legacyConversations()); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "无法加载历史对话。"); }
     finally { setLegacyLoading(false); }
+  }
+  async function toggleRecovery() {
+    if (showRecovery) { setShowRecovery(false); return; }
+    const version = mobileApi.version;
+    setShowRecovery(true);
+    setRecoveryLoading(true);
+    setRecoveryItems([]);
+    setRecoveryCursor(null);
+    setError("");
+    try {
+      const page = await mobileApi.recoverableConversations();
+      if (version === mobileApi.version) { setRecoveryItems(page.conversations); setRecoveryCursor(page.next_cursor); }
+    } catch (reason) {
+      if (version === mobileApi.version) setError(reason instanceof Error ? reason.message : "无法查找可恢复对话。");
+    } finally { setRecoveryLoading(false); }
+  }
+  async function moreRecoverable() {
+    if (!recoveryCursor || recoveryLoading) return;
+    const version = mobileApi.version;
+    setRecoveryLoading(true);
+    try {
+      const page = await mobileApi.recoverableConversations(recoveryCursor);
+      if (version === mobileApi.version) {
+        setRecoveryItems((old) => [...old, ...page.conversations.filter((item) => !old.some((v) => v.conversation_id === item.conversation_id))]);
+        setRecoveryCursor(page.next_cursor);
+      }
+    } catch (reason) {
+      if (version === mobileApi.version) setError(reason instanceof Error ? reason.message : "无法加载更多对话。");
+    } finally { setRecoveryLoading(false); }
+  }
+  async function recover(id: string) {
+    if (busy) return;
+    const version = mobileApi.version;
+    setBusy(true);
+    setError("");
+    try {
+      await mobileApi.recoverConversation(id);
+      if (version !== mobileApi.version) return;
+      setRecoveryItems((old) => old.filter((item) => item.conversation_id !== id));
+      await load();
+    } catch (reason) {
+      if (version === mobileApi.version) setError(reason instanceof Error ? reason.message : "恢复未完成。");
+    } finally { setBusy(false); }
   }
   async function linkLegacy(threadId: string) {
     if (busy) return;
@@ -155,6 +213,23 @@ export default function LiveConversations() {
                 <Text style={styles.sub}>{new Date(item.updated_at).toLocaleString("zh-CN")}　·　关联</Text>
               </Pressable>
             )) : <Text style={S.body}>没有可关联的历史对话。</Text>}
+          </View>
+        ) : null}
+        {recoveryEnabled ? <Pressable accessibilityRole="button" onPress={() => { void toggleRecovery(); }} style={{ marginTop: 16 }}>
+          <Text style={styles.link}>{showRecovery ? "收起可恢复对话" : "找回身份变化前的对话"}</Text>
+        </Pressable> : null}
+        {recoveryEnabled && showRecovery ? (
+          <View style={{ marginTop: 12, gap: 10 }}>
+            <Text style={S.body}>账号权限变化后，可以找回本人在当前机构的训练对话。仍在处理的任务或上传会暂时无法恢复。</Text>
+            {recoveryItems.map((item) => (
+              <Pressable key={item.conversation_id} accessibilityRole="button" disabled={busy}
+                onPress={() => confirmAction("恢复训练对话", "恢复后可使用当前身份继续查看；其他设备上的旧身份可能需要重新登录。", () => { void recover(item.conversation_id); })} style={styles.legacyItem}>
+                <Text style={styles.title}>训练对话</Text>
+                <Text style={styles.sub}>{new Date(item.updated_at).toLocaleString("zh-CN")}　·　恢复</Text>
+              </Pressable>
+            ))}
+            {recoveryLoading ? <Text style={S.body}>正在查找…</Text> : !recoveryItems.length ? <Text style={S.body}>没有找到可恢复的对话。</Text> : null}
+            {recoveryCursor ? <Pressable accessibilityRole="button" disabled={recoveryLoading} onPress={() => { void moreRecoverable(); }}><Text style={styles.link}>加载更多</Text></Pressable> : null}
           </View>
         ) : null}
         {error ? (

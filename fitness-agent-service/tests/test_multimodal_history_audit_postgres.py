@@ -53,8 +53,9 @@ async def test_audit_reports_ambiguous_history_and_changed_owner_without_mutatio
                 {"run": run, "content": b"synthetic"},
             )
             await connection.execute(
-                text("UPDATE agent_chat_messages SET status='COMMITTED' WHERE run_id=:run"),
-                {"run": run},
+                text("""UPDATE agent_chat_messages SET status='COMMITTED',
+                    content_ciphertext=:content,key_version='v1' WHERE run_id=:run"""),
+                {"run": run, "content": b"synthetic"},
             )
             prior = str(uuid4())
             await connection.execute(
@@ -75,6 +76,13 @@ async def test_audit_reports_ambiguous_history_and_changed_owner_without_mutatio
             observed["possible_missing_lineage_reports"]
             == baseline["possible_missing_lineage_reports"] + 1
         )
+        assert await audit(db) == observed
+        # The run and dispatch expire sooner than the visible report; the audit
+        # must continue to count this candidate after that retention cleanup.
+        async with db.engine.begin() as connection:
+            await connection.execute(
+                text("DELETE FROM agent_chat_runs WHERE run_id=:run"), {"run": run}
+            )
         assert await audit(db) == observed
     finally:
         await db.close()

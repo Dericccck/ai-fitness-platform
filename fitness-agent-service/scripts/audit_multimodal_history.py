@@ -32,10 +32,9 @@ async def audit(database: Database) -> dict[str, int]:
           ), candidates AS (
             SELECT current_message.message_id
             FROM agent_chat_messages current_message
-            JOIN agent_chat_runs current_run ON current_run.run_id=current_message.run_id
             WHERE current_message.role='assistant' AND current_message.deleted_at IS NULL
-              AND current_message.status='COMMITTED' AND current_run.status='COMPLETED'
-              AND current_run.executor_kind='MULTIMODAL'
+              AND current_message.status='COMMITTED' AND current_message.content_ciphertext IS NOT NULL
+              AND current_message.run_id IS NOT NULL
               AND NOT EXISTS (
                 SELECT 1 FROM agent_chat_message_media d
                 WHERE d.message_id=current_message.message_id AND d.dependency_type='CONTEXT'

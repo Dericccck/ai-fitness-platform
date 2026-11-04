@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import String, bindparam, text
+from sqlalchemy.exc import IntegrityError
 from starlette.responses import StreamingResponse
 
 from app.api.chat_protection import enforce_chat_quota
@@ -24,6 +25,11 @@ from app.media.storage import MediaObjectNotFound, MediaStorageError, StoredVers
 from app.streaming.control import run_owner
 from app.streaming.durable_multimodal import DurableAccessError
 from app.streaming.legacy_bridge import LegacyConversationUnavailable
+from app.streaming.ownership_recovery import (
+    OwnershipRecovery,
+    RecoveryConflict,
+    RecoveryUnavailable,
+)
 from app.streaming.repository import RunConflict, RunSessionBusy
 
 router = APIRouter(prefix="/api/v1/mobile/agent", tags=["mobile-multimodal"])
@@ -94,6 +100,9 @@ async def capabilities(request: Request, response: Response) -> dict[str, Any]:
         "video_min_seconds": 2,
         "video_max_seconds": 120,
         "audio_analysis": False,
+        "owner_recovery_enabled": getattr(
+            request.app.state.settings, "multimodal_owner_recovery_enabled", False
+        ),
     }
 
 
@@ -133,6 +142,46 @@ async def available_legacy_conversations(request: Request, response: Response) -
             for row in rows
         ]
     }
+
+
+@router.get("/conversations/recoverable")
+async def recoverable_conversations(
+    request: Request, response: Response, before: str | None = None
+) -> dict[str, Any]:
+    _, identity = await _auth(request, response)
+    if not getattr(request.app.state.settings, "multimodal_owner_recovery_enabled", False):
+        raise HTTPException(503, "历史对话恢复暂未启用")
+    await enforce_chat_quota(request, identity)
+    recovery = OwnershipRecovery(
+        request.app.state.database, request.app.state.multimodal_repository.cipher
+    )
+    try:
+        return await recovery.available(identity, before)
+    except RecoveryUnavailable:
+        raise HTTPException(404, "会话不存在或无法访问") from None
+
+
+@router.post("/conversations/{conversation_id}/recover")
+async def recover_conversation(
+    conversation_id: str, request: Request, response: Response
+) -> dict[str, bool]:
+    _, identity = await _auth(request, response)
+    if not getattr(request.app.state.settings, "multimodal_owner_recovery_enabled", False):
+        raise HTTPException(503, "历史对话恢复暂未启用")
+    await enforce_chat_quota(request, identity)
+    recovery = OwnershipRecovery(
+        request.app.state.database, request.app.state.multimodal_repository.cipher
+    )
+    try:
+        return {"recovered": await recovery.recover(identity, conversation_id)}
+    except RecoveryUnavailable:
+        raise HTTPException(404, "会话不存在或无法访问") from None
+    except RecoveryConflict as exc:
+        raise HTTPException(409, str(exc)) from None
+    except IntegrityError:
+        # Conflicting concurrent uploads or inconsistent old data must roll back;
+        # never expose database or identity details to the caller.
+        raise HTTPException(409, "会话数据存在冲突，请稍后重试或联系管理员") from None
 
 
 @router.post("/conversations/legacy-link", status_code=201)

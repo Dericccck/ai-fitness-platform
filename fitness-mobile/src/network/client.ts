@@ -22,6 +22,7 @@ export type RemoteConversation = {
   legacy_linked?: boolean;
 };
 export type RemoteLegacyConversation = { thread_id: string; updated_at: string };
+export type RecoverableConversation = { conversation_id: string; updated_at: string };
 export type RemoteMedia = {
   asset_id: string;
   kind: "image" | "video";
@@ -373,6 +374,15 @@ export class MobileApi {
   }
   async legacyConversations(): Promise<RemoteLegacyConversation[]> {
     return (await this.request<{conversations: RemoteLegacyConversation[]}>(AGENT + "/conversations/legacy-available")).conversations;
+  }
+  async ownerRecoveryEnabled(): Promise<boolean> {
+    return (await this.request<{ owner_recovery_enabled?: boolean }>(AGENT + "/capabilities")).owner_recovery_enabled === true;
+  }
+  async recoverableConversations(before?: string): Promise<{ conversations: RecoverableConversation[]; next_cursor: string | null }> {
+    return this.request(`${AGENT}/conversations/recoverable${before ? `?before=${encodeURIComponent(before)}` : ""}`);
+  }
+  async recoverConversation(id: string): Promise<void> {
+    await this.request(`${AGENT}/conversations/${encodeURIComponent(id)}/recover`, "POST");
   }
   async linkLegacyConversation(threadId: string): Promise<string> {
     return (await this.request<{conversation_id: string}>(AGENT + "/conversations/legacy-link", "POST", {thread_id: threadId})).conversation_id;

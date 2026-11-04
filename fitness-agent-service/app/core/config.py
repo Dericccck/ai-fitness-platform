@@ -119,6 +119,9 @@ class Settings(BaseSettings):
     multimodal_queue_timeout_seconds: float = Field(default=2, gt=0, le=30)
     multimodal_prompt_version: str = "movement-analysis-v1"
     multimodal_api_enabled: bool = False
+    # Historical content may include information permitted by earlier roles.
+    # Enable only after explicitly approving the organization's recovery policy.
+    multimodal_owner_recovery_enabled: bool = False
     multimodal_oss_endpoint: str = ""
     multimodal_oss_bucket: str = ""
     multimodal_oss_region: str = ""
