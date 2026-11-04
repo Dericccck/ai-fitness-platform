@@ -19,6 +19,7 @@ public class FrogUserDetails implements UserDetails {
     private List<GrantedAuthority> authorityList;
     private final String password;
     private final String phone;
+    private final boolean enabled;
     @Transient
     private Map<String, Object> properties = new HashMap<>();
 
@@ -26,6 +27,7 @@ public class FrogUserDetails implements UserDetails {
         this.loginUserId = loginUser.getId();
         this.password = loginUser.getPassword();
         this.phone = loginUser.getPhone();
+        this.enabled = Boolean.TRUE.equals(loginUser.getEnabled());
         if (StringUtils.isEmpty(loginUserId)) {
             logger.warn("loginUserId is null", new Exception());
         }
@@ -63,7 +65,7 @@ public class FrogUserDetails implements UserDetails {
 
     @Override
     public boolean isEnabled() {
-        return true;
+        return enabled;
     }
 
     @Override
