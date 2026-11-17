@@ -9,6 +9,7 @@ import pytest
 from pydantic import ValidationError
 
 from app.agent.movement_analysis import MovementAnalysisService
+from app.agent.movement_safety import has_unreviewed_knee_cue
 from app.core.config import Settings
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.multimodal_gateway import (
@@ -277,6 +278,110 @@ async def test_recognition_rag_and_final_model_receive_actual_video() -> None:
     )
     assert "internal://private" not in output.model_dump_json()
     assert output.limitations
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "下蹲侧的膝关节不要超过脚尖",
+        "建议避免膝盖超过脚尖",
+        "膝盖超过脚尖就是错误",
+        "深蹲时膝盖适度超过脚尖是正常现象",
+        "膝　盖不应越过脚尖",
+    ],
+)
+def test_known_absolute_knee_cues_are_detected(text: str) -> None:
+    assert has_unreviewed_knee_cue(text)
+
+
+def test_observed_knee_position_is_not_itself_rejected() -> None:
+    assert not has_unreviewed_knee_cue("画面显示膝盖超过脚尖，无法据此判断动作是否错误。")
+
+
+@pytest.mark.parametrize("knowledge_mode", [False, True])
+@pytest.mark.parametrize(
+    "risky_text", ["下蹲侧的膝关节不要超过脚尖", "能有效保护膝关节，预防运动中出现损伤"]
+)
+async def test_review_pending_training_chunk_does_not_reach_model(
+    knowledge_mode: bool, risky_text: str
+) -> None:
+    risky = KnowledgeChunk(
+        "risky",
+        "risky-doc",
+        0,
+        risky_text,
+        "internal://risk",
+        "待审资料",
+        "EXERCISE_SAFETY",
+        1,
+        0.9,
+        {},
+    )
+    safe = replace(risky, id="safe", document_id="safe-doc", content="训练应循序渐进")
+    rag = FakeRag(RagSearchResult((risky, safe)))
+    gateway = FakeGateway([knowledge_report() if knowledge_mode else report()])
+    service = MovementAnalysisService(gateway, rag, prompt_version="v1")
+    if knowledge_mode:
+        output = await service.analyze_knowledge(
+            identity=identity(), question="讲什么", media=[video()]
+        )
+    else:
+        output = await service.analyze(
+            identity=identity(), question="动作怎么样", media=[video()], exercise_hint="深蹲"
+        )
+    prompt = gateway.calls[0]["user_prompt"]
+    assert risky_text not in prompt and "risky-doc:0" not in prompt
+    assert "训练应循序渐进" in prompt and "safe-doc:0" in prompt
+    assert output.knowledge_status == "USED"
+
+
+async def test_unsafe_model_report_is_withheld_instead_of_partially_published() -> None:
+    result = report(summary="整体动作不错，但膝盖不要超过脚尖")
+    service = MovementAnalysisService(FakeGateway([result]), FakeRag(), prompt_version="v1")
+    output = await service.analyze(
+        identity=identity(), question="动作怎么样", media=[video()], exercise_hint="深蹲"
+    )
+    assert output.assessment == "INSUFFICIENT_EVIDENCE"
+    assert "未经核实" in output.summary
+    assert output.observations == [] and output.adjustments == []
+    assert "不要超过脚尖" not in output.model_dump_json()
+    assert output.source_assets[0].asset_id == "asset-1"
+
+
+@pytest.mark.parametrize(
+    "advice",
+    [
+        "做好正确的下蹲动作能有效保护膝关节，预防运动中出现损伤。",
+        "保持背部挺直可以预防损伤。",
+    ],
+)
+async def test_unverified_injury_prevention_claim_is_withheld(advice: str) -> None:
+    result = report()
+    result["adjustments"][0]["advice"] = advice
+    output = await MovementAnalysisService(
+        FakeGateway([result]), FakeRag(), prompt_version="v1"
+    ).analyze(identity=identity(), question="分析", media=[video()], exercise_hint="深蹲")
+    assert output.assessment == "INSUFFICIENT_EVIDENCE"
+    assert output.adjustments == [] and output.observations == []
+
+
+async def test_all_quarantined_chunks_are_reported_as_no_usable_knowledge() -> None:
+    chunk = KnowledgeChunk(
+        "risk",
+        "doc",
+        0,
+        "膝盖不要超过脚尖",
+        "internal://risk",
+        "待审资料",
+        "EXERCISE_SAFETY",
+        1,
+        0.9,
+        {},
+    )
+    output = await MovementAnalysisService(
+        FakeGateway([report()]), FakeRag(RagSearchResult((chunk,))), prompt_version="v1"
+    ).analyze(identity=identity(), question="分析", media=[video()], exercise_hint="深蹲")
+    assert output.knowledge_status == "EMPTY" and not output.knowledge_citations
 
 
 async def test_long_input_is_bounded_before_final_model_call() -> None:
