@@ -88,6 +88,18 @@ INSERT INTO login_user_authority(id,login_user_id,authority,entity_id) VALUES ('
 INSERT INTO user_and_coach(id,user_id,coach_id,organization_id,status,deleted) VALUES ('relation-1','student-1','coach-1','org-1',1,0);
 INSERT INTO contract(id,organization_id,user_id,course_id,contract_create_time,contract_end_time,remaining_class_hours,status,deleted) VALUES ('contract-1','org-1','student-1','course-1','2000-01-01','2099-12-31',2,1,0),('contract-2','org-2','student-2','course-2','2000-01-01','2099-12-31',5,1,0);
 SQL
+booking_db_user=root gateway_db_user=root
+booking_db_password="$MYSQL_ROOT_PASSWORD" gateway_db_password="$MYSQL_ROOT_PASSWORD"
+booking_schema_init=true
+if [[ "$single_development_trial" == true ]]; then
+    export TASK_EVAL_BOOKING_DB_PASSWORD="$(openssl rand -hex 24)"
+    export TASK_EVAL_GATEWAY_DB_PASSWORD="$(openssl rand -hex 24)"
+    "$python" -m app.evaluation.task_eval.mysql_restricted_audit setup
+    booking_db_user=eval_booking gateway_db_user=eval_gateway
+    booking_db_password="$TASK_EVAL_BOOKING_DB_PASSWORD"
+    gateway_db_password="$TASK_EVAL_GATEWAY_DB_PASSWORD"
+    booking_schema_init=false
+fi
 context_secret="$(openssl rand -hex 32)" confirmation_secret="$(openssl rand -hex 32)"
 execution_token="$(openssl rand -hex 32)" booking_token="$(openssl rand -hex 32)"
 execution_hash="$(printf '%s' "$execution_token" | openssl dgst -sha256 | awk '{print $NF}')"
@@ -95,7 +107,8 @@ expires_at="$(( $(date +%s) + 1200 ))"
 mysql_url="jdbc:mysql://127.0.0.1:$mysql_port/fitness_eval?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8"
 cd "$run_dir"
 env -i PATH="$PATH" HOME="$run_dir" TMPDIR="$run_dir" \
-    BOOKING_DB_URL="$mysql_url" BOOKING_DB_USERNAME=root BOOKING_DB_PASSWORD="$MYSQL_ROOT_PASSWORD" \
+    BOOKING_DB_URL="$mysql_url" BOOKING_DB_USERNAME="$booking_db_user" BOOKING_DB_PASSWORD="$booking_db_password" \
+    BOOKING_SCHEMA_INIT_ENABLED="$booking_schema_init" \
     BOOKING_SERVER_PORT=0 BOOKING_INTERNAL_SERVICE_TOKEN="$booking_token" \
     BOOKING_OUTBOX_PUBLISHER_ENABLED=false \
     java -jar "$repo_root/fitness-booking-service/target/fitness-booking-service.jar" \
@@ -116,7 +129,7 @@ wait_port() {
 }
 booking_port="$(wait_port "$booking_pid" "$run_dir/booking.log")"
 env -i PATH="$PATH" HOME="$run_dir" TMPDIR="$run_dir" \
-    GATEWAY_DB_URL="$mysql_url" GATEWAY_DB_USERNAME=root GATEWAY_DB_PASSWORD="$MYSQL_ROOT_PASSWORD" \
+    GATEWAY_DB_URL="$mysql_url" GATEWAY_DB_USERNAME="$gateway_db_user" GATEWAY_DB_PASSWORD="$gateway_db_password" \
     GATEWAY_SERVER_PORT=0 GATEWAY_AGENT_EXECUTION_TOKEN_SHA256="$execution_hash" \
     GATEWAY_AGENT_EXECUTION_TOKEN_EXPIRES_AT="$expires_at" GATEWAY_CONTEXT_SIGNING_SECRET="$context_secret" \
     GATEWAY_CONTEXT_SIGNING_KEY_ID=eval GATEWAY_CONFIRMATION_SIGNING_SECRET="$confirmation_secret" \
@@ -127,6 +140,9 @@ env -i PATH="$PATH" HOME="$run_dir" TMPDIR="$run_dir" \
     --server.address=127.0.0.1 >"$run_dir/gateway.log" 2>&1 &
 gateway_pid=$!
 gateway_port="$(wait_port "$gateway_pid" "$run_dir/gateway.log")"
+if [[ "$single_development_trial" == true ]]; then
+    "$python" -m app.evaluation.task_eval.mysql_restricted_audit verify
+fi
 "$python" - "$service_root" "$run_dir/alembic.ini" <<'PY'
 from pathlib import Path
 import sys
@@ -146,6 +162,10 @@ runtime_env=(env -i "PATH=$PATH" "HOME=$run_dir" "TMPDIR=$run_dir" "PYTHONPATH=$
     "TASK_EVAL_MYSQL_CONTAINER_ID=$mysql_id" "TASK_EVAL_GATEWAY_PID=$gateway_pid"
     "TASK_EVAL_LAUNCHER_PID=$$"
     "TASK_EVAL_CONTEXT_SECRET=$context_secret" "TASK_EVAL_CONFIRMATION_SECRET=$confirmation_secret")
+if [[ "$single_development_trial" == true ]]; then
+    runtime_env+=("TASK_EVAL_BOOKING_DB_PASSWORD=$TASK_EVAL_BOOKING_DB_PASSWORD"
+        "TASK_EVAL_GATEWAY_DB_PASSWORD=$TASK_EVAL_GATEWAY_DB_PASSWORD")
+fi
 "${runtime_env[@]}" "$python" -m alembic -c "$run_dir/alembic.ini" upgrade head >"$run_dir/migrations.log" 2>&1
 if [[ "$single_development_trial" == true ]]; then
     "${runtime_env[@]}" "$python" -m app.evaluation.task_eval.dev_sandbox_booking --report-file "$single_report"

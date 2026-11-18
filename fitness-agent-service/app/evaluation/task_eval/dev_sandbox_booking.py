@@ -41,6 +41,8 @@ from .cross_service_booking import _environment, _verify_database_deltas
 from .dataset import load_dataset
 from .dev_booking_observer import read_booking_details
 from .mysql_booking_observer import snapshot_booking
+from .mysql_restricted_audit import observe as observe_restricted_audit
+from .mysql_restricted_audit import verify as verify_restricted_audit
 from .step_kernel import StepState, execute_steps, prepare_steps
 
 _DIR = Path(__file__).resolve().parents[3] / "evals/task_eval/dev_sandbox_v1"
@@ -77,6 +79,9 @@ def _source_identity() -> dict[str, Any]:
     result["driver_sha256"] = _digest(Path(__file__))
     result["step_kernel_sha256"] = _digest(Path(__file__).with_name("step_kernel.py"))
     result["booking_observer_sha256"] = _digest(Path(__file__).with_name("dev_booking_observer.py"))
+    result["restricted_audit_sha256"] = _digest(
+        Path(__file__).with_name("mysql_restricted_audit.py")
+    )
     return result
 
 
@@ -125,6 +130,7 @@ async def _drive(
     repository: ConfirmationRepository,
     snapshot: Any,
     details: Any,
+    audit_observe: Any = None,
 ) -> dict[str, Any]:
     """Drive the exact frozen development steps; arguments here are not a public adapter API."""
     requests = prepare_steps(case)
@@ -152,8 +158,13 @@ async def _drive(
     repeated_decision: dict[str, Any] | None = None
     decision_count = 0
     failure: str | None = None
+    audit_observations: list[dict[str, Any]] = []
     try:
         async with asyncio.timeout(case.timeouts.trial_seconds):
+            if audit_observe is not None:
+                audit_observations.append(
+                    {"phase": "before_chat", **await asyncio.to_thread(audit_observe)}
+                )
             while request is not None:
                 step = request.step
                 evidence = None
@@ -173,6 +184,10 @@ async def _drive(
                             raise ValueError("SNAPSHOT_INCOMPLETE")
                         current_facts = current["facts"]
                         phase = step.phase
+                        if audit_observe is not None:
+                            audit_observations.append(
+                                {"phase": phase, **await asyncio.to_thread(audit_observe)}
+                            )
                         try:
                             expected_deltas = _verify_database_deltas(
                                 initial,
@@ -336,12 +351,14 @@ async def _drive(
         "phase_observations": state.phase_observations,
         "snapshot_checks": snapshot_checks,
         "repeated_decision": repeated_decision,
+        "audit_observations": audit_observations,
     }
 
 
 async def run() -> dict[str, Any]:
     case, fixture = _load()
     settings, run_id, mysql_id, context_secret, token_secret = _environment()
+    audit_initial = await asyncio.to_thread(verify_restricted_audit)
     source_identity = _source_identity()
     db = Database(settings)
     gateway = GatewayClient(settings)
@@ -394,7 +411,17 @@ async def run() -> dict[str, Any]:
             transport=ASGITransport(app=app), base_url="http://agent.local"
         ) as client:
             agent = AgentHTTP(client, _identity(context_secret, subject="student-1", org="org-1"))
-            trial = await _drive(case, fixture, agent, repo, snapshot, details)
+            trial = await _drive(
+                case, fixture, agent, repo, snapshot, details, observe_restricted_audit
+            )
+        try:
+            audit_final: dict[str, Any] = await asyncio.to_thread(verify_restricted_audit)
+        except Exception:  # noqa: BLE001 - retain the trial and explicitly invalidate audit integrity
+            audit_final = {"status": "FAILED"}
+            for assertion in trial["assertions"]:
+                if assertion.get("status") == "PASS":
+                    assertion["status"] = "UNKNOWN"
+                    assertion["reason"] = "FINAL_AUDIT_INTEGRITY_UNVERIFIED"
         return {
             "status": "INCOMPLETE",
             "origin": "synthetic_scripted_model_real_local_postgres_mysql_java",
@@ -405,6 +432,8 @@ async def run() -> dict[str, Any]:
             "run_id": run_id,
             "review": "draft",
             "audit_complete": False,
+            "audit_initial_integrity": audit_initial,
+            "audit_final_integrity": audit_final,
             "trial": trial,
             "limitations": [
                 "Fixed scripted model does not test language understanding.",

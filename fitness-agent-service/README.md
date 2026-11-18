@@ -320,7 +320,7 @@ python -m app.evaluation.task_eval.cli run --dataset evals/task_eval/datasets/v1
 
 `scripts/task_eval_cross_service_booking.sh` 可在本机临时 PostgreSQL、MySQL 和 Java 服务中运行预约组件探针；真实模型模式必须显式提供评测凭证文件、已有账本与定价确认。`--same-session-followup` 仅允许配合真实模型和批准的合成夹具，记录后续只读查询及业务快照，仍不等同于逐案例完整任务或独立事务审计。各探针支持 `--help` 查看参数，切勿把凭证写入命令行参数值、报告或仓库。
 
-该启动器另支持 `--single-development-trial /绝对路径/新报告.json`：使用 `evals/task_eval/dev_sandbox_v1/` 中独立的未审核合成案例及固定夹具，按步骤运行脚本模型和临时本机服务。报告会保留确认前后快照、源码身份及未知断言；它不属于原规划集，也不代表真实模型表现或完整事务审计。
+该启动器另支持 `--single-development-trial /绝对路径/新报告.json`：使用 `evals/task_eval/dev_sandbox_v1/` 中独立的未审核合成案例及固定夹具，按步骤运行脚本模型和临时本机服务。该模式以受限账号运行 Gateway 和 Booking，并核验独立审计 owner 与指定表触发器；报告保留确认前后快照、审计观察、源码身份及未知断言。它不属于原规划集，也不代表真实模型表现或完整事务审计。
 
 `bash scripts/task_eval_mysql_audit_lab.sh` 在全新临时 MySQL 中实验受限写入账号和独立审计表，检查指定预约相关表的提交、回滚、权限及触发器完整性。它不是任务审计适配器：并发事务的窗口边界和 PostgreSQL 确认的跨库因果尚未证明，因此不能据此把确认前写入断言判为通过。
 
