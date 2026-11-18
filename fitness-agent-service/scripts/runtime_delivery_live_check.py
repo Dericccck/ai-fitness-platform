@@ -97,6 +97,7 @@ async def check(*, execute: bool, isolated: bool = False) -> dict[str, object]:
             [
                 str(root / "tests/task_eval/test_isolated_postgres_chain.py"),
                 str(root / "tests/task_eval/test_isolated_postgres_booking_event.py"),
+                str(root / "tests/task_eval/test_isolated_notification_retry.py"),
             ]
             if isolated
             else []
@@ -139,6 +140,7 @@ async def check(*, execute: bool, isolated: bool = False) -> dict[str, object]:
                 [
                     "task_eval/test_isolated_postgres_chain.py",
                     "task_eval/test_isolated_postgres_booking_event.py",
+                    "task_eval/test_isolated_notification_retry.py",
                 ]
                 if isolated
                 else []

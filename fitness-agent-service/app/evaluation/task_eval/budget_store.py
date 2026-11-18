@@ -7,6 +7,7 @@ Every reservation is committed before the request and is never refunded.
 
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import sqlite3
@@ -151,6 +152,190 @@ class DurableBudget:
                 self.path.as_uri() + "?mode=rw", uri=True, timeout=10, isolation_level=None
             )
         return sqlite3.connect(self.path, timeout=10, isolation_level=None)
+
+    @classmethod
+    def resume_with_unknown_cost(
+        cls,
+        path: str | Path,
+        *,
+        limit_nano: int,
+        opening_nano: int,
+        expected_reserved_nano: int,
+        expected_unknown: dict[str, int],
+        authorization_ref: str,
+        acknowledge_unknown_cost: bool,
+    ) -> DurableBudget:
+        """Explicitly accept unknown cost while retaining every reservation.
+
+        This is not reconciliation and cannot establish a provider spending cap.
+        A legacy ledger may predate audit events; its historical freeze cause is
+        therefore not independently provable. This method only handles the
+        normal API's UNKNOWN settlement freeze, never PENDING or a bare freeze.
+        """
+        location = Path(path)
+        if (
+            location.is_symlink()
+            or not location.is_file()
+            or type(limit_nano) is not int
+            or type(opening_nano) is not int
+            or type(expected_reserved_nano) is not int
+            or not 0 < limit_nano <= 10_000_000_000
+            or not 0 <= opening_nano <= expected_reserved_nano <= limit_nano
+            or not isinstance(expected_unknown, dict)
+            or not expected_unknown
+            or any(
+                not isinstance(key, str)
+                or not _REQUEST_ID.fullmatch(key)
+                or type(value) is not int
+                or value <= 0
+                for key, value in expected_unknown.items()
+            )
+            or not isinstance(authorization_ref, str)
+            or not _REVIEWER_REF.fullmatch(authorization_ref)
+            or acknowledge_unknown_cost is not True
+        ):
+            raise BudgetError("invalid unknown-cost authorization")
+        location = location.resolve()
+        try:
+            with closing(
+                sqlite3.connect(
+                    location.as_uri() + "?mode=rw", uri=True, timeout=10, isolation_level=None
+                )
+            ) as connection:
+                connection.execute("BEGIN IMMEDIATE")
+                try:
+                    if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
+                        raise BudgetError("budget integrity check failed")
+                    budget_rows = connection.execute(
+                        "SELECT id, limit_nano, opening_nano, frozen FROM budget"
+                    ).fetchall()
+                    rows = connection.execute(
+                        "SELECT request_id, amount_nano, state FROM reservations ORDER BY request_id"
+                    ).fetchall()
+                    if budget_rows != [(1, limit_nano, opening_nano, 1)]:
+                        raise BudgetError("budget identity or freeze state changed")
+                    if any(
+                        not isinstance(request_id, str)
+                        or not _REQUEST_ID.fullmatch(request_id)
+                        or type(amount) is not int
+                        or amount <= 0
+                        or state not in ("COMPLETE", "UNKNOWN")
+                        for request_id, amount, state in rows
+                    ):
+                        raise BudgetError("invalid or pending reservation")
+                    unknown = {
+                        request_id: amount
+                        for request_id, amount, state in rows
+                        if state == "UNKNOWN"
+                    }
+                    if (
+                        unknown != expected_unknown
+                        or opening_nano + sum(row[1] for row in rows) != expected_reserved_nano
+                    ):
+                        raise BudgetError("budget snapshot changed")
+                    had_audit = (
+                        connection.execute(
+                            "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name='budget_audit'"
+                        ).fetchone()[0]
+                        == 1
+                    )
+                    if had_audit:
+                        events = connection.execute(
+                            "SELECT event, request_id, details FROM budget_audit ORDER BY id"
+                        ).fetchall()
+                        # A later unrelated freeze cannot be overridden by this operation.
+                        if not events or events[-1][0] not in (
+                            "SETTLED",
+                            "RECONCILIATION_CLAIM_SUBMITTED",
+                            "RECONCILIATION_CLAIM_REJECTED",
+                        ):
+                            raise BudgetError("freeze cause is not an unknown settlement")
+                        settlements = {
+                            request_id
+                            for event, request_id, details in events
+                            if event == "SETTLED" and json.loads(details).get("state") == "UNKNOWN"
+                        }
+                        acknowledged: dict[str, int] = {}
+                        for event, _, details in events:
+                            if event == "UNKNOWN_COST_RESUME_AUTHORIZED":
+                                recorded = json.loads(details).get("unknown_reservations")
+                                if not isinstance(recorded, dict):
+                                    raise BudgetError("prior authorization is invalid")
+                                acknowledged.update(recorded)
+                        if any(
+                            request_id not in settlements and acknowledged.get(request_id) != amount
+                            for request_id, amount in unknown.items()
+                        ):
+                            raise BudgetError("unknown settlement audit is incomplete")
+                        previous_resume = max(
+                            (
+                                i
+                                for i, (event, _, _) in enumerate(events)
+                                if event == "UNKNOWN_COST_RESUME_AUTHORIZED"
+                            ),
+                            default=-1,
+                        )
+                        last_settlement: tuple[str | None, dict[str, Any]] = next(
+                            (
+                                (request_id, json.loads(details))
+                                for event, request_id, details in reversed(
+                                    events[previous_resume + 1 :]
+                                )
+                                if event == "SETTLED"
+                            ),
+                            (None, {}),
+                        )
+                        if (
+                            last_settlement[0] not in unknown
+                            or last_settlement[1].get("state") != "UNKNOWN"
+                        ):
+                            raise BudgetError("freeze cause is not an unknown settlement")
+                    else:
+                        connection.execute(
+                            "CREATE TABLE budget_audit (id INTEGER PRIMARY KEY AUTOINCREMENT, "
+                            "created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ','now')), "
+                            "event TEXT NOT NULL, request_id TEXT, details TEXT NOT NULL)"
+                        )
+                        cls._audit(
+                            connection, "AUDIT_STARTED", None, {"legacy_reservations": len(rows)}
+                        )
+                    connection.execute(
+                        "CREATE TRIGGER IF NOT EXISTS budget_audit_no_update BEFORE UPDATE ON budget_audit "
+                        "BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END"
+                    )
+                    connection.execute(
+                        "CREATE TRIGGER IF NOT EXISTS budget_audit_no_delete BEFORE DELETE ON budget_audit "
+                        "BEGIN SELECT RAISE(ABORT, 'audit is append-only'); END"
+                    )
+                    snapshot = {"budget": budget_rows, "reservations": rows}
+                    digest = hashlib.sha256(
+                        json.dumps(snapshot, sort_keys=True, separators=(",", ":")).encode()
+                    ).hexdigest()
+                    cls._audit(
+                        connection,
+                        "UNKNOWN_COST_RESUME_AUTHORIZED",
+                        None,
+                        {
+                            "authorization_ref": authorization_ref,
+                            "authorization": "CALLER_ASSERTED_USER_AUTHORIZATION",
+                            "unknown_cost": "UNVERIFIED_AND_NOT_REFUNDED",
+                            "provider_cap_verified": False,
+                            "legacy_history_incomplete": not had_audit,
+                            "prior_snapshot_sha256": digest,
+                            "reserved_nano": expected_reserved_nano,
+                            "unknown_reservations": unknown,
+                        },
+                    )
+                    connection.execute("UPDATE budget SET frozen=0 WHERE id=1")
+                    connection.commit()
+                except Exception:
+                    connection.rollback()
+                    raise
+        except (sqlite3.Error, ValueError, TypeError) as exc:
+            if isinstance(exc, BudgetError):
+                raise
+            raise BudgetError("budget recovery unavailable or invalid") from exc
+        return cls.open_existing(location, limit_nano=limit_nano, opening_nano=opening_nano)
 
     @staticmethod
     def _audit(

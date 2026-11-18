@@ -6,19 +6,17 @@ explicitly unsupported until isolation and independent observation are proven.
 
 from __future__ import annotations
 
-import hashlib
 import json
-import math
 import subprocess
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from uuid import uuid4
 
 from .adapters.synthetic import SyntheticAdapter
-from .graders.rules import grade_rule
 from .report import markdown, reduce_trial, summarize
+from .step_kernel import StepState, UnsupportedSteps, execute_steps, prepare_steps
 
 MODES = ("contract", "model_sandbox", "integration_sandbox")
 GRADER_VERSION = "task-eval-rules-v1"
@@ -95,56 +93,34 @@ def run_trial(
         row["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
         return row
 
-    assertions: dict[str, dict[str, Any]] = {}
+    try:
+        requests = prepare_steps(case)
+    except UnsupportedSteps:
+        reason = "UNSUPPORTED_STEP_OR_AMBIGUOUS_PHASE"
+        row.update(reason=reason, assertions=_empty_assertions(case, "SKIPPED", reason))
+        row["duration_ms"] = round((time.monotonic() - started) * 1000, 3)
+        return row
+    state = StepState()
     failure = None
     try:
         assert adapter is not None
         adapter.start(case, trial_id)
         row["executed"] = True
-        for step in case.steps:
-            adapter.step(step)
-            if step.type == "assert":
-                evidence = adapter.observe(step.phase)
-                for a in case.expected.assertions:
-                    if a.phase != step.phase or a.id in assertions:
-                        continue
-                    result = grade_rule(a.rule, a.parameters, evidence, a.applicable)
-                    status = result.get("status")
-                    unanswerable_recall = (
-                        a.rule == "required_evidence_recalled"
-                        and a.parameters.get("answerable") is False
-                        and result.get("reason") == "UNANSWERABLE_RECALL_NA"
-                    )
-                    if status not in {"PASS", "FAIL", "UNKNOWN", "NA"} or (
-                        a.applicable and status == "NA" and not unanswerable_recall
-                    ):
-                        status = "UNKNOWN"
-                    item = _assertion_row(a, status, result.get("reason", "INVALID_GRADER_RESULT"))
-                    item["grader_version"] = GRADER_VERSION
-                    # Fingerprints let reviewers correlate synthetic references without
-                    # copying raw references, answers, credentials, or payloads.
-                    refs = evidence.get("evidence_refs") if isinstance(evidence, dict) else None
-                    if isinstance(refs, list) and all(isinstance(ref, str) and ref for ref in refs):
-                        item["evidence_ref_sha256"] = [
-                            hashlib.sha256(ref.encode()).hexdigest() for ref in refs
-                        ]
-                        item["evidence_origin"] = "synthetic"
-                    metrics = result.get("metrics")
-                    if isinstance(metrics, dict):
-                        item["metrics"] = {
-                            k: v
-                            for k, v in metrics.items()
-                            if isinstance(k, str)
-                            and (
-                                v is None
-                                or (
-                                    isinstance(v, (int, float))
-                                    and not isinstance(v, bool)
-                                    and math.isfinite(v)
-                                )
-                            )
-                        }
-                    assertions[a.id] = item
+        operations = execute_steps(
+            case, requests, state, evidence_origin="synthetic", grader_version=GRADER_VERSION
+        )
+        request = next(operations, None)
+        while request is not None:
+            evidence = None
+            if request.kind == "action":
+                adapter.step(request.step)
+            else:
+                adapter.step(request.step)
+                evidence = adapter.observe(cast(str, request.step.phase))
+            try:
+                request = operations.send(evidence)
+            except StopIteration:
+                request = None
     except Exception:  # noqa: BLE001 - preserve prior findings without leaking exception data
         # Do not leak exception messages, credentials, or raw evidence to output.
         failure = "ERROR"
@@ -157,7 +133,7 @@ def run_trial(
             failure = "ERROR"
             row["reason"] = "CLEANUP_ERROR"
     for a in case.expected.assertions:
-        if a.id not in assertions:
+        if a.id not in state.assertions:
             status = (
                 "NA"
                 if not a.applicable
@@ -165,10 +141,11 @@ def run_trial(
                 if failure and not row["executed"]
                 else "UNKNOWN"
             )
-            assertions[a.id] = _assertion_row(
+            state.assertions[a.id] = _assertion_row(
                 a, status, "NOT_APPLICABLE" if not a.applicable else "EVIDENCE_NOT_OBSERVED"
             )
-    row["assertions"] = [assertions[a.id] for a in case.expected.assertions]
+    row["assertions"] = [state.assertions[a.id] for a in case.expected.assertions]
+    row["phase_observations"] = state.phase_observations
     row["status"] = reduce_trial(row["assertions"], executed=row["executed"], failure=failure)
     if row["status"] == "ERROR" and not row["reason"]:
         row["reason"] = "INVALID_CONTRACT"

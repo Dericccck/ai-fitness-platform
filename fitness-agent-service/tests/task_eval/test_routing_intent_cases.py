@@ -35,7 +35,7 @@ async def test_real_routing_observations_preserve_task_unknown():
     }
     assert rows["ROUT-012"]["component_status"] == "PASS"
     assert rows["ROUT-015"]["component_status"] == "PASS"
-    assert rows["ROUT-016"]["component_status"] == "UNKNOWN"
+    assert rows["ROUT-016"]["component_status"] == "PASS"
     assert rows["ROUT-019"]["component_status"] == "UNKNOWN"
     assert rows["ROUT-019"]["reason"] == "REQUIRES_DOWNSTREAM_OR_SEMANTIC_EVIDENCE"
 
@@ -73,6 +73,12 @@ def test_multi_intent_order_and_clarification_counterexamples():
     )
     assert probes._component_assessment("ROUT-012", decision(q))[0] == "FAIL"
     assert probes._component_assessment("ROUT-012", decision(clarification="请说明"))[0] == "PASS"
+
+
+def test_personal_balance_cannot_be_graded_as_store_operations():
+    wrong = RoutedIntent("OPERATIONS", "QUERY_REMAINING_CLASS_HOURS")
+    booking = RoutedIntent("BOOKING", "CREATE_BOOKING")
+    assert probes._component_assessment("ROUT-016", decision(wrong, booking))[0] == "FAIL"
 
 
 @pytest.mark.asyncio

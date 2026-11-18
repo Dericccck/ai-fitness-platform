@@ -203,3 +203,204 @@ def test_unknown_diagnostic_settles_safely_without_recording_raw_text(tmp_path: 
     assert event["event"] == "RECONCILIATION_CLAIM_REJECTED"
     assert event["details"] == {"reason": "INVALID_INPUT"}
     assert "sensitive" not in str(event)
+
+
+def test_explicit_unknown_cost_resume_keeps_reservation_and_audit(tmp_path: Path):
+    path = tmp_path / "budget.sqlite"
+    ledger = DurableBudget(path, limit_nano=100, opening_nano=10)
+    ledger.reserve("case", 20)
+    ledger.finish("case", usage_known=False)
+    resumed = DurableBudget.resume_with_unknown_cost(
+        path,
+        limit_nano=100,
+        opening_nano=10,
+        expected_reserved_nano=30,
+        expected_unknown={"case": 20},
+        authorization_ref="user-turn-1",
+        acknowledge_unknown_cost=True,
+    )
+    assert resumed.snapshot()["reserved_nano"] == 30
+    assert not resumed.snapshot()["frozen"]
+    event = resumed.audit()[-1]
+    assert event["event"] == "UNKNOWN_COST_RESUME_AUTHORIZED"
+    assert event["details"]["unknown_cost"] == "UNVERIFIED_AND_NOT_REFUNDED"
+    assert event["details"]["unknown_reservations"] == {"case": 20}
+    assert event["details"]["legacy_history_incomplete"] is False
+    resumed.reserve("next", 70)
+    resumed.finish("next", usage_known=True)
+    with pytest.raises(BudgetError, match="exceeded"):
+        resumed.reserve("too-much", 1)
+    with sqlite3.connect(path) as connection:
+        assert connection.execute(
+            "SELECT state FROM reservations WHERE request_id='case'"
+        ).fetchone() == ("UNKNOWN",)
+
+
+def test_legacy_unknown_resume_creates_honest_audit_in_one_transaction(tmp_path: Path):
+    path = tmp_path / "legacy.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE budget (id INTEGER PRIMARY KEY, limit_nano INTEGER, opening_nano INTEGER, frozen INTEGER)"
+        )
+        connection.execute(
+            "CREATE TABLE reservations (request_id TEXT PRIMARY KEY, amount_nano INTEGER, state TEXT)"
+        )
+        connection.execute("INSERT INTO budget VALUES (1, 100, 10, 1)")
+        connection.execute("INSERT INTO reservations VALUES ('old', 20, 'UNKNOWN')")
+    ledger = DurableBudget.resume_with_unknown_cost(
+        path,
+        limit_nano=100,
+        opening_nano=10,
+        expected_reserved_nano=30,
+        expected_unknown={"old": 20},
+        authorization_ref="user-turn-1",
+        acknowledge_unknown_cost=True,
+    )
+    assert ledger.audit()[0]["details"] == {"legacy_reservations": 1}
+    assert ledger.audit()[1]["details"]["legacy_history_incomplete"] is True
+    assert len(ledger.audit()[1]["details"]["prior_snapshot_sha256"]) == 64
+    assert ledger.snapshot()["reserved_nano"] == 30
+
+
+def test_legacy_unknown_allows_a_new_audited_unknown_to_resume_again(tmp_path: Path):
+    path = tmp_path / "legacy.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE budget (id INTEGER PRIMARY KEY, limit_nano INTEGER, opening_nano INTEGER, frozen INTEGER)"
+        )
+        connection.execute(
+            "CREATE TABLE reservations (request_id TEXT PRIMARY KEY, amount_nano INTEGER, state TEXT)"
+        )
+        connection.execute("INSERT INTO budget VALUES (1, 100, 10, 1)")
+        connection.execute("INSERT INTO reservations VALUES ('old', 20, 'UNKNOWN')")
+    ledger = DurableBudget.resume_with_unknown_cost(
+        path,
+        limit_nano=100,
+        opening_nano=10,
+        expected_reserved_nano=30,
+        expected_unknown={"old": 20},
+        authorization_ref="first",
+        acknowledge_unknown_cost=True,
+    )
+    ledger.reserve("new", 5)
+    ledger.finish("new", usage_known=False)
+    ledger = DurableBudget.resume_with_unknown_cost(
+        path,
+        limit_nano=100,
+        opening_nano=10,
+        expected_reserved_nano=35,
+        expected_unknown={"old": 20, "new": 5},
+        authorization_ref="second",
+        acknowledge_unknown_cost=True,
+    )
+    assert ledger.snapshot()["reserved_nano"] == 35
+    assert not ledger.snapshot()["frozen"]
+    assert [event["event"] for event in ledger.audit()].count("UNKNOWN_COST_RESUME_AUTHORIZED") == 2
+
+
+@pytest.mark.parametrize("tamper", ["add_unknown", "change_old_amount", "unrelated_freeze"])
+def test_second_resume_rejects_unrecorded_unknown_or_freeze(tmp_path: Path, tamper: str):
+    path = tmp_path / "legacy.sqlite"
+    with sqlite3.connect(path) as connection:
+        connection.execute(
+            "CREATE TABLE budget (id INTEGER PRIMARY KEY, limit_nano INTEGER, opening_nano INTEGER, frozen INTEGER)"
+        )
+        connection.execute(
+            "CREATE TABLE reservations (request_id TEXT PRIMARY KEY, amount_nano INTEGER, state TEXT)"
+        )
+        connection.execute("INSERT INTO budget VALUES (1, 100, 10, 1)")
+        connection.execute("INSERT INTO reservations VALUES ('old', 20, 'UNKNOWN')")
+    ledger = DurableBudget.resume_with_unknown_cost(
+        path,
+        limit_nano=100,
+        opening_nano=10,
+        expected_reserved_nano=30,
+        expected_unknown={"old": 20},
+        authorization_ref="first",
+        acknowledge_unknown_cost=True,
+    )
+    if tamper != "unrelated_freeze":
+        ledger.reserve("new", 5)
+        ledger.finish("new", usage_known=False)
+    with sqlite3.connect(path) as connection:
+        if tamper == "add_unknown":
+            connection.execute("INSERT INTO reservations VALUES ('extra', 1, 'UNKNOWN')")
+        elif tamper == "change_old_amount":
+            connection.execute("UPDATE reservations SET amount_nano=21 WHERE request_id='old'")
+        else:
+            connection.execute("UPDATE budget SET frozen=1")
+        rows = connection.execute(
+            "SELECT request_id, amount_nano FROM reservations WHERE state='UNKNOWN'"
+        ).fetchall()
+    before = ledger.audit()
+    with pytest.raises(BudgetError):
+        DurableBudget.resume_with_unknown_cost(
+            path,
+            limit_nano=100,
+            opening_nano=10,
+            expected_reserved_nano=10 + sum(x[1] for x in rows),
+            expected_unknown=dict(rows),
+            authorization_ref="second",
+            acknowledge_unknown_cost=True,
+        )
+    assert ledger.snapshot()["frozen"]
+    assert ledger.audit() == before
+
+
+@pytest.mark.parametrize(
+    "change",
+    ["no_authorization", "wrong_amount", "wrong_id", "pending", "bare_freeze", "wrong_limit"],
+)
+def test_unknown_resume_rejects_changed_or_unrelated_state(tmp_path: Path, change: str):
+    path = tmp_path / "budget.sqlite"
+    ledger = DurableBudget(path, limit_nano=100, opening_nano=10)
+    ledger.reserve("case", 20)
+    if change != "pending":
+        ledger.finish("case", usage_known=change == "bare_freeze")
+    if change in ("pending", "bare_freeze"):
+        with sqlite3.connect(path) as connection:
+            connection.execute("UPDATE budget SET frozen=1")
+    before = ledger.audit()
+    args = {
+        "limit_nano": 100,
+        "opening_nano": 10,
+        "expected_reserved_nano": 30,
+        "expected_unknown": {"case": 20},
+        "authorization_ref": "user-turn-1",
+        "acknowledge_unknown_cost": True,
+    }
+    if change == "no_authorization":
+        args["acknowledge_unknown_cost"] = False
+    elif change == "wrong_amount":
+        args["expected_reserved_nano"] = 29
+    elif change == "wrong_id":
+        args["expected_unknown"] = {"other": 20}
+    elif change == "wrong_limit":
+        args["limit_nano"] = 101
+    with pytest.raises(BudgetError):
+        DurableBudget.resume_with_unknown_cost(path, **args)
+    assert ledger.snapshot()["frozen"]
+    assert ledger.audit() == before
+
+
+def test_resume_rollback_when_audit_fails(tmp_path: Path, monkeypatch):
+    path = tmp_path / "budget.sqlite"
+    ledger = DurableBudget(path, limit_nano=100)
+    ledger.reserve("case", 20)
+    ledger.finish("case", usage_known=False)
+    before = ledger.audit()
+    monkeypatch.setattr(
+        DurableBudget, "_audit", lambda *_args: (_ for _ in ()).throw(RuntimeError("audit failure"))
+    )
+    with pytest.raises(RuntimeError):
+        DurableBudget.resume_with_unknown_cost(
+            path,
+            limit_nano=100,
+            opening_nano=0,
+            expected_reserved_nano=20,
+            expected_unknown={"case": 20},
+            authorization_ref="user-turn-1",
+            acknowledge_unknown_cost=True,
+        )
+    assert ledger.snapshot()["frozen"]
+    assert ledger.audit() == before

@@ -53,6 +53,16 @@ class JsonRouterModel:
         return JsonModelTurn(self.content, input_tokens=12, output_tokens=7)
 
 
+async def test_empty_model_intents_request_clarification_and_keep_usage() -> None:
+    model = JsonRouterModel('{"intents":[],"confidence":0.99,"reason_code":"UNCERTAIN"}')
+    router = HybridIntentRouter(cast(ModelGateway, model))
+    result = await router.decide("周六下午", recent_messages=[], previous_route=None)
+    assert result.intents == ()
+    assert result.clarification
+    assert result.reason_code == "MODEL_UNCERTAIN"
+    assert result.input_tokens == 12 and result.output_tokens == 7
+
+
 def request(message: str) -> SupervisorRequest:
     return SupervisorRequest(
         user_message=message,
@@ -97,6 +107,29 @@ def test_personal_contract_query_and_booking_remain_distinct_intents() -> None:
     decision = deterministic_route_decision("先查我还剩多少节私教课，再帮我预约一次")
     assert decision is not None
     assert [intent.intent for intent in decision.intents] == ["QUERY_CONTRACT", "CREATE_BOOKING"]
+
+
+def test_personal_balance_then_booking_uses_contract_read_before_confirmation_write() -> None:
+    decision = deterministic_route_decision("查我的剩余课时，然后帮我约课")
+    assert decision is not None
+    assert decision.intents == (
+        RoutedIntent("CUSTOMER_SERVICE", "QUERY_CONTRACT"),
+        RoutedIntent("BOOKING", "CREATE_BOOKING"),
+    )
+    assert not decision.intents[0].is_write and decision.intents[1].is_write
+
+
+def test_balance_booking_rules_do_not_infer_a_write_or_another_users_contract() -> None:
+    for message in (
+        "查我的剩余课时，然后不要帮我约课",
+        "查我的剩余课时，然后帮我约课需要多少钱？",
+        "查我的剩余课时，然后帮我约课，但不要提交",
+    ):
+        decision = deterministic_route_decision(message)
+        assert decision is not None
+        assert not any(intent.intent == "CREATE_BOOKING" for intent in decision.intents)
+    assert deterministic_route_decision("查其他会员的剩余课时") is None
+    assert deterministic_route_decision("不要查我的剩余课时") is None
 
 
 def test_two_writes_require_split_instead_of_shared_confirmation() -> None:

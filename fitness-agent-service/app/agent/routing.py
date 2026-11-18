@@ -335,7 +335,7 @@ class _ModelIntent(BaseModel):
 class _ModelRouteDecision(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    intents: list[_ModelIntent] = Field(min_length=1, max_length=3)
+    intents: list[_ModelIntent] = Field(max_length=3)
     confidence: float = Field(ge=0, le=1)
     reason_code: str = Field(min_length=1, max_length=64, pattern=r"^[A-Z0-9_]+$")
 
@@ -500,6 +500,14 @@ class HybridIntentRouter:
             temperature=0,
         )
         parsed = _ModelRouteDecision.model_validate_json(turn.content)
+        if not parsed.intents:
+            return _clarification_decision(
+                "MODEL_UNCERTAIN",
+                "我还不能准确判断你的需求。你是要处理预约、训练计划、经营数据，还是客服问题？",
+                confidence=parsed.confidence,
+                input_tokens=turn.input_tokens,
+                output_tokens=turn.output_tokens,
+            )
         intents = tuple(_validate_model_intent(item) for item in parsed.intents)
         return _finalize_decision(
             intents,
@@ -579,6 +587,9 @@ def deterministic_route_decision(user_message: str) -> RouteDecision | None:
         text,
     )
     if followup_booking and _affirmative(text, (followup_booking.group(),)):
+        signals.append(RoutedIntent("BOOKING", "CREATE_BOOKING"))
+    followup_short_booking = re.search(r"(?:^|[，,。；;])(?:再|然后|接着)帮我约课[。！!]*$", text)
+    if followup_short_booking and _affirmative(text, (followup_short_booking.group(),)):
         signals.append(RoutedIntent("BOOKING", "CREATE_BOOKING"))
     _append_if(
         signals, text, "FITNESS_COACHING", "PUBLISH_PLAN", ("发布训练计划", "发布计划"), write=True
@@ -676,6 +687,11 @@ def deterministic_route_decision(user_message: str) -> RouteDecision | None:
         r"(?:剩余|剩)(?:下)?(?:多少|几)(?:节|次|堂|课时)?",
         text,
     ):
+        signals.append(RoutedIntent("CUSTOMER_SERVICE", "QUERY_CONTRACT"))
+    personal_balance = re.search(
+        r"(?:查询|查看|查)(?:一下)?(?:我|本人)的?(?:剩余|剩下)(?:课时|课程次数)", text
+    )
+    if personal_balance and _affirmative(text, (personal_balance.group(),)):
         signals.append(RoutedIntent("CUSTOMER_SERVICE", "QUERY_CONTRACT"))
     _append_if(
         signals,

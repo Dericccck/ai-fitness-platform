@@ -145,3 +145,87 @@ def test_inapplicable_assertion_cannot_produce_pass():
     row["assertions"][0]["applicable"] = False
     with pytest.raises(IncompatibleRuns):
         compare_runs(manifest(), [row], manifest(), [row])
+
+
+def test_necessary_applicable_na_is_incomparable_without_frozen_parameters():
+    left = trial("a", 0, "PASS")
+    left["assertions"].append(
+        {
+            "id": "recall",
+            "rule": "required_evidence_recalled",
+            "phase": "final",
+            "required": True,
+            "risk": None,
+            "applicable": True,
+            "status": "NA",
+            "reason": "UNANSWERABLE_RECALL_NA",
+        }
+    )
+    result = compare_runs(
+        manifest(repeats=1, selected_case_ids=["a"]),
+        [left],
+        manifest(repeats=1, selected_case_ids=["a"]),
+        [left],
+    )
+    case = result["cases"][0]
+    assert result["counts"]["incomparable"] == 1
+    assert case["trials"][0]["baseline"] == "PASS"
+    assert case["trials"][0]["baseline_comparability_reason"] == (
+        "APPLICABLE_NA_REQUIRES_DATASET_VERIFICATION"
+    )
+
+
+def test_inapplicable_na_does_not_block_comparison():
+    row = trial("a", 0, "PASS")
+    row["assertions"].append(
+        {
+            "id": "not_applicable",
+            "rule": "unused",
+            "phase": "final",
+            "required": True,
+            "risk": None,
+            "applicable": False,
+            "status": "NA",
+        }
+    )
+    report = compare_runs(
+        manifest(repeats=1, selected_case_ids=["a"]),
+        [row],
+        manifest(repeats=1, selected_case_ids=["a"]),
+        [row],
+    )
+    assert report["counts"]["unchanged"] == 1
+
+
+def test_observed_failure_survives_other_applicable_na():
+    row = trial("a", 0, "FAIL")
+    row["assertions"].append(
+        {
+            "id": "unknown",
+            "rule": "some_rule",
+            "phase": "final",
+            "required": True,
+            "risk": None,
+            "applicable": True,
+            "status": "NA",
+        }
+    )
+    report = compare_runs(
+        manifest(repeats=1, selected_case_ids=["a"]),
+        [row],
+        manifest(repeats=1, selected_case_ids=["a"]),
+        [row],
+    )
+    assert report["counts"]["unchanged"] == 1
+    assert report["cases"][0]["baseline"] == "FAIL"
+
+
+@pytest.mark.parametrize("field", ["trial", "assertion"])
+def test_invalid_unhashable_status_is_an_incompatible_run(field):
+    row = trial("a", 0, "PASS")
+    if field == "trial":
+        row["status"] = []
+    else:
+        row["assertions"][0]["status"] = []
+    with pytest.raises(IncompatibleRuns):
+        compare_runs(manifest(), [row], manifest(), [])

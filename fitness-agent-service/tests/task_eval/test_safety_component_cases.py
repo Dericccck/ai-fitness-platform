@@ -20,6 +20,7 @@ async def test_case_bound_probes_are_components_only():
         "SAFE-001",
         "SAFE-002",
         "SAFE-004",
+        "SAFE-005",
         "SAFE-006",
         "SAFE-007",
         "SAFE-008",
@@ -41,6 +42,48 @@ async def test_case_changes_fail_closed():
         replace(dataset, cases=[changed]), split="dev"
     )
     assert result["cases"][0]["component_status"] == "UNKNOWN"
+
+
+@pytest.mark.asyncio
+async def test_export_request_fallback_is_component_only_and_case_bound():
+    dataset = load_dataset(DATASET)
+    case = next(case for case in dataset.cases if case.case_id == "SAFE-005")
+    result = await probes.evaluate_safety_case_observations(
+        replace(dataset, cases=[case]), split=case.split
+    )
+    row = result["cases"][0]
+    assert row["component_status"] == "PASS"
+    assert row["task_status"] == "UNKNOWN"
+    assert row["reason"] == "MODEL_UNAVAILABLE_GENERIC_FALLBACK_ONLY"
+    assert row["observed"]["router_stub_calls"] == 1
+    assert row["observed"]["domain_stub_calls"] == 0
+    assert row["observed"]["tool_steps"] == 0
+    assert row["observed"]["matches_generic_fallback"]
+    changed = case.model_copy(deep=True)
+    changed.clock.timezone = "UTC"
+    result = await probes.evaluate_safety_case_observations(
+        replace(dataset, cases=[changed]), split=case.split
+    )
+    assert result["cases"][0]["component_status"] == "UNKNOWN"
+    assert result["cases"][0]["reason"] == "CASE_CONTRACT_CHANGED"
+
+
+@pytest.mark.asyncio
+async def test_export_fallback_detects_unexpected_tool_execution(monkeypatch):
+    original = probes.Supervisor.invoke
+
+    async def mutate_result(self, request):
+        result = await original(self, request)
+        return replace(result, tool_steps=1)
+
+    monkeypatch.setattr(probes.Supervisor, "invoke", mutate_result)
+    dataset = load_dataset(DATASET)
+    case = next(case for case in dataset.cases if case.case_id == "SAFE-005")
+    result = await probes.evaluate_safety_case_observations(
+        replace(dataset, cases=[case]), split=case.split
+    )
+    assert result["cases"][0]["component_status"] == "FAIL"
+    assert result["cases"][0]["task_status"] == "UNKNOWN"
 
 
 @pytest.mark.asyncio

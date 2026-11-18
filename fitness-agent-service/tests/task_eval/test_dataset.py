@@ -88,3 +88,25 @@ def test_booking_message_references_have_planned_fixture_templates():
                     "{" + key + "}" in definition["template"]
                     for key in definition["required_values"]
                 )
+
+
+def test_duplicate_json_object_keys_are_rejected_even_when_nested(tmp_path):
+    original = DATASET.read_text(encoding="utf-8").splitlines()[0]
+    for ambiguous in (
+        original.replace('"case_id":"ROUT-001"', '"case_id":"ROUT-001","case_id":"secret"'),
+        original.replace('"role":"STUDENT"', '"role":"STUDENT","role":"secret"'),
+    ):
+        path = tmp_path / "ambiguous.jsonl"
+        path.write_text(ambiguous + "\n", encoding="utf-8")
+        with pytest.raises(DatasetValidationError, match="duplicate JSON object key") as error:
+            load_dataset(path, check_quotas=False)
+        assert "secret" not in str(error.value)
+
+
+@pytest.mark.parametrize("value", ["NaN", "Infinity", "-Infinity"])
+def test_nonfinite_json_constants_are_rejected(tmp_path, value):
+    original = DATASET.read_text(encoding="utf-8").splitlines()[0]
+    path = tmp_path / "nonfinite.jsonl"
+    path.write_text(original.replace('"step_seconds":30', f'"step_seconds":{value}') + "\n")
+    with pytest.raises(DatasetValidationError, match="non-finite numbers"):
+        load_dataset(path, check_quotas=False)

@@ -361,3 +361,81 @@ def test_unknown_reason_cannot_escape_whitelist(tmp_path: Path) -> None:
     result = model.diagnostics()
     assert result["reason"] == "UNCLASSIFIED_MODEL_FAILURE"
     assert "provider-output-or-secret" not in str(result)
+
+
+@pytest.mark.parametrize(
+    "scenario", ["missing_and_extra", "malformed", "different", "length", "optional_mark"]
+)
+async def test_model_diagnostics_describe_structure_without_provider_text(
+    tmp_path: Path, scenario: str
+) -> None:
+    ledger = budget(tmp_path / "budget.sqlite")
+    sensitive = "untrusted-extra-key-and-value"
+    body = response(coach="unexpected-coach" if scenario == "different" else "coach-1")
+    choice = body["choices"][0]
+    if scenario == "length":
+        choice["finish_reason"] = "length"
+        choice["message"]["tool_calls"] = []
+    else:
+        function = choice["message"]["tool_calls"][0]["function"]
+        if scenario == "malformed":
+            function["arguments"] = "{" + sensitive
+        elif scenario == "missing_and_extra":
+            arguments = json.loads(function["arguments"])
+            del arguments["studentId"]
+            arguments[sensitive] = sensitive
+            function["arguments"] = json.dumps(arguments)
+        elif scenario == "optional_mark":
+            arguments = json.loads(function["arguments"])
+            arguments["mark"] = 1
+            function["arguments"] = json.dumps(arguments)
+    model = OneBookingModel(
+        "mock-credential-for-tests",
+        ledger,
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=body)),
+        execute=True,
+        confirmed_current_pricing=True,
+    )
+    result = await run_local(model)
+    assert result["error"] and result["gateway_attempts"] == 0
+    observed = model.diagnostics()
+    assert sensitive not in json.dumps(observed)
+    assert "unexpected-coach" not in json.dumps(observed)
+    if scenario == "missing_and_extra":
+        assert observed["reason"] == "INVALID_TOOL_ARGUMENTS"
+        assert observed["argument_missing"] == ["studentId"]
+        assert observed["argument_extra_count"] == 1
+    elif scenario == "malformed":
+        assert observed["reason"] == "INVALID_TOOL_ARGUMENTS"
+        assert observed["argument_missing"] is None
+    elif scenario == "different":
+        assert observed["reason"] == "FIXTURE_PARAMETERS_MISMATCH"
+        assert observed["argument_differing"] == ["coachId"]
+    elif scenario == "optional_mark":
+        assert observed["reason"] == "FIXTURE_PARAMETERS_MISMATCH"
+        assert observed["argument_mark_state"] == "ALLOWED_INTEGER"
+        assert observed["argument_differing"] == ["mark"]
+        assert observed["argument_extra_count"] == 0
+    else:
+        assert observed["reason"] == "MISSING_TOOL_CALL"
+        assert observed["finish_reason"] == "length"
+
+
+async def test_optional_null_mark_matches_frozen_fixture(tmp_path: Path) -> None:
+    ledger = budget(tmp_path / "budget.sqlite")
+    body = response()
+    function = body["choices"][0]["message"]["tool_calls"][0]["function"]
+    arguments = json.loads(function["arguments"])
+    arguments["mark"] = None
+    function["arguments"] = json.dumps(arguments)
+    model = OneBookingModel(
+        "mock-credential-for-tests",
+        ledger,
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=body)),
+        execute=True,
+        confirmed_current_pricing=True,
+    )
+    result = await run_local(model)
+    assert not result.get("error")
+    assert result["result"]["authorization_status"] == "REJECTED"
+    assert model.diagnostics()["argument_mark_state"] == "NULL"

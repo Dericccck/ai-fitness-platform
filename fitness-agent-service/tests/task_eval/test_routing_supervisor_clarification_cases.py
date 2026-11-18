@@ -18,6 +18,10 @@ async def test_supervisor_delivers_fallback_without_domain_model_or_tools():
         report = await probes.evaluate_supervisor_clarification_observations(dataset, split=split)
         assert len(report["cases"]) == expected_count
         for row in report["cases"]:
+            if row["case_id"] == "ROUT-016":
+                assert row["component_status"] == "UNKNOWN"
+                assert row["reason"] == "MODEL_UNAVAILABLE_PRECONDITION_NOT_APPLICABLE"
+                continue
             assert row["component_status"] == "PASS"
             assert row["task_status"] == "UNKNOWN"
             assert row["observed"]["router_stub_calls"] == 1

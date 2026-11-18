@@ -310,9 +310,17 @@ python -m app.evaluation.task_eval.cli run --dataset evals/task_eval/datasets/v1
 
 人工审核清单可通过 `python -m app.evaluation.task_eval.review_queue --dataset evals/task_eval/datasets/v1.jsonl --output /tmp/fitness-review-queue.json` 生成。清单绑定数据集与案例摘要，不会自动填写审核结论；安全审核仍需实际具备相应资质的人员完成。
 
+`python -m app.evaluation.task_eval.split_leakage --dataset evals/task_eval/datasets/v1.jsonl` 提供开发集与测试集的词面相似候选及可比较数量。结果不包含无法展开的对话，也不检查语义、夹具和标签泄漏，不能代替人工分集审核。检索组件报告的 `summary` 按 K 展示有证据的条件 Recall、Hit、MRR 和计划分母，并单列空结果、未知及未执行数量；不可回答题不计入这些指标。
+
 `model-preflight` 是不联网的模型配置检查；`model-smoke` 是需显式启用的单次连通性检查，只向允许的官方服务地址发送固定的 ROUT-001 合成输入，需要独立评测密钥 `FITNESS_EVAL_MODEL_API_KEY`。真实调用必须使用已有的持久预算账本，并提供与其一致的预算上限和历史预留金额；账本未知用量或未完成请求会阻止后续调用。持久账本仅覆盖接入它的调用，不构成供应商账单硬上限，也不能证明环境隔离。执行前必须独立核实服务商侧费用上限和隔离条件。单次调用的结果不进入完整任务通过率。示例配置见 `evals/task_eval/config/model-preflight.example.json`，其中地址和证据引用均为占位符，不能直接用于调用。
 
 `supervisor_model_probe` 仅对固定的 ROUT-002 合成输入运行一次真实 Supervisor 和模型，不启用业务工具。真实请求必须提供本地持久化预算账本：调用前保守预留、跨进程串行化，费用未知或进程中断会阻止后续预留。该账本只覆盖接入它的评测调用，不监控同一服务商账户的其他请求，也不是供应商账单硬限额；模型答案和案例仍须人工审核。
+
+遇到未知费用时，账本保持冻结。只有获得明确授权并核对账本身份、全部未知预留和待完成请求后，`DurableBudget.resume_with_unknown_cost` 才能记录授权并恢复；未知预留不会删除或退款，也不代表供应商费用已对账。`routing_model_probe` 和 `dev_review_probe` 是有限的合成开发案例观察工具，帮助人工检查真实模型或硬规则结果，不产生完整任务通过结论；后者的审核材料写入仅当前用户可访问的目录，仍应由合适的审核人员检查。
+
+`scripts/task_eval_cross_service_booking.sh` 可在本机临时 PostgreSQL、MySQL 和 Java 服务中运行预约组件探针；真实模型模式必须显式提供评测凭证文件、已有账本与定价确认。`--same-session-followup` 仅允许配合真实模型和批准的合成夹具，记录后续只读查询及业务快照，仍不等同于逐案例完整任务或独立事务审计。各探针支持 `--help` 查看参数，切勿把凭证写入命令行参数值、报告或仓库。
+
+该启动器另支持 `--single-development-trial /绝对路径/新报告.json`：使用 `evals/task_eval/dev_sandbox_v1/` 中独立的未审核合成案例及固定夹具，按步骤运行脚本模型和临时本机服务。报告会保留确认前后快照、源码身份及未知断言；它不属于原规划集，也不代表真实模型表现或完整事务审计。
 
 `app.evaluation.task_eval.mysql_sandbox_preflight` 是为未来业务沙箱准备的独立 MySQL 空库预检，检查专用容器及空 schema；它尚未接入任务运行器，也不适用于上述采用不同容器标识的 Maven MySQL 验收脚本。单独通过该检查不表示业务服务、网络或审计已隔离。
 

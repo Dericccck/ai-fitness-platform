@@ -2,6 +2,15 @@
 # Scripted model -> Python Agent/PG -> Gateway HTTP -> Booking HTTP/MySQL.
 # All services and identities are newly created for this run; never use .env.
 set -euo pipefail
+single_development_trial=false
+if [[ "${1:-}" == "--single-development-trial" ]]; then
+    [[ "$#" -eq 2 && "$2" == /* && ! -e "$2" ]] || {
+        printf 'Provide a new absolute report path for the development trial.\n' >&2
+        exit 1
+    }
+    single_development_trial=true
+    single_report="$2"
+fi
 service_root="$(cd "$(dirname "$0")/.." && pwd)"
 repo_root="$(cd "$service_root/.." && pwd)"
 python="$service_root/.venv/bin/python"
@@ -138,4 +147,8 @@ runtime_env=(env -i "PATH=$PATH" "HOME=$run_dir" "TMPDIR=$run_dir" "PYTHONPATH=$
     "TASK_EVAL_LAUNCHER_PID=$$"
     "TASK_EVAL_CONTEXT_SECRET=$context_secret" "TASK_EVAL_CONFIRMATION_SECRET=$confirmation_secret")
 "${runtime_env[@]}" "$python" -m alembic -c "$run_dir/alembic.ini" upgrade head >"$run_dir/migrations.log" 2>&1
-"${runtime_env[@]}" "$python" -m app.evaluation.task_eval.cross_service_booking "$@"
+if [[ "$single_development_trial" == true ]]; then
+    "${runtime_env[@]}" "$python" -m app.evaluation.task_eval.dev_sandbox_booking --report-file "$single_report"
+else
+    "${runtime_env[@]}" "$python" -m app.evaluation.task_eval.cross_service_booking "$@"
+fi

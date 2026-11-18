@@ -17,6 +17,11 @@ async def test_retrieval_lab_is_explicit_about_scope_and_unknowns():
     assert cases["local-unanswerable"]["retrieval"]["status"] == "NA"
     assert all(row["acl"]["status"] == "UNKNOWN" for row in cases.values())
     assert all(row["answer"]["status"] == "UNKNOWN" for row in cases.values())
+    summary = report["summary"]["overall_same_k"]
+    assert summary["planned_answerable"] == 2
+    assert summary["retrieval_observed"] == 2
+    assert summary["recall_at_k"]["value"] == 1
+    assert report["summary"]["unanswerable"]["planned"] == 2
 
 
 @pytest.mark.asyncio
@@ -44,3 +49,17 @@ async def test_candidate_leak_is_preserved_when_reranker_errors():
     assert row["retrieval"]["status"] == "ERROR"
     assert row["acl"]["status"] == "FAIL"
     assert {"foreign", "finance"} <= set(row["forbidden_hits"])
+    assert result["summary"]["unanswerable"]["state_counts"]["UNKNOWN"] == 1
+
+
+@pytest.mark.asyncio
+async def test_invalid_plan_rejected_before_retrieval():
+    from typing import cast
+
+    from app.evaluation.task_eval.component_retrieval import evaluate_retrieval
+    from app.evaluation.task_eval.retrieval_lab import CASES
+    from app.rag.service import RagService
+
+    # A duplicate frozen ID must be rejected before inspecting this service.
+    with pytest.raises(ValueError, match="unique"):
+        await evaluate_retrieval(cast(RagService, object()), [CASES[0], CASES[0]])

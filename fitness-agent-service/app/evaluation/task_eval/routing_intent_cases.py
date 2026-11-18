@@ -47,7 +47,7 @@ _CASES = {
 # Alternatives are grouped by semantic intent; order of groups is required.
 _INTENT_GROUPS = {
     "ROUT-015": ({"FITNESS_KNOWLEDGE_QA"}, {"CREATE_BOOKING"}),
-    "ROUT-016": ({"QUERY_CONTRACT", "QUERY_REMAINING_CLASS_HOURS"}, {"CREATE_BOOKING"}),
+    "ROUT-016": ({"QUERY_CONTRACT"}, {"CREATE_BOOKING"}),
     "ROUT-017": ({"QUERY_APPOINTMENTS", "QUERY_APPOINTMENT"}, {"CANCEL_BOOKING"}),
 }
 
@@ -124,8 +124,10 @@ def _component_assessment(case_id: str, decision: RouteDecision) -> tuple[str, s
             return "UNKNOWN", "MODEL_UNAVAILABLE_SAFE_CLARIFICATION"
         actual = [item.intent for item in decision.intents]
         groups = _INTENT_GROUPS[case_id]
-        if len(actual) == len(groups) and all(
-            value in group for value, group in zip(actual, groups)
+        if (
+            len(actual) == len(groups)
+            and all(value in group for value, group in zip(actual, groups))
+            and (case_id != "ROUT-016" or decision.intents[0].route == "CUSTOMER_SERVICE")
         ):
             return "PASS", "EXPECTED_INTENTS_IN_ORDER"
         return "FAIL", "EXPECTED_INTENTS_NOT_PRESERVED"

@@ -45,6 +45,10 @@ INPUT_LIMIT = 8192
 OUTPUT_LIMIT = 512
 RESERVATION_NANO = 204_800_000
 MAX_RESPONSE_BYTES = 65_536
+_ARGUMENT_KEYS = frozenset(
+    {"studentId", "contractId", "coachId", "courseId", "startTime", "endTime"}
+)
+_FINISH_REASONS = frozenset({"stop", "length", "tool_calls", "content_filter"})
 _REASONS = frozenset(
     {
         "NOT_CALLED",
@@ -134,6 +138,11 @@ class OneBookingModel:
         self.usage: tuple[int | None, int | None] = (None, None)
         self.http_status: int | None = None
         self.response_hash: str | None = None
+        self.finish_reason: str | None = None
+        self.argument_missing: list[str] | None = None
+        self.argument_extra_count: int | None = None
+        self.argument_differing: list[str] | None = None
+        self.argument_mark_state: str | None = None
 
     def diagnostics(self) -> dict[str, Any]:
         """Only return bounded counters and predefined status labels; no provider data."""
@@ -178,6 +187,11 @@ class OneBookingModel:
             else None,
             "reported_input_tokens": input_tokens if valid_usage else None,
             "reported_output_tokens": output_tokens if valid_usage else None,
+            "finish_reason": self.finish_reason,
+            "argument_missing": self.argument_missing,
+            "argument_extra_count": self.argument_extra_count,
+            "argument_differing": self.argument_differing,
+            "argument_mark_state": self.argument_mark_state,
             "usage_status": "VALIDATED_PROVIDER_REPORTED"
             if valid_usage
             else "UNKNOWN_OR_EXCEEDS_RESERVATION",
@@ -272,6 +286,12 @@ class OneBookingModel:
             ):
                 raise BookingModelProbeError("INVALID_RESPONSE")
             choice = choices[0]
+            finish_reason = choice.get("finish_reason")
+            self.finish_reason = (
+                finish_reason
+                if isinstance(finish_reason, str) and finish_reason in _FINISH_REASONS
+                else None
+            )
             message = choice.get("message")
             if choice.get("finish_reason") != "tool_calls" or not isinstance(message, dict):
                 raise BookingModelProbeError("MISSING_TOOL_CALL")
@@ -298,20 +318,43 @@ class OneBookingModel:
                 or not isinstance(function.get("arguments"), str)
             ):
                 raise BookingModelProbeError("INVALID_TOOL_CALL")
-            arguments = json.loads(
-                function["arguments"], object_pairs_hook=_object_without_duplicate_keys
-            )
-            if not isinstance(arguments, dict) or set(arguments) != {
-                "studentId",
-                "contractId",
-                "coachId",
-                "courseId",
-                "startTime",
-                "endTime",
-            }:
+            try:
+                arguments = json.loads(
+                    function["arguments"], object_pairs_hook=_object_without_duplicate_keys
+                )
+            except (ValueError, TypeError) as exc:
+                raise BookingModelProbeError("INVALID_TOOL_ARGUMENTS") from exc
+            if not isinstance(arguments, dict):
+                raise BookingModelProbeError("INVALID_TOOL_ARGUMENTS")
+            if "mark" not in arguments:
+                self.argument_mark_state = "ABSENT"
+            elif arguments["mark"] is None:
+                self.argument_mark_state = "NULL"
+            elif type(arguments["mark"]) is int and arguments["mark"] in (0, 1):
+                self.argument_mark_state = "ALLOWED_INTEGER"
+            else:
+                self.argument_mark_state = "OTHER"
+            self.argument_missing = sorted(_ARGUMENT_KEYS.difference(arguments))
+            # The production schema exposes optional mark=None. It is exactly
+            # equivalent to omitting the field in this frozen fixture; other
+            # mark values still fail the payload equality check below.
+            self.argument_extra_count = len(set(arguments).difference(_ARGUMENT_KEYS | {"mark"}))
+            if self.argument_missing or self.argument_extra_count:
                 raise BookingModelProbeError("INVALID_TOOL_ARGUMENTS")
             arguments["organizationId"] = "org-1"
             if not expected_payload(arguments):
+                # Export only fixed schema names, never untrusted values or keys.
+                expected = BookingCreateToolInput.model_validate(PAYLOAD).model_dump(by_alias=True)
+                try:
+                    actual = BookingCreateToolInput.model_validate(arguments).model_dump(
+                        by_alias=True
+                    )
+                except ValueError:
+                    self.argument_differing = None
+                else:
+                    self.argument_differing = sorted(
+                        key for key in (_ARGUMENT_KEYS | {"mark"}) if actual[key] != expected[key]
+                    )
                 raise BookingModelProbeError("FIXTURE_PARAMETERS_MISMATCH")
             arguments.pop("organizationId")
             selected = ModelToolCall(

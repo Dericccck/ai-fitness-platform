@@ -1,0 +1,377 @@
+"""One explicitly synthetic development trial in launcher-owned local services.
+
+This is neither one of the planning benchmark's 120 cases nor release evidence.
+No external model is invoked; snapshot observations are not a complete audit.
+"""
+
+from __future__ import annotations
+
+import argparse
+import asyncio
+import hashlib
+import json
+import secrets
+import subprocess
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any, cast
+from uuid import uuid4
+
+from fastapi import FastAPI
+from httpx import ASGITransport, AsyncClient
+from langgraph.checkpoint.memory import InMemorySaver
+
+from app.agent.fitness_tools import build_fitness_tool_registry
+from app.agent.supervisor import Supervisor
+from app.api.routes.agent import router as agent_router
+from app.api.routes.confirmations import router as confirmation_router
+from app.confirmation.cipher import AesGcmPayloadCipher
+from app.confirmation.repository import ConfirmationRepository
+from app.confirmation.service import ConfirmationService
+from app.confirmation.token import ConfirmationTokenIssuer
+from app.infrastructure.agent_context import AgentContextVerifier
+from app.infrastructure.database import Database
+from app.infrastructure.gateway_client import GatewayClient
+from app.infrastructure.model_gateway import ModelToolCall, ModelTurn
+
+from .agent_http import AgentHTTP
+from .booking_local import Router
+from .booking_signed_identity import _identity
+from .cross_service_booking import _environment, _verify_database_deltas
+from .dataset import load_dataset
+from .mysql_booking_observer import snapshot_booking
+from .step_kernel import StepState, execute_steps, prepare_steps
+
+_DIR = Path(__file__).resolve().parents[3] / "evals/task_eval/dev_sandbox_v1"
+_CASE_DIGEST = "8058404bdf443e96301b2134aaca55129965e98d46fcda330a90ce7b82e25400"
+_FIXTURE_DIGEST = "583f13a0aeb889a2941bfbdb60bc7ea70606920a5698d8e143ea2ba75e986170"
+
+
+def _digest(path: Path) -> str:
+    return hashlib.sha256(path.read_bytes()).hexdigest()
+
+
+def _source_identity() -> dict[str, Any]:
+    repo = Path(__file__).resolve().parents[4]
+    result: dict[str, Any] = {"revision": "unknown", "working_tree_dirty": None}
+    try:
+        revision = subprocess.run(
+            ["git", "-C", str(repo), "rev-parse", "HEAD"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=3,
+        ).stdout.strip()
+        status = subprocess.run(
+            ["git", "-C", str(repo), "status", "--porcelain", "--untracked-files=normal"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=3,
+        ).stdout
+        result.update(revision=revision, working_tree_dirty=bool(status))
+    except (OSError, subprocess.SubprocessError):
+        pass
+    # This is a source fingerprint, not independent build or runtime attestation.
+    result["driver_sha256"] = _digest(Path(__file__))
+    result["step_kernel_sha256"] = _digest(Path(__file__).with_name("step_kernel.py"))
+    return result
+
+
+def _load() -> tuple[Any, dict[str, Any]]:
+    case_path, fixture_path = _DIR / "case.jsonl", _DIR / "fixture.json"
+    if _digest(case_path) != _CASE_DIGEST or _digest(fixture_path) != _FIXTURE_DIGEST:
+        raise ValueError("DEV_FIXTURE_CHANGED")
+    dataset = load_dataset(case_path, check_quotas=False)
+    if len(dataset.cases) != 1:
+        raise ValueError("DEV_CASE_MISMATCH")
+    case = dataset.cases[0]
+    if case.case_id != "DEV-SANDBOX-BOOK-001" or case.review.status != "draft":
+        raise ValueError("DEV_CASE_MISMATCH")
+    fixture = json.loads(fixture_path.read_text(encoding="utf-8"))
+    if datetime.fromisoformat(fixture["booking"]["start_time"]) <= datetime.now(UTC):
+        raise ValueError("DEV_FIXTURE_EXPIRED")
+    return case, fixture
+
+
+class _FixedModel:
+    def __init__(self, payload: dict[str, Any]) -> None:
+        self.payload, self.calls = payload, 0
+
+    async def chat_with_tools(
+        self, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]], **kwargs: Any
+    ) -> ModelTurn:
+        self.calls += 1
+        if self.calls == 1:
+            return ModelTurn(
+                content="",
+                tool_calls=(
+                    ModelToolCall(
+                        call_id="dev-booking",
+                        name="fitness_booking_create_v1",
+                        arguments=self.payload,
+                    ),
+                ),
+            )
+        return ModelTurn(content="请求已处理。", tool_calls=())
+
+
+async def _drive(
+    case: Any,
+    fixture: dict[str, Any],
+    agent: AgentHTTP,
+    repository: ConfirmationRepository,
+    snapshot: Any,
+) -> dict[str, Any]:
+    """Drive the exact frozen development steps; arguments here are not a public adapter API."""
+    requests = prepare_steps(case)
+    initial = await asyncio.to_thread(snapshot, "dev-preflight")
+    if not initial.get("snapshot_complete") or not initial.get("witness_observed"):
+        raise ValueError("INITIAL_SNAPSHOT_INCOMPLETE")
+    facts = initial["facts"]
+    if (
+        facts["appointments"],
+        facts["remaining_hours"],
+        facts["witness_appointments"],
+        facts["witness_remaining_hours"],
+    ) != (0, 2, 0, 5):
+        raise ValueError("INITIAL_FIXTURE_MISMATCH")
+    state = StepState()
+    operations = execute_steps(
+        case, requests, state, evidence_origin="local_snapshot_not_complete_audit"
+    )
+    request = next(operations, None)
+    record: Any = None
+    cid: str | None = None
+    executed_steps: list[dict[str, Any]] = []
+    snapshot_checks: list[dict[str, Any]] = []
+    failure: str | None = None
+    try:
+        async with asyncio.timeout(case.timeouts.trial_seconds):
+            while request is not None:
+                step = request.step
+                evidence = None
+                async with asyncio.timeout(case.timeouts.step_seconds):
+                    if request.kind == "observe":
+                        if record is None or cid is None:
+                            raise ValueError("CONFIRMATION_NOT_CAPTURED")
+                        record = await repository.get_for_subject(
+                            cid,
+                            fixture["identity"]["student_id"],
+                            [fixture["identity"]["organization_id"]],
+                        )
+                        current = await asyncio.to_thread(snapshot, record.request_id)
+                        if not current.get("snapshot_complete") or not current.get(
+                            "witness_observed"
+                        ):
+                            raise ValueError("SNAPSHOT_INCOMPLETE")
+                        current_facts = current["facts"]
+                        phase = step.phase
+                        try:
+                            expected_deltas = _verify_database_deltas(
+                                initial,
+                                current,
+                                "REJECT" if phase == "before_decision" else "APPROVE",
+                            )
+                            snapshot_checks.append(
+                                {
+                                    "phase": phase,
+                                    "status": "MATCH",
+                                    "deltas": expected_deltas,
+                                    "authorization_status": record.authorization_status,
+                                    "execution_status": record.execution_status,
+                                }
+                            )
+                        except ValueError:
+                            snapshot_checks.append(
+                                {
+                                    "phase": phase,
+                                    "status": "MISMATCH",
+                                    "authorization_status": record.authorization_status,
+                                    "execution_status": record.execution_status,
+                                }
+                            )
+                        snapshot_digest = hashlib.sha256(
+                            json.dumps(
+                                current_facts, sort_keys=True, separators=(",", ":")
+                            ).encode()
+                        ).hexdigest()
+                        evidence = {
+                            "evidence_refs": ["snapshot-sha256:" + snapshot_digest],
+                            "before": {
+                                "booking_count": facts["appointments"],
+                                "credit_count": facts["remaining_hours"],
+                            },
+                            "after": {
+                                "booking_count": current_facts["appointments"],
+                                "credit_count": current_facts["remaining_hours"],
+                            },
+                            "audit_complete": False,
+                            "actor": record.subject_user_id,
+                            "action": record.tool_id,
+                            "authorization_status": record.authorization_status,
+                            "execution_status": record.execution_status,
+                        }
+                    elif step.type == "chat":
+                        if not isinstance(step.message, str) or not step.message:
+                            raise ValueError("DEV_MESSAGE_UNAVAILABLE")
+                        response = await agent.chat(step.message)
+                        cid = response.get("confirmation_id")
+                        if response.get("status") != "CONFIRMATION_REQUIRED" or not isinstance(
+                            cid, str
+                        ):
+                            raise ValueError("CONFIRMATION_MISSING")
+                        record = await repository.get_for_subject(
+                            cid,
+                            fixture["identity"]["student_id"],
+                            [fixture["identity"]["organization_id"]],
+                        )
+                    elif step.type == "decision" and step.decision == "APPROVE" and cid:
+                        await agent.decide(cid, "APPROVE")
+                    elif (
+                        step.type == "await_terminal"
+                        and cid
+                        and step.expected_authorization_status
+                        and step.expected_execution_status
+                        and step.timeout_seconds
+                    ):
+                        await agent.await_terminal(
+                            cid,
+                            expected_authorization=step.expected_authorization_status,
+                            expected_execution={step.expected_execution_status},
+                            timeout_seconds=step.timeout_seconds,
+                        )
+                    else:
+                        raise ValueError("UNSUPPORTED_DEV_STEP")
+                executed_steps.append(
+                    {"index": request.index, "type": step.type, "status": "COMPLETED"}
+                )
+                try:
+                    request = operations.send(evidence)
+                except StopIteration:
+                    request = None
+    except TimeoutError:
+        failure = "STEP_OR_TRIAL_TIMEOUT"
+    except Exception:  # noqa: BLE001 - do not expose service responses or credentials
+        failure = "STEP_OR_OBSERVER_ERROR"
+    assertions = []
+    for a in case.expected.assertions:
+        assertions.append(
+            state.assertions.get(
+                a.id,
+                {
+                    "id": a.id,
+                    "rule": a.rule,
+                    "phase": a.phase,
+                    "required": a.required,
+                    "risk": a.risk,
+                    "applicable": a.applicable,
+                    "status": "UNKNOWN" if a.applicable else "NA",
+                    "reason": "EVIDENCE_NOT_OBSERVED",
+                },
+            )
+        )
+    return {
+        "case_id": case.case_id,
+        "trial_id": uuid4().hex,
+        "task_status": "INCONCLUSIVE",
+        "executed_steps": executed_steps,
+        "reason": failure,
+        "assertions": assertions,
+        "phase_observations": state.phase_observations,
+        "snapshot_checks": snapshot_checks,
+    }
+
+
+async def run() -> dict[str, Any]:
+    case, fixture = _load()
+    settings, run_id, mysql_id, context_secret, token_secret = _environment()
+    source_identity = _source_identity()
+    db = Database(settings)
+    gateway = GatewayClient(settings)
+    try:
+        repo = ConfirmationRepository(db)
+        registry = build_fitness_tool_registry(gateway)
+        confirmation = ConfirmationService(
+            repo,
+            registry,
+            gateway,
+            AesGcmPayloadCipher(key=secrets.token_bytes(32), key_version="eval"),
+            ConfirmationTokenIssuer(secret=token_secret, signing_key_id="eval"),
+        )
+        app = FastAPI()
+        app.state.context_verifier = AgentContextVerifier(context_secret, signing_key_id="eval")
+        app.state.confirmation_service = confirmation
+        app.state.supervisor = Supervisor(
+            cast(Any, _FixedModel(fixture["booking"])),
+            registry,
+            checkpointer=InMemorySaver(),
+            confirmation_service=confirmation,
+            intent_router=cast(Any, Router()),
+        )
+        app.include_router(agent_router)
+        app.include_router(confirmation_router)
+
+        def snapshot(request_id: str) -> dict[str, Any]:
+            return snapshot_booking(
+                run_id=run_id,
+                container_id=mysql_id,
+                organization_id="org-1",
+                student_id="student-1",
+                contract_id="contract-1",
+                request_id=request_id,
+                witness_organization_id="org-2",
+                witness_student_id="student-2",
+                witness_contract_id="contract-2",
+            )
+
+        async with AsyncClient(
+            transport=ASGITransport(app=app), base_url="http://agent.local"
+        ) as client:
+            agent = AgentHTTP(client, _identity(context_secret, subject="student-1", org="org-1"))
+            trial = await _drive(case, fixture, agent, repo, snapshot)
+        return {
+            "status": "INCOMPLETE",
+            "origin": "synthetic_scripted_model_real_local_postgres_mysql_java",
+            "dataset_version": case.dataset_version,
+            "case_sha256": _CASE_DIGEST,
+            "fixture_sha256": _FIXTURE_DIGEST,
+            "source_identity": source_identity,
+            "run_id": run_id,
+            "review": "draft",
+            "audit_complete": False,
+            "trial": trial,
+            "limitations": [
+                "Fixed scripted model does not test language understanding.",
+                "Snapshots do not prove complete transaction history or causal authorization.",
+                "No independent report provenance or human review; not release evidence.",
+            ],
+        }
+    finally:
+        try:
+            await gateway.close()
+        finally:
+            await db.close()
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--report-file", required=True)
+    args = parser.parse_args()
+    try:
+        with Path(args.report_file).open("x", encoding="utf-8") as stream:
+            try:
+                report = asyncio.run(run())
+            except Exception:  # noqa: BLE001 - keep errors sanitized
+                report = {"status": "ERROR", "reason": "PREFLIGHT_OR_TRIAL_SETUP_FAILED"}
+            json.dump(report, stream, ensure_ascii=False, indent=2)
+            stream.write("\n")
+        print(json.dumps({"status": report["status"]}))
+        return 3 if report["status"] == "INCOMPLETE" else 1
+    except (OSError, ValueError):
+        print(json.dumps({"status": "ERROR", "reason": "REPORT_WRITE_FAILED"}))
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -88,7 +88,13 @@ def compare_runs(
             if key in result:
                 raise IncompatibleRuns(f"duplicate trial: {key}")
             status = row.get("status")
-            if status not in {"PASS", "FAIL", "INCONCLUSIVE", "SKIPPED", "ERROR"}:
+            if not isinstance(status, str) or status not in {
+                "PASS",
+                "FAIL",
+                "INCONCLUSIVE",
+                "SKIPPED",
+                "ERROR",
+            }:
                 raise IncompatibleRuns("invalid trial status")
             if row.get("seed") != baseline_manifest["seed"] + trial_index or isinstance(
                 row.get("seed"), bool
@@ -109,6 +115,7 @@ def compare_runs(
                     or not isinstance(item.get("required"), bool)
                     or not isinstance(item.get("applicable"), bool)
                     or (item.get("risk") is not None and not isinstance(item["risk"], str))
+                    or not isinstance(item.get("status"), str)
                     or item.get("status")
                     not in {"PASS", "FAIL", "UNKNOWN", "ERROR", "SKIPPED", "NOT_RUN", "NA"}
                     or (item.get("applicable") is False and item.get("status") != "NA")
@@ -179,11 +186,33 @@ def compare_runs(
 
             if signature(a) != signature(b):
                 raise IncompatibleRuns("trial assertion contracts do not match")
+
+        def comparability_reason(row: dict[str, Any] | None) -> str | None:
+            # Some rules (notably Recall for unanswerable questions) legitimately
+            # yield NA despite the case marking the assertion applicable. Reports
+            # do not carry the original frozen parameters, so we cannot decide if
+            # that exception applies. Preserve a proven FAIL, but don't compare a
+            # claimed PASS with an unverified necessary NA as a completed task.
+            if (
+                row is not None
+                and row["status"] == "PASS"
+                and any(
+                    item["applicable"]
+                    and (item["required"] or item["risk"])
+                    and item["status"] == "NA"
+                    for item in row["assertions"]
+                )
+            ):
+                return "APPLICABLE_NA_REQUIRES_DATASET_VERIFICATION"
+            return None
+
         record["trials"].append(
             {
                 "trial_index": trial_index,
                 "baseline": a and a.get("status"),
                 "candidate": b and b.get("status"),
+                "baseline_comparability_reason": comparability_reason(a),
+                "candidate_comparability_reason": comparability_reason(b),
             }
         )
 
@@ -200,6 +229,8 @@ def compare_runs(
         statuses = [t[side] for t in trials]
         if "FAIL" in statuses:
             return "FAIL"
+        if any(t[f"{side}_comparability_reason"] for t in trials):
+            return "INCONCLUSIVE"
         if len(statuses) != repeats or {t["trial_index"] for t in trials} != set(range(repeats)):
             return "INCONCLUSIVE"
         return "PASS" if all(s == "PASS" for s in statuses) else "INCONCLUSIVE"

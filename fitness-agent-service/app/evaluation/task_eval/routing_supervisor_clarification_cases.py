@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from typing import Any, cast
 
-from app.agent.routing import HybridIntentRouter
+from app.agent.routing import HybridIntentRouter, deterministic_route_decision
 from app.agent.supervisor import Supervisor, SupervisorRequest
 from app.agent.tool_registry import ToolRegistry
 from app.infrastructure.agent_context import AgentIdentity
@@ -81,6 +81,16 @@ class _UnavailableModel:
 
 
 async def _run(message: str, case_id: str) -> dict[str, Any]:
+    deterministic = deterministic_route_decision(message)
+    if deterministic is not None and (
+        deterministic.confidence >= 0.98
+        or len(deterministic.intents) > 1
+        or any(intent.is_write for intent in deterministic.intents)
+    ):
+        return {
+            "component_status": "UNKNOWN",
+            "reason": "MODEL_UNAVAILABLE_PRECONDITION_NOT_APPLICABLE",
+        }
     model = _UnavailableModel()
     supervisor = Supervisor(
         cast(ModelGateway, model),

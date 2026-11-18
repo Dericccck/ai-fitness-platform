@@ -16,6 +16,7 @@ from app.rag.repository import KnowledgeRepository
 from app.rag.service import RagService
 
 from .graders.retrieval import grade_retrieval
+from .retrieval_summary import summarize_retrieval
 
 
 @dataclass(frozen=True)
@@ -56,6 +57,17 @@ async def evaluate_retrieval(service: RagService, cases: list[RetrievalCase]) ->
     forbidden result cannot prove ACL without verifying that the forbidden
     positive-control documents actually existed and could have been recalled.
     """
+    plans = [
+        {
+            "case_id": case.case_id,
+            "answerable": case.answerable,
+            "relevant_ids": list(case.relevant_ids),
+            "k": case.k,
+        }
+        for case in cases
+    ]
+    # Reject malformed or duplicate frozen plans before invoking retrieval.
+    summarize_retrieval(plans, [])
     rows: list[dict[str, Any]] = []
     real_repository = isinstance(service.repository, KnowledgeRepository)
     for case in cases:
@@ -121,4 +133,20 @@ async def evaluate_retrieval(service: RagService, cases: list[RetrievalCase]) ->
         "labels": "draft_unreviewed",
         "repository": "postgres_knowledge_repository" if real_repository else "substitute",
         "cases": rows,
+        "summary": summarize_retrieval(
+            plans,
+            [
+                {
+                    "case_id": row["case_id"],
+                    "state": (
+                        "OBSERVED"
+                        if row["retrieval"]["status"] in {"PASS", "FAIL", "NA"}
+                        else "UNKNOWN"
+                    ),
+                    "retrieved_ids": row.get("retrieved_ids"),
+                    "evidence_refs": ["rag-service-search"],
+                }
+                for row in rows
+            ],
+        ),
     }

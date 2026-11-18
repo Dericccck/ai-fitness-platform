@@ -194,6 +194,82 @@ def test_report_file_contains_only_current_result_and_does_not_overwrite(monkeyp
     assert len(calls) == 1
 
 
+@pytest.mark.parametrize(
+    "args",
+    [
+        ["--same-session-followup"],
+        ["--mock-model", "--approve-synthetic-fixture", "--same-session-followup"],
+        ["--real-model", "--same-session-followup"],
+    ],
+)
+def test_followup_cli_requires_real_model_and_explicit_approval(monkeypatch, tmp_path, args):
+    path = tmp_path / "report.json"
+    monkeypatch.setattr("sys.argv", ["cross_service_booking", *args, "--report-file", str(path)])
+    with pytest.raises(SystemExit) as exc:
+        chain.main()
+    assert exc.value.code == 2 and not path.exists()
+
+
+@pytest.mark.asyncio
+async def test_followup_evaluation_rejects_other_modes_before_environment(tmp_path, monkeypatch):
+    def fail_environment():
+        raise AssertionError("environment must not be accessed")
+
+    monkeypatch.setattr(chain, "_environment", fail_environment)
+    with pytest.raises(ValueError, match="followup requires"):
+        await chain.evaluate(same_session_followup=True)
+    model = chain._mock_model(str(tmp_path))
+    with pytest.raises(ValueError, match="followup requires"):
+        await chain.evaluate(
+            model=model,
+            model_decision="APPROVE",
+            approve_synthetic_fixture=True,
+            same_session_followup=True,
+        )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("result_kind", ["matched", "different_answer", "exception"])
+async def test_followup_reports_only_sanitized_evidence_and_restores_supervisor(
+    monkeypatch, result_kind
+):
+    import hashlib
+    import json
+    from types import SimpleNamespace
+
+    output = "private-model-answer"
+
+    class FakeFollowup:
+        def __init__(self, *_args, **_kwargs):
+            self.output_sha256 = hashlib.sha256(output.encode()).hexdigest()
+
+        def observation(self):
+            return {"component_status": "OBSERVED", "task_status": "UNKNOWN"}
+
+    class FakeAgent:
+        async def chat(self, prompt):
+            assert prompt == chain.FOLLOWUP
+            if result_kind == "exception":
+                raise RuntimeError("private-error-details")
+            return {
+                "answer": output if result_kind == "matched" else "unexpected-answer",
+                "route": "CUSTOMER_SERVICE",
+                "tool_steps": 1,
+            }
+
+    original_models, original_router = object(), object()
+    supervisor = SimpleNamespace(models=original_models, intent_router=original_router)
+    model = SimpleNamespace(_credential="private-key", budget=object())
+    monkeypatch.setattr(chain, "FollowupModel", FakeFollowup)
+    result = await chain._run_same_session_followup(
+        agent=FakeAgent(), supervisor=supervisor, model=model, booking_id="a" * 32
+    )
+    assert result["task_status"] == "UNKNOWN"
+    assert result["component_status"] == ("OBSERVED" if result_kind == "matched" else "INCOMPLETE")
+    assert "private" not in json.dumps(result)
+    assert supervisor.models is original_models and supervisor.intent_router is original_router
+
+
 def _database_snapshot():
     return {
         "snapshot_complete": True,

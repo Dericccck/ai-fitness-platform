@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import os
 import re
@@ -30,6 +31,7 @@ from langgraph.checkpoint.memory import InMemorySaver
 from sqlalchemy.engine import make_url
 
 from app.agent.fitness_tools import build_fitness_tool_registry
+from app.agent.routing import HybridIntentRouter
 from app.agent.supervisor import Supervisor
 from app.api.routes.agent import router as agent_router
 from app.api.routes.confirmations import router as confirmation_router
@@ -46,6 +48,7 @@ from . import booking_local
 from .agent_http import AgentHTTP
 from .booking_contracts import matches_frozen_case
 from .booking_duplicate_event import run_duplicate_event_probe
+from .booking_followup_probe import FOLLOWUP, FollowupModel
 from .booking_model_boundary import PAYLOAD, PROMPT, OneBookingModel, expected_payload
 from .booking_signed_identity import _identity
 from .budget_store import DurableBudget
@@ -160,11 +163,53 @@ def _environment() -> tuple[Settings, str, str, str, str]:
     return settings, run_id, mysql_id, context_secret, token_secret
 
 
+async def _run_same_session_followup(
+    *, agent: AgentHTTP, supervisor: Supervisor, model: OneBookingModel, booking_id: str
+) -> dict[str, Any]:
+    """Ask within the existing session without exposing raw model output in reports."""
+    followup = FollowupModel(
+        model._credential,
+        model.budget,
+        booking_id,
+        execute=True,
+        confirmed_current_pricing=True,
+    )
+    previous_models, previous_router = supervisor.models, supervisor.intent_router
+    response: dict[str, Any] | None = None
+    try:
+        supervisor.models = cast(Any, followup)
+        supervisor.intent_router = HybridIntentRouter(cast(Any, followup))
+        response = await agent.chat(FOLLOWUP)
+    except Exception:  # noqa: BLE001 - provider and runtime exceptions can contain sensitive text
+        response = None
+    finally:
+        supervisor.models, supervisor.intent_router = previous_models, previous_router
+    result = followup.observation()
+    answer = response.get("answer") if isinstance(response, dict) else None
+    matched = (
+        isinstance(answer, str)
+        and followup.output_sha256 is not None
+        and hashlib.sha256(answer.encode()).hexdigest() == followup.output_sha256
+    )
+    route_valid = isinstance(response, dict) and response.get("route") == "CUSTOMER_SERVICE"
+    steps = response.get("tool_steps") if isinstance(response, dict) else None
+    valid_steps = type(steps) is int and steps in (0, 1)
+    if not matched or not route_valid or not valid_steps:
+        result["component_status"] = "INCOMPLETE"
+    result.update(
+        supervisor_answer_hash_matches=matched,
+        expected_route_observed=route_valid,
+        tool_steps=steps if valid_steps else None,
+    )
+    return result
+
+
 async def evaluate(
     *,
     model: OneBookingModel | None = None,
     model_decision: str = "REJECT",
     approve_synthetic_fixture: bool = False,
+    same_session_followup: bool = False,
 ) -> dict[str, Any]:
     if model is not None and (
         not isinstance(model, OneBookingModel)
@@ -172,6 +217,16 @@ async def evaluate(
         or (model_decision == "APPROVE" and approve_synthetic_fixture is not True)
     ):
         raise ValueError("only an explicitly approved synthetic fixture may be written")
+    if type(same_session_followup) is not bool or (
+        same_session_followup
+        and (
+            model is None
+            or model._transport is not None
+            or model_decision != "APPROVE"
+            or approve_synthetic_fixture is not True
+        )
+    ):
+        raise ValueError("followup requires the real model and an approved synthetic fixture")
     # The model-bound case is fixed; the pre-existing scripted-only case may
     # choose a future date dynamically because it never leaves the machine.
     start = (
@@ -242,8 +297,8 @@ async def evaluate(
                     )
                     if not expected_payload(pending_payload):
                         raise ValueError("confirmed payload does not match synthetic fixture")
-                    # Never send provider a second turn containing business results.
-                    # Any post-decision text is explicitly scripted and is not evaluated.
+                    # Confirmation itself uses the deterministic business result;
+                    # the separately opted-in next user turn is evaluated below.
                     followup = booking_local.Model()
                     followup.calls = 1
                     supervisor.models = cast(Any, followup)
@@ -362,6 +417,43 @@ async def evaluate(
                     "witness_unchanged": True,
                     "database_effect_deltas": expected_deltas,
                 }
+                if same_session_followup and model is not None:
+                    try:
+                        event = await asyncio.to_thread(
+                            read_created_event,
+                            run_id=run_id,
+                            container_id=mysql_id,
+                            organization_id="org-1",
+                            student_id="student-1",
+                            coach_id="coach-1",
+                            request_id=record.request_id,
+                        )
+                        followup_observation = await _run_same_session_followup(
+                            agent=agent,
+                            supervisor=supervisor,
+                            model=model,
+                            booking_id=event.aggregate_id,
+                        )
+                    except Exception:  # noqa: BLE001 - do not expose untrusted inputs or local credentials
+                        followup_observation = {
+                            "component_status": "INCOMPLETE",
+                            "task_status": "UNKNOWN",
+                            "status": "FOLLOWUP_SETUP_OR_OBSERVER_ERROR",
+                        }
+                    try:
+                        final = await asyncio.to_thread(snapshot)
+                        _verify_database_deltas(after, final, "REJECT")
+                        if final["facts"] != after["facts"]:
+                            raise ValueError("UNEXPECTED_BUSINESS_CHANGE")
+                        followup_observation["business_effects_after_followup"] = (
+                            "NO_CHANGE_OBSERVED"
+                        )
+                    except Exception:  # noqa: BLE001 - report unresolved audit instead of model content
+                        followup_observation["business_effects_after_followup"] = (
+                            "UNVERIFIED_OR_CHANGED"
+                        )
+                        followup_observation["component_status"] = "INCOMPLETE"
+                    results["same_session_followup"] = followup_observation
                 if decision == "APPROVE" and model is None:
                     dataset_path = (
                         Path(__file__).resolve().parents[3] / "evals/task_eval/datasets/v1.jsonl"
@@ -393,9 +485,14 @@ async def evaluate(
                 "status": "INCOMPLETE",
                 "task_status": "UNKNOWN",
                 "component_status": "OBSERVED",
-                "origin": "one_model_tool_call_then_scripted_followup_real_postgres_mysql",
+                "origin": (
+                    "model_booking_and_opt_in_same_session_followup_real_postgres_mysql"
+                    if same_session_followup
+                    else "one_model_tool_call_then_scripted_followup_real_postgres_mysql"
+                ),
                 "cases": results,
                 "model_attempts": model.ledger.attempts,
+                "model_observation": model.diagnostics(),
                 "budget": model.budget.snapshot(),
                 "provider_cap_verified": False,
                 "complete_independent_database_audit": False,
@@ -517,6 +614,11 @@ def main() -> int:
     models.add_argument("--mock-model", action="store_true")
     models.add_argument("--real-model", action="store_true")
     parser.add_argument("--approve-synthetic-fixture", action="store_true")
+    parser.add_argument(
+        "--same-session-followup",
+        action="store_true",
+        help="After real-model synthetic approval, run a bounded same-session read-only follow-up",
+    )
     parser.add_argument("--confirm-current-pricing", action="store_true")
     parser.add_argument("--credential-file")
     parser.add_argument("--budget-file")
@@ -529,6 +631,8 @@ def main() -> int:
     args = parser.parse_args()
     if args.approve_synthetic_fixture and not (args.mock_model or args.real_model):
         parser.error("synthetic approval requires an explicit model mode")
+    if args.same_session_followup and not (args.real_model and args.approve_synthetic_fixture):
+        parser.error("same-session-followup requires real-model and synthetic approval")
     if args.real_model and (
         not args.credential_file
         or not args.budget_file
@@ -571,6 +675,7 @@ def main() -> int:
                 model=model,
                 model_decision="APPROVE" if args.approve_synthetic_fixture else "REJECT",
                 approve_synthetic_fixture=args.approve_synthetic_fixture,
+                same_session_followup=args.same_session_followup,
             )
         )
     except Exception as exc:  # noqa: BLE001 - avoid exposing secret-bearing network errors

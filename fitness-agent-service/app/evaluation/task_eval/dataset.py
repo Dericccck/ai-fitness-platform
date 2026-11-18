@@ -51,6 +51,21 @@ class DatasetValidationError(ValueError):
     """An invalid dataset; messages include source line where available."""
 
 
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Reject ambiguous JSON rather than silently choosing the last duplicate key."""
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            # Do not expose dataset contents in validation errors.
+            raise ValueError("duplicate JSON object key")
+        result[key] = value
+    return result
+
+
+def _reject_nonfinite_json(_value: str) -> None:
+    raise ValueError("non-finite numbers are not valid JSON")
+
+
 @dataclass(frozen=True)
 class Dataset:
     cases: list[TaskCase]
@@ -113,7 +128,15 @@ def load_dataset(
             errors.append(f"line {line_number}: blank JSONL line")
             continue
         try:
-            cases.append(TaskCase.model_validate(json.loads(line)))
+            cases.append(
+                TaskCase.model_validate(
+                    json.loads(
+                        line,
+                        object_pairs_hook=_unique_json_object,
+                        parse_constant=_reject_nonfinite_json,
+                    )
+                )
+            )
         except (ValueError, ValidationError) as exc:
             errors.append(f"line {line_number}: {exc}")
     if not cases:
