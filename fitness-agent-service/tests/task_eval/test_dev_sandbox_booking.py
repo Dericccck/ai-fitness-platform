@@ -39,8 +39,9 @@ class FakeAgent:
         return {"status": "CONFIRMATION_REQUIRED", "confirmation_id": "test-confirmation"}
 
     async def decide(self, confirmation_id, decision):
-        self.calls.append(("decision", decision))
+        self.calls.append(("decision", confirmation_id, decision))
         self.approved = True
+        return {"authorization_status": "APPROVED", "execution_status": "SUCCEEDED"}
 
     async def await_terminal(self, confirmation_id, **kwargs):
         self.calls.append(("await", kwargs))
@@ -85,11 +86,29 @@ async def test_dev_trial_steps_refresh_confirmation_and_preserve_unknown():
             data["facts"]["global_remaining_hours"] = 6
         return data
 
-    report = await module._drive(case, fixture, agent, repo, snapshot)
+    def details():
+        return {
+            "snapshot_complete": True,
+            "created_bookings": [
+                {
+                    "courseId": "course-1",
+                    "coachId": "coach-1",
+                    "studentId": "student-1",
+                    "organizationId": "org-1",
+                    "contractId": "contract-1",
+                    "startTime": "2030-01-07T01:00:00Z",
+                    "endTime": "2030-01-07T02:00:00Z",
+                }
+            ],
+        }
+
+    report = await module._drive(case, fixture, agent, repo, snapshot, details)
     assert report["task_status"] == "INCONCLUSIVE"
     assert [item["type"] for item in report["executed_steps"]] == [
         "chat",
         "assert",
+        "decision",
+        "await_terminal",
         "decision",
         "await_terminal",
         "assert",
@@ -101,7 +120,12 @@ async def test_dev_trial_steps_refresh_confirmation_and_preserve_unknown():
         "APPROVED",
     ]
     assert [row["status"] for row in report["snapshot_checks"]] == ["MATCH", "MATCH"]
-    assert [row["status"] for row in report["assertions"]] == ["UNKNOWN", "PASS", "UNKNOWN", "PASS"]
+    assert [row["status"] for row in report["assertions"]] == ["PASS", "PASS", "UNKNOWN", "PASS"]
+    assert report["repeated_decision"]["status"] == "MATCH"
+    assert [call for call in agent.calls if call[0] == "decision"] == [
+        ("decision", "test-confirmation", "APPROVE"),
+        ("decision", "test-confirmation", "APPROVE"),
+    ]
     assert all("test-confirmation" not in str(value) for value in report.values())
 
 
@@ -119,7 +143,14 @@ async def test_cross_tenant_or_global_change_is_reported_as_mismatch():
             data["facts"]["witness_remaining_hours"] = 4
         return data
 
-    report = await module._drive(case, fixture, agent, repo, snapshot)
+    report = await module._drive(
+        case,
+        fixture,
+        agent,
+        repo,
+        snapshot,
+        lambda: {"snapshot_complete": True, "created_bookings": []},
+    )
     assert report["snapshot_checks"][0]["status"] == "MISMATCH"
     assert report["task_status"] == "INCONCLUSIVE"
 
@@ -131,3 +162,84 @@ def test_development_case_is_not_original_planning_dataset():
     assert all(
         fixture["booking"][name] in case.steps[0].message for name in ("course_id", "coach_id")
     )
+
+
+@pytest.mark.asyncio
+async def test_duplicate_side_effect_is_not_accepted_as_idempotent():
+    case, fixture = module._load()
+    agent = FakeAgent()
+    repo = FakeRepository(agent)
+    decision_count = 0
+
+    async def decide(_cid, _decision):
+        nonlocal decision_count
+        decision_count += 1
+        agent.approved = True
+        return {"authorization_status": "APPROVED", "execution_status": "SUCCEEDED"}
+
+    agent.decide = decide
+
+    def snapshot(_request_id):
+        data = snapshot_values()
+        if decision_count:
+            data["facts"]["appointments"] = decision_count
+            data["facts"]["remaining_hours"] = 2 - decision_count
+            data["facts"]["global_appointments"] = decision_count
+        return data
+
+    result = await module._drive(
+        case,
+        fixture,
+        agent,
+        repo,
+        snapshot,
+        lambda: {"snapshot_complete": True, "created_bookings": []},
+    )
+    assert result["repeated_decision"]["status"] == "MISMATCH"
+    assert result["assertions"][0]["status"] == "UNKNOWN"
+    assert result["task_status"] == "INCONCLUSIVE"
+
+
+def test_read_only_details_are_scoped_and_reject_bad_results(monkeypatch):
+    import json
+
+    from app.evaluation.task_eval import dev_booking_observer as observer
+    from app.evaluation.task_eval.sandbox_preflight import PreflightError
+
+    inspected = []
+    monkeypatch.setattr(observer, "_inspect", lambda value: {"id": value})
+    monkeypatch.setattr(
+        observer, "verify_container", lambda info, **kw: inspected.append((info, kw))
+    )
+    rows = [
+        {
+            "courseId": "course-1",
+            "coachId": "coach-1",
+            "studentId": "student-1",
+            "organizationId": "org-1",
+            "contractId": "contract-1",
+            "startTime": "2030-01-07T01:00:00Z",
+            "endTime": "2030-01-07T02:00:00Z",
+        }
+    ]
+    result = {"database": "fitness_eval", "identity": "root@localhost", "rows": rows}
+    commands = []
+
+    def run(cmd, **kwargs):
+        commands.append(cmd)
+        return SimpleNamespace(stdout=json.dumps(result))
+
+    monkeypatch.setattr(observer.subprocess, "run", run)
+    kwargs = {
+        "run_id": "x",
+        "container_id": "y",
+        "organization_id": "org-1",
+        "student_id": "student-1",
+        "contract_id": "contract-1",
+    }
+    observed = observer.read_booking_details(**kwargs)
+    assert inspected and observed["created_bookings"] == rows
+    assert "SET TRANSACTION READ ONLY" in commands[0][-1]
+    result["rows"][0]["organizationId"] = "other-org"
+    with pytest.raises(PreflightError, match="INVALID_BOOKING_DETAILS"):
+        observer.read_booking_details(**kwargs)

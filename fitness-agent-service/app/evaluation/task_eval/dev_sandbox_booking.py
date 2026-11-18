@@ -39,11 +39,12 @@ from .booking_local import Router
 from .booking_signed_identity import _identity
 from .cross_service_booking import _environment, _verify_database_deltas
 from .dataset import load_dataset
+from .dev_booking_observer import read_booking_details
 from .mysql_booking_observer import snapshot_booking
 from .step_kernel import StepState, execute_steps, prepare_steps
 
 _DIR = Path(__file__).resolve().parents[3] / "evals/task_eval/dev_sandbox_v1"
-_CASE_DIGEST = "8058404bdf443e96301b2134aaca55129965e98d46fcda330a90ce7b82e25400"
+_CASE_DIGEST = "4acffd6a435ded4f82fe50bd04b5dd0af6e8265dadd15b6196a8c968f16412e1"
 _FIXTURE_DIGEST = "583f13a0aeb889a2941bfbdb60bc7ea70606920a5698d8e143ea2ba75e986170"
 
 
@@ -75,6 +76,7 @@ def _source_identity() -> dict[str, Any]:
     # This is a source fingerprint, not independent build or runtime attestation.
     result["driver_sha256"] = _digest(Path(__file__))
     result["step_kernel_sha256"] = _digest(Path(__file__).with_name("step_kernel.py"))
+    result["booking_observer_sha256"] = _digest(Path(__file__).with_name("dev_booking_observer.py"))
     return result
 
 
@@ -122,6 +124,7 @@ async def _drive(
     agent: AgentHTTP,
     repository: ConfirmationRepository,
     snapshot: Any,
+    details: Any,
 ) -> dict[str, Any]:
     """Drive the exact frozen development steps; arguments here are not a public adapter API."""
     requests = prepare_steps(case)
@@ -145,6 +148,9 @@ async def _drive(
     cid: str | None = None
     executed_steps: list[dict[str, Any]] = []
     snapshot_checks: list[dict[str, Any]] = []
+    idempotency_checked = False
+    repeated_decision: dict[str, Any] | None = None
+    decision_count = 0
     failure: str | None = None
     try:
         async with asyncio.timeout(case.timeouts.trial_seconds):
@@ -212,6 +218,28 @@ async def _drive(
                             "authorization_status": record.authorization_status,
                             "execution_status": record.execution_status,
                         }
+                        if phase == "final":
+                            detail = await asyncio.to_thread(details)
+                            if detail.get("snapshot_complete") is not True:
+                                raise ValueError("DETAIL_SNAPSHOT_INCOMPLETE")
+                            detail_digest = hashlib.sha256(
+                                json.dumps(
+                                    detail["created_bookings"],
+                                    sort_keys=True,
+                                    separators=(",", ":"),
+                                ).encode()
+                            ).hexdigest()
+                            evidence.update(
+                                evidence_refs=[
+                                    "snapshot-sha256:" + snapshot_digest,
+                                    "details-sha256:" + detail_digest,
+                                ],
+                                snapshot_complete=True,
+                                created_bookings=detail["created_bookings"],
+                                credit_delta=current_facts["remaining_hours"]
+                                - facts["remaining_hours"],
+                                idempotency_checked=idempotency_checked,
+                            )
                     elif step.type == "chat":
                         if not isinstance(step.message, str) or not step.message:
                             raise ValueError("DEV_MESSAGE_UNAVAILABLE")
@@ -227,7 +255,34 @@ async def _drive(
                             [fixture["identity"]["organization_id"]],
                         )
                     elif step.type == "decision" and step.decision == "APPROVE" and cid:
-                        await agent.decide(cid, "APPROVE")
+                        decision_count += 1
+                        if decision_count == 1:
+                            await agent.decide(cid, "APPROVE")
+                        elif decision_count == 2 and record is not None:
+                            before_retry = await asyncio.to_thread(snapshot, record.request_id)
+                            before_details = await asyncio.to_thread(details)
+                            decision = await agent.decide(cid, "APPROVE")
+                            after_retry = await asyncio.to_thread(snapshot, record.request_id)
+                            after_details = await asyncio.to_thread(details)
+                            idempotency_checked = (
+                                before_retry.get("snapshot_complete") is True
+                                and after_retry.get("snapshot_complete") is True
+                                and before_retry.get("witness_observed") is True
+                                and after_retry.get("witness_observed") is True
+                                and before_details.get("snapshot_complete") is True
+                                and after_details.get("snapshot_complete") is True
+                                and before_retry.get("facts") == after_retry.get("facts")
+                                and before_details.get("created_bookings")
+                                == after_details.get("created_bookings")
+                                and decision.get("authorization_status") == "APPROVED"
+                                and decision.get("execution_status") == "SUCCEEDED"
+                            )
+                            repeated_decision = {
+                                "status": "MATCH" if idempotency_checked else "MISMATCH",
+                                "scope": "same_confirmation_and_decision_request_id_snapshot_comparison",
+                            }
+                        else:
+                            raise ValueError("UNSUPPORTED_DECISION_SEQUENCE")
                     elif (
                         step.type == "await_terminal"
                         and cid
@@ -280,6 +335,7 @@ async def _drive(
         "assertions": assertions,
         "phase_observations": state.phase_observations,
         "snapshot_checks": snapshot_checks,
+        "repeated_decision": repeated_decision,
     }
 
 
@@ -325,11 +381,20 @@ async def run() -> dict[str, Any]:
                 witness_contract_id="contract-2",
             )
 
+        def details() -> dict[str, Any]:
+            return read_booking_details(
+                run_id=run_id,
+                container_id=mysql_id,
+                organization_id="org-1",
+                student_id="student-1",
+                contract_id="contract-1",
+            )
+
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://agent.local"
         ) as client:
             agent = AgentHTTP(client, _identity(context_secret, subject="student-1", org="org-1"))
-            trial = await _drive(case, fixture, agent, repo, snapshot)
+            trial = await _drive(case, fixture, agent, repo, snapshot, details)
         return {
             "status": "INCOMPLETE",
             "origin": "synthetic_scripted_model_real_local_postgres_mysql_java",
