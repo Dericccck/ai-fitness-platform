@@ -45,6 +45,12 @@ def _parser() -> argparse.ArgumentParser:
         if name == "run":
             cmd.add_argument("--execute", action="store_true", required=True)
             cmd.add_argument("--output-dir", required=True)
+    gate = sub.add_parser("release-gate", help="fail-closed offline release assessment")
+    gate.add_argument("--dataset", required=True)
+    gate.add_argument("--manifest", required=True)
+    gate.add_argument("--trials", required=True, help="trials.jsonl")
+    gate.add_argument("--policy", required=True, help="pre-frozen policy JSON")
+    gate.add_argument("--no-quota-check", action="store_true")
     preflight = sub.add_parser(
         "model-preflight", help="offline, fail-closed model configuration check"
     )
@@ -100,8 +106,61 @@ def _read_run(path: str) -> tuple[dict[str, Any], list[dict[str, Any]]]:
     return manifest, trials
 
 
+def _read_gate_json(path: str, *, max_bytes: int) -> Any:
+    raw = Path(path).read_bytes()
+    if len(raw) > max_bytes:
+        raise ValueError("input too large")
+
+    def unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate key")
+            value[key] = item
+        return value
+
+    return json.loads(raw, object_pairs_hook=unique_pairs)
+
+
+def _read_gate_trials(path: str) -> list[Any]:
+    raw = Path(path).read_bytes()
+    if len(raw) > 10_000_000:
+        raise ValueError("input too large")
+    lines = raw.decode("utf-8").splitlines()
+    if any(not line.strip() for line in lines):
+        raise ValueError("blank trial line")
+
+    def unique_pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        value: dict[str, Any] = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate key")
+            value[key] = item
+        return value
+
+    return [json.loads(line, object_pairs_hook=unique_pairs) for line in lines]
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
+    if args.command == "release-gate":
+        # Data and validation errors can contain untrusted text or secrets.
+        # This dedicated boundary deliberately reports a generic input failure.
+        try:
+            from .release_gate import GatePolicy, assess_release_gate
+
+            if Path(args.dataset).stat().st_size > 10_000_000:
+                raise ValueError("dataset too large")
+            dataset = load_dataset(args.dataset, check_quotas=not args.no_quota_check)
+            manifest = _read_gate_json(args.manifest, max_bytes=2_000_000)
+            trials = _read_gate_trials(args.trials)
+            policy = GatePolicy.model_validate(_read_gate_json(args.policy, max_bytes=100_000))
+            result = assess_release_gate(dataset, manifest, trials, policy)
+        except (ValueError, OSError, TypeError, KeyError, UnicodeError):
+            print("task-eval: invalid release gate input", file=sys.stderr)
+            return 1
+        print(_json(result))
+        return {"PASS": 0, "FAIL": 2, "BLOCKED": 3}[result["status"]]
     try:
         if args.command == "dataset-local":
             from .dataset_local import evaluate_dataset, write_dataset_report

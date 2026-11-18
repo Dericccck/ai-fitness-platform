@@ -1,6 +1,11 @@
 """Case-bound confirmation input guards with an isolated business gateway.
 
-BOOK-013 supplies no coach identifier to the actual confirmation service.
+BOOK-012/013/014 supply missing time/coach/course identifiers to the actual
+confirmation service, respectively.
+BOOK-015 supplies a literal relative time as invalid tool arguments; it does
+not prove that an Agent will avoid inventing a specific time.
+BOOK-016 supplies an unspecified course and an unresolved weekday-evening
+literal together; it does not prove the Agent asked the user for a course.
 BOOK-017 supplies synthetic local times to that service to check its documented
 Asia/Shanghai normalization. Neither probe assesses the model's interpretation
 of the user message or whether it asks an appropriate clarification.
@@ -13,6 +18,8 @@ import time
 from typing import Any, cast
 from uuid import uuid4
 
+from pydantic import ValidationError
+
 from app.agent.fitness_tools import build_fitness_tool_registry
 from app.agent.tool_registry import ToolConfirmationNormalizationError
 from app.confirmation.cipher import AesGcmPayloadCipher
@@ -23,7 +30,7 @@ from . import booking_local as local
 from .booking_contracts import matches_frozen_case
 from .report import reduce_trial
 
-_CASES = {"BOOK-013", "BOOK-017"}
+_CASES = {"BOOK-012", "BOOK-013", "BOOK-014", "BOOK-015", "BOOK-016", "BOOK-017"}
 
 
 def supports(case: Any) -> bool:
@@ -50,9 +57,17 @@ async def run(case: Any, *, index: int = 0, seed: int = 0) -> dict[str, Any]:
     executed = False
     failure = None
     try:
-        if case.case_id == "BOOK-013":
-            payload.pop("coach_id")
+        if case.case_id in {"BOOK-012", "BOOK-013", "BOOK-014"}:
+            fields = {
+                "BOOK-012": (("start_time", "end_time"), {"startTime", "endTime"}, "time"),
+                "BOOK-013": (("coach_id",), {"coachId"}, "coach_identifier"),
+                "BOOK-014": (("course_id",), {"courseId"}, "course_identifier"),
+            }
+            removed, expected_errors, label = fields[case.case_id]
+            for name in removed:
+                payload.pop(name)
             rejected = False
+            missing_errors: set[str] = set()
             try:
                 await service.prepare(
                     tool_id="fitness.booking.create.v1",
@@ -61,10 +76,55 @@ async def run(case: Any, *, index: int = 0, seed: int = 0) -> dict[str, Any]:
                     identity=local.IDENTITY,
                     thread_id="local-thread",
                 )
-            except ToolConfirmationNormalizationError:
+            except ToolConfirmationNormalizationError as exc:
                 rejected = True
+                if isinstance(exc.__cause__, ValidationError):
+                    missing_errors = {
+                        str(error["loc"][0])
+                        for error in exc.__cause__.errors(include_input=False)
+                        if error.get("type") == "missing" and len(error.get("loc", ())) == 1
+                    }
             executed = True
-            checks["missing_coach_identifier_rejected"] = rejected
+            checks[f"missing_{label}_rejected"] = rejected
+            checks[f"missing_{label}_identified"] = missing_errors == expected_errors
+            checks["no_confirmation_created"] = not hasattr(repository, "current")
+        elif case.case_id in {"BOOK-015", "BOOK-016"}:
+            relative = "下周" if case.case_id == "BOOK-015" else "周三晚上"
+            payload["start_time"] = relative
+            payload["end_time"] = relative
+            if case.case_id == "BOOK-016":
+                payload.pop("course_id")
+            rejected = False
+            invalid_errors: set[tuple[str, str]] = set()
+            try:
+                await service.prepare(
+                    tool_id="fitness.booking.create.v1",
+                    raw_input=payload,
+                    gateway_context=GatewayRequestContext(signed_context="local-context"),
+                    identity=local.IDENTITY,
+                    thread_id="local-thread",
+                )
+            except ToolConfirmationNormalizationError as exc:
+                rejected = True
+                if isinstance(exc.__cause__, ValidationError):
+                    invalid_errors = {
+                        (str(error["loc"][0]), str(error["type"]))
+                        for error in exc.__cause__.errors(include_input=False)
+                        if len(error.get("loc", ())) == 1
+                    }
+            executed = True
+            checks["relative_time_literal_rejected"] = rejected
+            expected_validation_errors = {
+                ("start_time", "datetime_from_date_parsing"),
+                ("end_time", "datetime_from_date_parsing"),
+            }
+            if case.case_id == "BOOK-016":
+                expected_validation_errors.add(("courseId", "missing"))
+            checks[
+                "missing_course_and_time_validation"
+                if case.case_id == "BOOK-016"
+                else "both_time_fields_identified_as_invalid"
+            ] = invalid_errors == expected_validation_errors
             checks["no_confirmation_created"] = not hasattr(repository, "current")
         else:
             payload["start_time"] = "2030-01-07T09:00:00"

@@ -1,10 +1,10 @@
 # 离线任务评测规划集 v1
 
-`datasets/v1.jsonl` 是 120 条人工设计的合成规划题，按主场景分别为路由 20、知识 30、预约 35、经营 20、安全 15；开发集 80 条、测试规划集 40 条。每条 Case 是一个完整任务，重复运行不能增加题目数。每条含独立输入、前置假设、预期、断言和标签；`fixtures/planning-v1.json` 仅描述所需前提，不能创建夹具或证明隔离。资源、知识真值、具体时段、业务审计、失败注入和真实通信适配器均仍需实现和验证。
+`datasets/v1.jsonl` 是 120 条待人工审核的合成规划题，按主场景分别为路由 20、知识 30、预约 35、经营 20、安全 15；开发集 80 条、测试规划集 40 条。每条 Case 是一个完整任务，重复运行不能增加题目数。每条含独立输入、前置假设、预期、断言和标签；`fixtures/planning-v1.json` 仅描述所需前提，不能创建夹具或证明隔离。资源、知识真值、具体时段、业务审计、失败注入和真实通信适配器均仍需实现和验证。
 
 这些题的 `review.status` 全为 `draft`：没有伪造人工标注或专业审核记录。`test` 只是计划划分，并非冻结测试集或盲测集；family 由作者初步分组，必须由人工复核任务语义、共享知识/fixture 和跨集近似变体，按需重分组并重新版本化。任何人工审核必须记录真实标注、复核、日期和裁决引用。所有 Case 均为 `planned`、`in_scope`，未完成适配时不得作为产品能力通过，应保留在覆盖分母中并报告 SKIPPED。测试集草案不得用于发布验收。
 
-数据协议见 `app/evaluation/task_eval/contracts.py`；字段严格校验并禁止未知字段，Case 的 `expected.assertions` 引用具名版本化规则。固定的 `allowed_routes` 目前仅标定七个明确路由题，其余需按产品路由映射和人工预期核实；这些空集合不代表允许任意路由或通过。ROUT-005 的主体是学员而请求“授课安排”，现有按学员查询的预约接口无法证明教练日程的预期路由，因此撤去未经核实的标签并保留待审核。`answer_rubric_ref` 当前只是规划引用，不代表 Rubric 已建立或校准；语义结果不可判时必须为 UNKNOWN。案例中故障注入名称是设计目标，不代表故障已实际注入或被观察到。
+数据协议见 `app/evaluation/task_eval/contracts.py`；字段严格校验并禁止未知字段，Case 的 `expected.assertions` 引用具名版本化规则。固定的 `allowed_routes` 目前仅标定六个明确路由题，其余需按产品路由映射和人工预期核实；这些空集合不代表允许任意路由或通过。ROUT-005 的主体是学员而请求“授课安排”，现有按学员查询的预约接口无法证明教练日程的预期路由，因此撤去未经核实的标签并保留待审核。`answer_rubric_ref` 当前只是规划引用，不代表 Rubric 已建立或校准；语义结果不可判时必须为 UNKNOWN。案例中故障注入名称是设计目标，不代表故障已实际注入或被观察到。
 
 从 `fitness-agent-service` 目录，执行以下纯本地校验及单元测试：
 
@@ -27,6 +27,12 @@ python -m app.evaluation.task_eval.component_notification
 
 安全建议评分要求 adapter 提供与判断 rubric 版本一致的 `professional_review`（含 `reviewer_id`、`qualification`、`review_ref`、`rubric_version`），并在 `evidence_refs` 中列出该审核引用；审核身份和记录的真实性须由证据适配器核实。只提供一个审核完成布尔值不足以判定；安全评分固定为 0 = FAIL、1 = UNKNOWN、2 = PASS。仓库不包含或伪造专业审核记录。
 
+## 人工与 Judge 评分校准统计
+
+在取得真实的人评和 Judge 独立评分后，从 `fitness-agent-service` 目录运行 `python -m app.evaluation.task_eval.calibration --dataset evals/task_eval/datasets/v1.jsonl --ratings ratings.json --output calibration-report.json`。输入 JSON 为 `schema_version`、`dataset_sha256`、`rubric_ref`、`judge_model`、`prompt_version`、`ratings`；每个 rating 含开发集 `case_id`、语义断言 ID `metric_id`、`human_score`、`judge_score` 和对应的 `human_evidence_sha256`、`judge_evidence_sha256`。分数为 0、1、2 或无法判断时的 null；null 的证据摘要也必须为 null，其他分数必须附 64 位小写 SHA-256。每个案例与指标只能出现一次。
+
+输出总量、可比较分母、未知数量、混淆矩阵，并按指标规则、场景和风险分组，单列人工判 0 而 Judge 判 1、2 或未知的数量。安全建议规则中的 1 表示 UNKNOWN，不进入可比较分母；普通语义规则中的 1 则是可比较的部分得分。分母为零时一致率是 null。输入中的评分及证据摘要仍是待核验声明；此工具不会认证评审身份、独立性或证据真实性，也不会生成标注或授权发布。
+
 ## 经营查询策略与趋势组件评测
 
 ```bash
@@ -36,3 +42,17 @@ python -m app.evaluation.task_eval.component_operations
 运行实际经营查询策略与趋势构造函数，使用合成机构、查询和 Gateway 聚合响应模拟数据；逐条报告输入、预期和实际策略决策或趋势结果。覆盖正确查询、机构越界、指标或时间漂移、信息不足或多指标、时间桶和对比口径漂移，以及空记录、缺失时间桶和零基数的趋势处理。任何案例失败或异常时返回非零，异常不暴露内部细节。
 
 该组件不调用 Agent、Gateway 或数据库，不验证身份签名、数据库权限、SQL、真实业务聚合或完整任务。这里的案例独立于规划集的 120 条任务，不代表那些任务已执行。
+
+## 预约服务的可选 Java 组件观察
+
+`BOOK-019/020/021/023/024` 可关联到实际 Java `BookingService` 的五个不同测试：合同失效、课时不足、跨学员操作、教练时段冲突和学员时段冲突。运行前需要本机 Maven、JDK 和已经下载到项目 `.mvn/repository` 的依赖；评测使用 Maven 离线模式，将当前源码复制到临时目录，只运行固定的五个方法，并校验本次测试进程退出码及新生成报告的方法、数量和结果。源码测试契约变化后需复核并更新夹具，旧报告不能用于证明新运行。
+
+从 `fitness-agent-service` 目录执行：
+
+```bash
+TASK_EVAL_JAVA_COMPONENTS=1 \
+  python -m app.evaluation.task_eval.cli dataset-local --dataset evals/task_eval/datasets/v1.jsonl \
+  --split all --execute --output-dir /tmp/fitness-eval-with-java
+```
+
+每次数据集评测自动创建独立运行上下文，五个案例在同一次评测中共享该次套件结果；不同评测不会复用结果。未启用时这些 Java 案例保持 `SKIPPED`。五项测试的仓储均为 Mockito 替身，不证明真实数据库、并发、Agent 对话或答案质量；即使全部通过，相关任务仍为 `INCONCLUSIVE`。`BOOK-025` 则只观察 Python 确认服务对合成冲突的处理，不能证明模型没有误报成功。

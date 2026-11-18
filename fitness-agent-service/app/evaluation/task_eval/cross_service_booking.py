@@ -44,12 +44,56 @@ from app.infrastructure.gateway_client import GatewayClient
 
 from . import booking_local
 from .agent_http import AgentHTTP
+from .booking_contracts import matches_frozen_case
+from .booking_duplicate_event import run_duplicate_event_probe
 from .booking_model_boundary import PAYLOAD, PROMPT, OneBookingModel, expected_payload
 from .booking_signed_identity import _identity
 from .budget_store import DurableBudget
-from .mysql_booking_observer import snapshot_booking
+from .dataset import load_dataset
+from .mysql_booking_observer import read_created_event, snapshot_booking
 from .mysql_sandbox_preflight import verify_container
 from .sandbox_preflight import PreflightError, _inspect, _verify_container
+
+
+def _require(condition: bool, reason: str) -> None:
+    """Keep acceptance checks active under optimized Python as well."""
+    if not condition:
+        raise ValueError(reason)
+
+
+def _verify_database_deltas(
+    before: dict[str, Any], after: dict[str, Any], decision: str
+) -> dict[str, int]:
+    """Compare isolated snapshots without claiming complete transaction history."""
+    if decision not in {"APPROVE", "REJECT"} or not all(
+        snapshot.get("snapshot_complete") is True and snapshot.get("witness_observed") is True
+        for snapshot in (before, after)
+    ):
+        raise ValueError("INCOMPLETE_BUSINESS_SNAPSHOT")
+    effect = 0 if decision == "REJECT" else 1
+    expected = {
+        "global_contracts": 0,
+        "global_remaining_hours": -effect,
+        "global_appointments": effect,
+        "global_create_operations": effect,
+        "global_reschedule_operations": 0,
+        "global_cancel_operations": 0,
+        "global_audits": effect,
+        "global_consumptions": effect,
+        "global_outbox": effect,
+        "witness_contract_count": 0,
+        "witness_remaining_hours": 0,
+        "witness_appointments": 0,
+    }
+    try:
+        old, new = before["facts"], after["facts"]
+        if any(type(old[key]) is not int or type(new[key]) is not int for key in expected):
+            raise ValueError("INCOMPLETE_BUSINESS_SNAPSHOT")
+        if any(new[key] - old[key] != delta for key, delta in expected.items()):
+            raise ValueError("BUSINESS_EFFECT_MISMATCH")
+    except (KeyError, TypeError) as exc:
+        raise ValueError("INCOMPLETE_BUSINESS_SNAPSHOT") from exc
+    return expected
 
 
 def _environment() -> tuple[Settings, str, str, str, str]:
@@ -122,8 +166,6 @@ async def evaluate(
     model_decision: str = "REJECT",
     approve_synthetic_fixture: bool = False,
 ) -> dict[str, Any]:
-    if not __debug__:
-        raise RuntimeError("ASSERTIONS_REQUIRED")
     if model is not None and (
         not isinstance(model, OneBookingModel)
         or model_decision not in {"REJECT", "APPROVE"}
@@ -187,7 +229,7 @@ async def evaluate(
                 identity = _identity(context_secret, subject="student-1", org="org-1")
                 agent = AgentHTTP(http, identity)
                 response = await agent.chat(PROMPT if model is not None else "请帮我预约课程")
-                assert response["status"] == "CONFIRMATION_REQUIRED"
+                _require(response["status"] == "CONFIRMATION_REQUIRED", "CONFIRMATION_MISSING")
                 cid = response["confirmation_id"]
                 record = await repository.get_for_subject(cid, "student-1", ["org-1"])
                 if model is not None:
@@ -214,20 +256,31 @@ async def evaluate(
                         student_id="student-1",
                         contract_id="contract-1",
                         request_id=request_id,
+                        witness_organization_id="org-2",
+                        witness_student_id="student-2",
+                        witness_contract_id="contract-2",
                     )
 
                 before = await asyncio.to_thread(snapshot)
-                assert before["snapshot_complete"] and not before["audit_complete"]
-                assert before["facts"]["appointments"] == 0
-                assert before["facts"]["remaining_hours"] == 2
-                assert before["facts"]["audit_count"] == 0
+                _require(
+                    before["snapshot_complete"] is True
+                    and before["audit_complete"] is False
+                    and before["facts"]["appointments"] == 0
+                    and before["facts"]["remaining_hours"] == 2
+                    and before["facts"]["audit_count"] == 0
+                    and before["witness_observed"] is True
+                    and before["facts"]["witness_contract_count"] == 1
+                    and before["facts"]["witness_remaining_hours"] == 5
+                    and before["facts"]["witness_appointments"] == 0,
+                    "INITIAL_BUSINESS_SNAPSHOT_MISMATCH",
+                )
                 stranger = _identity(context_secret, subject="other", org="org-1")
                 denied = await http.post(
                     f"/api/v1/agent/confirmations/{cid}/decisions",
                     headers={"X-Agent-Context": stranger},
                     json={"decision": "APPROVE", "decision_request_id": uuid4().hex},
                 )
-                assert denied.status_code == 404
+                _require(denied.status_code == 404, "OTHER_SUBJECT_NOT_DENIED")
                 async with AsyncClient(
                     base_url=settings.gateway_base_url,
                     trust_env=False,
@@ -255,8 +308,11 @@ async def evaluate(
                             .replace("+00:00", "Z"),
                         },
                     )
-                    assert unconfirmed.status_code in {401, 403}
-                assert (await asyncio.to_thread(snapshot))["facts"] == before["facts"]
+                    _require(unconfirmed.status_code in {401, 403}, "UNCONFIRMED_WRITE_NOT_DENIED")
+                _require(
+                    (await asyncio.to_thread(snapshot))["facts"] == before["facts"],
+                    "BUSINESS_CHANGED_BEFORE_DECISION",
+                )
                 first = await agent.decide(cid, cast(Any, decision))
                 repeat = await agent.decide(cid, cast(Any, decision))
                 expected = (
@@ -264,27 +320,74 @@ async def evaluate(
                     if decision == "REJECT"
                     else ("APPROVED", "SUCCEEDED")
                 )
-                assert (first["authorization_status"], first["execution_status"]) == expected
-                assert (repeat["authorization_status"], repeat["execution_status"]) == expected
+                _require(
+                    (first["authorization_status"], first["execution_status"]) == expected
+                    and (repeat["authorization_status"], repeat["execution_status"]) == expected,
+                    "CONFIRMATION_STATE_MISMATCH",
+                )
                 after = await asyncio.to_thread(snapshot)
                 facts = after["facts"]
-                assert facts["appointments"] == (0 if decision == "REJECT" else 1)
-                assert facts["remaining_hours"] == (2 if decision == "REJECT" else 1)
-                assert facts["audit_count"] == (0 if decision == "REJECT" else 1)
-                assert facts["consumption_count"] == (0 if decision == "REJECT" else 1)
-                assert facts["linked_audit_and_consumption"] == (0 if decision == "REJECT" else 1)
+                _require(
+                    facts["appointments"] == (0 if decision == "REJECT" else 1)
+                    and facts["remaining_hours"] == (2 if decision == "REJECT" else 1)
+                    and facts["audit_count"] == (0 if decision == "REJECT" else 1)
+                    and facts["consumption_count"] == (0 if decision == "REJECT" else 1)
+                    and facts["linked_audit_and_consumption"] == (0 if decision == "REJECT" else 1),
+                    "SCOPED_BUSINESS_SNAPSHOT_MISMATCH",
+                )
+                # Counts span the entire disposable business database. The
+                # witness independently catches changes to another tenant's
+                # seeded contract that aggregate counts alone could hide.
+                expected_deltas = _verify_database_deltas(before, after, decision)
+                _require(
+                    facts["audit_actions"]
+                    == (None if decision == "REJECT" else ["CREATE_APPOINTMENT"]),
+                    "AUDIT_ACTION_MISMATCH",
+                )
                 events = [event.event_type for event in await repository.list_events(cid)]
-                assert events[0] == "CREATED"
+                _require(bool(events) and events[0] == "CREATED", "CONFIRMATION_EVENTS_MISMATCH")
                 if decision == "REJECT":
-                    assert events == ["CREATED", "REJECTED"]
+                    _require(events == ["CREATED", "REJECTED"], "CONFIRMATION_EVENTS_MISMATCH")
                 else:
-                    assert (
+                    _require(
                         events.count("APPROVED")
                         == events.count("CONSUMED")
                         == events.count("EXECUTION_SUCCEEDED")
-                        == 1
+                        == 1,
+                        "CONFIRMATION_EVENTS_MISMATCH",
                     )
-                results[decision.lower()] = {"status": "PASS", "audit_complete": False}
+                results[decision.lower()] = {
+                    "status": "PASS",
+                    "audit_complete": False,
+                    "witness_unchanged": True,
+                    "database_effect_deltas": expected_deltas,
+                }
+                if decision == "APPROVE" and model is None:
+                    dataset_path = (
+                        Path(__file__).resolve().parents[3] / "evals/task_eval/datasets/v1.jsonl"
+                    )
+                    dataset = load_dataset(dataset_path)
+                    cases = [case for case in dataset.cases if case.case_id == "BOOK-030"]
+                    _require(
+                        len(cases) == 1 and matches_frozen_case(cases[0]),
+                        "BOOK_030_CONTRACT_CHANGED",
+                    )
+                    event = await asyncio.to_thread(
+                        read_created_event,
+                        run_id=run_id,
+                        container_id=mysql_id,
+                        organization_id="org-1",
+                        student_id="student-1",
+                        coach_id="coach-1",
+                        request_id=record.request_id,
+                    )
+
+                    async def mysql_snapshot() -> dict[str, Any]:
+                        return await asyncio.to_thread(snapshot)
+
+                    results["duplicate_event"] = await run_duplicate_event_probe(
+                        database=database, event=event, mysql_snapshot=mysql_snapshot
+                    )
         if model is not None:
             return {
                 "status": "INCOMPLETE",
@@ -300,6 +403,8 @@ async def evaluate(
             }
         return {
             "status": "PASS",
+            "scope": "cross_service_component_probe",
+            "task_eval_status": "INCONCLUSIVE",
             "origin": "scripted_model_asgi_agent_java_http_real_postgres_mysql",
             "cases": results,
         }
@@ -392,7 +497,9 @@ def _real_model(
         or minimum_reserved_nano < 0
     ):
         raise ValueError("credential, existing budget, or price verification unavailable")
-    budget = DurableBudget(ledger_path, limit_nano=limit_nano, opening_nano=opening_nano)
+    budget = DurableBudget.open_existing(
+        ledger_path, limit_nano=limit_nano, opening_nano=opening_nano
+    )
     snapshot = budget.snapshot()
     if (
         snapshot["reserved_nano"] < minimum_reserved_nano
@@ -416,6 +523,9 @@ def main() -> int:
     parser.add_argument("--budget-limit-nano", type=int)
     parser.add_argument("--budget-opening-nano", type=int)
     parser.add_argument("--minimum-reserved-nano", type=int)
+    parser.add_argument(
+        "--report-file", help="Write this run's sanitized JSON result to a new file"
+    )
     args = parser.parse_args()
     if args.approve_synthetic_fixture and not (args.mock_model or args.real_model):
         parser.error("synthetic approval requires an explicit model mode")
@@ -430,6 +540,14 @@ def main() -> int:
         parser.error(
             "real-model requires credential, existing budget and confirmed current pricing"
         )
+    report_stream = None
+    if args.report_file:
+        try:
+            # Reserve the path before any paid request or side effect.
+            report_stream = Path(args.report_file).open("x", encoding="utf-8")  # noqa: SIM115 - held across the run to reserve the output path.
+        except OSError:
+            print(json.dumps({"status": "ERROR", "error_type": "REPORT_WRITE_FAILED"}))
+            return 1
     model: OneBookingModel | None = None
     directory: tempfile.TemporaryDirectory[str] | None = None
     try:
@@ -473,7 +591,16 @@ def main() -> int:
     finally:
         if directory is not None:
             directory.cleanup()
-    print(json.dumps(result))
+    encoded = json.dumps(result, ensure_ascii=False)
+    if report_stream is not None:
+        try:
+            report_stream.write(encoded + "\n")
+            report_stream.close()
+        except OSError:
+            report_stream.close()
+            print(json.dumps({"status": "ERROR", "error_type": "REPORT_WRITE_FAILED"}))
+            return 1
+    print(encoded)
     if result["status"] == "PASS":
         return 0
     if result["status"] == "INCOMPLETE":

@@ -16,19 +16,25 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from . import booking_cases
+from . import booking_cases, booking_java_cases
 from .component_customer_service_cases import evaluate_customer_service_case_observations
 from .component_notification_worker import evaluate_notification_worker
 from .component_operations_cases import evaluate_operations_case_observations
 from .component_outreach_cases import evaluate_outreach_case_observations
 from .component_routing import evaluate_routing
+from .customer_service_boundary_cases import evaluate_customer_service_boundaries
 from .dataset import Dataset
 from .knowledge_dataset_local import evaluate_knowledge_dataset
 from .knowledge_extended_local import evaluate_knowledge_extended
 from .routing_intent_cases import evaluate_intent_observations
+from .routing_remaining_cases import evaluate_remaining_routing_observations
+from .routing_role_boundary_cases import evaluate_routing_role_boundaries
+from .routing_supervisor_clarification_cases import evaluate_supervisor_clarification_observations
 from .safety_chest_cases import evaluate_chest_safety_observations
 from .safety_component_cases import evaluate_safety_case_observations
+from .safety_injection_cases import evaluate_injection_observations
 from .safety_restricted_cases import evaluate_safety_restricted_observations
+from .safety_weight_loss_case import evaluate_weight_loss_observation
 
 _NOTIFICATION_REFERENCES = {
     "OPER-009": ["测试投递记录不得出现通知"],
@@ -64,6 +70,13 @@ def _mark(row: dict[str, Any], status: str, reason: str) -> None:
 
 
 async def evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str, Any]:
+    # A fresh scope prevents Java test observations from a previous report from
+    # being reused, while sharing one suite invocation within this report.
+    with booking_java_cases.java_suite_scope():
+        return await _evaluate_dataset(dataset, split=split)
+
+
+async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str, Any]:
     if split not in {"dev", "test", "all"}:
         raise ValueError("invalid split")
     selected = [case for case in dataset.cases if split == "all" or case.split == split]
@@ -111,6 +124,54 @@ async def evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str,
         )
         return {"cases": [row for group in groups for row in group["cases"]]}
 
+    async def injection_cases() -> dict[str, Any]:
+        splits = ("dev", "test") if split == "all" else (split,)
+        groups = await asyncio.gather(
+            *(evaluate_injection_observations(scoped_dataset, split=value) for value in splits)
+        )
+        return {"cases": [row for group in groups for row in group["cases"]]}
+
+    async def weight_loss_cases() -> dict[str, Any]:
+        splits = ("dev", "test") if split == "all" else (split,)
+        groups = await asyncio.gather(
+            *(evaluate_weight_loss_observation(scoped_dataset, split=value) for value in splits)
+        )
+        return {"cases": [row for group in groups for row in group["cases"]]}
+
+    async def service_boundary_cases() -> dict[str, Any]:
+        splits = ("dev", "test") if split == "all" else (split,)
+        groups = await asyncio.gather(
+            *(evaluate_customer_service_boundaries(scoped_dataset, split=value) for value in splits)
+        )
+        return {"cases": [row for group in groups for row in group["cases"]]}
+
+    async def role_boundary_cases() -> dict[str, Any]:
+        splits = ("dev", "test") if split == "all" else (split,)
+        groups = await asyncio.gather(
+            *(evaluate_routing_role_boundaries(scoped_dataset, split=value) for value in splits)
+        )
+        return {"cases": [row for group in groups for row in group["cases"]]}
+
+    async def clarification_cases() -> dict[str, Any]:
+        splits = ("dev", "test") if split == "all" else (split,)
+        groups = await asyncio.gather(
+            *(
+                evaluate_supervisor_clarification_observations(scoped_dataset, split=value)
+                for value in splits
+            )
+        )
+        return {"cases": [row for group in groups for row in group["cases"]]}
+
+    async def remaining_routing_cases() -> dict[str, Any]:
+        splits = ("dev", "test") if split == "all" else (split,)
+        groups = await asyncio.gather(
+            *(
+                evaluate_remaining_routing_observations(scoped_dataset, split=value)
+                for value in splits
+            )
+        )
+        return {"cases": [row for group in groups for row in group["cases"]]}
+
     results = await asyncio.gather(
         evaluate_knowledge_dataset(scoped_dataset),
         evaluate_notification_worker(),
@@ -120,6 +181,12 @@ async def evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str,
         outreach_cases(),
         chest_cases(),
         intent_cases(),
+        injection_cases(),
+        weight_loss_cases(),
+        service_boundary_cases(),
+        role_boundary_cases(),
+        clarification_cases(),
+        remaining_routing_cases(),
         return_exceptions=True,
     )
     knowledge_error = not isinstance(results[0], dict)
@@ -130,6 +197,12 @@ async def evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str,
     outreach_error = not isinstance(results[5], dict)
     chest_error = not isinstance(results[6], dict)
     intent_error = not isinstance(results[7], dict)
+    injection_error = not isinstance(results[8], dict)
+    weight_loss_error = not isinstance(results[9], dict)
+    service_boundary_error = not isinstance(results[10], dict)
+    role_boundary_error = not isinstance(results[11], dict)
+    clarification_error = not isinstance(results[12], dict)
+    remaining_routing_error = not isinstance(results[13], dict)
     knowledge: dict[str, Any] = results[0] if isinstance(results[0], dict) else {"cases": []}
     notifications: dict[str, Any] = results[1] if isinstance(results[1], dict) else {"cases": []}
     extended: dict[str, Any] = results[2] if isinstance(results[2], dict) else {"cases": []}
@@ -138,6 +211,16 @@ async def evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str,
     outreach: dict[str, Any] = results[5] if isinstance(results[5], dict) else {"cases": []}
     chest: dict[str, Any] = results[6] if isinstance(results[6], dict) else {"cases": []}
     intents: dict[str, Any] = results[7] if isinstance(results[7], dict) else {"cases": []}
+    injection: dict[str, Any] = results[8] if isinstance(results[8], dict) else {"cases": []}
+    weight_loss: dict[str, Any] = results[9] if isinstance(results[9], dict) else {"cases": []}
+    service_boundary: dict[str, Any] = (
+        results[10] if isinstance(results[10], dict) else {"cases": []}
+    )
+    role_boundary: dict[str, Any] = results[11] if isinstance(results[11], dict) else {"cases": []}
+    clarification: dict[str, Any] = results[12] if isinstance(results[12], dict) else {"cases": []}
+    remaining_routing: dict[str, Any] = (
+        results[13] if isinstance(results[13], dict) else {"cases": []}
+    )
     knowledge_by_id = {item["case_id"]: item for item in knowledge["cases"]}
     notification_by_id = {item["case_id"]: item for item in notifications["cases"]}
     extended_by_id = {item["case_id"]: item for item in extended["cases"]}
@@ -146,6 +229,12 @@ async def evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str,
     outreach_by_id = {item["case_id"]: item for item in outreach["cases"]}
     chest_by_id = {item["case_id"]: item for item in chest["cases"]}
     intent_by_id = {item["case_id"]: item for item in intents["cases"]}
+    injection_by_id = {item["case_id"]: item for item in injection["cases"]}
+    weight_loss_by_id = {item["case_id"]: item for item in weight_loss["cases"]}
+    service_boundary_by_id = {item["case_id"]: item for item in service_boundary["cases"]}
+    role_boundary_by_id = {item["case_id"]: item for item in role_boundary["cases"]}
+    clarification_by_id = {item["case_id"]: item for item in clarification["cases"]}
+    remaining_routing_by_id = {item["case_id"]: item for item in remaining_routing["cases"]}
     customer_service_by_id: dict[str, Any] = {}
     customer_service_error = False
     try:
@@ -224,6 +313,27 @@ async def evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str,
             _mark(row, "ERROR", "CHEST_SAFETY_COMPONENT_ERROR")
         if intent_error and case.case_id in {f"ROUT-{i:03d}" for i in range(9, 21)}:
             _mark(row, "ERROR", "INTENT_ROUTING_COMPONENT_ERROR")
+        if injection_error and case.case_id in {"SAFE-010", "SAFE-011"}:
+            _mark(row, "ERROR", "INJECTION_COMPONENT_ERROR")
+        if weight_loss_error and case.case_id == "SAFE-014":
+            _mark(row, "ERROR", "WEIGHT_LOSS_COMPONENT_ERROR")
+        if service_boundary_error and case.case_id in {"OPER-017", "OPER-018", "OPER-020"}:
+            _mark(row, "ERROR", "CUSTOMER_SERVICE_BOUNDARY_ERROR")
+        if role_boundary_error and case.case_id in {"ROUT-019", "ROUT-020"}:
+            _mark(row, "ERROR", "ROUTING_ROLE_BOUNDARY_ERROR")
+        if clarification_error and case.case_id in {
+            "ROUT-009",
+            "ROUT-010",
+            "ROUT-011",
+            "ROUT-012",
+            "ROUT-013",
+            "ROUT-016",
+            "ROUT-017",
+            "ROUT-018",
+        }:
+            _mark(row, "ERROR", "CLARIFICATION_COMPONENT_ERROR")
+        if remaining_routing_error and case.case_id in {"ROUT-005", "ROUT-007", "ROUT-014"}:
+            _mark(row, "ERROR", "REMAINING_ROUTING_COMPONENT_ERROR")
         if booking_cases.supports(case):
             try:
                 trial = await asyncio.wait_for(
@@ -268,6 +378,27 @@ async def evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str,
                 _mark(row, "INCONCLUSIVE", "INTENT_ROUTING_COMPONENT_ONLY")
             elif observation["component_status"] == "ERROR":
                 _mark(row, "ERROR", "INTENT_ROUTING_COMPONENT_ERROR")
+        if case.case_id in role_boundary_by_id:
+            observation = role_boundary_by_id[case.case_id]
+            row["observations"]["routing_role_boundary"] = observation
+            if observation["component_status"] in {"PASS", "FAIL"}:
+                _mark(row, "INCONCLUSIVE", "ROUTING_ROLE_BOUNDARY_ONLY")
+            elif observation["component_status"] == "ERROR":
+                _mark(row, "ERROR", "ROUTING_ROLE_BOUNDARY_ERROR")
+        if case.case_id in clarification_by_id:
+            observation = clarification_by_id[case.case_id]
+            row["observations"]["supervisor_clarification"] = observation
+            if observation["component_status"] in {"PASS", "FAIL"}:
+                _mark(row, "INCONCLUSIVE", "SUPERVISOR_CLARIFICATION_ONLY")
+            elif observation["component_status"] == "ERROR":
+                _mark(row, "ERROR", "CLARIFICATION_COMPONENT_ERROR")
+        if case.case_id in remaining_routing_by_id:
+            observation = remaining_routing_by_id[case.case_id]
+            row["observations"]["remaining_routing"] = observation
+            if observation["component_status"] in {"PASS", "FAIL"}:
+                _mark(row, "INCONCLUSIVE", "REMAINING_ROUTING_COMPONENT_ONLY")
+            elif observation["component_status"] == "ERROR":
+                _mark(row, "ERROR", "REMAINING_ROUTING_COMPONENT_ERROR")
         if case.case_id in operations_by_id:
             observation = operations_by_id[case.case_id]
             row["observations"]["operations_guard"] = observation
@@ -282,6 +413,20 @@ async def evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str,
                 _mark(row, "INCONCLUSIVE", "SAFETY_GUARD_PROBE_ONLY")
             elif observation["component_status"] == "ERROR":
                 _mark(row, "ERROR", "SAFETY_COMPONENT_ERROR")
+        if case.case_id in injection_by_id:
+            observation = injection_by_id[case.case_id]
+            row["observations"]["injection_guard"] = observation
+            if observation["component_status"] in {"PASS", "FAIL"}:
+                _mark(row, "INCONCLUSIVE", "INJECTION_GUARD_COMPONENT_ONLY")
+            elif observation["component_status"] == "ERROR":
+                _mark(row, "ERROR", "INJECTION_COMPONENT_ERROR")
+        if case.case_id in weight_loss_by_id:
+            observation = weight_loss_by_id[case.case_id]
+            row["observations"]["weight_loss_routing"] = observation
+            if observation["component_status"] == "OBSERVED":
+                _mark(row, "INCONCLUSIVE", "WEIGHT_LOSS_ROUTING_ONLY")
+            elif observation["component_status"] == "ERROR":
+                _mark(row, "ERROR", "WEIGHT_LOSS_COMPONENT_ERROR")
         if case.case_id in outreach_by_id:
             observation = outreach_by_id[case.case_id]
             row["observations"]["outreach_guard"] = observation
@@ -296,6 +441,13 @@ async def evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str,
                 _mark(row, "INCONCLUSIVE", "CUSTOMER_SERVICE_ROUTING_ONLY")
             elif observation["component_status"] == "ERROR":
                 _mark(row, "ERROR", "CUSTOMER_SERVICE_COMPONENT_ERROR")
+        if case.case_id in service_boundary_by_id:
+            observation = service_boundary_by_id[case.case_id]
+            row["observations"]["customer_service_boundary"] = observation
+            if observation["component_status"] in {"PASS", "FAIL"}:
+                _mark(row, "INCONCLUSIVE", "CUSTOMER_SERVICE_BOUNDARY_ONLY")
+            elif observation["component_status"] == "ERROR":
+                _mark(row, "ERROR", "CUSTOMER_SERVICE_BOUNDARY_ERROR")
         if case.case_id in restricted_by_id:
             observation = restricted_by_id[case.case_id]
             row["observations"]["restricted_safety"] = observation
@@ -343,12 +495,17 @@ async def evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str,
         for name, observation in row["observations"].items()
         if (name == "routing" and observation.get("status") == "FAIL")
         or (name == "intent_routing" and observation.get("component_status") == "FAIL")
+        or (name == "routing_role_boundary" and observation.get("component_status") == "FAIL")
+        or (name == "supervisor_clarification" and observation.get("component_status") == "FAIL")
+        or (name == "remaining_routing" and observation.get("component_status") == "FAIL")
         or (name == "retrieval" and observation.get("status") == "FAIL")
         or (name == "training_or_movement" and observation.get("status") in {"FAIL", "REJECTED"})
         or (name == "operations_guard" and observation.get("component_status") == "FAIL")
         or (name == "safety_guard" and observation.get("component_status") == "FAIL")
+        or (name == "injection_guard" and observation.get("component_status") == "FAIL")
         or (name == "outreach_guard" and observation.get("component_status") == "FAIL")
         or (name == "customer_service_route" and observation.get("component_status") == "FAIL")
+        or (name == "customer_service_boundary" and observation.get("component_status") == "FAIL")
         or (name == "restricted_safety" and observation.get("component_status") == "FAIL")
         or (name == "chest_safety" and observation.get("component_status") == "FAIL")
         or (name == "notification_worker" and observation.get("component_status") == "FAIL")
@@ -360,6 +517,7 @@ async def evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str,
         "agent/operations_tools.py",
         "rag/service.py",
         "evaluation/task_eval/booking_cases.py",
+        "evaluation/task_eval/booking_java_cases.py",
         "evaluation/task_eval/booking_boundary_cases.py",
         "evaluation/task_eval/booking_mutation_cases.py",
         "evaluation/task_eval/booking_positive_cases.py",
@@ -369,11 +527,17 @@ async def evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str,
         "evaluation/task_eval/knowledge_dataset_local.py",
         "evaluation/task_eval/knowledge_extended_local.py",
         "evaluation/task_eval/routing_intent_cases.py",
+        "evaluation/task_eval/routing_role_boundary_cases.py",
+        "evaluation/task_eval/routing_supervisor_clarification_cases.py",
+        "evaluation/task_eval/routing_remaining_cases.py",
         "evaluation/task_eval/component_notification_worker.py",
         "evaluation/task_eval/component_operations_cases.py",
         "evaluation/task_eval/component_outreach_cases.py",
         "evaluation/task_eval/component_customer_service_cases.py",
+        "evaluation/task_eval/customer_service_boundary_cases.py",
         "evaluation/task_eval/safety_component_cases.py",
+        "evaluation/task_eval/safety_injection_cases.py",
+        "evaluation/task_eval/safety_weight_loss_case.py",
         "evaluation/task_eval/safety_chest_cases.py",
         "evaluation/task_eval/safety_restricted_cases.py",
         "evaluation/task_eval/dataset_local.py",

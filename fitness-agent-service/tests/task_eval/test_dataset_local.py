@@ -182,3 +182,81 @@ async def test_intent_component_failure_is_counted_without_claiming_task_failure
     assert report["summary"]["component_failures"] == 1
     assert report["cases"][0]["task_status"] == "INCONCLUSIVE"
     assert report["cases"][0]["observations"]["intent_routing"]["component_status"] == "FAIL"
+
+
+@pytest.mark.asyncio
+async def test_injection_component_failure_is_counted_without_claiming_task_failure(
+    dataset, monkeypatch
+):
+    case = next(c for c in dataset.cases if c.case_id == "SAFE-010")
+
+    async def failing_probe(_, *, split):
+        return {"cases": [{"case_id": case.case_id, "component_status": "FAIL"}]}
+
+    monkeypatch.setattr(dataset_local, "evaluate_injection_observations", failing_probe)
+    report = await dataset_local.evaluate_dataset(replace(dataset, cases=[case]), split=case.split)
+    assert report["summary"]["component_failures"] == 1
+    assert report["cases"][0]["task_status"] == "INCONCLUSIVE"
+    assert report["cases"][0]["observations"]["injection_guard"]["component_status"] == "FAIL"
+
+
+@pytest.mark.asyncio
+async def test_service_boundary_failure_is_counted_without_claiming_task_failure(
+    dataset, monkeypatch
+):
+    case = next(c for c in dataset.cases if c.case_id == "OPER-017")
+
+    async def failing_probe(_, *, split):
+        return {"cases": [{"case_id": case.case_id, "component_status": "FAIL"}]}
+
+    monkeypatch.setattr(dataset_local, "evaluate_customer_service_boundaries", failing_probe)
+    report = await dataset_local.evaluate_dataset(replace(dataset, cases=[case]), split=case.split)
+    assert report["summary"]["component_failures"] == 1
+    assert report["cases"][0]["task_status"] == "INCONCLUSIVE"
+    assert (
+        report["cases"][0]["observations"]["customer_service_boundary"]["component_status"]
+        == "FAIL"
+    )
+
+
+@pytest.mark.asyncio
+async def test_routing_role_failure_is_counted_without_claiming_task_failure(dataset, monkeypatch):
+    case = next(c for c in dataset.cases if c.case_id == "ROUT-019")
+
+    async def failing_probe(_, *, split):
+        return {"cases": [{"case_id": case.case_id, "component_status": "FAIL"}]}
+
+    monkeypatch.setattr(dataset_local, "evaluate_routing_role_boundaries", failing_probe)
+    report = await dataset_local.evaluate_dataset(replace(dataset, cases=[case]), split=case.split)
+    assert report["summary"]["component_failures"] == 1
+    assert report["cases"][0]["task_status"] == "INCONCLUSIVE"
+
+
+@pytest.mark.asyncio
+async def test_clarification_failure_is_counted_without_claiming_task_failure(dataset, monkeypatch):
+    case = next(c for c in dataset.cases if c.case_id == "ROUT-009")
+
+    async def failing_probe(_, *, split):
+        return {"cases": [{"case_id": case.case_id, "component_status": "FAIL"}]}
+
+    monkeypatch.setattr(
+        dataset_local, "evaluate_supervisor_clarification_observations", failing_probe
+    )
+    report = await dataset_local.evaluate_dataset(replace(dataset, cases=[case]), split=case.split)
+    assert report["summary"]["component_failures"] == 1
+    assert report["cases"][0]["task_status"] == "INCONCLUSIVE"
+
+
+@pytest.mark.asyncio
+async def test_remaining_routing_failure_is_counted_without_claiming_task_failure(
+    dataset, monkeypatch
+):
+    case = next(c for c in dataset.cases if c.case_id == "ROUT-014")
+
+    async def failing_probe(_, *, split):
+        return {"cases": [{"case_id": case.case_id, "component_status": "FAIL"}]}
+
+    monkeypatch.setattr(dataset_local, "evaluate_remaining_routing_observations", failing_probe)
+    report = await dataset_local.evaluate_dataset(replace(dataset, cases=[case]), split=case.split)
+    assert report["summary"]["component_failures"] == 1
+    assert report["cases"][0]["task_status"] == "INCONCLUSIVE"

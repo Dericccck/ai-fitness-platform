@@ -25,6 +25,7 @@ from app.confirmation.service import ConfirmationService
 
 from . import (
     booking_boundary_cases,
+    booking_java_cases,
     booking_mutation_cases,
     booking_positive_cases,
     booking_reconciliation_cases,
@@ -68,7 +69,8 @@ def supports(case: Any) -> bool:
     if not matches_frozen_case(case):
         return False
     if (
-        booking_positive_cases.supports(case)
+        booking_java_cases.supports(case)
+        or booking_positive_cases.supports(case)
         or booking_boundary_cases.supports(case)
         or booking_mutation_cases.supports(case)
         or booking_reconciliation_cases.supports(case)
@@ -120,6 +122,8 @@ async def run(case: Any, *, index: int = 0, seed: int = 0) -> dict[str, Any]:
     """Run supported draft steps; a partially graded draft remains inconclusive."""
     if not supports(case):
         raise ValueError("unsupported booking fixture or step sequence")
+    if booking_java_cases.supports(case):
+        return await booking_java_cases.run(case, index=index, seed=seed)
     if booking_positive_cases.supports(case):
         return await booking_positive_cases.run(case, index=index, seed=seed)
     if booking_boundary_cases.supports(case):

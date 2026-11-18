@@ -72,12 +72,12 @@ docker exec "$pg_id" createdb -U fitness_eval "fitness_cross_$run_id"
 docker exec -i "$mysql_id" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --protocol=socket -uroot fitness_eval' \
     < "$repo_root/fitness-core-gateway/src/test/resources/mcp/mysql-legacy-fixture.sql"
 docker exec -i "$mysql_id" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --protocol=socket -uroot fitness_eval' <<'SQL'
-INSERT INTO login_user(id,name,phone) VALUES ('student-1','test student','test-student'),('coach-1','test coach','test-coach');
-INSERT INTO organization(id,name,organization_type) VALUES ('org-1','test organization','FITNESS');
-INSERT INTO course(id,name,status,organization_id) VALUES ('course-1','test course',1,'org-1');
+INSERT INTO login_user(id,name,phone) VALUES ('student-1','test student','test-student'),('student-2','witness student','witness-student'),('coach-1','test coach','test-coach');
+INSERT INTO organization(id,name,organization_type) VALUES ('org-1','test organization','FITNESS'),('org-2','witness organization','FITNESS');
+INSERT INTO course(id,name,status,organization_id) VALUES ('course-1','test course',1,'org-1'),('course-2','witness course',1,'org-2');
 INSERT INTO login_user_authority(id,login_user_id,authority,entity_id) VALUES ('authority-1','coach-1','COACH','org-1');
 INSERT INTO user_and_coach(id,user_id,coach_id,organization_id,status,deleted) VALUES ('relation-1','student-1','coach-1','org-1',1,0);
-INSERT INTO contract(id,organization_id,user_id,course_id,contract_create_time,contract_end_time,remaining_class_hours,status,deleted) VALUES ('contract-1','org-1','student-1','course-1','2000-01-01','2099-12-31',2,1,0);
+INSERT INTO contract(id,organization_id,user_id,course_id,contract_create_time,contract_end_time,remaining_class_hours,status,deleted) VALUES ('contract-1','org-1','student-1','course-1','2000-01-01','2099-12-31',2,1,0),('contract-2','org-2','student-2','course-2','2000-01-01','2099-12-31',5,1,0);
 SQL
 context_secret="$(openssl rand -hex 32)" confirmation_secret="$(openssl rand -hex 32)"
 execution_token="$(openssl rand -hex 32)" booking_token="$(openssl rand -hex 32)"
