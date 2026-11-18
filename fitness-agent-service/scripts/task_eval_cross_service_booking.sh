@@ -1,0 +1,141 @@
+#!/usr/bin/env bash
+# Scripted model -> Python Agent/PG -> Gateway HTTP -> Booking HTTP/MySQL.
+# All services and identities are newly created for this run; never use .env.
+set -euo pipefail
+service_root="$(cd "$(dirname "$0")/.." && pwd)"
+repo_root="$(cd "$service_root/.." && pwd)"
+python="$service_root/.venv/bin/python"
+run_id="$(openssl rand -hex 8)"
+run_dir="$(mktemp -d "${TMPDIR:-/tmp}/fitness-cross-eval.XXXXXX")"
+pg_id="" mysql_id="" gateway_pid="" booking_pid=""
+cleanup() {
+    local status=$?
+    local cleanup_failed=0
+    trap - EXIT
+    [[ -z "$gateway_pid" ]] || { kill "$gateway_pid" 2>/dev/null || true; wait "$gateway_pid" 2>/dev/null || true; }
+    [[ -z "$booking_pid" ]] || { kill "$booking_pid" 2>/dev/null || true; wait "$booking_pid" 2>/dev/null || true; }
+    [[ -z "$pg_id" ]] || docker rm -f -v "$pg_id" >/dev/null || cleanup_failed=1
+    [[ -z "$mysql_id" ]] || docker rm -f -v "$mysql_id" >/dev/null || cleanup_failed=1
+    if [[ "$cleanup_failed" -ne 0 ]]; then
+        printf 'Failed to remove one or more isolated containers.\n' >&2
+        status=1
+    fi
+    if [[ "$status" -eq 0 || "$status" -eq 3 ]]; then rm -rf "$run_dir"; else printf 'Isolated run logs: %s\n' "$run_dir" >&2; fi
+    exit "$status"
+}
+trap cleanup EXIT
+trap 'exit 130' INT TERM
+cd "$repo_root"
+# Refuse remote Docker contexts and pin every subsequent Docker call to the
+# resolved local Unix socket, including subprocesses with a clean HOME.
+docker_host="$(docker context inspect --format '{{.Endpoints.docker.Host}}')"
+[[ "$docker_host" == unix:///* && -S "${docker_host#unix://}" ]] || {
+    printf 'A local Docker Unix socket is required.\n' >&2
+    exit 1
+}
+export DOCKER_HOST="$docker_host"
+unset DOCKER_CONTEXT
+# Rebuild the checked-out sources. Offline mode prevents implicit dependency egress.
+mvn -q -o -f fitness-core-gateway/pom.xml -DskipTests package >"$run_dir/build.log" 2>&1
+mvn -q -o -f fitness-booking-service/pom.xml -DskipTests package >>"$run_dir/build.log" 2>&1
+export POSTGRES_PASSWORD="$(openssl rand -hex 24)" MYSQL_ROOT_PASSWORD="$(openssl rand -hex 24)"
+pg_id="$(docker run -d --pull=never --rm --name "fitness-eval-pg-$run_id" --label "fitness.eval=$run_id" \
+    --tmpfs /var/lib/postgresql/data -p 127.0.0.1::5432 -e POSTGRES_PASSWORD \
+    -e POSTGRES_USER=fitness_eval -e POSTGRES_DB=postgres pgvector/pgvector:pg16)"
+mysql_id="$(docker run -d --pull=never --rm --name "fitness-eval-mysql-$run_id" --label "fitness.eval=$run_id" \
+    --tmpfs /var/lib/mysql -p 127.0.0.1::3306 -e MYSQL_ROOT_PASSWORD -e MYSQL_ROOT_HOST=% \
+    -e MYSQL_DATABASE=fitness_eval mysql:8.0 --character-set-server=utf8mb4 --collation-server=utf8mb4_bin)"
+ready=false
+for attempt in $(seq 1 90); do
+    if docker exec "$pg_id" pg_isready -U fitness_eval -d postgres >/dev/null 2>&1 \
+        && docker exec "$mysql_id" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=tcp -h127.0.0.1 -uroot -e "SELECT 1"' >/dev/null 2>&1; then
+        ready=true; break
+    fi
+    sleep 1
+done
+[[ "$ready" == true ]]
+pg_port="$(docker port "$pg_id" 5432/tcp | sed -n 's/^127\.0\.0\.1://p')"
+mysql_port="$(docker port "$mysql_id" 3306/tcp | sed -n 's/^127\.0\.0\.1://p')"
+[[ "$pg_port" =~ ^[0-9]+$ && "$mysql_port" =~ ^[0-9]+$ ]]
+export TASK_EVAL_RUN_ID="$run_id" TASK_EVAL_POSTGRES_CONTAINER_ID="$pg_id"
+export TASK_EVAL_MYSQL_CONTAINER_ID="$mysql_id" TASK_EVAL_MYSQL_PORT="$mysql_port"
+cd "$service_root"
+"$python" -m app.evaluation.task_eval.mysql_sandbox_preflight
+# Verify PostgreSQL is our tagged disposable container before issuing CREATE DATABASE.
+"$python" - "$pg_id" "$run_id" "$pg_port" <<'PY'
+import sys
+from app.evaluation.task_eval.sandbox_preflight import _inspect, _verify_container
+if _verify_container(_inspect(sys.argv[1]), run_id=sys.argv[2], kind="pg") != int(sys.argv[3]):
+    raise RuntimeError("POSTGRES_ENDPOINT_MISMATCH")
+PY
+docker exec "$pg_id" createdb -U fitness_eval "fitness_cross_$run_id"
+docker exec -i "$mysql_id" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --protocol=socket -uroot fitness_eval' \
+    < "$repo_root/fitness-core-gateway/src/test/resources/mcp/mysql-legacy-fixture.sql"
+docker exec -i "$mysql_id" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" exec mysql --protocol=socket -uroot fitness_eval' <<'SQL'
+INSERT INTO login_user(id,name,phone) VALUES ('student-1','test student','test-student'),('coach-1','test coach','test-coach');
+INSERT INTO organization(id,name,organization_type) VALUES ('org-1','test organization','FITNESS');
+INSERT INTO course(id,name,status,organization_id) VALUES ('course-1','test course',1,'org-1');
+INSERT INTO login_user_authority(id,login_user_id,authority,entity_id) VALUES ('authority-1','coach-1','COACH','org-1');
+INSERT INTO user_and_coach(id,user_id,coach_id,organization_id,status,deleted) VALUES ('relation-1','student-1','coach-1','org-1',1,0);
+INSERT INTO contract(id,organization_id,user_id,course_id,contract_create_time,contract_end_time,remaining_class_hours,status,deleted) VALUES ('contract-1','org-1','student-1','course-1','2000-01-01','2099-12-31',2,1,0);
+SQL
+context_secret="$(openssl rand -hex 32)" confirmation_secret="$(openssl rand -hex 32)"
+execution_token="$(openssl rand -hex 32)" booking_token="$(openssl rand -hex 32)"
+execution_hash="$(printf '%s' "$execution_token" | openssl dgst -sha256 | awk '{print $NF}')"
+expires_at="$(( $(date +%s) + 1200 ))"
+mysql_url="jdbc:mysql://127.0.0.1:$mysql_port/fitness_eval?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=UTF-8"
+cd "$run_dir"
+env -i PATH="$PATH" HOME="$run_dir" TMPDIR="$run_dir" \
+    BOOKING_DB_URL="$mysql_url" BOOKING_DB_USERNAME=root BOOKING_DB_PASSWORD="$MYSQL_ROOT_PASSWORD" \
+    BOOKING_SERVER_PORT=0 BOOKING_INTERNAL_SERVICE_TOKEN="$booking_token" \
+    BOOKING_OUTBOX_PUBLISHER_ENABLED=false \
+    java -jar "$repo_root/fitness-booking-service/target/fitness-booking-service.jar" \
+    --server.address=127.0.0.1 >"$run_dir/booking.log" 2>&1 &
+booking_pid=$!
+wait_port() {
+    local pid="$1" file="$2" port=""
+    for attempt in $(seq 1 90); do
+        kill -0 "$pid" 2>/dev/null || return 1
+        port="$(sed -n 's/.*Tomcat started on port(s): \([0-9][0-9]*\).*/\1/p' "$file" | tail -1)"
+        if [[ "$port" =~ ^[0-9]+$ ]] && curl --noproxy '*' -fsS --max-time 1 "http://127.0.0.1:$port/health/runtime-ready" >/dev/null 2>&1; then
+            lsof -nP -a -p "$pid" -iTCP:"$port" -sTCP:LISTEN -F p | grep -qx "p$pid" || return 1
+            printf '%s' "$port"; return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+booking_port="$(wait_port "$booking_pid" "$run_dir/booking.log")"
+env -i PATH="$PATH" HOME="$run_dir" TMPDIR="$run_dir" \
+    GATEWAY_DB_URL="$mysql_url" GATEWAY_DB_USERNAME=root GATEWAY_DB_PASSWORD="$MYSQL_ROOT_PASSWORD" \
+    GATEWAY_SERVER_PORT=0 GATEWAY_AGENT_EXECUTION_TOKEN_SHA256="$execution_hash" \
+    GATEWAY_AGENT_EXECUTION_TOKEN_EXPIRES_AT="$expires_at" GATEWAY_CONTEXT_SIGNING_SECRET="$context_secret" \
+    GATEWAY_CONTEXT_SIGNING_KEY_ID=eval GATEWAY_CONFIRMATION_SIGNING_SECRET="$confirmation_secret" \
+    GATEWAY_CONFIRMATION_SIGNING_KEY_ID=eval GATEWAY_BOOKING_SERVICE_BASE_URL="http://127.0.0.1:$booking_port" \
+    GATEWAY_BOOKING_SERVICE_TOKEN="$booking_token" GATEWAY_TRAINING_SERVICE_BASE_URL=http://127.0.0.1:1 \
+    GATEWAY_CUSTOMER_SERVICE_BASE_URL=http://127.0.0.1:1 \
+    java -jar "$repo_root/fitness-core-gateway/target/fitness-core-gateway.jar" \
+    --server.address=127.0.0.1 >"$run_dir/gateway.log" 2>&1 &
+gateway_pid=$!
+gateway_port="$(wait_port "$gateway_pid" "$run_dir/gateway.log")"
+"$python" - "$service_root" "$run_dir/alembic.ini" <<'PY'
+from pathlib import Path
+import sys
+source = Path(sys.argv[1])
+ini = (source / 'alembic.ini').read_text()
+ini = ini.replace('script_location = migrations', f'script_location = {source / "migrations"}')
+ini = ini.replace('prepend_sys_path = .', f'prepend_sys_path = {source}')
+Path(sys.argv[2]).write_text(ini)
+PY
+runtime_env=(env -i "PATH=$PATH" "HOME=$run_dir" "TMPDIR=$run_dir" "PYTHONPATH=$service_root"
+    "DOCKER_HOST=$docker_host"
+    "AGENT_ENVIRONMENT=test"
+    "AGENT_DATABASE_URL=postgresql+asyncpg://fitness_eval:$POSTGRES_PASSWORD@127.0.0.1:$pg_port/fitness_cross_$run_id"
+    "AGENT_GATEWAY_BASE_URL=http://127.0.0.1:$gateway_port"
+    "AGENT_GATEWAY_HTTP_EXECUTION_SERVICE_TOKEN=$execution_token"
+    "TASK_EVAL_RUN_ID=$run_id" "TASK_EVAL_POSTGRES_CONTAINER_ID=$pg_id"
+    "TASK_EVAL_MYSQL_CONTAINER_ID=$mysql_id" "TASK_EVAL_GATEWAY_PID=$gateway_pid"
+    "TASK_EVAL_LAUNCHER_PID=$$"
+    "TASK_EVAL_CONTEXT_SECRET=$context_secret" "TASK_EVAL_CONFIRMATION_SECRET=$confirmation_secret")
+"${runtime_env[@]}" "$python" -m alembic -c "$run_dir/alembic.ini" upgrade head >"$run_dir/migrations.log" 2>&1
+"${runtime_env[@]}" "$python" -m app.evaluation.task_eval.cross_service_booking "$@"

@@ -13,6 +13,7 @@ from uuid import UUID, uuid4
 from fastapi import APIRouter, HTTPException, Request, Response
 from pydantic import BaseModel, ConfigDict, Field
 from sqlalchemy import text
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.api.chat_protection import enforce_chat_quota
 from app.api.routes.mobile_auth import service as auth_service
@@ -42,7 +43,7 @@ def _enabled(request: Request) -> None:
         raise HTTPException(503, "训练计划关联暂未启用")
 
 
-async def _plan(request: Request, ref: str, identity: AgentIdentity, plan_id: str):
+async def _plan(request: Request, ref: str, identity: AgentIdentity, plan_id: str) -> Any:
     if not re.fullmatch(_ID, plan_id):
         raise HTTPException(404, "训练计划不存在或无法访问")
     signed = await auth_service(request).signed_context(ref, identity)
@@ -72,7 +73,7 @@ async def _plan(request: Request, ref: str, identity: AgentIdentity, plan_id: st
     return plan
 
 
-def _item(plan, day_id: str, item_id: str):
+def _item(plan: Any, day_id: str, item_id: str) -> tuple[Any, Any]:
     for day in plan.days:
         if day.id == day_id:
             for item in day.items:
@@ -81,7 +82,7 @@ def _item(plan, day_id: str, item_id: str):
     raise HTTPException(409, "训练计划已变化，请重新选择动作")
 
 
-async def _report(conn, run_id: str, owner: str, *, lock: bool = False):
+async def _report(conn: AsyncConnection, run_id: str, owner: str, *, lock: bool = False) -> str:
     # Lock the conversation first, matching media deletion and publication.
     conversation = (
         await conn.execute(

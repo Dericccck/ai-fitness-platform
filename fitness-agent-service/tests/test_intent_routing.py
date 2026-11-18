@@ -8,8 +8,9 @@ from app.agent.routing import (
     RoutedIntent,
     RuleIntentRouter,
     deterministic_route_decision,
+    intent_allowed_tool_ids,
 )
-from app.agent.supervisor import Supervisor, SupervisorRequest
+from app.agent.supervisor import Supervisor, SupervisorRequest, classify_route
 from app.agent.tool_registry import ToolRegistry
 from app.infrastructure.gateway_client import GatewayRequestContext
 from app.infrastructure.model_gateway import (
@@ -71,6 +72,31 @@ async def test_rule_router_orders_read_before_the_single_write() -> None:
         "QUERY_APPOINTMENT",
         "CANCEL_BOOKING",
     ]
+
+
+async def test_personal_remaining_lessons_uses_contract_read_tools() -> None:
+    for question in ("我还剩多少节私教课？", "我的课程还剩几节？", "本人还有多少课时？"):
+        decision = await RuleIntentRouter().decide(
+            question, recent_messages=[], previous_route=None
+        )
+        assert decision.intents == (RoutedIntent("CUSTOMER_SERVICE", "QUERY_CONTRACT"),)
+        assert classify_route(question) == "CUSTOMER_SERVICE"
+        assert "fitness.contract.list.v1" in (
+            intent_allowed_tool_ids("CUSTOMER_SERVICE", "QUERY_CONTRACT") or ()
+        )
+
+
+def test_remaining_lesson_rule_does_not_reclassify_store_aggregates_or_third_parties() -> None:
+    store = deterministic_route_decision("查看门店剩余课时统计")
+    assert store is not None
+    assert store.intents == (RoutedIntent("OPERATIONS", "QUERY_REMAINING_CLASS_HOURS"),)
+    assert deterministic_route_decision("其他会员还剩多少节私教课？") is None
+
+
+def test_personal_contract_query_and_booking_remain_distinct_intents() -> None:
+    decision = deterministic_route_decision("先查我还剩多少节私教课，再帮我预约一次")
+    assert decision is not None
+    assert [intent.intent for intent in decision.intents] == ["QUERY_CONTRACT", "CREATE_BOOKING"]
 
 
 def test_two_writes_require_split_instead_of_shared_confirmation() -> None:
@@ -151,3 +177,39 @@ async def test_hybrid_router_fails_safe_when_provider_is_unavailable() -> None:
 
     assert decision.intents == ()
     assert decision.reason_code == "ROUTER_UNAVAILABLE"
+
+
+async def test_knowledge_then_booking_keeps_both_intents_without_model_call() -> None:
+    model = JsonRouterModel(fail=True)
+    router = HybridIntentRouter(cast(ModelGateway, model))
+    decision = await router.decide(
+        "先告诉我深蹲注意事项，再预约一节私教课",
+        recent_messages=[],
+        previous_route=None,
+    )
+    assert decision.intents == (
+        RoutedIntent("FITNESS_COACHING", "FITNESS_KNOWLEDGE_QA"),
+        RoutedIntent("BOOKING", "CREATE_BOOKING"),
+    )
+    assert decision.intents[1].is_write
+    assert not model.messages
+
+
+def test_followup_booking_does_not_infer_write_from_negation_or_price_question() -> None:
+    for message in (
+        "先告诉我深蹲注意事项，再不要预约一节私教课",
+        "先告诉我深蹲注意事项，别再预约一节私教课",
+        "先告诉我深蹲注意事项，再预约一节私教课需要多少钱？",
+        "先告诉我深蹲注意事项，再预约一节私教课，但先不要提交",
+    ):
+        decision = deterministic_route_decision(message)
+        assert decision is not None
+        assert not any(intent.intent == "CREATE_BOOKING" for intent in decision.intents)
+
+
+def test_explicit_followup_booking_still_respects_two_write_clarification() -> None:
+    decision = deterministic_route_decision("先取消预约，再预约一节私教课")
+    assert decision is not None
+    assert decision.intents == ()
+    assert decision.reason_code == "MULTIPLE_WRITE_INTENTS"
+    assert decision.clarification

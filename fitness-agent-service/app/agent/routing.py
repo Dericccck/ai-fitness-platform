@@ -538,6 +538,15 @@ def deterministic_route_decision(user_message: str) -> RouteDecision | None:
         return _single("CUSTOMER_SERVICE", "CREATE_TICKET", "EXPLICIT_TICKET_WRITE")
 
     signals: list[RoutedIntent] = []
+    # A request for complaint guidance is a customer-service question.  It is
+    # not by itself permission to create a ticket: that remains a separate
+    # explicit intent and its confirmation gate still applies.
+    if _affirmative(
+        text,
+        ("我要投诉", "我想投诉", "如何投诉", "怎么投诉"),
+        extra_negations=("没说", "没有说", "从未说过"),
+    ):
+        signals.append(RoutedIntent("CUSTOMER_SERVICE", "BUSINESS_RULE_QA"))
     _append_if(
         signals,
         text,
@@ -562,6 +571,15 @@ def deterministic_route_decision(user_message: str) -> RouteDecision | None:
         ("创建预约", "帮我预约", "预约一次", "预订课程", "预定课程"),
         write=True,
     )
+    # A second, explicitly requested booking may omit “帮我” after an
+    # earlier question. Keep this narrow: price/rule questions and tentative
+    # wording must not be promoted into an authorization to write.
+    followup_booking = re.search(
+        r"(?:再|然后|接着)预约(?:一节|一堂|一次)(?:私教课|训练课|课程|团课)[。！!]*$",
+        text,
+    )
+    if followup_booking and _affirmative(text, (followup_booking.group(),)):
+        signals.append(RoutedIntent("BOOKING", "CREATE_BOOKING"))
     _append_if(
         signals, text, "FITNESS_COACHING", "PUBLISH_PLAN", ("发布训练计划", "发布计划"), write=True
     )
@@ -648,6 +666,17 @@ def deterministic_route_decision(user_message: str) -> RouteDecision | None:
         "QUERY_CONTRACT",
         ("我的合同", "私教包", "剩几节", "还剩几次", "合同还有"),
     )
+    # Personal remaining lessons are a contract lookup, not aggregate store metrics.
+    # Restrict this rule to an explicit first-person subject; ambiguous or third-party
+    # requests must not acquire a personal-contract intent merely by mentioning lessons.
+    if re.search(
+        r"(?:我|本人)(?:还)?(?:剩余|剩|有)(?:下)?(?:多少|几)(?:节|次|堂|个)?"
+        r"(?:私教课|训练课|课程|课时|课|次数)"
+        r"|(?:我的|本人的?)(?:私教课|训练课|课程|课时)(?:还)?"
+        r"(?:剩余|剩)(?:下)?(?:多少|几)(?:节|次|堂|课时)?",
+        text,
+    ):
+        signals.append(RoutedIntent("CUSTOMER_SERVICE", "QUERY_CONTRACT"))
     _append_if(
         signals,
         text,
@@ -766,8 +795,20 @@ def _append_if(
         target.append(RoutedIntent(route, intent))
 
 
-def _affirmative(text: str, markers: tuple[str, ...]) -> bool:
-    negations = ("不要", "别", "无需", "不用", "不需要", "禁止", "不想", "不是要", "并非要")
+def _affirmative(
+    text: str, markers: tuple[str, ...], *, extra_negations: tuple[str, ...] = ()
+) -> bool:
+    negations = (
+        "不要",
+        "别",
+        "无需",
+        "不用",
+        "不需要",
+        "禁止",
+        "不想",
+        "不是要",
+        "并非要",
+    ) + extra_negations
     boundaries = "，。；！？\n"
     for marker in markers:
         start = 0

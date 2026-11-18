@@ -276,6 +276,50 @@ TruLens 不能替代既有的 RAG Recall/MRR、经营策略、角色权限、确
 
 环境分层和 Secret 管理规则见 `deployment/environments/README.md`。
 
+### 离线任务评测（建设中）
+
+`evals/task_eval/datasets/v1.jsonl` 包含 120 条合成规划案例，按语义族分为 80 条开发案例和 40 条测试规划案例。案例、预期、夹具和专业风险判断均尚待人工审核；测试规划集尚未冻结。数据校验只证明协议和配额符合要求，不代表案例质量或 Agent 通过评测。
+
+在 `fitness-agent-service` 目录运行：
+
+```bash
+python -m app.evaluation.task_eval.cli validate --dataset evals/task_eval/datasets/v1.jsonl
+python -m app.evaluation.task_eval.cli plan --dataset evals/task_eval/datasets/v1.jsonl --split dev --mode contract
+python -m app.evaluation.task_eval.cli routing --dataset evals/task_eval/datasets/v1.jsonl --split dev
+python -m app.evaluation.task_eval.cli local --suite booking --output /tmp/fitness-eval-booking.json
+python -m app.evaluation.task_eval.cli local --suite notification --output /tmp/fitness-eval-notification.json
+python -m app.evaluation.task_eval.cli local --suite operations --output /tmp/fitness-eval-operations.json
+python -m app.evaluation.task_eval.cli local --suite all --output /tmp/fitness-eval-local.json
+python -m app.evaluation.task_eval.cli dataset-local --dataset evals/task_eval/datasets/v1.jsonl --split all --execute --output-dir /tmp/fitness-eval-cases
+python -m app.evaluation.task_eval.cli run --dataset evals/task_eval/datasets/v1.jsonl --split dev --mode contract --execute --output-dir /tmp/fitness-task-eval-run
+```
+
+`routing` 实际调用现有第一阶段确定性路由器，只评估已标注意图路由的案例，不代表整个 Agent 的任务表现。`run` 生成 `manifest.json`、`trials.jsonl`、`summary.json` 和 `report.md`；当前规划集缺少经过验证的业务夹具及独立审计，案例将标记为 `SKIPPED`，退出码为 3（不完整）。三种模式的结果必须分开；真实模型和集成沙箱执行尚未启用，不能用 HTTP 客户端替代隔离环境、业务状态和审计证明。内存桩仅用于测试评测程序本身。
+
+`local` 是可执行的本地协议与组件测试，独立于 120 条规划案例：预约套件使用真实对话与确认 HTTP 接口、Python Supervisor 和确认服务，加固定模型、内存确认仓储和隔离 SQLite 业务替身，覆盖批准、拒绝、越权、重复批准、冲突、模拟超时及写入后响应丢失；检索套件运行真实 `RagService`，但向量、权限仓储和重排使用本地替身；经营套件覆盖查询策略和趋势报告；通知套件运行实际通知偏好策略，不代表消息已经投递。`--suite all` 因检索权限和生成回答尚无独立证据而返回 3（不完整）；各项可判定违规仍会返回 2。报告输出为单独的 JSON 文件，不与完整任务质量成绩混算。
+
+预约 Java 仓储还提供独立的 H2 内存事务测试，在仓库根目录运行 `mvn -o -f fitness-booking-service/pom.xml -Dtest=BookingWriteH2Test test`。它验证预约、扣课时、确认凭证消费、操作记录、审计和 Outbox 的提交与故障回滚；手建 H2 schema 不等于验证了 MySQL 生产迁移、锁、并发或跨服务事务。
+
+`dataset-local` 将已支持的本地夹具按案例 ID 关联到规划集，逐条保留 `INCONCLUSIVE` / `SKIPPED` 等任务状态，同时提供路由、检索、确认或通知组件观察；组件通过不会被提升为完整任务通过。输出包含 `manifest.json`、`cases.jsonl`、`summary.json` 和 `report.md`。它不是正式的真实模型或端到端评测，因尚有未判定项返回退出码 3。可在仓库根目录通过 `bash fitness-core-gateway/scripts/isolated-mysql-acceptance.sh` 启动临时 MySQL 容器，测试真实数据库行为并自动清理；脚本不会连接已有业务数据库。
+
+在本目录执行 `bash scripts/task_eval_isolated_runtime.sh` 可启动临时 PostgreSQL 和 Redis，运行迁移及确认、运行时和会话相关验收，完成后自动删除专用数据库和容器。两种容器验收都只监听本机随机端口；需要 Docker、相应镜像及项目依赖。
+
+运行时脚本通过独立临时目录和精简环境启动子进程，预检会核对容器标识、临时存储、端口和数据库身份；预检只覆盖这些数据库依赖，不会授权真实模型或完整业务沙箱。预约案例的部分本地观察会运行真实 Supervisor 和确认接口，但业务网关仍为隔离的 SQLite 替身、模型为脚本模型；通知与安全案例也仅覆盖报告列出的局部组件。真实端到端验收仍需实现逐案例业务夹具、受控测试身份和独立审计、外部通知隔离、模型预算与真实模型适配，并完成案例和专业安全审核。
+
+隔离运行时验收还运行真实 PostgreSQL 通知策略、站内收件箱及签名身份/确认状态测试，检查测试执行数并拒绝静默跳过。通知测试对本次 Python 进程的 socket 连接施加限定，并验证外部地址被拒绝；这不是操作系统级网络隔离，也不能证明其他进程或渠道的出口安全。
+
+人工审核清单可通过 `python -m app.evaluation.task_eval.review_queue --dataset evals/task_eval/datasets/v1.jsonl --output /tmp/fitness-review-queue.json` 生成。清单绑定数据集与案例摘要，不会自动填写审核结论；安全审核仍需实际具备相应资质的人员完成。
+
+`model-preflight` 是不联网的模型配置检查；`model-smoke` 是需显式启用的单次连通性检查，只向允许的官方服务地址发送固定的 ROUT-001 合成输入，需要独立评测密钥 `FITNESS_EVAL_MODEL_API_KEY`。真实调用必须使用已有的持久预算账本，并提供与其一致的预算上限和历史预留金额；账本未知用量或未完成请求会阻止后续调用。持久账本仅覆盖接入它的调用，不构成供应商账单硬上限，也不能证明环境隔离。执行前必须独立核实服务商侧费用上限和隔离条件。单次调用的结果不进入完整任务通过率。示例配置见 `evals/task_eval/config/model-preflight.example.json`，其中地址和证据引用均为占位符，不能直接用于调用。
+
+`supervisor_model_probe` 仅对固定的 ROUT-002 合成输入运行一次真实 Supervisor 和模型，不启用业务工具。真实请求必须提供本地持久化预算账本：调用前保守预留、跨进程串行化，费用未知或进程中断会阻止后续预留。该账本只覆盖接入它的评测调用，不监控同一服务商账户的其他请求，也不是供应商账单硬限额；模型答案和案例仍须人工审核。
+
+`app.evaluation.task_eval.mysql_sandbox_preflight` 是为未来业务沙箱准备的独立 MySQL 空库预检，检查专用容器及空 schema；它尚未接入任务运行器，也不适用于上述采用不同容器标识的 Maven MySQL 验收脚本。单独通过该检查不表示业务服务、网络或审计已隔离。
+
+`validate --require-reviewed-test` 可检查测试规划案例是否具有人工标注与复核记录；当前预期失败。`compare --baseline <报告目录> --candidate <报告目录> --output <新文件>` 仅接受数据、执行模式、范围、评分器、已解析夹具摘要和试次等条件一致且已知的报告。运行退出码：0 表示执行且通过，1 表示数据或配置错误，2 表示已判定失败，3 表示证据不足或执行不完整。`validate` 和 `plan` 的成功不表示质量通过。
+
+比较不同版本时使用 `--vary revision`；沙箱比较也可以声明模型、提示词、工具协议或索引之一为唯一变化项。其余条件、证据及摘要必须匹配。当前 120 条规划案例还没有可验证的真实夹具摘要，因此现有任务报告不能用于版本比较。
+
 ## Java Gateway 调用
 
 配置 `AGENT_GATEWAY_BASE_URL`、`AGENT_GATEWAY_INTERNAL_SERVICE_TOKEN` 以及超时和重试参数。

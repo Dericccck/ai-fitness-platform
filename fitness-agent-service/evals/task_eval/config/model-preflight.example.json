@@ -1,0 +1,19 @@
+{
+  "endpoint": "https://model.example.com/v1",
+  "allowed_hosts": ["model.example.com"],
+  "model": "replace-with-authorized-model",
+  "environment_id": "replace-isolated-environment-id",
+  "isolation_evidence_ref": "replace-isolation-evidence-ref",
+  "authorization_ref": "replace-authorization-ref",
+  "provider_spend_limit_ref": "replace-provider-limit-ref",
+  "credential_env": "FITNESS_EVAL_MODEL_API_KEY",
+  "max_requests": 1,
+  "max_input_tokens": 1000,
+  "max_output_tokens": 300,
+  "max_cost": "0.10",
+  "input_cost_per_million": "1.00",
+  "output_cost_per_million": "2.00",
+  "currency": "USD",
+  "pricing_version": "replace-pricing-version",
+  "data_class": "synthetic"
+}

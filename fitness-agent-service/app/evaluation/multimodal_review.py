@@ -11,7 +11,7 @@ import json
 import sys
 from collections import Counter
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
@@ -48,7 +48,7 @@ def _ratio(numerator: int, denominator: int) -> float | None:
     return round(numerator / denominator, 4) if denominator else None
 
 
-def summarize(cases: list[ReviewedCase]) -> dict:
+def summarize(cases: list[ReviewedCase]) -> dict[str, Any]:
     counts = Counter(case.reference for case in cases)
     results = Counter(case.assessment for case in cases)
     missed = sum(
@@ -89,7 +89,7 @@ def summarize(cases: list[ReviewedCase]) -> dict:
     }
 
 
-def evaluate(dataset: ReviewedDataset) -> dict:
+def evaluate(dataset: ReviewedDataset) -> dict[str, Any]:
     groups = {}
     for field, values in (
         ("media_kind", ("image", "video")),

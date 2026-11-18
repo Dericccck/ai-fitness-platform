@@ -837,6 +837,19 @@ class Supervisor:
         emit_event("stage.changed", {"stage": "ROUTING"})
         if runtime.context is None or not runtime.context.user_message:
             raise SupervisorRuntimeError("缺少路由所需的当前用户消息")
+        urgent_training_safety = _urgent_training_safety_answer(runtime.context.user_message)
+        if urgent_training_safety is not None:
+            return {
+                "route": "FITNESS_COACHING",
+                "intent": "FITNESS_KNOWLEDGE_QA",
+                "route_plan": [],
+                "route_source": "HARD_GUARD",
+                "route_confidence": 1.0,
+                "route_reason_code": "URGENT_TRAINING_SAFETY",
+                "router_version": "hard-guard-v1",
+                "routing_terminal": True,
+                "final_answer": urgent_training_safety,
+            }
         restricted = _customer_service_restricted_answer(runtime.context.user_message)
         if restricted is not None:
             return {
@@ -1318,7 +1331,7 @@ class Supervisor:
                     "content": json.dumps(result, ensure_ascii=False),
                 }
             )
-        elif calls:
+        elif calls and isinstance(last, dict):
             # 旧版或损坏状态无法关联时，不能伪造 tool_call_id，也不能留下未配对
             # 的 tool_calls 供下一次请求使用。保留普通文本并移除不可靠的调用结构。
             cleaned = {key: value for key, value in last.items() if key != "tool_calls"}
@@ -1667,6 +1680,23 @@ def _looks_like_customer_service_knowledge_question(user_message: str) -> bool:
             "课时规则",
         )
     )
+
+
+def _urgent_training_safety_answer(user_message: str) -> str | None:
+    """Narrow pre-model escalation for explicit chest pain, not a diagnosis.
+
+    Other symptoms and paraphrases are not covered by this rule and must not be
+    treated as clinically assessed. The source is the AHA first-aid guidance:
+    https://cpr.heart.org/en/resuscitation-science/first-aid-guidelines/first-aid
+    """
+    text = "".join(user_message.lower().split())
+    if any(marker in text for marker in ("胸口疼", "胸口痛", "胸部疼", "胸部痛", "胸痛")):
+        return (
+            "请立即停止训练并休息，不要继续高强度运动。"
+            "胸痛可能需要紧急处理，请立即联系当地急救服务并寻求医疗评估；"
+            "不要自行开车。"
+        )
+    return None
 
 
 def _customer_service_restricted_answer(user_message: str) -> str | None:

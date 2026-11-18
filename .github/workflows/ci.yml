@@ -50,6 +50,23 @@ jobs:
       - name: Test
         run: uv run pytest
 
+      - name: Validate synthetic task evaluation planning dataset
+        run: uv run python -m app.evaluation.task_eval.cli validate --dataset evals/task_eval/datasets/v1.jsonl
+
+      - name: Local booking, operations and notification evaluation contracts
+        run: |
+          uv run python -m app.evaluation.task_eval.cli local --suite booking --output "$RUNNER_TEMP/task-eval-booking.json"
+          uv run python -m app.evaluation.task_eval.cli local --suite notification --output "$RUNNER_TEMP/task-eval-notification.json"
+          uv run python -m app.evaluation.task_eval.cli local --suite operations --output "$RUNNER_TEMP/task-eval-operations.json"
+
+      - name: Dataset-linked exploratory evaluation (incomplete is expected)
+        run: |
+          set +e
+          uv run python -m app.evaluation.task_eval.cli dataset-local --dataset evals/task_eval/datasets/v1.jsonl --split dev --execute --output-dir "$RUNNER_TEMP/task-eval-cases"
+          result=$?
+          set -e
+          test "$result" -eq 3
+
       - name: Database migration contract
         run: uv run python scripts/migration_contract_check.py
 
@@ -177,6 +194,24 @@ jobs:
       - name: Build independent image (do not publish or deploy)
         run: docker build -t ${{ matrix.service }}:${{ github.sha }} ${{ matrix.service }}
 
+  task-eval-mysql-acceptance:
+    name: Isolated MySQL business acceptance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: "8"
+          cache: maven
+          cache-dependency-path: |
+            fitness-core-gateway/pom.xml
+            fitness-booking-service/pom.xml
+            fitness-training-service/pom.xml
+            fitness-customer-service/pom.xml
+      - name: Exercise isolated business database and clean up container
+        run: bash fitness-core-gateway/scripts/isolated-mysql-acceptance.sh
+
   runtime-delivery-integration:
     name: Isolated PostgreSQL and Redis runtime acceptance
     runs-on: ubuntu-latest
@@ -210,6 +245,10 @@ jobs:
           AGENT_DATABASE_URL: postgresql+asyncpg://acceptance:acceptance@127.0.0.1:5432/postgres
           AGENT_REDIS_URL: redis://127.0.0.1:6379/0
         run: uv run python scripts/runtime_delivery_live_check.py --execute
+      - name: Exercise disposable task-evaluation database and notification boundaries
+        env:
+          TASK_EVAL_PYTHON: .venv/bin/python
+        run: bash scripts/task_eval_isolated_runtime.sh
 
   fitness-web:
     name: Frontend streaming contract and image

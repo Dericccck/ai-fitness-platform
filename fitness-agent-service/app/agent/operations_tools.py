@@ -8,6 +8,7 @@
 from __future__ import annotations
 
 import asyncio
+import calendar
 import hashlib
 import json
 import re
@@ -497,7 +498,10 @@ def parse_operations_intent(
         return None
     metric = next(iter(metrics))
     matched_terms = tuple(term for _, term in matches)
-    start, end = _parse_date_range(text, today or datetime.now(_BUSINESS_ZONE).date())
+    date_range = _parse_date_range(text, today or datetime.now(_BUSINESS_ZONE).date())
+    if date_range is None:
+        return None
+    start, end = date_range
     bucket = _parse_time_bucket(text)
     if bucket is None:
         return None
@@ -557,16 +561,51 @@ def operations_prompt_hint(user_message: str) -> str:
     )
 
 
-def _parse_date_range(text: str, today: date) -> tuple[date, date]:
+def _parse_date_range(text: str, today: date) -> tuple[date, date] | None:
+    # More than one temporal expression is ambiguous unless it is the explicitly
+    # supported "this month versus last month" comparison. Never discard an
+    # unparsed second period just because another period happens to match.
+    temporal_pattern = (
+        r"20\d{2}年\d{1,2}月|20\d{2}[-/]\d{1,2}(?![-/\d])|\d{1,2}月|"
+        r"上个月|本月|上月|上周|本周|上个?星期|本星期|下周|下个月|下月|"
+        r"(?:近|过去|最近)(?:\d+|[一二三四五六七八九十两]+)[天周月年]|"
+        r"(?:上|下)半年|(?:上个?|本|下个?)季度|今年|去年|前年|明年|"
+        r"今天|今日|昨天|昨日|前天|明天|明日|指定(?:时间|日期|周|月|年)"
+    )
     explicit = re.search(
-        r"(20\d{2})[-年/](\d{1,2})[-月/](\d{1,2})\s*(?:到|至|-)\s*"
-        r"(20\d{2})[-年/](\d{1,2})[-月/](\d{1,2})",
+        r"(20\d{2})[-年/](\d{1,2})[-月/](\d{1,2})日?\s*(?:到|至|-)\s*"
+        r"(20\d{2})[-年/](\d{1,2})[-月/](\d{1,2})日?",
         text,
     )
     if explicit:
-        start = date(int(explicit.group(1)), int(explicit.group(2)), int(explicit.group(3)))
-        end = date(int(explicit.group(4)), int(explicit.group(5)), int(explicit.group(6)))
-        return start, end
+        if re.search(temporal_pattern, text[: explicit.start()] + text[explicit.end() :]):
+            return None
+        try:
+            start = date(int(explicit.group(1)), int(explicit.group(2)), int(explicit.group(3)))
+            end = date(int(explicit.group(4)), int(explicit.group(5)), int(explicit.group(6)))
+        except ValueError:
+            return None
+        return (start, end) if start <= end and (end - start).days <= 92 else None
+    temporal_terms = re.findall(temporal_pattern, text)
+    supported_month_comparison = (
+        len(temporal_terms) == 2
+        and set(temporal_terms) == {"本月", "上月"}
+        and any(term in text for term in ("和上月比", "与上月比", "相比上月", "较上月"))
+    )
+    if len(temporal_terms) > 1 and not supported_month_comparison:
+        return None
+    # A standalone calendar month is not equivalent to the default rolling 30 days.
+    months = list(
+        re.finditer(r"(?<!\d)(20\d{2})(?:年(\d{1,2})月(?!\d)|[-/](\d{1,2})(?![-/\d]))", text)
+    )
+    if len(months) == 1 and not re.search(r"\d(?:月|日)?\s*(?:到|至|~|～)", text):
+        month = months[0]
+        year, number = int(month.group(1)), int(month.group(2) or month.group(3))
+        if not 1 <= number <= 12:
+            return None
+        return date(year, number, 1), date(year, number, calendar.monthrange(year, number)[1])
+    if re.search(r"\d{4}年|\d{4}[-/]\d|\d{1,2}月", text):
+        return None
     recent = re.search(r"近\s*(\d{1,3})\s*天", text)
     if recent:
         days = int(recent.group(1))
@@ -580,6 +619,20 @@ def _parse_date_range(text: str, today: date) -> tuple[date, date]:
         first_this_month = today.replace(day=1)
         last_previous_month = first_this_month - timedelta(days=1)
         return last_previous_month.replace(day=1), last_previous_month
+    if "上周" in text:
+        last_sunday = today - timedelta(days=today.weekday() + 1)
+        return last_sunday - timedelta(days=6), last_sunday
+    # Preserve the legacy rolling default only for requests with no time expression.
+    # Unrecognized or incomplete dates must never silently become another period.
+    if re.search(
+        r"\d{4}年|\d{4}[-/]\d|\d{1,2}月|月份|指定(?:时间|日期|周|月|年)|"
+        r"(?:今天|今日|昨天|昨日|前天|明天|明日|下周|下月|去年|今年|前年|季度|上个?星期|"
+        r"本星期|上个月|上半年|下半年|(?:近|过去|最近)[一二三四五六七八九十两]+[天周月年]|"
+        r"最近\d+天|过去\d+[天周月年]|"
+        r"近\d+天|近\d+周|近\d+月|\d+日|\d+号)",
+        text,
+    ):
+        return None
     return today - timedelta(days=29), today
 
 

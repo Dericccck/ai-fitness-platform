@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -160,7 +161,7 @@ class MemoryCandidateRepository:
         return self._record_from_row(row)
 
     @asynccontextmanager
-    async def _transaction_or_connection(self, connection: Any | None):
+    async def _transaction_or_connection(self, connection: Any | None) -> AsyncIterator[Any]:
         if connection is not None:
             yield connection
         else:

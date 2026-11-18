@@ -1,5 +1,7 @@
 package com.shuyiwa.fitness.booking.repository;
 
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
 import com.shuyiwa.fitness.booking.api.BookingApiException;
 import com.shuyiwa.fitness.booking.api.BookingAppointmentView;
 import com.shuyiwa.fitness.booking.api.BookingCancelRequest;
@@ -18,18 +20,28 @@ import org.springframework.jdbc.datasource.DriverManagerDataSource;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
+import java.io.BufferedReader;
+import java.io.InputStreamReader;
+import java.io.File;
+import java.nio.charset.StandardCharsets;
 import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Instant;
+import java.time.LocalDate;
+import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.Collections;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.HashSet;
+import java.util.List;
 import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 
 import static org.junit.Assert.assertEquals;
 import static org.junit.Assert.assertNotNull;
@@ -55,10 +67,12 @@ public class BookingRepositoryIntegrationTest {
         BookingService service = new BookingService(new BookingRepository(jdbc));
         TransactionTemplate transaction = new TransactionTemplate(
                 new DataSourceTransactionManager(fixture.dataSource));
-        try {
+        try (Fixture ignored = fixture) {
             fixture.createSchema(jdbc);
             fixture.insertBusinessFacts(jdbc);
             fixture.assertUtf8ChineseRoundTrip(jdbc);
+
+            observeFromIndependentProcess(fixture, fixture.request1, 0, 2, 0, 0);
 
             Instant initialStart = Instant.now().plus(7, ChronoUnit.DAYS).truncatedTo(ChronoUnit.HOURS);
             Instant initialEnd = initialStart.plus(1, ChronoUnit.HOURS);
@@ -75,6 +89,7 @@ public class BookingRepositoryIntegrationTest {
             assertEquals(1, first.getRemainingClassHours().intValue());
             assertEquals(1, remainingHours(jdbc, fixture.contractId));
             assertEquals(1, countAppointments(jdbc, fixture.contractId, fixture.studentId));
+            observeFromIndependentProcess(fixture, fixture.request1, 1, 1, 1, 1);
 
             // 相同 request_id 重试只返回第一次结果，不会再次扣减课时或创建预约。
             BookingAppointmentView retry = transaction.execute(status ->
@@ -83,6 +98,7 @@ public class BookingRepositoryIntegrationTest {
             assertEquals(first.getId(), retry.getId());
             assertEquals(1, remainingHours(jdbc, fixture.contractId));
             assertEquals(1, countAppointments(jdbc, fixture.contractId, fixture.studentId));
+            observeFromIndependentProcess(fixture, fixture.request1, 1, 1, 1, 1);
 
             // 复用已经消费的 JTI，但更换 request_id 和时间段，必须在事务内失败并回滚预约及课时扣减。
             try {
@@ -97,6 +113,7 @@ public class BookingRepositoryIntegrationTest {
                     remainingHours(jdbc, fixture.contractId));
             assertEquals("JTI conflict must roll back appointment insert", 1,
                     countAppointments(jdbc, fixture.contractId, fixture.studentId));
+            observeFromIndependentProcess(fixture, fixture.request2, 1, 1, 0, 0);
 
             BookingAppointmentView rescheduled = transaction.execute(status ->
                     service.reschedule(fixture.rescheduleActor(fixture.request3, first.getId()),
@@ -133,8 +150,56 @@ public class BookingRepositoryIntegrationTest {
             assertEquals(cancelled.getId(), cancelRetry.getId());
             assertEquals(1, remainingHours(jdbc, fixture.contractId));
             assertEquals(1, countActiveAppointments(jdbc, fixture.contractId, fixture.studentId));
-        } finally {
-            fixture.cleanup(jdbc);
+        }
+    }
+
+    private static void observeFromIndependentProcess(Fixture fixture, String requestId,
+            int appointments, int remainingHours, int auditCount, int consumptionCount) {
+        if (!"1".equals(System.getenv("TASK_EVAL_OBSERVER_ENABLED"))) {
+            return;
+        }
+        try {
+            List<String> command = new ArrayList<>();
+            // Maven may itself run under Rosetta while the Python venv uses arm64 extensions.
+            if ("arm64".equals(System.getenv("TASK_EVAL_OBSERVER_ARCH"))) {
+                command.addAll(Arrays.asList("/usr/bin/arch", "-arm64"));
+            }
+            command.addAll(Arrays.asList(required("TASK_EVAL_PYTHON"), "-m",
+                    "app.evaluation.task_eval.mysql_booking_observer",
+                    "--organization-id", fixture.organizationId,
+                    "--student-id", fixture.studentId, "--contract-id", fixture.contractId,
+                    "--request-id", requestId));
+            Process process = new ProcessBuilder(command)
+                    .directory(new File(required("TASK_EVAL_SERVICE_ROOT")))
+                    .redirectErrorStream(true).start();
+            if (!process.waitFor(30, TimeUnit.SECONDS)) {
+                process.destroyForcibly();
+                throw new AssertionError("independent observer timed out");
+            }
+            StringBuilder output = new StringBuilder();
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(
+                    process.getInputStream(), StandardCharsets.UTF_8))) {
+                String line;
+                while ((line = reader.readLine()) != null) output.append(line);
+            }
+            if (process.exitValue() != 0) {
+                JsonNode error = new ObjectMapper().readTree(output.toString());
+                throw new AssertionError("independent observer failed: " + error.path("reason").asText());
+            }
+            JsonNode snapshot = new ObjectMapper().readTree(output.toString());
+            assertEquals("disposable_mysql_consistent_read", snapshot.path("origin").asText());
+            assertEquals(true, snapshot.path("snapshot_complete").asBoolean());
+            // The application audit is not a complete database transaction log.
+            assertEquals(false, snapshot.path("audit_complete").asBoolean());
+            JsonNode facts = snapshot.path("facts");
+            assertEquals(1, facts.path("contract_count").asInt(-1));
+            assertEquals(appointments, facts.path("appointments").asInt(-1));
+            assertEquals(remainingHours, facts.path("remaining_hours").asInt(-1));
+            assertEquals(auditCount, facts.path("audit_count").asInt(-1));
+            assertEquals(consumptionCount, facts.path("consumption_count").asInt(-1));
+            assertEquals(consumptionCount, facts.path("linked_audit_and_consumption").asInt(-1));
+        } catch (Exception ex) {
+            throw new AssertionError("independent observer could not be executed", ex);
         }
     }
 
@@ -148,7 +213,8 @@ public class BookingRepositoryIntegrationTest {
         Instant start = Instant.now().plus(8, ChronoUnit.DAYS).truncatedTo(ChronoUnit.HOURS);
         Instant end = start.plus(1, ChronoUnit.HOURS);
         ExecutorService executor = Executors.newFixedThreadPool(2);
-        try {
+        try (Fixture ignored = fixture) {
+          try {
             fixture.createSchema(jdbc);
             fixture.insertBusinessFacts(jdbc);
             fixture.insertSecondStudentWithContract(jdbc);
@@ -176,9 +242,9 @@ public class BookingRepositoryIntegrationTest {
             assertEquals("两份合同合计只能扣减一个课时", 1,
                     remainingHours(jdbc, fixture.contractId)
                             + remainingHours(jdbc, fixture.secondContractId));
-        } finally {
+          } finally {
             executor.shutdownNow();
-            fixture.cleanup(jdbc);
+          }
         }
     }
 
@@ -256,7 +322,7 @@ public class BookingRepositoryIntegrationTest {
         return new HashSet<>(Collections.singleton(value));
     }
 
-    private static final class Fixture {
+    private static final class Fixture implements AutoCloseable {
         private final String suffix = UUID.randomUUID().toString().replace("-", "").substring(0, 8);
         private final String organizationId = "it-org-" + suffix;
         private final String studentId = "it-student-" + suffix;
@@ -281,9 +347,20 @@ public class BookingRepositoryIntegrationTest {
         private final DataSource dataSource = new DriverManagerDataSource(
                 required("BOOKING_IT_DB_URL"), required("BOOKING_IT_DB_USERNAME"),
                 required("BOOKING_IT_DB_PASSWORD"));
+        private boolean schemaInitialized;
 
         private void createSchema(JdbcTemplate jdbc) {
             BookingDatabaseSchema.initialize(dataSource, jdbc);
+            schemaInitialized = true;
+        }
+
+        @Override
+        public void close() {
+            // try-with-resources preserves any earlier setup/test exception and
+            // attaches cleanup errors as suppressed exceptions.
+            if (schemaInitialized) {
+                cleanup(new JdbcTemplate(dataSource));
+            }
         }
 
         private void insertBusinessFacts(JdbcTemplate jdbc) {
@@ -314,7 +391,8 @@ public class BookingRepositoryIntegrationTest {
                             + "contract_end_time, remaining_class_hours, status, version, deleted) "
                             + "VALUES (?, ?, ?, ?, ?, ?, 2, 1, 0, 0)",
                     contractId, organizationId, studentId, courseId,
-                    Date.valueOf("2026-01-01"), Date.valueOf("2026-12-31"));
+                    Date.valueOf(LocalDate.now(ZoneOffset.UTC).minusYears(1)),
+                    Date.valueOf(LocalDate.now(ZoneOffset.UTC).plusYears(1)));
         }
 
         private void assertUtf8ChineseRoundTrip(JdbcTemplate jdbc) {
@@ -345,7 +423,8 @@ public class BookingRepositoryIntegrationTest {
                             + "contract_end_time, remaining_class_hours, status, version, deleted) "
                             + "VALUES (?, ?, ?, ?, ?, ?, 1, 1, 0, 0)",
                     secondContractId, organizationId, secondStudentId, courseId,
-                    Date.valueOf("2026-01-01"), Date.valueOf("2026-12-31"));
+                    Date.valueOf(LocalDate.now(ZoneOffset.UTC).minusYears(1)),
+                    Date.valueOf(LocalDate.now(ZoneOffset.UTC).plusYears(1)));
             assertEquals("并发测试学员-" + suffix,
                     jdbc.queryForObject("SELECT name FROM login_user WHERE id = ?",
                             String.class, secondStudentId));

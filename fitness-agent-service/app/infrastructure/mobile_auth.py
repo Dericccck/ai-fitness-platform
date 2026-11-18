@@ -345,7 +345,7 @@ class MobileAuthService:
         except AgentContextVerificationError as exc:
             raise BrowserAuthError(401, "移动会话已失效，请重新登录") from exc
 
-        def scope(value: AgentIdentity) -> tuple:
+        def scope(value: AgentIdentity) -> tuple[object, ...]:
             return (
                 value.subject,
                 value.organization_ids,

@@ -22,6 +22,48 @@ def test_parses_monthly_course_metric() -> None:
     assert hint.to_date == date(2026, 8, 15)
 
 
+@pytest.mark.parametrize("question", ["2026年8月营收", "查看2026-08收入"])
+def test_explicit_calendar_month_is_not_replaced_by_rolling_default(question: str) -> None:
+    hint = parse_operations_intent(question, today=date(2026, 11, 17))
+    assert hint is not None
+    assert (hint.from_date, hint.to_date) == (date(2026, 8, 1), date(2026, 8, 31))
+
+
+def test_last_week_is_full_previous_calendar_week() -> None:
+    hint = parse_operations_intent("查看上周营收", today=date(2026, 11, 17))
+    assert hint is not None
+    assert (hint.from_date, hint.to_date) == (date(2026, 11, 9), date(2026, 11, 15))
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        "查询指定月份营业收入",
+        "查询没有交易的月份的收入",
+        "查看2024年收入",
+        "查看2026年8月1日收入",
+        "查看2026-99-01到2026-99-31的营收",
+        "查看2026-08-15到2026-08-01的营收",
+        "查看近100天营收",
+        "查看2026年8月到2026年9月营收",
+        "查看上周和本月营收",
+        "查看2026年8月及9月营收",
+        "查看上半年营收",
+        "查看下半年营收",
+        "查看过去一年营收",
+        "查看最近一年营收",
+        "查看上个月到本月营收",
+        "查看2026-08-01至2026-08-15及本月营收",
+        "查看本月和上个季度营收",
+        "查看2026年8月和去年营收",
+        "查看近三天营收",
+    ],
+)
+def test_unsupported_or_incomplete_time_never_falls_back_to_another_period(question: str) -> None:
+    assert parse_operations_intent(question, today=date(2026, 11, 17)) is None
+    assert "先向用户澄清" in operations_prompt_hint(question)
+
+
 def test_builds_authorized_tool_input_from_question_and_single_signed_org() -> None:
     query = build_authorized_operations_tool_input(
         "统计 2026-08-01 至 2026-08-15 的营收金额按周趋势",

@@ -3,12 +3,14 @@
 from __future__ import annotations
 
 import os
+import socket
 from datetime import datetime, timedelta
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 import pytest
 from sqlalchemy import text
+from sqlalchemy.engine import make_url
 
 from app.core.config import Settings
 from app.infrastructure.database import Database
@@ -138,3 +140,31 @@ async def test_notification_policy_publishes_defers_and_suppresses() -> None:
                 {"subjects": subjects},
             )
         await database.close()
+
+
+@pytest.mark.skipif(
+    os.getenv("TASK_EVAL_RESTRICT_NOTIFICATION_NETWORK") != "1",
+    reason="仅在专用隔离评测容器环境运行通知网络探针",
+)
+async def test_notification_worker_cannot_connect_to_other_network_destinations(
+    monkeypatch,
+) -> None:
+    """Observe this test's Python sockets; this is not an OS-level egress firewall."""
+    database_url = make_url(Settings(_env_file=None).database_url)
+    assert database_url.host == "127.0.0.1" and database_url.port
+    original_connect = socket.socket.connect
+    blocked: list[object] = []
+
+    def restricted_connect(sock, address):
+        if address != ("127.0.0.1", database_url.port):
+            blocked.append(address)
+            raise PermissionError("non-test notification destination blocked")
+        return original_connect(sock, address)
+
+    monkeypatch.setattr(socket.socket, "connect", restricted_connect)
+    with socket.socket() as probe, pytest.raises(PermissionError):
+        probe.connect(("192.0.2.1", 443))
+    assert blocked == [("192.0.2.1", 443)]
+    blocked.clear()
+    await test_notification_policy_publishes_defers_and_suppresses()
+    assert not blocked

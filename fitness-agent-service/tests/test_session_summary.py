@@ -109,7 +109,9 @@ async def test_session_summary_is_encrypted_and_reused_only_after_incremental_th
     )
 
     summary = await service.maybe_summarize(
-        thread_id="fitness:thread-1", subject_user_id="student-1", messages=_messages(2),
+        thread_id="fitness:thread-1",
+        subject_user_id="student-1",
+        messages=_messages(2),
         memory_revision=0,
     )
 
@@ -140,10 +142,15 @@ async def test_summary_skips_missing_or_stale_turn_memory_revision() -> None:
         keep_recent_messages=1,
     )
     for revision in (None, 1):
-        assert await service.prepare_summary(
-            thread_id="thread", subject_user_id="user", messages=_messages(2),
-            memory_revision=revision,
-        ) is None
+        assert (
+            await service.prepare_summary(
+                thread_id="thread",
+                subject_user_id="user",
+                messages=_messages(2),
+                memory_revision=revision,
+            )
+            is None
+        )
     assert models.calls == []
 
 
@@ -195,7 +202,10 @@ async def test_candidate_preparation_does_not_publish_and_stale_version_cannot_r
         keep_recent_messages=1,
     )
     draft = await service.prepare_summary(
-        thread_id="thread", subject_user_id="subject", messages=_messages(2), memory_revision=0,
+        thread_id="thread",
+        subject_user_id="subject",
+        messages=_messages(2),
+        memory_revision=0,
     )
     assert draft is not None and not repository.upsert_calls
     await repository.publish(draft)

@@ -23,10 +23,18 @@ def upgrade() -> None:
         sa.Column("key_version", sa.Text(), nullable=False),
         sa.Column("write_epoch", sa.BigInteger(), nullable=False),
         sa.Column("status", sa.Text(), nullable=False, server_default="CAPTURED"),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.Column("completed_at", sa.DateTime(timezone=True)),
         sa.Column("retain_until", sa.DateTime(timezone=True), nullable=False),
-        sa.UniqueConstraint("subject_user_id", "organization_id", "thread_id", "source_request_id", name="uq_memory_source_request"),
+        sa.UniqueConstraint(
+            "subject_user_id",
+            "organization_id",
+            "thread_id",
+            "source_request_id",
+            name="uq_memory_source_request",
+        ),
         sa.CheckConstraint("status IN ('CAPTURED','COMPLETED')", name="ck_memory_source_status"),
     )
     op.create_index("ix_memory_source_retention", "agent_memory_source_messages", ["retain_until"])
@@ -37,20 +45,43 @@ def upgrade() -> None:
         sa.Column("organization_id", sa.Text(), nullable=False),
         sa.Column("thread_id", sa.Text(), nullable=False),
         sa.Column("source_request_id", sa.Text(), nullable=False),
-        sa.Column("source_message_id", sa.Text(), sa.ForeignKey("agent_memory_source_messages.id", ondelete="CASCADE"), nullable=False),
+        sa.Column(
+            "source_message_id",
+            sa.Text(),
+            sa.ForeignKey("agent_memory_source_messages.id", ondelete="CASCADE"),
+            nullable=False,
+        ),
         sa.Column("write_epoch", sa.BigInteger(), nullable=False),
         sa.Column("status", sa.Text(), nullable=False, server_default="PENDING"),
         sa.Column("attempts", sa.Integer(), nullable=False, server_default="0"),
-        sa.Column("available_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
+        sa.Column(
+            "available_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
         sa.Column("lease_token", sa.Text()),
         sa.Column("lease_until", sa.DateTime(timezone=True)),
-        sa.Column("created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()),
-        sa.UniqueConstraint("subject_user_id", "organization_id", "source_message_id", name="uq_memory_extraction_source"),
-        sa.CheckConstraint("status IN ('PENDING','RUNNING','DONE','FAILED')", name="ck_memory_extraction_job_status"),
+        sa.Column(
+            "created_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.Column(
+            "updated_at", sa.DateTime(timezone=True), nullable=False, server_default=sa.func.now()
+        ),
+        sa.UniqueConstraint(
+            "subject_user_id",
+            "organization_id",
+            "source_message_id",
+            name="uq_memory_extraction_source",
+        ),
+        sa.CheckConstraint(
+            "status IN ('PENDING','RUNNING','DONE','FAILED')",
+            name="ck_memory_extraction_job_status",
+        ),
         sa.CheckConstraint("attempts >= 0", name="ck_memory_extraction_attempts"),
     )
-    op.create_index("ix_memory_extraction_ready", "agent_memory_extraction_jobs", ["status", "available_at", "id"])
+    op.create_index(
+        "ix_memory_extraction_ready",
+        "agent_memory_extraction_jobs",
+        ["status", "available_at", "id"],
+    )
 
 
 def downgrade() -> None:

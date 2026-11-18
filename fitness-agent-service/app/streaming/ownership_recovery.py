@@ -9,9 +9,12 @@ from __future__ import annotations
 import hashlib
 import json
 import re
+from typing import Any
 from uuid import uuid4
 
 from sqlalchemy import text
+from sqlalchemy.engine import RowMapping
+from sqlalchemy.ext.asyncio import AsyncConnection
 
 from app.confirmation.cipher import AesGcmPayloadCipher, ConfirmationPayloadCipherError
 from app.infrastructure.agent_context import AgentIdentity
@@ -34,7 +37,7 @@ class OwnershipRecovery:
 
     async def _audit(
         self,
-        conn,
+        conn: AsyncConnection,
         identity: AgentIdentity,
         conversation_id: str,
         outcome: str,
@@ -84,11 +87,11 @@ class OwnershipRecovery:
             )
             return result.rowcount + repaired.rowcount
 
-    async def available(self, identity: AgentIdentity, before: str | None = None) -> dict:
+    async def available(self, identity: AgentIdentity, before: str | None = None) -> dict[str, Any]:
         if len(identity.organization_ids) != 1:
             raise RecoveryUnavailable()
         async with self.database.engine.connect() as conn:
-            args = {
+            args: dict[str, Any] = {
                 "subject": identity.subject,
                 "scope": json.dumps(sorted(identity.organization_ids)),
                 "owner": run_owner(identity),
@@ -140,7 +143,7 @@ class OwnershipRecovery:
         async with self.database.engine.begin() as conn:
             await conn.execute(text("SET LOCAL lock_timeout = '5s'"))
             await conn.execute(text("SET LOCAL statement_timeout = '30s'"))
-            args = {
+            args: dict[str, Any] = {
                 "id": conversation_id,
                 "subject": identity.subject,
                 "scope": json.dumps(sorted(identity.organization_ids)),
@@ -171,7 +174,7 @@ class OwnershipRecovery:
                 raise RecoveryConflict("该会话包含旧对话关联或不支持的标题数据，需要人工处理")
             args.update(old=old, target=target)
 
-            async def rows(sql: str) -> list:
+            async def rows(sql: str) -> list[RowMapping]:
                 return list((await conn.execute(text(sql), args)).mappings().all())
 
             assets = await rows("""SELECT asset_id,owner_hash,subject_user_id FROM agent_media_assets

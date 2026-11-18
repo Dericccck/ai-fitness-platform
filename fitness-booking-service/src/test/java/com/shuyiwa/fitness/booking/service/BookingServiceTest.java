@@ -22,10 +22,12 @@ import java.util.Optional;
 
 import static org.junit.Assert.assertEquals;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.mockito.Mockito.never;
 
 public class BookingServiceTest {
     private final BookingRepository repository = mock(BookingRepository.class);
@@ -99,6 +101,81 @@ public class BookingServiceTest {
             return;
         }
         throw new AssertionError("missing confirmation must be rejected");
+    }
+
+    @Test
+    public void expiredContractIsRejectedBeforeInsertAndReleasesLocks() {
+        setupCreateChecks();
+        when(repository.findContractForUpdate("org-1", "student-1", "contract-1"))
+                .thenReturn(new BookingRepository.ContractRecord("contract-1", "org-1", "student-1",
+                        "course-1", Date.valueOf("2026-01-01"), Date.valueOf("2026-12-31"), 2, 0, 0));
+        assertCreateRejected(request(), 409, "合同已失效，无法预约");
+        assertNoCreateAndLocksReleased();
+    }
+
+    @Test
+    public void exhaustedContractIsRejectedBeforeInsertAndReleasesLocks() {
+        setupCreateChecks();
+        when(repository.findContractForUpdate("org-1", "student-1", "contract-1"))
+                .thenReturn(contract(0));
+        assertCreateRejected(request(), 409, "合同剩余课时不足");
+        assertNoCreateAndLocksReleased();
+    }
+
+    @Test
+    public void studentCannotBookForAnotherStudent() {
+        BookingCreateRequest request = request();
+        request.setStudentId("other-student");
+        assertCreateRejected(request, 403, "学员只能为本人预约");
+        verify(repository, never()).acquireRequestLock(any());
+        verify(repository, never()).insertBooking(any(), any(), any(), any(), any(), any(), anyInt());
+    }
+
+    @Test
+    public void existingCoachAppointmentRejectsNewBookingWithoutWrite() {
+        BookingCreateRequest request = request();
+        setupCreateChecks();
+        when(repository.findCoachConflicts("org-1", "coach-1", request.getStartTime(), request.getEndTime()))
+                .thenReturn(Collections.singletonList(mock(BookingAppointmentView.class)));
+        assertCreateRejected(request, 409, "教练该时间段已有预约");
+        assertNoCreateAndLocksReleased();
+    }
+
+    @Test
+    public void existingStudentAppointmentRejectsNewBookingWithoutWrite() {
+        BookingCreateRequest request = request();
+        setupCreateChecks();
+        when(repository.findStudentConflicts("org-1", "student-1", request.getStartTime(), request.getEndTime(), null))
+                .thenReturn(Collections.singletonList(mock(BookingAppointmentView.class)));
+        assertCreateRejected(request, 409, "学员该时间段已有预约");
+        assertNoCreateAndLocksReleased();
+    }
+
+    private void setupCreateChecks() {
+        when(repository.isOrganizationMember("org-1", "student-1")).thenReturn(true);
+        when(repository.isCoachInOrganization("org-1", "coach-1")).thenReturn(true);
+        when(repository.findByRequestId("request-1")).thenReturn(Optional.empty());
+        when(repository.findContractForUpdate("org-1", "student-1", "contract-1"))
+                .thenReturn(contract(2));
+        when(repository.findActiveCourse("org-1", "course-1"))
+                .thenReturn(Optional.of(new BookingRepository.CourseRecord("course-1", "力量训练", 1)));
+    }
+
+    private void assertCreateRejected(BookingCreateRequest request, int status, String reason) {
+        try {
+            service.create(studentActor(), request);
+            throw new AssertionError("invalid booking was accepted");
+        } catch (com.shuyiwa.fitness.booking.api.BookingApiException expected) {
+            assertEquals(status, expected.getStatus().value());
+            assertEquals(reason, expected.getMessage());
+        }
+    }
+
+    private void assertNoCreateAndLocksReleased() {
+        verify(repository, never()).insertBooking(any(), any(), any(), any(), any(), any(), anyInt());
+        verify(repository).releaseStudentDayLock("org-1", "student-1", LocalDate.of(2026, 8, 20));
+        verify(repository).releaseCoachDayLock("org-1", "coach-1", LocalDate.of(2026, 8, 20));
+        verify(repository).releaseRequestLock("request-1");
     }
 
     @Test

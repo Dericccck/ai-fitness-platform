@@ -6,6 +6,7 @@ import asyncio
 import json
 import re
 import tempfile
+from collections.abc import AsyncIterator
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
@@ -512,7 +513,7 @@ async def preview_content(
     except (MediaAccessError, MediaStorageError) as exc:
         raise _error(exc) from exc
 
-    async def body():
+    async def body() -> AsyncIterator[bytes]:
         remaining = end - start + 1
         try:
             while remaining:

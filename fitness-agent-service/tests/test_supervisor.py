@@ -659,3 +659,44 @@ def test_booking_prompt_requires_write_tool_and_confirmation_flow() -> None:
 
     assert "必须调用对应的预约工具" in prompt
     assert "自动生成确认单并暂停" in prompt
+
+
+@pytest.mark.parametrize(
+    "message",
+    [
+        "胸口疼还要继续高强度训练吗？",
+        "运动时胸口痛，还能继续吗？",
+        "我胸痛想问怎么训练",
+    ],
+)
+async def test_chest_pain_terminates_before_router_model_or_tools(message: str) -> None:
+    calls: list[dict[str, Any]] = []
+    models = FakeModels([])
+
+    class NeverRoute:
+        async def decide(self, *args: Any, **kwargs: Any) -> Any:
+            raise AssertionError("urgent safety response must precede routing")
+
+    supervisor = Supervisor(
+        cast(ModelGateway, models), build_registry(calls), intent_router=NeverRoute()
+    )
+    response = await supervisor.invoke(request(message))
+    assert response.route == "FITNESS_COACHING"
+    assert response.route_source == "HARD_GUARD"
+    assert "立即停止训练" in response.answer
+    assert "立即联系当地急救服务" in response.answer
+    assert response.tool_steps == 0
+    assert not models.tools_seen
+    assert not calls
+
+
+def test_chest_guard_is_narrow_and_preserves_other_existing_behavior() -> None:
+    from app.agent.supervisor import (
+        _customer_service_restricted_answer,
+        _urgent_training_safety_answer,
+    )
+
+    assert _urgent_training_safety_answer("胸肌怎么练？") is None
+    assert _urgent_training_safety_answer("训练后膝盖有些酸怎么办？") is None
+    assert _urgent_training_safety_answer("训练后头晕吃什么处方药？") is None
+    assert _customer_service_restricted_answer("训练后头晕吃什么处方药？") is not None

@@ -9,6 +9,7 @@ from collections.abc import Awaitable, Callable
 import structlog
 
 from app.agent.movement_analysis import MovementAnalysisService
+from app.agent.movement_models import KnowledgeReport, MovementReport
 from app.core.multimodal_metrics import MultimodalMetrics
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.model_usage import collect_usage
@@ -115,6 +116,7 @@ class MultimodalWorker:
                 return
             dispatched = True
             with collect_usage(lease.run_id, run_id=lease.run_id):
+                report: KnowledgeReport | MovementReport
                 if lease.payload.get("analysis_mode", "movement") == "knowledge":
                     report = await self.analysis.analyze_knowledge(
                         identity=identity,

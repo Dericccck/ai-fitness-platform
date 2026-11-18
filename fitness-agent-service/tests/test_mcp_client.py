@@ -233,8 +233,10 @@ async def test_cancelling_one_call_preserves_shared_pool_and_other_calls():
             started.set()
             await asyncio.sleep(5)
         return CallToolResult(
-            content=[], structuredContent=success_envelope(TOOL_SPECS[USER_TOOL],
-                                                          {"id": "user-1", "enabled": True}),
+            content=[],
+            structuredContent=success_envelope(
+                TOOL_SPECS[USER_TOOL], {"id": "user-1", "enabled": True}
+            ),
         )
 
     with remote_server(result_factory=response) as (url, _, calls):
