@@ -324,6 +324,8 @@ python -m app.evaluation.task_eval.cli run --dataset evals/task_eval/datasets/v1
 
 `bash scripts/task_eval_mysql_audit_lab.sh` 在全新临时 MySQL 中实验受限写入账号和独立审计表，检查指定预约相关表的提交、回滚、权限及触发器完整性。它不是任务审计适配器：并发事务的窗口边界和 PostgreSQL 确认的跨库因果尚未证明，因此不能据此把确认前写入断言判为通过。
 
+`bash scripts/task_eval_mysql_barrier_lab.sh` 在全新临时 MySQL 中观察读锁与单个在途事务、新写入的交互。该实验不运行 Agent，也不证明所有写者受控；不能将取得读锁等同于事务已排空。
+
 `app.evaluation.task_eval.mysql_sandbox_preflight` 是为未来业务沙箱准备的独立 MySQL 空库预检，检查专用容器及空 schema；它尚未接入任务运行器，也不适用于上述采用不同容器标识的 Maven MySQL 验收脚本。单独通过该检查不表示业务服务、网络或审计已隔离。
 
 `validate --require-reviewed-test` 可检查测试规划案例是否具有人工标注与复核记录；当前预期失败。`compare --baseline <报告目录> --candidate <报告目录> --output <新文件>` 仅接受数据、执行模式、范围、评分器、已解析夹具摘要和试次等条件一致且已知的报告。运行退出码：0 表示执行且通过，1 表示数据或配置错误，2 表示已判定失败，3 表示证据不足或执行不完整。`validate` 和 `plan` 的成功不表示质量通过。
