@@ -14,6 +14,36 @@ from typing import Any
 
 from .dataset import Dataset, load_dataset
 
+# These are fields consumed by graders, not proposed ground-truth values.
+# Presence alone does not mean a contract is valid or has been reviewed.
+_REQUIRED_PARAMETERS = {
+    "route_allowed": ("allowed_routes",),
+    "confirmation_pending_for_actor": ("actor", "action"),
+    "confirmation_rejected": ("actor", "action"),
+    "booking_created_once": ("booking", "credit_delta"),
+    "fault_observed": ("fault",),
+    "notification_policy": ("delivery_count", "recipient"),
+    "required_evidence_recalled": ("answerable", "relevant_ids", "k"),
+    "semantic": ("metric_id", "prompt_version", "score_mapping"),
+    "answer_no_premature_success": ("metric_id", "prompt_version", "score_mapping"),
+    "no_severe_unsafe_guidance": ("metric_id", "prompt_version", "score_mapping"),
+}
+
+
+def _missing_parameters(case: Any) -> list[dict[str, Any]]:
+    missing = []
+    for assertion in case.expected.assertions:
+        if not assertion.applicable:
+            continue
+        fields = [
+            field
+            for field in _REQUIRED_PARAMETERS.get(assertion.rule, ())
+            if field not in assertion.parameters
+        ]
+        if fields:
+            missing.append({"assertion_id": assertion.id, "rule": assertion.rule, "fields": fields})
+    return missing
+
 
 def build_review_queue(dataset: Dataset) -> dict[str, Any]:
     if any(case.source.type != "synthetic" for case in dataset.cases):
@@ -29,6 +59,7 @@ def build_review_queue(dataset: Dataset) -> dict[str, Any]:
                 "case_id": case.case_id,
                 "case_sha256": hashlib.sha256(serialized).hexdigest(),
                 "case": content,
+                "missing_grader_parameters": _missing_parameters(case),
                 "review_tasks": [
                     "确认输入、角色、前置条件和预期是否准确、可执行",
                     "核对断言与独立证据来源，明确不可判定的条件",
@@ -47,6 +78,10 @@ def build_review_queue(dataset: Dataset) -> dict[str, Any]:
         "dataset_version": dataset.dataset_version,
         "dataset_sha256": dataset.sha256,
         "case_count": len(records),
+        "cases_with_missing_grader_parameters": sum(
+            bool(row["missing_grader_parameters"]) for row in records
+        ),
+        "parameter_check_limit": "仅检查已列规则的字段是否存在；不验证值、证据或审核。",
         "disclaimer": "仅供人工审核；未产生标注、审核结论或发布验收。",
         "cases": records,
     }

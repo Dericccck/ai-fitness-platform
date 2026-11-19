@@ -58,3 +58,16 @@ TASK_EVAL_JAVA_COMPONENTS=1 \
 ```
 
 每次数据集评测自动创建独立运行上下文，五个案例在同一次评测中共享该次套件结果；不同评测不会复用结果。未启用时这些 Java 案例保持 `SKIPPED`。五项测试的仓储均为 Mockito 替身，不证明真实数据库、并发、Agent 对话或答案质量；即使全部通过，相关任务仍为 `INCONCLUSIVE`。`BOOK-025` 则只观察 Python 确认服务对合成冲突的处理，不能证明模型没有误报成功。
+
+## BOOK-030 本机 RabbitMQ 重复投递观察
+
+在 `fitness-agent-service` 目录执行以下命令；报告路径必须为不存在的绝对路径：
+
+```bash
+bash scripts/task_eval_cross_service_booking.sh --broker-duplicate-trial \
+  "$PWD/var/task-eval/book-030-rabbit-report.json"
+```
+
+该模式要求本机 Docker、JDK 和离线 Maven 依赖，以及本机已有的 PostgreSQL、MySQL、RabbitMQ 镜像。启动器创建带随机运行标识、临时存储和仅监听 loopback 的容器；RabbitMQ 使用随机凭据与独占队列，退出时删除容器。实验用脚本模型产生一次经确认的合成预约，从隔离 MySQL Outbox 重建事件，通过真正的本机 RabbitMQ 将相同字节投递两次，并检查 PostgreSQL 消费去重、通知 Outbox、预约与课时和另一租户的见证快照。
+
+这是组件观察，不运行 Java 的事件发布器、真实模型或通知投递；数据库快照不是完整独立事务审计。案例仍为草稿，组件成功不代表 BOOK-030 任务或 120 条案例验收通过。重复运行时应使用新的报告文件名。

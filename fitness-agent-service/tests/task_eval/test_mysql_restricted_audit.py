@@ -77,14 +77,41 @@ def test_verify_rejects_modified_trigger_and_extra_privilege(monkeypatch):
 
 def test_observations_explicitly_do_not_claim_complete_window(monkeypatch):
     monkeypatch.setattr(audit, "_container", lambda: ("run", "container"))
-    monkeypatch.setattr(audit, "_sql", lambda *_args: "appointment\tINSERT\t1")
+    monkeypatch.setattr(
+        audit,
+        "_sql",
+        lambda _cid, query: "RUNNING\t0\t1" if "innodb_trx" in query else "appointment\tINSERT\t1",
+    )
     observed = audit.observe()
     assert observed["records"] == [{"table": "appointment", "operation": "INSERT", "count": 1}]
     assert observed["audit_window_complete"] is False
     assert observed["cross_database_causality"] == "UNKNOWN"
+    assert observed["transaction_sample"] == {
+        "state_counts": [{"state": "RUNNING", "read_only": False, "count": 1}],
+        "freshness": "NOT_GUARANTEED",
+        "writers_drained": "UNKNOWN",
+        "blocks_future_writes": False,
+    }
     monkeypatch.setattr(audit, "_sql", lambda *_args: "arbitrary_table\tINSERT\t1")
     with pytest.raises(PreflightError, match="INVALID_AUDIT_OBSERVATION"):
         audit.observe()
+
+
+def test_empty_transaction_sample_never_proves_writers_drained(monkeypatch):
+    monkeypatch.setattr(audit, "_sql", lambda *_args: "")
+    sample = audit._observe_transactions("container")
+    assert sample["state_counts"] == []
+    assert sample["writers_drained"] == "UNKNOWN"
+    assert sample["blocks_future_writes"] is False
+
+
+@pytest.mark.parametrize(
+    "raw", ["INVALID\t0\t1", "RUNNING\t2\t1", "RUNNING\t0\t0", "RUNNING\t0\t1\nRUNNING\t0\t1"]
+)
+def test_invalid_transaction_samples_are_rejected(monkeypatch, raw):
+    monkeypatch.setattr(audit, "_sql", lambda *_args: raw)
+    with pytest.raises(PreflightError, match="INVALID_TRANSACTION_OBSERVATION"):
+        audit._observe_transactions("container")
 
 
 def test_login_failure_is_not_proof_of_permission_denial(monkeypatch):

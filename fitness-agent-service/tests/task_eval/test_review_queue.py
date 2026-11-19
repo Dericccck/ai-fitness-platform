@@ -17,6 +17,15 @@ def test_queue_is_complete_and_does_not_create_review_decisions():
     assert all(row["review_outcome"] is None for row in queue["cases"])
     assert all(row["case"]["review"]["status"] == "draft" for row in queue["cases"])
     assert all(len(row["case_sha256"]) == 64 for row in queue["cases"])
+    book_018 = next(row for row in queue["cases"] if row["case_id"] == "BOOK-018")
+    missing = {
+        item["assertion_id"]: item["fields"] for item in book_018["missing_grader_parameters"]
+    }
+    assert missing["pending"] == ["actor", "action"]
+    assert missing["rejected"] == ["actor", "action"]
+    assert missing["task_result"] == ["metric_id", "prompt_version", "score_mapping"]
+    assert queue["cases_with_missing_grader_parameters"] > 0
+    assert book_018["review_outcome"] is None
 
 
 def test_queue_rejects_non_synthetic_data():

@@ -1,7 +1,8 @@
 """Replay one real booking Outbox fact through the Python consumer and PG worker.
 
-The envelope is reconstructed from the real MySQL row; the delivery object is a
-local stub, not RabbitMQ. No notification delivery worker or real model is run.
+The envelope is reconstructed from the real MySQL row. Delivery defaults to a
+local stub; the explicit broker mode uses a verified disposable local RabbitMQ.
+The Java publisher, notification delivery worker and real model are not run.
 """
 
 from __future__ import annotations
@@ -9,6 +10,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Awaitable, Callable
+from contextlib import AsyncExitStack
 from typing import Any, cast
 
 from aio_pika.abc import AbstractIncomingMessage
@@ -21,6 +23,8 @@ from app.proactive.rabbit_consumer import ProactiveRabbitConsumer
 from app.proactive.repository import ProactiveEventRepository
 from app.proactive.worker import ProactiveEventWorker
 
+from .booking_rabbit_delivery import BrokerDelivery, BrokerFixture
+
 
 class Delivery:
     def __init__(self, body: bytes) -> None:
@@ -32,6 +36,22 @@ class Delivery:
         self.acks += 1
 
     async def reject(self, *, requeue: bool) -> None:
+        self.rejects += 1
+
+
+class _TrackedBrokerDelivery(Delivery):
+    """Record ACK/reject only after the real broker method succeeds."""
+
+    def __init__(self, message: AbstractIncomingMessage) -> None:
+        super().__init__(message.body)
+        self.message = message
+
+    async def ack(self) -> None:
+        await self.message.ack()
+        self.acks += 1
+
+    async def reject(self, *, requeue: bool) -> None:
+        await self.message.reject(requeue=requeue)
         self.rejects += 1
 
 
@@ -151,6 +171,7 @@ async def run_duplicate_event_probe(
     database: Database,
     event: ProactiveEventMessage,
     mysql_snapshot: Callable[[], Awaitable[dict[str, Any]]],
+    broker: BrokerFixture | None = None,
 ) -> dict[str, Any]:
     if (
         event.event_type != "APPOINTMENT_CREATED"
@@ -171,7 +192,6 @@ async def run_duplicate_event_probe(
     body = json.dumps(
         event.model_dump(mode="json", by_alias=True), sort_keys=True, separators=(",", ":")
     ).encode()
-    first_delivery, second_delivery = Delivery(body), Delivery(body)
     repository = ProactiveEventRepository()
     consumer = ProactiveRabbitConsumer(
         database,
@@ -190,12 +210,24 @@ async def run_duplicate_event_probe(
     )
     before_mysql = await mysql_snapshot()
     baseline = await _pg_snapshot(database, event.event_id)
-    await consumer._consume_one(cast(AbstractIncomingMessage, first_delivery))
-    first_run = await worker.run_once()
-    first = await _pg_snapshot(database, event.event_id)
-    await consumer._consume_one(cast(AbstractIncomingMessage, second_delivery))
-    second_run = await worker.run_once()
-    second = await _pg_snapshot(database, event.event_id)
+    async with AsyncExitStack() as stack:
+        transport = (
+            await stack.enter_async_context(BrokerDelivery(broker, body)) if broker else None
+        )
+        first_delivery = (
+            _TrackedBrokerDelivery(await transport.receive()) if transport else Delivery(body)
+        )
+        await consumer._consume_one(cast(AbstractIncomingMessage, first_delivery))
+        first_run = await worker.run_once()
+        first = await _pg_snapshot(database, event.event_id)
+        second_delivery = (
+            _TrackedBrokerDelivery(await transport.receive()) if transport else Delivery(body)
+        )
+        await consumer._consume_one(cast(AbstractIncomingMessage, second_delivery))
+        second_run = await worker.run_once()
+        second = await _pg_snapshot(database, event.event_id)
+        if transport and not await transport.empty():
+            raise ValueError("UNEXPECTED_BROKER_MESSAGE")
     after_mysql = await mysql_snapshot()
     one = (first_run.claimed, first_run.processed, first_run.retried)
     two = (second_run.claimed, second_run.processed, second_run.retried)
@@ -217,7 +249,11 @@ async def run_duplicate_event_probe(
         "component_status": "OBSERVED",
         "task_status": "UNKNOWN",
         "event_source": "actual_mysql_booking_outbox_reconstructed_envelope",
-        "duplicate_delivery": "same_bytes_twice_to_python_consumer_with_stub_message",
+        "duplicate_delivery": (
+            "same_bytes_twice_via_disposable_rabbitmq_to_python_consumer"
+            if broker
+            else "same_bytes_twice_to_python_consumer_with_stub_message"
+        ),
         "event_body_sha256": hashlib.sha256(body).hexdigest(),
         "delivery_acks": [first_delivery.acks, second_delivery.acks],
         "delivery_rejects": [first_delivery.rejects, second_delivery.rejects],
@@ -233,7 +269,11 @@ async def run_duplicate_event_probe(
         "mysql_observed_facts_unchanged": True,
         "audit_complete": False,
         "limitations": [
-            "The actual broker and Java publisher are not used; the envelope is reconstructed from the persisted booking Outbox row.",
+            (
+                "The Java publisher is not used; the envelope is reconstructed from the persisted booking Outbox row."
+                if broker
+                else "The actual broker and Java publisher are not used; the envelope is reconstructed from the persisted booking Outbox row."
+            ),
             "The event consumer generates notification Outbox rows, not bookings or credit charges; no real notification is delivered.",
             "MySQL snapshots are not a complete database transaction audit; the scripted model does not test interpretation.",
             "The planning case and semantic evaluation remain unreviewed; this component observation is not an end-to-end task PASS.",

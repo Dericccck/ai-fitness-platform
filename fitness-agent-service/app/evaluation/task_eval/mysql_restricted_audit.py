@@ -22,6 +22,7 @@ _BOOKING = "eval_booking"
 _GATEWAY = "eval_gateway"
 _OWNER = "eval_audit_owner"
 _BODY = "INSERT INTO fitness_eval_audit.events (table_name, op) VALUES ('{table}', '{event}')"
+_TRANSACTION_STATES = frozenset({"RUNNING", "LOCK WAIT", "ROLLING BACK", "COMMITTING"})
 
 
 def _container() -> tuple[str, str]:
@@ -211,6 +212,39 @@ SELECT account_locked FROM mysql.user WHERE user='eval_audit_owner' AND host='lo
     }
 
 
+def _observe_transactions(cid: str) -> dict[str, Any]:
+    """Sample transaction states without exposing SQL text or asserting quiescence.
+
+    INNODB_TRX is a potentially stale snapshot. No row, including a read-only
+    classification, proves that a writer cannot exist or appear later.
+    """
+    output = _sql(
+        cid,
+        "SELECT trx_state,trx_is_read_only,COUNT(*) FROM information_schema.innodb_trx "
+        "GROUP BY trx_state,trx_is_read_only ORDER BY trx_state,trx_is_read_only;",
+    )
+    counts: list[dict[str, Any]] = []
+    seen: set[tuple[str, str]] = set()
+    for line in output.splitlines():
+        fields = line.split("\t")
+        if (
+            len(fields) != 3
+            or fields[0] not in _TRANSACTION_STATES
+            or fields[1] not in {"0", "1"}
+            or not re.fullmatch(r"[1-9][0-9]*", fields[2])
+            or (fields[0], fields[1]) in seen
+        ):
+            raise PreflightError("INVALID_TRANSACTION_OBSERVATION")
+        seen.add((fields[0], fields[1]))
+        counts.append({"state": fields[0], "read_only": fields[1] == "1", "count": int(fields[2])})
+    return {
+        "state_counts": counts,
+        "freshness": "NOT_GUARANTEED",
+        "writers_drained": "UNKNOWN",
+        "blocks_future_writes": False,
+    }
+
+
 def observe() -> dict[str, Any]:
     """Return transactional audit counts, without claiming a closed commit window."""
     _, cid = _container()
@@ -231,6 +265,7 @@ def observe() -> dict[str, Any]:
         records.append({"table": values[0], "operation": values[1], "count": int(values[2])})
     return {
         "records": records,
+        "transaction_sample": _observe_transactions(cid),
         "audit_window_complete": False,
         "cross_database_causality": "UNKNOWN",
     }

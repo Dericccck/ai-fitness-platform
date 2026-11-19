@@ -308,7 +308,7 @@ python -m app.evaluation.task_eval.cli run --dataset evals/task_eval/datasets/v1
 
 隔离运行时验收还运行真实 PostgreSQL 通知策略、站内收件箱及签名身份/确认状态测试，检查测试执行数并拒绝静默跳过。通知测试对本次 Python 进程的 socket 连接施加限定，并验证外部地址被拒绝；这不是操作系统级网络隔离，也不能证明其他进程或渠道的出口安全。
 
-人工审核清单可通过 `python -m app.evaluation.task_eval.review_queue --dataset evals/task_eval/datasets/v1.jsonl --output /tmp/fitness-review-queue.json` 生成。清单绑定数据集与案例摘要，不会自动填写审核结论；安全审核仍需实际具备相应资质的人员完成。
+人工审核清单可通过 `python -m app.evaluation.task_eval.review_queue --dataset evals/task_eval/datasets/v1.jsonl --output /tmp/fitness-review-queue.json` 生成。清单绑定数据集与案例摘要，并提示部分规则缺少的评分参数；这只是字段存在性检查，不能证明参数值有效，也不会自动填写审核结论。安全审核仍需实际具备相应资质的人员完成。
 
 `python -m app.evaluation.task_eval.split_leakage --dataset evals/task_eval/datasets/v1.jsonl` 提供开发集与测试集的词面相似候选及可比较数量。结果不包含无法展开的对话，也不检查语义、夹具和标签泄漏，不能代替人工分集审核。检索组件报告的 `summary` 按 K 展示有证据的条件 Recall、Hit、MRR 和计划分母，并单列空结果、未知及未执行数量；不可回答题不计入这些指标。
 

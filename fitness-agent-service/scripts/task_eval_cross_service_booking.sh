@@ -5,7 +5,17 @@ set -euo pipefail
 umask 077
 single_development_trial=false
 book_real_model=false
+broker_duplicate_trial=false
 development_module=app.evaluation.task_eval.dev_sandbox_booking
+if [[ "${1:-}" == "--broker-duplicate-trial" ]]; then
+    [[ "$#" -eq 2 && "$2" == /* && ! -e "$2" ]] || {
+        printf 'Provide a new absolute report path for the broker trial.\n' >&2
+        exit 1
+    }
+    broker_duplicate_trial=true
+    broker_report="$2"
+    set -- --real-broker --report-file "$broker_report"
+fi
 if [[ "${1:-}" == "--single-development-trial" || "${1:-}" == "--book-018-development-trial" || "${1:-}" == "--book-018-real-model-trial" ]]; then
     [[ "$#" -ge 2 && "$2" == /* && ! -e "$2" ]] || {
         printf 'Provide a new absolute report path for the development trial.\n' >&2
@@ -51,7 +61,7 @@ repo_root="$(cd "$service_root/.." && pwd)"
 python="$service_root/.venv/bin/python"
 run_id="$(openssl rand -hex 8)"
 run_dir="$(mktemp -d "${TMPDIR:-/tmp}/fitness-cross-eval.XXXXXX")"
-pg_id="" mysql_id="" gateway_pid="" booking_pid=""
+pg_id="" mysql_id="" rabbit_id="" gateway_pid="" booking_pid=""
 cleanup() {
     local status=$?
     local cleanup_failed=0
@@ -60,6 +70,7 @@ cleanup() {
     [[ -z "$booking_pid" ]] || { kill "$booking_pid" 2>/dev/null || true; wait "$booking_pid" 2>/dev/null || true; }
     [[ -z "$pg_id" ]] || docker rm -f -v "$pg_id" >/dev/null || cleanup_failed=1
     [[ -z "$mysql_id" ]] || docker rm -f -v "$mysql_id" >/dev/null || cleanup_failed=1
+    [[ -z "$rabbit_id" ]] || docker rm -f -v "$rabbit_id" >/dev/null || cleanup_failed=1
     if [[ "$cleanup_failed" -ne 0 ]]; then
         printf 'Failed to remove one or more isolated containers.\n' >&2
         status=1
@@ -89,10 +100,17 @@ pg_id="$(docker run -d --pull=never --rm --name "fitness-eval-pg-$run_id" --labe
 mysql_id="$(docker run -d --pull=never --rm --name "fitness-eval-mysql-$run_id" --label "fitness.eval=$run_id" \
     --tmpfs /var/lib/mysql -p 127.0.0.1::3306 -e MYSQL_ROOT_PASSWORD -e MYSQL_ROOT_HOST=% \
     -e MYSQL_DATABASE=fitness_eval mysql:8.0 --character-set-server=utf8mb4 --collation-server=utf8mb4_bin)"
+if [[ "$broker_duplicate_trial" == true ]]; then
+    export RABBITMQ_DEFAULT_USER=fitness_eval RABBITMQ_DEFAULT_PASS="$(openssl rand -hex 24)"
+    rabbit_id="$(docker run -d --pull=never --rm --name "fitness-eval-rabbit-$run_id" --label "fitness.eval=$run_id" \
+        --tmpfs /var/lib/rabbitmq -p 127.0.0.1::5672 -e RABBITMQ_DEFAULT_USER -e RABBITMQ_DEFAULT_PASS \
+        -e RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS='+S 2:2 +A 4' rabbitmq:3.13-management-alpine)"
+fi
 ready=false
 for attempt in $(seq 1 90); do
     if docker exec "$pg_id" pg_isready -U fitness_eval -d postgres >/dev/null 2>&1 \
-        && docker exec "$mysql_id" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=tcp -h127.0.0.1 -uroot -e "SELECT 1"' >/dev/null 2>&1; then
+        && docker exec "$mysql_id" sh -c 'MYSQL_PWD="$MYSQL_ROOT_PASSWORD" mysql --protocol=tcp -h127.0.0.1 -uroot -e "SELECT 1"' >/dev/null 2>&1 \
+        && { [[ "$broker_duplicate_trial" == false ]] || docker exec "$rabbit_id" rabbitmq-diagnostics -q check_running >/dev/null 2>&1; }; then
         ready=true; break
     fi
     sleep 1
@@ -200,6 +218,9 @@ runtime_env=(env -i "PATH=$PATH" "HOME=$run_dir" "TMPDIR=$run_dir" "PYTHONPATH=$
 if [[ "$single_development_trial" == true ]]; then
     runtime_env+=("TASK_EVAL_BOOKING_DB_PASSWORD=$TASK_EVAL_BOOKING_DB_PASSWORD"
         "TASK_EVAL_GATEWAY_DB_PASSWORD=$TASK_EVAL_GATEWAY_DB_PASSWORD")
+fi
+if [[ "$broker_duplicate_trial" == true ]]; then
+    runtime_env+=("TASK_EVAL_RABBIT_CONTAINER_ID=$rabbit_id" "TASK_EVAL_RABBIT_PASSWORD=$RABBITMQ_DEFAULT_PASS")
 fi
 "${runtime_env[@]}" "$python" -m alembic -c "$run_dir/alembic.ini" upgrade head >"$run_dir/migrations.log" 2>&1
 if [[ "$single_development_trial" == true ]]; then

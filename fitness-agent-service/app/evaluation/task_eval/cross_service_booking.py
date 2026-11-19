@@ -50,6 +50,7 @@ from .booking_contracts import matches_frozen_case
 from .booking_duplicate_event import run_duplicate_event_probe
 from .booking_followup_probe import FOLLOWUP, FollowupModel
 from .booking_model_boundary import PAYLOAD, PROMPT, OneBookingModel, expected_payload
+from .booking_rabbit_delivery import BrokerFixture
 from .booking_signed_identity import _identity
 from .budget_store import DurableBudget
 from .dataset import load_dataset
@@ -210,7 +211,10 @@ async def evaluate(
     model_decision: str = "REJECT",
     approve_synthetic_fixture: bool = False,
     same_session_followup: bool = False,
+    broker: BrokerFixture | None = None,
 ) -> dict[str, Any]:
+    if broker is not None and model is not None:
+        raise ValueError("broker replay is restricted to the scripted component probe")
     if model is not None and (
         not isinstance(model, OneBookingModel)
         or model_decision not in {"REJECT", "APPROVE"}
@@ -237,6 +241,10 @@ async def evaluate(
     if model is not None and start <= datetime.now(UTC) + timedelta(days=1):
         raise ValueError("synthetic fixture date needs review")
     settings, run_id, mysql_id, context_secret, token_secret = _environment()
+    if broker is not None:
+        if broker.run_id != run_id:
+            raise PreflightError("BROKER_RUN_MISMATCH")
+        broker.verified_port()
     database = Database(settings)
     repository = ConfirmationRepository(database)
     gateway = GatewayClient(settings)
@@ -478,7 +486,7 @@ async def evaluate(
                         return await asyncio.to_thread(snapshot)
 
                     results["duplicate_event"] = await run_duplicate_event_probe(
-                        database=database, event=event, mysql_snapshot=mysql_snapshot
+                        database=database, event=event, mysql_snapshot=mysql_snapshot, broker=broker
                     )
         if model is not None:
             return {
@@ -613,6 +621,7 @@ def main() -> int:
     models = parser.add_mutually_exclusive_group()
     models.add_argument("--mock-model", action="store_true")
     models.add_argument("--real-model", action="store_true")
+    parser.add_argument("--real-broker", action="store_true")
     parser.add_argument("--approve-synthetic-fixture", action="store_true")
     parser.add_argument(
         "--same-session-followup",
@@ -629,6 +638,8 @@ def main() -> int:
         "--report-file", help="Write this run's sanitized JSON result to a new file"
     )
     args = parser.parse_args()
+    if args.real_broker and (args.real_model or args.mock_model):
+        parser.error("real-broker is available only in the scripted component probe")
     if args.approve_synthetic_fixture and not (args.mock_model or args.real_model):
         parser.error("synthetic approval requires an explicit model mode")
     if args.same_session_followup and not (args.real_model and args.approve_synthetic_fixture):
@@ -676,6 +687,15 @@ def main() -> int:
                 model_decision="APPROVE" if args.approve_synthetic_fixture else "REJECT",
                 approve_synthetic_fixture=args.approve_synthetic_fixture,
                 same_session_followup=args.same_session_followup,
+                broker=(
+                    BrokerFixture(
+                        run_id=os.environ.get("TASK_EVAL_RUN_ID", ""),
+                        container_id=os.environ.get("TASK_EVAL_RABBIT_CONTAINER_ID", ""),
+                        password=os.environ.get("TASK_EVAL_RABBIT_PASSWORD", ""),
+                    )
+                    if args.real_broker
+                    else None
+                ),
             )
         )
     except Exception as exc:  # noqa: BLE001 - avoid exposing secret-bearing network errors
