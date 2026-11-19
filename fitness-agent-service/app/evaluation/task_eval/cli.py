@@ -14,7 +14,7 @@ from typing import Any
 
 from .comparison import IncompatibleRuns, compare_runs
 from .dataset import DatasetValidationError, load_dataset
-from .runner import MODES, execute, exit_code, write_report
+from .runner import MODES, execute, execute_development_sandbox, exit_code, write_report
 
 
 def _json(value: Any) -> str:
@@ -45,6 +45,16 @@ def _parser() -> argparse.ArgumentParser:
         if name == "run":
             cmd.add_argument("--execute", action="store_true", required=True)
             cmd.add_argument("--output-dir", required=True)
+            cmd.add_argument(
+                "--dev-scripted-sandbox",
+                action="store_true",
+                help="explicit local disposable sandbox for the single fixed synthetic dev case",
+            )
+            cmd.add_argument(
+                "--dev-scripted-case",
+                choices=("DEV-SANDBOX-BOOK-001", "BOOK-018"),
+                help="fixed draft case to run with --dev-scripted-sandbox",
+            )
     gate = sub.add_parser("release-gate", help="fail-closed offline release assessment")
     gate.add_argument("--dataset", required=True)
     gate.add_argument("--manifest", required=True)
@@ -298,15 +308,28 @@ def main(argv: list[str] | None = None) -> int:
                 )
             )
             return 0
-        manifest, trials, summary = execute(
-            dataset,
-            split=args.split,
-            mode=args.mode,
-            repeats=args.repeats,
-            seed=args.seed,
-            dataset_path=args.dataset,
-        )
-        write_report(args.output_dir, manifest, trials, summary)
+        if args.dev_scripted_case and not args.dev_scripted_sandbox:
+            raise ValueError("--dev-scripted-case requires --dev-scripted-sandbox")
+        if args.dev_scripted_sandbox:
+            manifest, trials, summary = execute_development_sandbox(
+                dataset,
+                split=args.split,
+                mode=args.mode,
+                repeats=args.repeats,
+                seed=args.seed,
+                output_dir=args.output_dir,
+                case_id=args.dev_scripted_case or "DEV-SANDBOX-BOOK-001",
+            )
+        else:
+            manifest, trials, summary = execute(
+                dataset,
+                split=args.split,
+                mode=args.mode,
+                repeats=args.repeats,
+                seed=args.seed,
+                dataset_path=args.dataset,
+            )
+            write_report(args.output_dir, manifest, trials, summary)
         print(
             _json(
                 {

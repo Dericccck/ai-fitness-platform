@@ -35,6 +35,46 @@ class Delivery:
         self.rejects += 1
 
 
+# This probe is only valid for the two-tenant disposable fixture established by
+# cross_service_booking; equal snapshots alone cannot prove an approved booking
+# happened, and missing fields must never be interpreted as zero.
+_EXPECTED_MYSQL_FACTS = {
+    "contract_count": 1,
+    "remaining_hours": 1,
+    "appointments": 1,
+    "active_appointments": 1,
+    "audit_count": 1,
+    "consumption_count": 1,
+    "linked_audit_and_consumption": 1,
+    "witness_contract_count": 1,
+    "witness_remaining_hours": 5,
+    "witness_appointments": 0,
+    "global_contracts": 2,
+    "global_remaining_hours": 6,
+    "global_appointments": 1,
+    "global_create_operations": 1,
+    "global_reschedule_operations": 0,
+    "global_cancel_operations": 0,
+    "global_audits": 1,
+    "global_consumptions": 1,
+    "global_outbox": 1,
+}
+
+
+def _matches_approved_booking(snapshot: dict[str, Any]) -> bool:
+    facts = snapshot.get("facts")
+    return (
+        snapshot.get("snapshot_complete") is True
+        and snapshot.get("witness_observed") is True
+        and isinstance(facts, dict)
+        and all(
+            type(facts.get(key)) is int and facts[key] == value
+            for key, value in _EXPECTED_MYSQL_FACTS.items()
+        )
+        and facts.get("audit_actions") == ["CREATE_APPOINTMENT"]
+    )
+
+
 async def _pg_snapshot(database: Database, event_id: str) -> dict[str, Any]:
     async with database.engine.begin() as connection:
         await connection.execute(text("SET TRANSACTION READ ONLY"))
@@ -94,10 +134,8 @@ def verify_replay(
             "recipients": ["coach-1", "student-1"],
         }
         or second != first
-        or mysql_before.get("snapshot_complete") is not True
-        or mysql_after.get("snapshot_complete") is not True
-        or mysql_before.get("witness_observed") is not True
-        or mysql_after.get("witness_observed") is not True
+        or not _matches_approved_booking(mysql_before)
+        or not _matches_approved_booking(mysql_after)
         or mysql_before.get("facts") != mysql_after.get("facts")
         or any(
             type(snapshot.get(field)) is not int
@@ -118,8 +156,15 @@ async def run_duplicate_event_probe(
         event.event_type != "APPOINTMENT_CREATED"
         or event.source != "booking"
         or event.organization_id != "org-1"
-        or event.payload.get("studentId") != "student-1"
-        or event.payload.get("coachId") != "coach-1"
+        or event.event_id != f"appointment-created:{event.aggregate_id}"
+        or event.contract_version != 1
+        or event.aggregate_version != 1
+        or event.payload
+        != {
+            "appointmentId": event.aggregate_id,
+            "studentId": "student-1",
+            "coachId": "coach-1",
+        }
     ):
         raise ValueError("INVALID_EVENT_FIXTURE")
     # The exact same bytes are delivered twice to the actual consumer handler.

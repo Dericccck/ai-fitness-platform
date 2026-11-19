@@ -294,7 +294,7 @@ python -m app.evaluation.task_eval.cli dataset-local --dataset evals/task_eval/d
 python -m app.evaluation.task_eval.cli run --dataset evals/task_eval/datasets/v1.jsonl --split dev --mode contract --execute --output-dir /tmp/fitness-task-eval-run
 ```
 
-`routing` 实际调用现有第一阶段确定性路由器，只评估已标注意图路由的案例，不代表整个 Agent 的任务表现。`run` 生成 `manifest.json`、`trials.jsonl`、`summary.json` 和 `report.md`；当前规划集缺少经过验证的业务夹具及独立审计，案例将标记为 `SKIPPED`，退出码为 3（不完整）。三种模式的结果必须分开；真实模型和集成沙箱执行尚未启用，不能用 HTTP 客户端替代隔离环境、业务状态和审计证明。内存桩仅用于测试评测程序本身。
+`routing` 实际调用现有第一阶段确定性路由器，只评估已标注意图路由的案例，不代表整个 Agent 的任务表现。`run` 生成 `manifest.json`、`trials.jsonl`、`summary.json` 和 `report.md`；常规运行当前规划集时，因案例未审核且缺少经过验证的业务夹具及独立审计，案例将标记为 `SKIPPED`，退出码为 3（不完整）。下文另列出受限的单案例开发沙箱及真实模型探针，它们不能代表完整数据集的集成验收。三种模式的结果必须分开；内存桩仅用于测试评测程序本身。
 
 `local` 是可执行的本地协议与组件测试，独立于 120 条规划案例：预约套件使用真实对话与确认 HTTP 接口、Python Supervisor 和确认服务，加固定模型、内存确认仓储和隔离 SQLite 业务替身，覆盖批准、拒绝、越权、重复批准、冲突、模拟超时及写入后响应丢失；检索套件运行真实 `RagService`，但向量、权限仓储和重排使用本地替身；经营套件覆盖查询策略和趋势报告；通知套件运行实际通知偏好策略，不代表消息已经投递。`--suite all` 因检索权限和生成回答尚无独立证据而返回 3（不完整）；各项可判定违规仍会返回 2。报告输出为单独的 JSON 文件，不与完整任务质量成绩混算。
 
@@ -316,11 +316,44 @@ python -m app.evaluation.task_eval.cli run --dataset evals/task_eval/datasets/v1
 
 `supervisor_model_probe` 仅对固定的 ROUT-002 合成输入运行一次真实 Supervisor 和模型，不启用业务工具。真实请求必须提供本地持久化预算账本：调用前保守预留、跨进程串行化，费用未知或进程中断会阻止后续预留。该账本只覆盖接入它的评测调用，不监控同一服务商账户的其他请求，也不是供应商账单硬限额；模型答案和案例仍须人工审核。
 
+用户明确授权调整额度时，`DurableBudget.increase_limit(...)` 可原子更新已有账本并追加授权审计；必须提供准确的旧额度、累计预留、所有未知费用请求及金额、授权引用，并确认未知费用风险。该操作保留全部历史预留、未知状态及原冻结状态，未完成的调用会阻止调整；冻结仍需通过单独的显式恢复流程处理。新额度最高为本地 30 元，不能通过创建新账本绕过旧历史；调用方应先停止其他账本使用者并只读核对最新账本，再执行变更。账本属于调用方本地记录，用户授权和历史审计本身不构成第三方认证，也不是供应商实际账单上限。
+
 遇到未知费用时，账本保持冻结。只有获得明确授权并核对账本身份、全部未知预留和待完成请求后，`DurableBudget.resume_with_unknown_cost` 才能记录授权并恢复；未知预留不会删除或退款，也不代表供应商费用已对账。`routing_model_probe` 和 `dev_review_probe` 是有限的合成开发案例观察工具，帮助人工检查真实模型或硬规则结果，不产生完整任务通过结论；后者的审核材料写入仅当前用户可访问的目录，仍应由合适的审核人员检查。
 
 `scripts/task_eval_cross_service_booking.sh` 可在本机临时 PostgreSQL、MySQL 和 Java 服务中运行预约组件探针；真实模型模式必须显式提供评测凭证文件、已有账本与定价确认。`--same-session-followup` 仅允许配合真实模型和批准的合成夹具，记录后续只读查询及业务快照，仍不等同于逐案例完整任务或独立事务审计。各探针支持 `--help` 查看参数，切勿把凭证写入命令行参数值、报告或仓库。
 
 该启动器另支持 `--single-development-trial /绝对路径/新报告.json`：使用 `evals/task_eval/dev_sandbox_v1/` 中独立的未审核合成案例及固定夹具，按步骤运行脚本模型和临时本机服务。该模式以受限账号运行 Gateway 和 Booking，并核验独立审计 owner 与指定表触发器；报告保留确认前后快照、审计观察、源码身份及未知断言。它不属于原规划集，也不代表真实模型表现或完整事务审计。
+
+同一固定开发案例也可以通过主 Runner 显式执行：
+
+```bash
+python -m app.evaluation.task_eval.cli run \
+  --dataset evals/task_eval/dev_sandbox_v1/case.jsonl --no-quota-check \
+  --split dev --mode integration_sandbox --execute --dev-scripted-sandbox \
+  --output-dir /绝对路径/新报告目录
+```
+
+也可明确选择原规划数据集的 BOOK-018，按该案例的拒绝步骤和版本化合成开发夹具运行：
+
+```bash
+python -m app.evaluation.task_eval.cli run \
+  --dataset evals/task_eval/datasets/v1.jsonl --split dev \
+  --mode integration_sandbox --execute --dev-scripted-sandbox \
+  --dev-scripted-case BOOK-018 --output-dir /绝对路径/新报告目录
+```
+
+入口只接受对应的未修改数据集、固定夹具和一次试次，并由启动器创建本机临时服务；不接受自定义服务端点或真实模型。BOOK-018 的拒绝操作不会验证所给时间确实可预约，确认前事务审计与语义依据仍不完整。报告使用标准 manifest、逐试次、汇总及 Markdown 文件，显式标记脚本模型和未审核状态。已观察到的必要断言失败返回 2；证据不全或尚未审核返回 3，不能用于发布验收。其余规划案例与真实模型沙箱仍未接入此入口。
+
+BOOK-018 还可通过启动器单独运行一次真实模型调用：
+
+```bash
+bash scripts/task_eval_cross_service_booking.sh --book-018-real-model-trial /绝对路径/新报告.json \
+  --credential-file /绝对路径/私有密钥文件 --budget-file /绝对路径/现有预算账本.sqlite \
+  --budget-limit-nano <账本上限> --budget-opening-nano <账本期初金额> \
+  --minimum-reserved-nano <已核对累计预留> --confirm-current-pricing
+```
+
+各金额单位均为十亿分之一元，须先核对现有账本及服务商当前定价；密钥从权限为 0600 的文件读取，不要写入命令行。该入口只接受固定合成输入和一个模型请求，报告包含脱敏诊断，仍不能证明正式任务或发布验收通过。
 
 `bash scripts/task_eval_mysql_audit_lab.sh` 在全新临时 MySQL 中实验受限写入账号和独立审计表，检查指定预约相关表的提交、回滚、权限及触发器完整性。它不是任务审计适配器：并发事务的窗口边界和 PostgreSQL 确认的跨库因果尚未证明，因此不能据此把确认前写入断言判为通过。
 

@@ -152,7 +152,7 @@ async def test_cross_tenant_or_global_change_is_reported_as_mismatch():
         lambda: {"snapshot_complete": True, "created_bookings": []},
     )
     assert report["snapshot_checks"][0]["status"] == "MISMATCH"
-    assert report["task_status"] == "INCONCLUSIVE"
+    assert report["task_status"] == "FAIL"
 
 
 def test_development_case_is_not_original_planning_dataset():
@@ -162,6 +162,87 @@ def test_development_case_is_not_original_planning_dataset():
     assert all(
         fixture["booking"][name] in case.steps[0].message for name in ("course_id", "coach_id")
     )
+
+
+@pytest.mark.asyncio
+async def test_committed_write_before_decision_fails_and_stops_before_approval():
+    case, fixture = module._load()
+    agent = FakeAgent()
+    repo = FakeRepository(agent)
+    snapshots = iter(
+        [
+            {"records": [], "audit_window_complete": False},
+            {
+                "records": [{"table": "appointment", "operation": "INSERT", "count": 1}],
+                "audit_window_complete": False,
+            },
+        ]
+    )
+    report = await module._drive(
+        case,
+        fixture,
+        agent,
+        repo,
+        lambda _request_id: snapshot_values(),
+        lambda: {"snapshot_complete": True, "created_bookings": []},
+        lambda: next(snapshots),
+    )
+    rows = {row["id"]: row for row in report["assertions"]}
+    assert rows["no_write_before"]["status"] == "FAIL"
+    assert report["task_status"] == "FAIL"
+    assert report["reason"] == "REQUIRED_ASSERTION_FAILED"
+    assert not any(call[0] == "decision" for call in agent.calls)
+
+
+@pytest.mark.asyncio
+async def test_concurrent_approval_does_not_turn_audit_event_into_proven_preapproval_write():
+    case, fixture = module._load()
+    agent = FakeAgent()
+
+    class ConcurrentApprovalRepository(FakeRepository):
+        async def get_for_subject(self, cid, subject, orgs):
+            record = await super().get_for_subject(cid, subject, orgs)
+            if len(self.calls) >= 3:
+                record.authorization_status = "APPROVED"
+            return record
+
+    repo = ConcurrentApprovalRepository(agent)
+    audit_calls = 0
+
+    def audit():
+        nonlocal audit_calls
+        audit_calls += 1
+        if audit_calls == 1:
+            return {"records": [], "audit_window_complete": False}
+        return {
+            "records": [{"table": "appointment", "operation": "INSERT", "count": 1}],
+            "audit_window_complete": False,
+        }
+
+    report = await module._drive(
+        case,
+        fixture,
+        agent,
+        repo,
+        lambda _request_id: snapshot_values(),
+        lambda: {"snapshot_complete": True, "created_bookings": []},
+        audit,
+    )
+    rows = {row["id"]: row for row in report["assertions"]}
+    assert rows["no_write_before"]["status"] == "UNKNOWN"
+
+
+def test_dev_trial_cli_reports_decidable_failure_as_exit_two(monkeypatch, tmp_path):
+    import sys
+
+    async def failed():
+        return {"status": "FAIL"}
+
+    monkeypatch.setattr(module, "run", failed)
+    monkeypatch.setattr(
+        sys, "argv", ["dev_sandbox_booking", "--report-file", str(tmp_path / "out")]
+    )
+    assert module.main() == 2
 
 
 @pytest.mark.asyncio

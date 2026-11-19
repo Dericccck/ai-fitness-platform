@@ -18,7 +18,7 @@ from app.confirmation.cipher import AesGcmPayloadCipher
 from app.confirmation.service import ConfirmationService
 from app.evaluation.task_eval import booking_local as local
 from app.evaluation.task_eval.agent_http import AgentHTTP
-from app.evaluation.task_eval.booking_model_boundary import PROMPT, OneBookingModel
+from app.evaluation.task_eval.booking_model_boundary import BOOK_018_PROMPT, PROMPT, OneBookingModel
 from app.evaluation.task_eval.budget_store import DurableBudget
 
 
@@ -69,6 +69,16 @@ def response(*, coach: str = "coach-1", usage: Any = "valid") -> dict[str, Any]:
         if usage == "valid"
         else usage,
     }
+
+
+def response_018() -> dict[str, Any]:
+    value = response()
+    function = value["choices"][0]["message"]["tool_calls"][0]["function"]
+    arguments = json.loads(function["arguments"])
+    arguments["startTime"] = "2030-01-01T10:00:00+08:00"
+    arguments["endTime"] = "2030-01-01T11:00:00+08:00"
+    function["arguments"] = json.dumps(arguments)
+    return value
 
 
 async def run_local(
@@ -155,6 +165,94 @@ async def test_single_mock_model_call_and_confirmation(decision: str, tmp_path: 
     assert result["snapshot"]["credit_delta"] == (0 if decision == "REJECT" else -1)
     assert ledger.snapshot()["reserved_nano"] == 353_280_000
     assert ledger.snapshot()["pending"] == 0
+
+
+@pytest.mark.parametrize("decision", ["REJECT", "APPROVE"])
+async def test_book_018_profile_mock_call_uses_same_budget_and_confirmation(
+    decision: str, tmp_path: Path
+) -> None:
+    ledger = budget(tmp_path / "budget.sqlite")
+    requests = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        requests.append(request)
+        assert ledger.snapshot()["pending"] == 1
+        assert ledger.snapshot()["reserved_nano"] == 353_280_000
+        return httpx.Response(200, json=response_018())
+
+    model = OneBookingModel(
+        "mock-credential-for-tests",
+        ledger,
+        profile="BOOK-018",
+        transport=httpx.MockTransport(handler),
+        execute=True,
+        confirmed_current_pricing=True,
+    )
+    assert model.profile == "BOOK-018"
+    with pytest.raises(AttributeError):
+        model.profile = "default"
+    result = await run_local(model, decision=decision, prompt=BOOK_018_PROMPT)
+    assert len(requests) == 1 and model.ledger.attempts == 1
+    assert result["chat"]["status"] == "CONFIRMATION_REQUIRED"
+    assert result["before"]["after"]["booking_count"] == 0
+    assert result["gateway_attempts"] == (0 if decision == "REJECT" else 1)
+    assert result["snapshot"]["after"]["booking_count"] == (0 if decision == "REJECT" else 1)
+    assert result["snapshot"]["credit_delta"] == (0 if decision == "REJECT" else -1)
+    assert ledger.snapshot()["reserved_nano"] == 353_280_000
+    assert ledger.snapshot()["pending"] == 0 and not ledger.snapshot()["frozen"]
+
+
+@pytest.mark.parametrize(
+    ("profile", "prompt"), [("default", BOOK_018_PROMPT), ("BOOK-018", PROMPT)]
+)
+async def test_cross_profile_input_rejected_before_reservation(
+    profile: str, prompt: str, tmp_path: Path
+) -> None:
+    ledger = budget(tmp_path / "budget.sqlite")
+    requests = []
+    model = OneBookingModel(
+        "mock-credential-for-tests",
+        ledger,
+        profile=profile,
+        transport=httpx.MockTransport(lambda request: requests.append(request)),
+        execute=True,
+        confirmed_current_pricing=True,
+    )
+    result = await run_local(model, prompt=prompt)
+    assert result["error"] and result["gateway_attempts"] == 0 and requests == []
+    assert model.reason == "UNAPPROVED_MODEL_INPUT_OR_TOOLS"
+    assert ledger.snapshot()["reserved_nano"] == 148_480_000
+
+
+async def test_book_018_wrong_response_freezes_budget_and_never_confirms(tmp_path: Path) -> None:
+    ledger = budget(tmp_path / "budget.sqlite")
+    model = OneBookingModel(
+        "mock-credential-for-tests",
+        ledger,
+        profile="BOOK-018",
+        transport=httpx.MockTransport(lambda _: httpx.Response(200, json=response())),
+        execute=True,
+        confirmed_current_pricing=True,
+    )
+    result = await run_local(model, prompt=BOOK_018_PROMPT)
+    assert result["error"] and result["gateway_attempts"] == 0
+    assert model.reason == "FIXTURE_PARAMETERS_MISMATCH"
+    assert ledger.snapshot()["frozen"] and ledger.snapshot()["pending"] == 0
+
+
+@pytest.mark.parametrize("profile", ["unknown", "book-018", "", None, 1, {"name": "BOOK-018"}])
+def test_arbitrary_profile_rejected_before_use(profile: Any, tmp_path: Path) -> None:
+    ledger = budget(tmp_path / "budget.sqlite")
+    with pytest.raises(ValueError, match="unsupported booking model profile"):
+        OneBookingModel(
+            "mock-credential-for-tests",
+            ledger,
+            profile=profile,
+            transport=httpx.MockTransport(lambda _: httpx.Response(500)),
+            execute=True,
+            confirmed_current_pricing=True,
+        )
+    assert ledger.snapshot()["reserved_nano"] == 148_480_000
 
 
 async def test_bad_model_booking_is_not_confirmed_or_written(tmp_path: Path) -> None:
@@ -439,3 +537,41 @@ async def test_optional_null_mark_matches_frozen_fixture(tmp_path: Path) -> None
     assert not result.get("error")
     assert result["result"]["authorization_status"] == "REJECTED"
     assert model.diagnostics()["argument_mark_state"] == "NULL"
+
+
+async def test_authorized_increased_ledger_supports_real_model_boundary_with_mock_transport(
+    tmp_path: Path,
+) -> None:
+    path = tmp_path / "budget.sqlite"
+    DurableBudget(path, limit_nano=10_000_000_000)
+    ledger = DurableBudget.increase_limit(
+        path,
+        previous_limit_nano=10_000_000_000,
+        new_limit_nano=30_000_000_000,
+        opening_nano=0,
+        expected_reserved_nano=0,
+        expected_unknown={},
+        authorization_ref="test-user-authorized",
+        acknowledge_unknown_cost=False,
+        explicitly_authorized=True,
+    )
+    ledger.reserve("previous-reservation", 12_000_000_000)
+    ledger.finish("previous-reservation", usage_known=True)
+    calls = []
+
+    def handler(req):
+        calls.append(req)
+        return httpx.Response(200, json=response())
+
+    model = OneBookingModel(
+        "synthetic-credential-only",
+        ledger,
+        execute=True,
+        confirmed_current_pricing=True,
+        transport=httpx.MockTransport(handler),
+    )
+    result = await run_local(model)
+    assert len(calls) == 1 and not result.get("error")
+    diagnostic = model.diagnostics()
+    assert diagnostic["budget"]["status"] == "AVAILABLE"
+    assert diagnostic["budget"]["reserved_nano"] > 10_000_000_000

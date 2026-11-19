@@ -213,6 +213,30 @@ def execute(
     return manifest, trials, summary
 
 
+def execute_development_sandbox(
+    dataset: Any,
+    *,
+    split: str,
+    mode: str,
+    repeats: int,
+    seed: int,
+    output_dir: str,
+    case_id: str = "DEV-SANDBOX-BOOK-001",
+) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
+    """Explicit fixed-case local scripted-model path; never release evidence."""
+    from .runner_dev_sandbox import execute_development_sandbox as execute_fixed_case
+
+    return execute_fixed_case(
+        dataset,
+        split=split,
+        mode=mode,
+        repeats=repeats,
+        seed=seed,
+        output_dir=output_dir,
+        case_id=case_id,
+    )
+
+
 def write_report(
     directory: str | Path,
     manifest: dict[str, Any],

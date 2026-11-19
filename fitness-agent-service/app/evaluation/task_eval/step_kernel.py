@@ -14,6 +14,7 @@ from typing import Any
 
 from .contracts import Step, TaskCase
 from .graders.rules import grade_rule
+from .release_gate import _declared_unanswerable_recall
 
 _ACTIONS = frozenset({"chat", "decision", "inject_fault", "await_terminal", "trigger_event"})
 
@@ -100,8 +101,7 @@ def execute_steps(
             )
             status = grade.get("status")
             unanswerable_na = (
-                assertion.rule == "required_evidence_recalled"
-                and assertion.parameters.get("answerable") is False
+                _declared_unanswerable_recall(case, assertion)
                 and grade.get("reason") == "UNANSWERABLE_RECALL_NA"
             )
             if (

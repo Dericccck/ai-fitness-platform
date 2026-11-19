@@ -308,3 +308,144 @@ def test_cli_rejects_duplicate_json_keys_without_leaking(tmp_path, capsys):
     assert main(args) == 1
     result = capsys.readouterr()
     assert "secret-value" not in result.out + result.err
+
+
+def test_frozen_unanswerable_recall_na_matches_runner_without_counting_as_pass():
+    from app.evaluation.task_eval.contracts import Assertion
+
+    dataset, policy, manifest, trials = setup()
+    case = dataset.cases[0]
+    recall = Assertion(
+        id="recall-na",
+        phase="final",
+        rule="required_evidence_recalled",
+        required=True,
+        parameters={"answerable": False, "relevant_ids": [], "forbidden_ids": [], "k": 5},
+    )
+    expected = case.expected.model_copy(update={"assertions": [*case.expected.assertions, recall]})
+    dataset = replace(dataset, cases=[case.model_copy(update={"expected": expected})])
+    trials[0]["assertions"].append(
+        {
+            "id": recall.id,
+            "rule": recall.rule,
+            "phase": recall.phase,
+            "required": True,
+            "applicable": True,
+            "risk": None,
+            "status": "NA",
+        }
+    )
+    result = _assess(dataset, manifest, trials, policy, TestOnlyVerifier())
+    assert result["status"] == "PASS"
+    assert "required_evidence_recalled" not in result["observations"]["metric_coverage"]
+    assert result["observations"]["trial_coverage"]["value"] == 1
+    assert assess_release_gate(dataset, manifest, trials, policy)["status"] == "BLOCKED"
+
+
+@pytest.mark.parametrize(
+    "change", ["answerable", "relevant", "invalid_k", "risk", "forbidden_without_risk"]
+)
+def test_unanswerable_na_cannot_hide_applicable_or_risk_assertions(change):
+    from app.evaluation.task_eval.contracts import Assertion
+
+    dataset, policy, manifest, trials = setup()
+    case = dataset.cases[0]
+    params = {"answerable": False, "relevant_ids": [], "forbidden_ids": [], "k": 5}
+    if change == "answerable":
+        params["answerable"] = True
+    elif change == "relevant":
+        params["relevant_ids"] = ["unavailable"]
+    elif change == "invalid_k":
+        params["k"] = 0
+    elif change == "forbidden_without_risk":
+        params["forbidden_ids"] = ["private"]
+    risk = "privacy" if change == "risk" else None
+    recall = Assertion(
+        id="recall-na",
+        phase="final",
+        rule="required_evidence_recalled",
+        required=True,
+        risk=risk,
+        parameters=params,
+    )
+    expected = case.expected.model_copy(update={"assertions": [*case.expected.assertions, recall]})
+    dataset = replace(dataset, cases=[case.model_copy(update={"expected": expected})])
+    trials[0]["assertions"].append(
+        {
+            "id": recall.id,
+            "rule": recall.rule,
+            "phase": recall.phase,
+            "required": True,
+            "applicable": True,
+            "risk": risk,
+            "status": "NA",
+        }
+    )
+    result = _assess(dataset, manifest, trials, policy, TestOnlyVerifier())
+    assert result["status"] == "BLOCKED"
+    assert any(r.startswith("INVALID_ASSERTION_APPLICABILITY") for r in result["reasons"])
+
+
+def test_unanswerable_with_forbidden_ids_requires_separate_verified_privacy_assertion():
+    from app.evaluation.task_eval.contracts import Assertion
+
+    dataset, policy, manifest, trials = setup()
+    case = dataset.cases[0]
+    recall = Assertion(
+        id="recall-na",
+        phase="final",
+        rule="required_evidence_recalled",
+        required=True,
+        parameters={"answerable": False, "relevant_ids": [], "forbidden_ids": ["private"], "k": 5},
+    )
+    privacy = Assertion(
+        id="privacy",
+        phase="final",
+        rule="authorization_denied_no_leak",
+        required=True,
+        risk="privacy",
+        parameters={},
+    )
+    expected = case.expected.model_copy(
+        update={"assertions": [*case.expected.assertions, recall, privacy]}
+    )
+    dataset = replace(dataset, cases=[case.model_copy(update={"expected": expected})])
+    for item, status in [(recall, "NA"), (privacy, "PASS")]:
+        trials[0]["assertions"].append(
+            {
+                "id": item.id,
+                "rule": item.rule,
+                "phase": item.phase,
+                "required": True,
+                "applicable": True,
+                "risk": item.risk,
+                "status": status,
+                "evidence_ref_sha256": ["d" * 64],
+            }
+        )
+    policy = policy.model_copy(
+        update={
+            "metric_coverage": {**policy.metric_coverage, privacy.rule: 1.0},
+            "risk_coverage": {**policy.risk_coverage, "privacy": 1.0},
+        }
+    )
+    manifest["gate_policy_sha256"] = gate_policy_sha256(policy)
+    result = _assess(dataset, manifest, trials, policy, TestOnlyVerifier())
+    assert result["status"] == "PASS"
+    assert result["observations"]["risk_coverage"]["privacy"]["value"] == 1.0
+    trials[0]["assertions"][-1]["status"] = "UNKNOWN"
+    result = _assess(dataset, manifest, trials, policy, TestOnlyVerifier())
+    assert result["status"] == "BLOCKED"
+
+
+def test_unsafe_guidance_case_requires_applicable_required_clinical_assertion():
+    dataset, policy, manifest, trials = setup()
+    case = dataset.cases[0]
+    original = case.expected.assertions[0]
+    ordinary = original.model_copy(update={"rule": "semantic", "risk": None})
+    expected = case.expected.model_copy(update={"assertions": [ordinary]})
+    dataset = replace(dataset, cases=[case.model_copy(update={"expected": expected})])
+    trials[0]["assertions"][0].update(rule="semantic", risk=None)
+    result = _assess(dataset, manifest, trials, policy, TestOnlyVerifier())
+    assert result["status"] == "BLOCKED"
+    assert "CLINICAL_ASSERTION_MISSING:SAFE-015" in result["reasons"]

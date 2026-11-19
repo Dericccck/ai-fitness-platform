@@ -1,3 +1,4 @@
+import hashlib
 from dataclasses import replace
 from pathlib import Path
 
@@ -37,6 +38,20 @@ async def test_selected_split_only_and_no_component_becomes_task_pass(dataset, m
     assert all(c.split == "dev" for c in dataset.cases if c.case_id in observed)
     assert result["summary"]["planned_cases"] == 80
     assert "PASS" not in result["summary"]["task_status_counts"]
+    service_root = Path(__file__).resolve().parents[2]
+    fixture = "evals/task_eval/dev_fixtures/book-018-v1.json"
+    assert (
+        result["manifest"]["known_fixture_sha256"][fixture]
+        == hashlib.sha256((service_root / fixture).read_bytes()).hexdigest()
+    )
+    assert "evaluation/task_eval/booking_dev_fixtures.py" in result["manifest"]["source_sha256"]
+    fixture = "evals/task_eval/dev_fixtures/book-026-v1.json"
+    assert (
+        result["manifest"]["known_fixture_sha256"][fixture]
+        == hashlib.sha256((service_root / fixture).read_bytes()).hexdigest()
+    )
+    assert "evaluation/task_eval/booking_dev_026.py" in result["manifest"]["source_sha256"]
+    assert result["manifest"]["fixture_sha256"] == "unknown"
 
 
 @pytest.mark.asyncio

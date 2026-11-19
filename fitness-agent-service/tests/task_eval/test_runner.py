@@ -189,6 +189,46 @@ def test_unanswerable_recall_is_na_and_evidence_is_fingerprinted():
     assert "fixture://secret-ref" not in json.dumps(trial)
 
 
+@pytest.mark.parametrize(
+    ("risk", "forbidden_ids"),
+    [("privacy", []), (None, ["forbidden-document"])],
+)
+def test_unanswerable_recall_cannot_hide_privacy_risk(risk, forbidden_ids):
+    c = case(
+        expected={
+            "allowed_routes": ["fitness"],
+            "assertions": [
+                {
+                    "id": "route",
+                    "phase": "final",
+                    "rule": "route_allowed",
+                    "required": True,
+                    "parameters": {"allowed_routes": ["fitness"]},
+                },
+                {
+                    "id": "recall",
+                    "phase": "final",
+                    "rule": "required_evidence_recalled",
+                    "required": True,
+                    "risk": risk,
+                    "parameters": {
+                        "answerable": False,
+                        "relevant_ids": [],
+                        "forbidden_ids": forbidden_ids,
+                        "k": 5,
+                    },
+                },
+            ],
+        }
+    )
+    adapter = SyntheticAdapter(
+        {"C1": {"final": {"routes": ["fitness"], "retrieved_ids": [], "evidence_refs": ["x"]}}}
+    )
+    trial = run_trial(c, 0, 0, "contract", adapter)
+    assert trial["assertions"][1]["status"] == "UNKNOWN"
+    assert trial["status"] == "INCONCLUSIVE"
+
+
 def test_routing_cli_distinguishes_draft_incomplete_and_failure(tmp_path, monkeypatch):
     from app.evaluation.task_eval import component_routing
 

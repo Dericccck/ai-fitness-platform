@@ -25,10 +25,14 @@ from app.confirmation.service import ConfirmationService
 
 from . import (
     booking_boundary_cases,
+    booking_dev_011,
+    booking_dev_026,
+    booking_dev_fixtures,
     booking_java_cases,
     booking_mutation_cases,
     booking_positive_cases,
     booking_reconciliation_cases,
+    booking_test_008,
 )
 from . import booking_local as local
 from .agent_http import AgentHTTP
@@ -70,10 +74,12 @@ def supports(case: Any) -> bool:
         return False
     if (
         booking_java_cases.supports(case)
+        or booking_dev_011.supports(case)
         or booking_positive_cases.supports(case)
         or booking_boundary_cases.supports(case)
         or booking_mutation_cases.supports(case)
         or booking_reconciliation_cases.supports(case)
+        or booking_test_008.supports(case)
         or _supports_reject(case)
     ):
         return True
@@ -122,6 +128,10 @@ async def run(case: Any, *, index: int = 0, seed: int = 0) -> dict[str, Any]:
     """Run supported draft steps; a partially graded draft remains inconclusive."""
     if not supports(case):
         raise ValueError("unsupported booking fixture or step sequence")
+    if booking_dev_011.supports(case):
+        return await booking_dev_011.run(case, index=index, seed=seed)
+    if booking_test_008.supports(case):
+        return await booking_test_008.run(case, index=index, seed=seed)
     if booking_java_cases.supports(case):
         return await booking_java_cases.run(case, index=index, seed=seed)
     if booking_positive_cases.supports(case):
@@ -134,9 +144,12 @@ async def run(case: Any, *, index: int = 0, seed: int = 0) -> dict[str, Any]:
         return await booking_mutation_cases.run(case, index=index, seed=seed)
     if _supports_reject(case):
         start = time.monotonic()
-        probe = await local.evaluate_case("reject")
-        # The referenced message and actor/action grading parameters are absent
-        # from the draft. Report the protocol probe without inventing them.
+        fixture = booking_dev_fixtures.load_book_018(case)
+        probe = await local.evaluate_case(
+            "reject", message=fixture["message"], payload=fixture["payload"]
+        )
+        # The fixture resolves a synthetic message, but actor/action grading
+        # parameters and an independently reviewed semantic judgment are absent.
         assertions = [
             {
                 "id": a.id,
@@ -182,7 +195,7 @@ async def run(case: Any, *, index: int = 0, seed: int = 0) -> dict[str, Any]:
             "status": reduce_trial(assertions, executed=executed, failure=failure),
             "reason": probe.get("reason") if failure else None,
             "assertions": assertions,
-            "evidence": probe,
+            "evidence": {**probe, "fixture_sha256": fixture["sha256"]},
             "duration_ms": round((time.monotonic() - start) * 1000, 3),
             "result_origin": "local_scripted_model_and_business_test_double",
             "limitations": [
@@ -195,6 +208,7 @@ async def run(case: Any, *, index: int = 0, seed: int = 0) -> dict[str, Any]:
         }
     start = time.monotonic()
     fault, scenario = _FAULTS[case.case_id]
+    fault_fixture = booking_dev_026.load(case) if case.case_id == "BOOK-026" else None
     row: dict[str, Any] = {
         "trial_id": uuid4().hex,
         "case_id": case.case_id,
@@ -230,7 +244,7 @@ async def run(case: Any, *, index: int = 0, seed: int = 0) -> dict[str, Any]:
         cast(Any, local.TokenIssuer()),
     )
     supervisor = Supervisor(
-        cast(Any, local.Model()),
+        cast(Any, local.Model(fault_fixture["payload"] if fault_fixture else None)),
         registry,
         checkpointer=InMemorySaver(),
         confirmation_service=service,
@@ -254,7 +268,8 @@ async def run(case: Any, *, index: int = 0, seed: int = 0) -> dict[str, Any]:
             for step in case.steps:
                 if step.type == "chat":
                     response = await asyncio.wait_for(
-                        agent.chat(_MESSAGE), case.timeouts.step_seconds
+                        agent.chat(fault_fixture["message"] if fault_fixture else _MESSAGE),
+                        case.timeouts.step_seconds,
                     )
                     row["executed"] = True
                     confirmation_id = response.get("confirmation_id")
@@ -320,6 +335,8 @@ async def run(case: Any, *, index: int = 0, seed: int = 0) -> dict[str, Any]:
             "authorization_status": repository.current.authorization_status,
             "execution_status": repository.current.execution_status,
         }
+        if fault_fixture:
+            row["evidence"]["fixture_sha256"] = fault_fixture["sha256"]
         # A safety check supplements the draft's semantic rubric; it never
         # replaces that rubric or upgrades the case to an overall PASS.
         snapshot = gateway.observe()

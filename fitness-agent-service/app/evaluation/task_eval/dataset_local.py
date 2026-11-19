@@ -523,6 +523,10 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
         "evaluation/task_eval/booking_positive_cases.py",
         "evaluation/task_eval/booking_reconciliation_cases.py",
         "evaluation/task_eval/booking_contracts.py",
+        "evaluation/task_eval/booking_dev_fixtures.py",
+        "evaluation/task_eval/booking_dev_011.py",
+        "evaluation/task_eval/booking_test_008.py",
+        "evaluation/task_eval/booking_dev_026.py",
         "evaluation/task_eval/booking_local.py",
         "evaluation/task_eval/knowledge_dataset_local.py",
         "evaluation/task_eval/knowledge_extended_local.py",
@@ -545,6 +549,16 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
     source_sha256 = {
         path: hashlib.sha256((app_root / path).read_bytes()).hexdigest() for path in source_paths
     }
+    service_root = app_root.parent
+    known_fixture_paths = (
+        "evals/task_eval/dev_fixtures/book-018-v1.json",
+        "evals/task_eval/dev_fixtures/book-026-v1.json",
+        "evals/task_eval/dev_fixtures/book-008-v1.json",
+    )
+    known_fixture_sha256 = {
+        path: hashlib.sha256((service_root / path).read_bytes()).hexdigest()
+        for path in known_fixture_paths
+    }
     return {
         "manifest": {
             "schema_version": "1.0",
@@ -554,6 +568,7 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
             "dataset_version": dataset.dataset_version,
             "dataset_sha256": dataset.sha256,
             "source_sha256": source_sha256,
+            "known_fixture_sha256": known_fixture_sha256,
             "fixture_sha256": "unknown",
             "fixture_note": "source hashes are not a resolved-fixture snapshot and do not make runs comparable",
             "split": split,

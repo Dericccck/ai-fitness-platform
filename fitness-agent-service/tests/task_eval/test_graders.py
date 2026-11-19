@@ -2,6 +2,8 @@
 
 from copy import deepcopy
 
+import pytest
+
 from app.evaluation.task_eval.graders import grade_retrieval, grade_rule, grade_semantic
 
 REFS = {"evidence_refs": ["test://observation/1"]}
@@ -145,6 +147,41 @@ def test_booking_count_parameters_and_retry() -> None:
         ]
         == "UNKNOWN"
     )
+
+
+@pytest.mark.parametrize("invalid", [True, "0", [], {}, -1])
+def test_snapshot_rejects_noncount_or_negative_booking_counts(invalid) -> None:
+    obs = {
+        **REFS,
+        "before": {"booking_count": invalid, "credit_count": 10},
+        "after": {"booking_count": invalid, "credit_count": 10},
+    }
+    assert grade_rule("booking_and_credit_delta_zero", {}, obs)["status"] == "UNKNOWN"
+
+
+@pytest.mark.parametrize("invalid", [True, "-1", [], {}])
+def test_booking_rejects_noninteger_credit_deltas(invalid) -> None:
+    expected = {"booking": {"user": "u"}, "credit_delta": -1}
+    obs = {
+        **REFS,
+        "snapshot_complete": True,
+        "created_bookings": [{"user": "u"}],
+        "credit_delta": invalid,
+        "idempotency_checked": True,
+    }
+    assert grade_rule("booking_created_once", expected, obs)["status"] == "UNKNOWN"
+
+
+def test_booking_values_do_not_treat_booleans_as_integers() -> None:
+    expected = {"booking": {"slot": {"number": 1}}, "credit_delta": -1}
+    obs = {
+        **REFS,
+        "snapshot_complete": True,
+        "created_bookings": [{"slot": {"number": True}}],
+        "credit_delta": -1,
+        "idempotency_checked": True,
+    }
+    assert grade_rule("booking_created_once", expected, obs)["status"] == "FAIL"
 
 
 def test_authorization_and_delivery_require_complete_evidence() -> None:

@@ -2,14 +2,49 @@
 # Scripted model -> Python Agent/PG -> Gateway HTTP -> Booking HTTP/MySQL.
 # All services and identities are newly created for this run; never use .env.
 set -euo pipefail
+umask 077
 single_development_trial=false
-if [[ "${1:-}" == "--single-development-trial" ]]; then
-    [[ "$#" -eq 2 && "$2" == /* && ! -e "$2" ]] || {
+book_real_model=false
+development_module=app.evaluation.task_eval.dev_sandbox_booking
+if [[ "${1:-}" == "--single-development-trial" || "${1:-}" == "--book-018-development-trial" || "${1:-}" == "--book-018-real-model-trial" ]]; then
+    [[ "$#" -ge 2 && "$2" == /* && ! -e "$2" ]] || {
         printf 'Provide a new absolute report path for the development trial.\n' >&2
         exit 1
     }
+    [[ "$1" == "--book-018-real-model-trial" || "$#" -eq 2 ]] || exit 1
     single_development_trial=true
     single_report="$2"
+    if [[ "$1" == "--book-018-development-trial" || "$1" == "--book-018-real-model-trial" ]]; then
+        development_module=app.evaluation.task_eval.dev_sandbox_book_018
+    fi
+    if [[ "$1" == "--book-018-real-model-trial" ]]; then
+        book_real_model=true
+        shift 2
+        real_model_args=("$@")
+        has_credential=false has_budget=false has_limit=false has_opening=false has_minimum=false has_pricing=false
+        while [[ "$#" -gt 0 ]]; do
+            case "$1" in
+                --confirm-current-pricing)
+                    [[ "$has_pricing" == false ]] || exit 1
+                    has_pricing=true; shift ;;
+                --credential-file|--budget-file|--budget-limit-nano|--budget-opening-nano|--minimum-reserved-nano)
+                    [[ "$#" -ge 2 && -n "$2" && "$2" != --* ]] || exit 1
+                    case "$1" in
+                        --credential-file) [[ "$has_credential" == false ]] || exit 1; has_credential=true ;;
+                        --budget-file) [[ "$has_budget" == false ]] || exit 1; has_budget=true ;;
+                        --budget-limit-nano) [[ "$has_limit" == false ]] || exit 1; has_limit=true ;;
+                        --budget-opening-nano) [[ "$has_opening" == false ]] || exit 1; has_opening=true ;;
+                        --minimum-reserved-nano) [[ "$has_minimum" == false ]] || exit 1; has_minimum=true ;;
+                    esac
+                    shift 2 ;;
+                *) printf 'Unsupported real-model option.\n' >&2; exit 1 ;;
+            esac
+        done
+        [[ "$has_credential" == true && "$has_budget" == true && "$has_limit" == true && "$has_opening" == true && "$has_minimum" == true && "$has_pricing" == true ]] || {
+            printf 'Real-model trial requires private credentials, existing budget and confirmed pricing.\n' >&2
+            exit 1
+        }
+    fi
 fi
 service_root="$(cd "$(dirname "$0")/.." && pwd)"
 repo_root="$(cd "$service_root/.." && pwd)"
@@ -29,7 +64,7 @@ cleanup() {
         printf 'Failed to remove one or more isolated containers.\n' >&2
         status=1
     fi
-    if [[ "$status" -eq 0 || "$status" -eq 3 ]]; then rm -rf "$run_dir"; else printf 'Isolated run logs: %s\n' "$run_dir" >&2; fi
+    if [[ "$status" -eq 0 || "$status" -eq 2 || "$status" -eq 3 ]]; then rm -rf "$run_dir"; else printf 'Isolated run logs: %s\n' "$run_dir" >&2; fi
     exit "$status"
 }
 trap cleanup EXIT
@@ -168,7 +203,11 @@ if [[ "$single_development_trial" == true ]]; then
 fi
 "${runtime_env[@]}" "$python" -m alembic -c "$run_dir/alembic.ini" upgrade head >"$run_dir/migrations.log" 2>&1
 if [[ "$single_development_trial" == true ]]; then
-    "${runtime_env[@]}" "$python" -m app.evaluation.task_eval.dev_sandbox_booking --report-file "$single_report"
+    if [[ "$book_real_model" == true ]]; then
+        "${runtime_env[@]}" "$python" -m "$development_module" --report-file "$single_report" --real-model "${real_model_args[@]}"
+    else
+        "${runtime_env[@]}" "$python" -m "$development_module" --report-file "$single_report"
+    fi
 else
     "${runtime_env[@]}" "$python" -m app.evaluation.task_eval.cross_service_booking "$@"
 fi

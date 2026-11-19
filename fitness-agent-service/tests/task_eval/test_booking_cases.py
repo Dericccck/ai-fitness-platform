@@ -1,9 +1,11 @@
+import hashlib
+import json
 from pathlib import Path
 from typing import Any
 
 import pytest
 
-from app.evaluation.task_eval import booking_cases, booking_local
+from app.evaluation.task_eval import booking_cases, booking_dev_fixtures, booking_local
 from app.evaluation.task_eval.dataset import load_dataset
 from app.evaluation.task_eval.graders.rules import grade_rule
 
@@ -96,7 +98,7 @@ def test_fixtures_refuse_actor_trigger_and_assertion_drift(case_id: str) -> None
 
 
 async def test_booking_rejection_probe_preserves_error(monkeypatch: pytest.MonkeyPatch) -> None:
-    async def failed(_: str) -> dict[str, Any]:
+    async def failed(_: str, **kwargs: Any) -> dict[str, Any]:
         return {"status": "ERROR", "checks": {"chat_api_succeeded": False}}
 
     monkeypatch.setattr(booking_local, "evaluate_case", failed)
@@ -111,3 +113,41 @@ async def test_booking_rejection_is_component_observation_only() -> None:
     assert trial["evidence"]["status"] == "PASS"
     assert trial["evidence"]["business"]["bookings"] == 0
     assert trial["evidence"]["business"]["credit_delta"] == 0
+    assert trial["evidence"]["fixture_sha256"] == booking_dev_fixtures._SHA256
+    assert all(
+        item["status"] == "UNKNOWN"
+        for item in trial["assertions"]
+        if not item["id"].startswith("supplemental_")
+    )
+
+
+async def test_booking_rejection_sends_resolved_message(monkeypatch: pytest.MonkeyPatch) -> None:
+    original = booking_local.AgentHTTP.chat
+    seen: list[str] = []
+
+    async def observe(self: Any, message: str) -> Any:
+        seen.append(message)
+        return await original(self, message)
+
+    monkeypatch.setattr(booking_local.AgentHTTP, "chat", observe)
+    fixture = booking_dev_fixtures.load_book_018(case("BOOK-018"))
+    trial = await booking_cases.run(case("BOOK-018"))
+    assert seen == [fixture["message"]]
+    assert trial["status"] == "INCONCLUSIVE"
+
+
+def test_booking_rejection_fixture_drift_and_inconsistency_fail_closed(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    changed = json.loads(booking_dev_fixtures._FIXTURE.read_bytes())
+    changed["payload"]["course_id"] = "different-course"
+    fixture_path = tmp_path / "fixture.json"
+    fixture_path.write_text(json.dumps(changed), encoding="utf-8")
+    monkeypatch.setattr(booking_dev_fixtures, "_FIXTURE", fixture_path)
+    with pytest.raises(ValueError, match="DEV_FIXTURE_CHANGED"):
+        booking_dev_fixtures.load_book_018(case("BOOK-018"))
+    monkeypatch.setattr(
+        booking_dev_fixtures, "_SHA256", hashlib.sha256(fixture_path.read_bytes()).hexdigest()
+    )
+    with pytest.raises(ValueError, match="DEV_FIXTURE_INCONSISTENT"):
+        booking_dev_fixtures.load_book_018(case("BOOK-018"))

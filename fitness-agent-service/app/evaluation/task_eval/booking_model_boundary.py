@@ -21,7 +21,7 @@ import httpx
 from app.agent.fitness_tools import BookingCreateToolInput
 from app.infrastructure.model_gateway import ModelToolCall, ModelTurn
 
-from .budget_store import DurableBudget
+from .budget_store import MAX_LIMIT_NANO, DurableBudget
 from .model_safety import BudgetLedger
 from .model_smoke import _validated_usage
 
@@ -41,6 +41,11 @@ PAYLOAD = {
 MODEL = "deepseek-flash"
 URL = "https://api.deepseek.com/v1/chat/completions"
 INPUT_HASH = "bd142ddce279fe336ddff1e1fc1775e1a2cf70c862f9beb3541edbc87ca83254"
+BOOK_018_PROMPT = (
+    "请预约 org-1 的 student-1 使用 contract-1，coach-1 的 course-1，"
+    "2030-01-01 10:00 至 11:00（东八区）。"
+)
+BOOK_018_INPUT_HASH = "61c0d03f474d436cf5515d4c26e1e470d47c95a055d209f0c1edbfc0914d72e2"
 INPUT_LIMIT = 8192
 OUTPUT_LIMIT = 512
 RESERVATION_NANO = 204_800_000
@@ -98,14 +103,46 @@ def _object_without_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, An
     return result
 
 
-def expected_payload(value: Any) -> bool:
+@dataclass(frozen=True)
+class _Profile:
+    name: str
+    input_hash: str
+    payload_items: tuple[tuple[str, str], ...]
+
+
+_DEFAULT_PROFILE = _Profile("default", INPUT_HASH, tuple(PAYLOAD.items()))
+_BOOK_018_PROFILE = _Profile(
+    "BOOK-018",
+    BOOK_018_INPUT_HASH,
+    (
+        ("organization_id", "org-1"),
+        ("student_id", "student-1"),
+        ("contract_id", "contract-1"),
+        ("coach_id", "coach-1"),
+        ("course_id", "course-1"),
+        ("start_time", "2030-01-01T10:00:00+08:00"),
+        ("end_time", "2030-01-01T11:00:00+08:00"),
+    ),
+)
+
+
+def _profile(name: str) -> _Profile:
+    if name == "default":
+        return _DEFAULT_PROFILE
+    if name == "BOOK-018":
+        return _BOOK_018_PROFILE
+    raise ValueError("unsupported booking model profile")
+
+
+def expected_payload(value: Any, *, profile: str = "default") -> bool:
     """Only the explicitly approved fixture may proceed to confirmation."""
+    expected = _profile(profile)
     if not isinstance(value, dict):
         return False
     try:
         actual = BookingCreateToolInput.model_validate(value)
-        expected = BookingCreateToolInput.model_validate(PAYLOAD)
-        return actual.model_dump() == expected.model_dump()
+        fixed = BookingCreateToolInput.model_validate(dict(expected.payload_items))
+        return actual.model_dump() == fixed.model_dump()
     except ValueError:
         return False
 
@@ -121,15 +158,19 @@ class OneBookingModel:
         transport: httpx.MockTransport | None = None,
         execute: bool = False,
         confirmed_current_pricing: bool = False,
+        profile: str = "default",
     ) -> None:
+        if type(profile) is not str:
+            raise ValueError("unsupported booking model profile")
+        self._profile = _profile(profile)
         if not execute or not confirmed_current_pricing:
             raise ValueError("explicit execution and current pricing confirmation are required")
         if not isinstance(credential, str) or len(credential.strip()) < 16:
             raise ValueError("dedicated evaluation credential is required")
         if transport is not None and type(transport) is not httpx.MockTransport:
             raise ValueError("only MockTransport is supported as an injected transport")
-        if not isinstance(budget, DurableBudget) or budget.limit_nano > 10_000_000_000:
-            raise ValueError("a persistent CNY budget of at most 10 is required")
+        if not isinstance(budget, DurableBudget) or budget.limit_nano > MAX_LIMIT_NANO:
+            raise ValueError("a valid persistent CNY budget is required")
         self._credential = credential
         self._transport = transport
         self.budget = budget
@@ -143,6 +184,11 @@ class OneBookingModel:
         self.argument_extra_count: int | None = None
         self.argument_differing: list[str] | None = None
         self.argument_mark_state: str | None = None
+
+    @property
+    def profile(self) -> str:
+        """The chosen fixed profile is immutable through the public API."""
+        return self._profile.name
 
     def diagnostics(self) -> dict[str, Any]:
         """Only return bounded counters and predefined status labels; no provider data."""
@@ -165,7 +211,7 @@ class OneBookingModel:
             frozen = snapshot.get("frozen")
             if (
                 type(reserved) is not int
-                or not 0 <= reserved <= 10_000_000_000
+                or not 0 <= reserved <= self.budget.limit_nano <= MAX_LIMIT_NANO
                 or type(pending) is not int
                 or pending < 0
                 or type(frozen) is not bool
@@ -207,7 +253,7 @@ class OneBookingModel:
             separators=(",", ":"),
         ).encode("utf-8")
         if (
-            hashlib.sha256(raw_input).hexdigest() != INPUT_HASH
+            hashlib.sha256(raw_input).hexdigest() != self._profile.input_hash
             or len(raw_input) > INPUT_LIMIT
             or self._credential.encode() in raw_input
         ):
@@ -341,10 +387,12 @@ class OneBookingModel:
             self.argument_extra_count = len(set(arguments).difference(_ARGUMENT_KEYS | {"mark"}))
             if self.argument_missing or self.argument_extra_count:
                 raise BookingModelProbeError("INVALID_TOOL_ARGUMENTS")
-            arguments["organizationId"] = "org-1"
-            if not expected_payload(arguments):
+            arguments["organizationId"] = dict(self._profile.payload_items)["organization_id"]
+            if not expected_payload(arguments, profile=self.profile):
                 # Export only fixed schema names, never untrusted values or keys.
-                expected = BookingCreateToolInput.model_validate(PAYLOAD).model_dump(by_alias=True)
+                expected = BookingCreateToolInput.model_validate(
+                    dict(self._profile.payload_items)
+                ).model_dump(by_alias=True)
                 try:
                     actual = BookingCreateToolInput.model_validate(arguments).model_dump(
                         by_alias=True

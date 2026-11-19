@@ -18,6 +18,8 @@ from typing import Any
 _REQUEST_ID = re.compile(r"[A-Za-z0-9_-]{1,80}\Z")
 _REVIEWER_REF = re.compile(r"[A-Za-z0-9._:-]{1,80}\Z")
 _SHA256 = re.compile(r"[0-9a-f]{64}\Z")
+INITIAL_MAX_LIMIT_NANO = 10_000_000_000
+MAX_LIMIT_NANO = 30_000_000_000
 _REASONS = frozenset(
     {
         "UNSPECIFIED",
@@ -51,10 +53,15 @@ class DurableBudget:
         if (
             type(limit_nano) is not int
             or type(opening_nano) is not int
-            or not 0 < limit_nano <= 10_000_000_000
+            or not 0 < limit_nano <= MAX_LIMIT_NANO
             or not 0 <= opening_nano <= limit_nano
         ):
             raise BudgetError("invalid CNY budget")
+        if limit_nano > INITIAL_MAX_LIMIT_NANO:
+            # Higher limits may only reopen an existing, explicitly increased ledger.
+            existing = self.open_existing(path, limit_nano=limit_nano, opening_nano=opening_nano)
+            self.__dict__.update(existing.__dict__)
+            return
         self.path = Path(path)
         self.limit_nano = limit_nano
         self.opening_nano = opening_nano
@@ -116,7 +123,7 @@ class DurableBudget:
             or not location.is_file()
             or type(limit_nano) is not int
             or type(opening_nano) is not int
-            or not 0 < limit_nano <= 10_000_000_000
+            or not 0 < limit_nano <= MAX_LIMIT_NANO
             or not 0 <= opening_nano <= limit_nano
         ):
             raise BudgetError("existing budget unavailable or invalid")
@@ -139,10 +146,25 @@ class DurableBudget:
                     raise BudgetError("existing budget identity mismatch or invalid")
                 if not audit_count or invalid:
                     raise BudgetError("existing budget history is incomplete or invalid")
+                if limit_nano > INITIAL_MAX_LIMIT_NANO:
+                    entry = connection.execute(
+                        "SELECT details FROM budget_audit WHERE event='LIMIT_INCREASED' ORDER BY id DESC LIMIT 1"
+                    ).fetchone()
+                    if not entry:
+                        raise BudgetError("increased budget has no authorization audit")
+                    details = json.loads(entry[0])
+                    if (
+                        not isinstance(details, dict)
+                        or details.get("new_limit_nano") != limit_nano
+                        or type(details.get("previous_limit_nano")) is not int
+                        or not 0 < details["previous_limit_nano"] < limit_nano
+                        or details.get("authorization") != "CALLER_ASSERTED_USER_AUTHORIZATION"
+                    ):
+                        raise BudgetError("increased budget authorization is invalid")
             snapshot = ledger.snapshot()
             if not opening_nano <= snapshot["reserved_nano"] <= limit_nano:
                 raise BudgetError("existing budget history is invalid")
-        except sqlite3.Error as exc:
+        except (sqlite3.Error, json.JSONDecodeError, TypeError) as exc:
             raise BudgetError("existing budget unavailable or invalid") from exc
         return ledger
 
@@ -152,6 +174,115 @@ class DurableBudget:
                 self.path.as_uri() + "?mode=rw", uri=True, timeout=10, isolation_level=None
             )
         return sqlite3.connect(self.path, timeout=10, isolation_level=None)
+
+    @classmethod
+    def increase_limit(
+        cls,
+        path: str | Path,
+        *,
+        previous_limit_nano: int,
+        new_limit_nano: int,
+        opening_nano: int,
+        expected_reserved_nano: int,
+        expected_unknown: dict[str, int],
+        authorization_ref: str,
+        acknowledge_unknown_cost: bool,
+        explicitly_authorized: bool,
+    ) -> DurableBudget:
+        """Atomically increase an existing ledger without resolving its freeze.
+
+        Authorization is asserted by the caller, not independently authenticated.
+        This local estimate cannot enforce the provider's actual account bill.
+        """
+        if (
+            type(previous_limit_nano) is not int
+            or type(new_limit_nano) is not int
+            or not 0 < previous_limit_nano < new_limit_nano <= MAX_LIMIT_NANO
+            or type(opening_nano) is not int
+            or type(expected_reserved_nano) is not int
+            or not 0 <= opening_nano <= expected_reserved_nano <= previous_limit_nano
+            or not isinstance(expected_unknown, dict)
+            or any(
+                not isinstance(key, str)
+                or not _REQUEST_ID.fullmatch(key)
+                or type(value) is not int
+                or value <= 0
+                for key, value in expected_unknown.items()
+            )
+            or not isinstance(authorization_ref, str)
+            or not _REVIEWER_REF.fullmatch(authorization_ref)
+            or explicitly_authorized is not True
+            or type(acknowledge_unknown_cost) is not bool
+            or (bool(expected_unknown) and not acknowledge_unknown_cost)
+        ):
+            raise BudgetError("invalid limit increase authorization")
+        ledger = cls.open_existing(path, limit_nano=previous_limit_nano, opening_nano=opening_nano)
+        with closing(ledger._connection()) as connection:
+            connection.execute("BEGIN IMMEDIATE")
+            try:
+                if connection.execute("PRAGMA quick_check").fetchone() != ("ok",):
+                    raise BudgetError("budget integrity check failed")
+                row = connection.execute(
+                    "SELECT limit_nano, opening_nano, frozen FROM budget WHERE id=1"
+                ).fetchone()
+                rows = connection.execute(
+                    "SELECT request_id, amount_nano, state FROM reservations ORDER BY request_id"
+                ).fetchall()
+                if (
+                    row is None
+                    or row[:2] != (previous_limit_nano, opening_nano)
+                    or row[2] not in (0, 1)
+                ):
+                    raise BudgetError("budget identity changed")
+                if any(
+                    not isinstance(request_id, str)
+                    or not _REQUEST_ID.fullmatch(request_id)
+                    or type(amount) is not int
+                    or amount <= 0
+                    or state not in {"PENDING", "COMPLETE", "UNKNOWN"}
+                    for request_id, amount, state in rows
+                ):
+                    raise BudgetError("invalid reservation history")
+                if any(state == "PENDING" for _, _, state in rows):
+                    raise BudgetError("unsettled request blocks increase")
+                unknown = {
+                    request_id: amount for request_id, amount, state in rows if state == "UNKNOWN"
+                }
+                if (
+                    unknown != expected_unknown
+                    or opening_nano + sum(item[1] for item in rows) != expected_reserved_nano
+                ):
+                    raise BudgetError("budget snapshot changed")
+                digest = hashlib.sha256(
+                    json.dumps(
+                        {"budget": row, "reservations": rows}, sort_keys=True, separators=(",", ":")
+                    ).encode()
+                ).hexdigest()
+                cls._audit(
+                    connection,
+                    "LIMIT_INCREASED",
+                    None,
+                    {
+                        "authorization_ref": authorization_ref,
+                        "authorization": "CALLER_ASSERTED_USER_AUTHORIZATION",
+                        "previous_limit_nano": previous_limit_nano,
+                        "new_limit_nano": new_limit_nano,
+                        "reserved_nano": expected_reserved_nano,
+                        "unknown_reservations": unknown,
+                        "unknown_cost": "UNVERIFIED_AND_NOT_REFUNDED"
+                        if unknown
+                        else "NONE_RECORDED",
+                        "previous_frozen": bool(row[2]),
+                        "provider_cap_verified": False,
+                        "prior_snapshot_sha256": digest,
+                    },
+                )
+                connection.execute("UPDATE budget SET limit_nano=? WHERE id=1", (new_limit_nano,))
+                connection.commit()
+            except Exception:
+                connection.rollback()
+                raise
+        return cls.open_existing(path, limit_nano=new_limit_nano, opening_nano=opening_nano)
 
     @classmethod
     def resume_with_unknown_cost(
@@ -179,7 +310,7 @@ class DurableBudget:
             or type(limit_nano) is not int
             or type(opening_nano) is not int
             or type(expected_reserved_nano) is not int
-            or not 0 < limit_nano <= 10_000_000_000
+            or not 0 < limit_nano <= MAX_LIMIT_NANO
             or not 0 <= opening_nano <= expected_reserved_nano <= limit_nano
             or not isinstance(expected_unknown, dict)
             or not expected_unknown
@@ -248,6 +379,7 @@ class DurableBudget:
                             "SETTLED",
                             "RECONCILIATION_CLAIM_SUBMITTED",
                             "RECONCILIATION_CLAIM_REJECTED",
+                            "LIMIT_INCREASED",
                         ):
                             raise BudgetError("freeze cause is not an unknown settlement")
                         settlements = {
@@ -362,6 +494,8 @@ class DurableBudget:
                 ).fetchone()
                 if row is None or row[2]:
                     raise BudgetError("budget missing or frozen")
+                if row[:2] != (self.limit_nano, self.opening_nano):
+                    raise BudgetError("budget identity changed; reopen required")
                 pending = connection.execute(
                     "SELECT COUNT(*) FROM reservations WHERE state='PENDING'"
                 ).fetchone()[0]
@@ -400,6 +534,11 @@ class DurableBudget:
         with closing(self._connection()) as connection:
             connection.execute("BEGIN IMMEDIATE")
             try:
+                identity = connection.execute(
+                    "SELECT limit_nano, opening_nano FROM budget WHERE id=1"
+                ).fetchone()
+                if identity != (self.limit_nano, self.opening_nano):
+                    raise BudgetError("budget identity changed; reopen required")
                 state = "COMPLETE" if usage_known else "UNKNOWN"
                 result = connection.execute(
                     "UPDATE reservations SET state=? WHERE request_id=? AND state='PENDING'",

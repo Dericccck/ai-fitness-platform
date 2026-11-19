@@ -31,6 +31,21 @@ def _list_of_dicts(value: Any) -> TypeGuard[list[dict[str, Any]]]:
     return isinstance(value, list) and all(isinstance(row, dict) for row in value)
 
 
+def _same_value(left: Any, right: Any) -> bool:
+    """Compare evidence without Python's bool/int or nested numeric coercion."""
+    if type(left) is not type(right):
+        return False
+    if isinstance(left, dict):
+        return left.keys() == right.keys() and all(
+            _same_value(value, right[key]) for key, value in left.items()
+        )
+    if isinstance(left, list):
+        return len(left) == len(right) and all(
+            _same_value(a, b) for a, b in zip(left, right, strict=True)
+        )
+    return bool(left == right)
+
+
 def grade_rule(
     rule_id: str,
     expected: dict[str, Any],
@@ -133,6 +148,12 @@ def grade_rule(
             not isinstance(before, dict)
             or not isinstance(after, dict)
             or not all(_has(s, "booking_count", "credit_count") for s in (before, after))
+            or any(
+                type(snapshot[key]) is not int
+                for snapshot in (before, after)
+                for key in ("booking_count", "credit_count")
+            )
+            or any(snapshot["booking_count"] < 0 for snapshot in (before, after))
         ):
             return _unknown()
         return _result(
@@ -183,13 +204,15 @@ def grade_rule(
             evidence, "credit_delta", "idempotency_checked"
         ):
             return _unknown()
+        if type(expected["credit_delta"]) is not int or type(evidence["credit_delta"]) is not int:
+            return _unknown("CREDIT_DELTA_INVALID")
         if evidence["idempotency_checked"] is not True:
             return _unknown("IDEMPOTENCY_UNPROVEN")
         if any(not all(key in row for key in params) for row in bookings):
             return _unknown("BOOKING_PARAMETERS_MISSING")
         return _result(
             len(bookings) == 1
-            and all(bookings[0][key] == value for key, value in params.items())
+            and all(_same_value(bookings[0][key], value) for key, value in params.items())
             and evidence["credit_delta"] == expected["credit_delta"],
             "BOOKING",
         )

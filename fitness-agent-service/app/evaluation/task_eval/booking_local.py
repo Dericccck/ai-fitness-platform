@@ -223,8 +223,9 @@ class Gateway:
 
 
 class Model:
-    def __init__(self) -> None:
+    def __init__(self, payload: dict[str, Any] | None = None) -> None:
         self.calls = 0
+        self.payload = dict(PAYLOAD if payload is None else payload)
 
     async def chat_with_tools(
         self, messages: list[dict[str, Any]], *, tools: list[dict[str, Any]], **kwargs: Any
@@ -235,7 +236,7 @@ class Model:
                 content="",
                 tool_calls=(
                     ModelToolCall(
-                        call_id="booking", name="fitness_booking_create_v1", arguments=PAYLOAD
+                        call_id="booking", name="fitness_booking_create_v1", arguments=self.payload
                     ),
                 ),
             )
@@ -262,7 +263,9 @@ class Verifier:
         raise ValueError("invalid context")
 
 
-async def evaluate_case(scenario: str) -> dict[str, Any]:
+async def evaluate_case(
+    scenario: str, *, message: str = "请帮我预约课程", payload: dict[str, Any] | None = None
+) -> dict[str, Any]:
     if scenario not in {
         "approve",
         "reject",
@@ -284,7 +287,7 @@ async def evaluate_case(scenario: str) -> dict[str, Any]:
         cast(Any, TokenIssuer()),
     )
     supervisor = Supervisor(
-        cast(Any, Model()),
+        cast(Any, Model(payload)),
         registry,
         checkpointer=InMemorySaver(),
         confirmation_service=service,
@@ -301,7 +304,7 @@ async def evaluate_case(scenario: str) -> dict[str, Any]:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://local") as client:
             agent = AgentHTTP(client, "signed-context")
             try:
-                response = await agent.chat("请帮我预约课程")
+                response = await agent.chat(message)
             except (HTTPError, TypeError, ValueError):
                 return {
                     "case": scenario,

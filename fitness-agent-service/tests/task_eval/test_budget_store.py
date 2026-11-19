@@ -404,3 +404,149 @@ def test_resume_rollback_when_audit_fails(tmp_path: Path, monkeypatch):
         )
     assert ledger.snapshot()["frozen"]
     assert ledger.audit() == before
+
+
+def test_authorized_increase_preserves_unknown_freeze_and_history(tmp_path):
+    path = tmp_path / "budget.sqlite"
+    old = DurableBudget(path, limit_nano=10_000_000_000, opening_nano=46_080_000)
+    old.reserve("known", 102_400_000)
+    old.finish("known", usage_known=True)
+    old.reserve("unknown", 204_800_000)
+    old.finish("unknown", usage_known=False)
+    before = old.audit()
+    upgraded = DurableBudget.increase_limit(
+        path,
+        previous_limit_nano=10_000_000_000,
+        new_limit_nano=30_000_000_000,
+        opening_nano=46_080_000,
+        expected_reserved_nano=353_280_000,
+        expected_unknown={"unknown": 204_800_000},
+        authorization_ref="test-user-authorized",
+        acknowledge_unknown_cost=True,
+        explicitly_authorized=True,
+    )
+    assert upgraded.snapshot() == {
+        "limit_nano": 30_000_000_000,
+        "reserved_nano": 353_280_000,
+        "frozen": True,
+        "pending": 0,
+        "provider_cap_verified": False,
+    }
+    assert upgraded.audit()[:-1] == before
+    event = upgraded.audit()[-1]
+    assert event["event"] == "LIMIT_INCREASED"
+    assert event["details"]["unknown_reservations"] == {"unknown": 204_800_000}
+    assert event["details"]["unknown_cost"] == "UNVERIFIED_AND_NOT_REFUNDED"
+    assert event["details"]["previous_frozen"] is True
+    assert event["details"]["provider_cap_verified"] is False
+    with pytest.raises(BudgetError):
+        upgraded.reserve("still-frozen", 1)
+    resumed = DurableBudget.resume_with_unknown_cost(
+        path,
+        limit_nano=30_000_000_000,
+        opening_nano=46_080_000,
+        expected_reserved_nano=353_280_000,
+        expected_unknown={"unknown": 204_800_000},
+        authorization_ref="test-separate-resume",
+        acknowledge_unknown_cost=True,
+    )
+    assert resumed.snapshot()["reserved_nano"] == 353_280_000
+    with pytest.raises(BudgetError, match="identity changed"):
+        old.reserve("stale-handle", 1)
+    resumed.reserve("new", 25_000_000_000)
+    with pytest.raises(BudgetError, match="identity changed"):
+        old.finish("new", usage_known=True)
+    resumed.finish("new", usage_known=True)
+    assert (
+        DurableBudget(path, limit_nano=30_000_000_000, opening_nano=46_080_000).snapshot()[
+            "reserved_nano"
+        ]
+        == 25_353_280_000
+    )
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "authorization",
+        "unknown_ack",
+        "wrong_unknown",
+        "wrong_total",
+        "same_limit",
+        "too_high",
+        "missing",
+        "pending",
+    ],
+)
+def test_increase_rejects_unapproved_changed_or_unsettled_state(tmp_path, change):
+    path = tmp_path / "budget.sqlite"
+    ledger = DurableBudget(path, limit_nano=100, opening_nano=10)
+    ledger.reserve("request", 20)
+    if change != "pending":
+        ledger.finish("request", usage_known=False)
+    before = ledger.audit()
+    kwargs = {
+        "previous_limit_nano": 100,
+        "new_limit_nano": 200,
+        "opening_nano": 10,
+        "expected_reserved_nano": 30,
+        "expected_unknown": {"request": 20},
+        "authorization_ref": "test-user",
+        "acknowledge_unknown_cost": True,
+        "explicitly_authorized": True,
+    }
+    if change == "authorization":
+        kwargs["explicitly_authorized"] = False
+    elif change == "unknown_ack":
+        kwargs["acknowledge_unknown_cost"] = False
+    elif change == "wrong_unknown":
+        kwargs["expected_unknown"] = {"request": 21}
+    elif change == "wrong_total":
+        kwargs["expected_reserved_nano"] = 31
+    elif change == "same_limit":
+        kwargs["new_limit_nano"] = 100
+    elif change == "too_high":
+        kwargs["new_limit_nano"] = 30_000_000_001
+    elif change == "missing":
+        path = tmp_path / "missing.sqlite"
+    elif change == "pending":
+        kwargs["expected_unknown"] = {}
+    with pytest.raises(BudgetError):
+        DurableBudget.increase_limit(path, **kwargs)
+    assert ledger.snapshot()["limit_nano"] == 100 and ledger.audit() == before
+    if change == "missing":
+        assert not path.exists()
+
+
+def test_cannot_create_or_open_increased_ledger_without_audit(tmp_path):
+    path = tmp_path / "budget.sqlite"
+    with pytest.raises(BudgetError):
+        DurableBudget(path, limit_nano=30_000_000_000)
+    assert not path.exists()
+    DurableBudget(path, limit_nano=10_000_000_000)
+    with sqlite3.connect(path) as connection:
+        connection.execute("UPDATE budget SET limit_nano=30000000000")
+    with pytest.raises(BudgetError, match="authorization"):
+        DurableBudget.open_existing(path, limit_nano=30_000_000_000, opening_nano=0)
+
+
+def test_limit_increase_rolls_back_if_audit_write_fails(tmp_path, monkeypatch):
+    path = tmp_path / "budget.sqlite"
+    ledger = DurableBudget(path, limit_nano=100)
+    before = ledger.audit()
+    monkeypatch.setattr(
+        DurableBudget, "_audit", lambda *_: (_ for _ in ()).throw(RuntimeError("audit error"))
+    )
+    with pytest.raises(RuntimeError):
+        DurableBudget.increase_limit(
+            path,
+            previous_limit_nano=100,
+            new_limit_nano=200,
+            opening_nano=0,
+            expected_reserved_nano=0,
+            expected_unknown={},
+            authorization_ref="test-user",
+            acknowledge_unknown_cost=False,
+            explicitly_authorized=True,
+        )
+    assert ledger.snapshot()["limit_nano"] == 100 and ledger.audit() == before

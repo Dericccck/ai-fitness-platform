@@ -35,6 +35,7 @@ from app.infrastructure.gateway_client import GatewayClient
 from app.infrastructure.model_gateway import ModelToolCall, ModelTurn
 
 from .agent_http import AgentHTTP
+from .audit_observation import committed_before_decision, invalidate_failed_audit
 from .booking_local import Router
 from .booking_signed_identity import _identity
 from .cross_service_booking import _environment, _verify_database_deltas
@@ -82,6 +83,7 @@ def _source_identity() -> dict[str, Any]:
     result["restricted_audit_sha256"] = _digest(
         Path(__file__).with_name("mysql_restricted_audit.py")
     )
+    result["audit_observation_sha256"] = _digest(Path(__file__).with_name("audit_observation.py"))
     return result
 
 
@@ -159,12 +161,15 @@ async def _drive(
     decision_count = 0
     failure: str | None = None
     audit_observations: list[dict[str, Any]] = []
+    audit_before_chat: dict[str, Any] | None = None
     try:
         async with asyncio.timeout(case.timeouts.trial_seconds):
             if audit_observe is not None:
-                audit_observations.append(
-                    {"phase": "before_chat", **await asyncio.to_thread(audit_observe)}
-                )
+                initial_audit = await asyncio.to_thread(audit_observe)
+                if not isinstance(initial_audit, dict):
+                    raise ValueError("INVALID_AUDIT_OBSERVATION")
+                audit_before_chat = initial_audit
+                audit_observations.append({"phase": "before_chat", **initial_audit})
             while request is not None:
                 step = request.step
                 evidence = None
@@ -184,10 +189,13 @@ async def _drive(
                             raise ValueError("SNAPSHOT_INCOMPLETE")
                         current_facts = current["facts"]
                         phase = step.phase
+                        current_audit: dict[str, Any] | None = None
                         if audit_observe is not None:
-                            audit_observations.append(
-                                {"phase": phase, **await asyncio.to_thread(audit_observe)}
-                            )
+                            observed_audit = await asyncio.to_thread(audit_observe)
+                            if not isinstance(observed_audit, dict):
+                                raise ValueError("INVALID_AUDIT_OBSERVATION")
+                            current_audit = observed_audit
+                            audit_observations.append({"phase": phase, **observed_audit})
                         try:
                             expected_deltas = _verify_database_deltas(
                                 initial,
@@ -233,6 +241,32 @@ async def _drive(
                             "authorization_status": record.authorization_status,
                             "execution_status": record.execution_status,
                         }
+                        if (
+                            phase == "before_decision"
+                            and decision_count == 0
+                            and record.authorization_status == "PENDING"
+                            and current_audit is not None
+                        ):
+                            # Check the monotonic confirmation state on both sides
+                            # of the committed MySQL observation. A clean audit
+                            # snapshot is not proof that all writers have drained.
+                            after_audit = await repository.get_for_subject(
+                                cid,
+                                fixture["identity"]["student_id"],
+                                [fixture["identity"]["organization_id"]],
+                            )
+                            if after_audit.authorization_status == "PENDING":
+                                commits = committed_before_decision(
+                                    audit_before_chat, current_audit
+                                )
+                                if commits:
+                                    evidence["commits"] = commits
+                                    audit_digest = hashlib.sha256(
+                                        json.dumps(
+                                            current_audit, sort_keys=True, separators=(",", ":")
+                                        ).encode()
+                                    ).hexdigest()
+                                    evidence["evidence_refs"].append("audit-sha256:" + audit_digest)
                         if phase == "final":
                             detail = await asyncio.to_thread(details)
                             if detail.get("snapshot_complete") is not True:
@@ -320,6 +354,12 @@ async def _drive(
                     request = operations.send(evidence)
                 except StopIteration:
                     request = None
+                if any(
+                    row.get("status") == "FAIL" and (row.get("required") or row.get("risk"))
+                    for row in state.assertions.values()
+                ):
+                    failure = "REQUIRED_ASSERTION_FAILED"
+                    break
     except TimeoutError:
         failure = "STEP_OR_TRIAL_TIMEOUT"
     except Exception:  # noqa: BLE001 - do not expose service responses or credentials
@@ -344,7 +384,14 @@ async def _drive(
     return {
         "case_id": case.case_id,
         "trial_id": uuid4().hex,
-        "task_status": "INCONCLUSIVE",
+        "task_status": (
+            "FAIL"
+            if any(
+                a.get("status") == "FAIL" and (a.get("required") or a.get("risk"))
+                for a in assertions
+            )
+            else "INCONCLUSIVE"
+        ),
         "executed_steps": executed_steps,
         "reason": failure,
         "assertions": assertions,
@@ -416,14 +463,13 @@ async def run() -> dict[str, Any]:
             )
         try:
             audit_final: dict[str, Any] = await asyncio.to_thread(verify_restricted_audit)
+            if audit_final.get("status") != "VERIFIED":
+                raise ValueError("FINAL_AUDIT_INTEGRITY_UNVERIFIED")
         except Exception:  # noqa: BLE001 - retain the trial and explicitly invalidate audit integrity
             audit_final = {"status": "FAILED"}
-            for assertion in trial["assertions"]:
-                if assertion.get("status") == "PASS":
-                    assertion["status"] = "UNKNOWN"
-                    assertion["reason"] = "FINAL_AUDIT_INTEGRITY_UNVERIFIED"
+            invalidate_failed_audit(trial)
         return {
-            "status": "INCOMPLETE",
+            "status": "FAIL" if trial["task_status"] == "FAIL" else "INCOMPLETE",
             "origin": "synthetic_scripted_model_real_local_postgres_mysql_java",
             "dataset_version": case.dataset_version,
             "case_sha256": _CASE_DIGEST,
@@ -461,7 +507,7 @@ def main() -> int:
             json.dump(report, stream, ensure_ascii=False, indent=2)
             stream.write("\n")
         print(json.dumps({"status": report["status"]}))
-        return 3 if report["status"] == "INCOMPLETE" else 1
+        return {"INCOMPLETE": 3, "FAIL": 2}.get(report["status"], 1)
     except (OSError, ValueError):
         print(json.dumps({"status": "ERROR", "reason": "REPORT_WRITE_FAILED"}))
         return 1
