@@ -66,3 +66,30 @@ async def test_unverified_broker_never_connected(monkeypatch: pytest.MonkeyPatch
         async with rabbit.BrokerDelivery(fixture, b"test"):
             pass
     connection.assert_not_awaited()
+
+
+@pytest.mark.parametrize("operation", ["prepare", "receive_java"])
+async def test_java_publisher_requires_verified_local_broker(
+    monkeypatch: pytest.MonkeyPatch, operation: str
+) -> None:
+    info = container()
+    info["NetworkSettings"]["Ports"]["5672/tcp"][0]["HostIp"] = "0.0.0.0"
+    monkeypatch.setattr(rabbit, "_inspect", lambda _: info)
+    connect = AsyncMock()
+    monkeypatch.setattr(rabbit.aio_pika, "connect", connect)
+    fixture = rabbit.BrokerFixture(RUN, CONTAINER, PASSWORD)
+    with pytest.raises(PreflightError):
+        if operation == "prepare":
+            await rabbit.prepare_java_publisher(fixture)
+        else:
+            async with rabbit.JavaPublisherDelivery(fixture, b""):
+                pass
+    connect.assert_not_awaited()
+
+
+def test_java_publisher_names_are_run_scoped():
+    fixture = rabbit.BrokerFixture(RUN, CONTAINER, PASSWORD)
+    assert fixture.exchange == f"fitness-eval-events-{RUN}"
+    assert fixture.queue == f"fitness-eval-java-{RUN}"
+    with pytest.raises(PreflightError):
+        _ = rabbit.BrokerFixture("../other", CONTAINER, PASSWORD).queue

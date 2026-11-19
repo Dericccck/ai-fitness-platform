@@ -1,10 +1,12 @@
 """Transport duplicate events only through an owned, disposable local RabbitMQ.
 
-This does not run the Java publisher and never uses the application's broker.
+The broker is verified before every connection and never uses the application's broker.
 """
 
 from __future__ import annotations
 
+import asyncio
+import os
 import re
 from dataclasses import dataclass
 from typing import Any, Self, cast
@@ -67,6 +69,39 @@ class BrokerFixture:
             raise PreflightError("INVALID_BROKER_CREDENTIAL")
         return verify_container(_inspect(self.container_id), run_id=self.run_id)
 
+    @property
+    def exchange(self) -> str:
+        if not _RUN.fullmatch(self.run_id):
+            raise PreflightError("INVALID_RUN")
+        return f"fitness-eval-events-{self.run_id}"
+
+    @property
+    def queue(self) -> str:
+        if not _RUN.fullmatch(self.run_id):
+            raise PreflightError("INVALID_RUN")
+        return f"fitness-eval-java-{self.run_id}"
+
+
+async def prepare_java_publisher(fixture: BrokerFixture) -> int:
+    """Declare one isolated durable route before enabling the real Java publisher."""
+    port = fixture.verified_port()
+    connection = await aio_pika.connect(
+        host="127.0.0.1",
+        port=port,
+        login="fitness_eval",
+        password=fixture.password,
+        virtualhost="/",
+        timeout=5,
+    )
+    try:
+        channel = await connection.channel()
+        exchange = await channel.declare_exchange(fixture.exchange, "direct", durable=True)
+        queue = await channel.declare_queue(fixture.queue, durable=True)
+        await queue.bind(exchange, routing_key="appointment.created")
+    finally:
+        await connection.close()
+    return port
+
 
 class BrokerDelivery:
     """One exclusive queue in the verified fixture; both deliveries are actual AMQP."""
@@ -115,3 +150,47 @@ class BrokerDelivery:
     async def empty(self) -> bool:
         # The exclusive queue should contain no unexpected third delivery.
         return await self.queue.get(timeout=5, fail=False) is None
+
+
+class JavaPublisherDelivery(BrokerDelivery):
+    """Consume Java's actual first publish, then replay its exact bytes."""
+
+    async def __aenter__(self) -> Self:
+        port = self.fixture.verified_port()
+        self.connection = await aio_pika.connect(
+            host="127.0.0.1",
+            port=port,
+            login="fitness_eval",
+            password=self.fixture.password,
+            virtualhost="/",
+            timeout=5,
+        )
+        try:
+            self.channel = await self.connection.channel(publisher_confirms=True)
+            self.queue = await self.channel.declare_queue(
+                self.fixture.queue, durable=True, passive=True
+            )
+        except BaseException:
+            await self.connection.close()
+            raise
+        return self
+
+    async def receive_java(self) -> AbstractIncomingMessage:
+        for _ in range(50):
+            message = await self.queue.get(timeout=2, fail=False)
+            if message is not None:
+                if message.redelivered or not message.body:
+                    raise ValueError("JAVA_BROKER_DELIVERY_MISMATCH")
+                self.body = message.body
+                return cast(AbstractIncomingMessage, message)
+            await asyncio.sleep(0.2)
+        raise ValueError("JAVA_BROKER_DELIVERY_TIMEOUT")
+
+
+if __name__ == "__main__":
+    fixture = BrokerFixture(
+        os.environ.get("TASK_EVAL_RUN_ID", ""),
+        os.environ.get("TASK_EVAL_RABBIT_CONTAINER_ID", ""),
+        os.environ.get("TASK_EVAL_RABBIT_PASSWORD", ""),
+    )
+    print(asyncio.run(prepare_java_publisher(fixture)))

@@ -252,6 +252,43 @@ COMMIT;
         raise PreflightError("BOOKING_EVENT_READ_FAILED") from exc
 
 
+def read_publisher_status(*, run_id: str, container_id: str, event_id: str) -> dict[str, Any]:
+    """Read Java publisher state from the same verified disposable MySQL."""
+    event_key = _literal(event_id, _REQUEST)
+    verify_container(_inspect(container_id), run_id=run_id)
+    sql = f"""
+SET TRANSACTION READ ONLY;
+START TRANSACTION WITH CONSISTENT SNAPSHOT;
+SELECT JSON_OBJECT('database', DATABASE(), 'identity', CURRENT_USER(), 'rows',
+  (SELECT JSON_ARRAYAGG(JSON_OBJECT('status', status, 'attempt_count', attempt_count,
+    'published', published_at IS NOT NULL, 'unclaimed', claimed_by IS NULL,
+    'error_free', last_error IS NULL))
+   FROM agent_booking_outbox WHERE event_key={event_key}));
+COMMIT;
+"""
+    try:
+        result = subprocess.run(
+            ["docker", "exec", container_id, "sh", "-c", _COMMAND, "publisher-status", sql],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=10,
+        )
+        value = json.loads(result.stdout)
+        if (
+            not isinstance(value, dict)
+            or value.get("database") != "fitness_eval"
+            or value.get("identity") != "root@localhost"
+            or not isinstance(value.get("rows"), list)
+            or len(value["rows"]) != 1
+            or not isinstance(value["rows"][0], dict)
+        ):
+            raise PreflightError("INVALID_PUBLISHER_STATUS")
+        return dict(value["rows"][0])
+    except (OSError, subprocess.SubprocessError, json.JSONDecodeError) as exc:
+        raise PreflightError("PUBLISHER_STATUS_READ_FAILED") from exc
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--organization-id", required=True)

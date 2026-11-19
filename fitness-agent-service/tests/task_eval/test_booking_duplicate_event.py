@@ -4,7 +4,9 @@ import pytest
 
 from app.evaluation.task_eval.booking_contracts import matches_frozen_case
 from app.evaluation.task_eval.booking_duplicate_event import (
+    _confirmed_java_publisher,
     run_duplicate_event_probe,
+    verify_delivery,
     verify_replay,
 )
 from app.evaluation.task_eval.dataset import load_dataset
@@ -69,6 +71,135 @@ def good():
 
 def test_consistent_duplicate_delivery_effects_accepted():
     verify_replay(**good())
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "pending",
+        "unpublished",
+        "claimed",
+        "error",
+        "retry",
+        "bool_attempt",
+        "integer_flag",
+        "extra",
+    ],
+)
+def test_java_publisher_confirmation_requires_exact_typed_evidence(mutation):
+    value = {
+        "status": "PUBLISHED",
+        "attempt_count": 0,
+        "published": True,
+        "unclaimed": True,
+        "error_free": True,
+    }
+    assert _confirmed_java_publisher(value)
+    if mutation == "pending":
+        value["status"] = "PENDING"
+    elif mutation == "unpublished":
+        value["published"] = False
+    elif mutation == "claimed":
+        value["unclaimed"] = False
+    elif mutation == "error":
+        value["error_free"] = False
+    elif mutation == "retry":
+        value["attempt_count"] = 1
+    elif mutation == "bool_attempt":
+        value["attempt_count"] = False
+    elif mutation == "integer_flag":
+        value["published"] = 1
+    else:
+        value["other"] = "value"
+    assert not _confirmed_java_publisher(value)
+
+
+def good_delivery():
+    empty = {
+        "inbox_total": 0,
+        "attempts_total": 0,
+        "published": 0,
+        "recipients": None,
+        "matched_delivery": 0,
+    }
+    delivered = {
+        "inbox_total": 2,
+        "attempts_total": 2,
+        "published": 2,
+        "recipients": ["coach-1", "student-1"],
+        "matched_delivery": 2,
+    }
+    return {
+        "baseline": empty,
+        "delivered": deepcopy(delivered),
+        "replayed": deepcopy(delivered),
+        "first_run": (2, 2, 0, 0, 0),
+        "second_run": (0, 0, 0, 0, 0),
+        "replay_ack": 1,
+        "replay_reject": 0,
+        "replay_worker": (0, 0, 0),
+        "replay_event_snapshot": {
+            "inbox_total": 1,
+            "inbox_processed": 1,
+            "outbox_total": 2,
+            "pending": 0,
+            "recipients": ["coach-1", "student-1"],
+        },
+    }
+
+
+def test_real_notification_receipts_can_be_verified():
+    verify_delivery(**good_delivery())
+
+
+@pytest.mark.parametrize(
+    "mutation",
+    [
+        "dirty_baseline",
+        "missing_receipt",
+        "wrong_recipient",
+        "duplicate_receipt",
+        "missing_join",
+        "retry",
+        "suppressed",
+        "delivery_again",
+        "rejected_replay",
+        "missing_ack",
+        "worker_reprocess",
+        "extra_event",
+        "bool_count",
+    ],
+)
+def test_notification_delivery_rejects_incomplete_or_wrong_evidence(mutation):
+    value = good_delivery()
+    if mutation == "dirty_baseline":
+        value["baseline"]["attempts_total"] = 1
+    elif mutation == "missing_receipt":
+        value["delivered"]["attempts_total"] = 1
+    elif mutation == "wrong_recipient":
+        value["delivered"]["recipients"] = ["other", "student-1"]
+    elif mutation == "duplicate_receipt":
+        value["replayed"]["inbox_total"] = 3
+    elif mutation == "missing_join":
+        value["delivered"]["matched_delivery"] = 1
+    elif mutation == "retry":
+        value["first_run"] = (2, 1, 1, 0, 0)
+    elif mutation == "suppressed":
+        value["first_run"] = (2, 1, 0, 0, 1)
+    elif mutation == "delivery_again":
+        value["second_run"] = (1, 1, 0, 0, 0)
+    elif mutation == "rejected_replay":
+        value["replay_reject"] = 1
+    elif mutation == "missing_ack":
+        value["replay_ack"] = 0
+    elif mutation == "worker_reprocess":
+        value["replay_worker"] = (1, 1, 0)
+    elif mutation == "extra_event":
+        value["replay_event_snapshot"]["inbox_total"] = 2
+    else:
+        value["baseline"]["inbox_total"] = False
+    with pytest.raises(ValueError, match="NOTIFICATION_DELIVERY_MISMATCH"):
+        verify_delivery(**value)
 
 
 def test_case_contract_drift_is_not_reused():

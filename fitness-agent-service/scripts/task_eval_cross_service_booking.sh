@@ -16,18 +16,21 @@ if [[ "${1:-}" == "--broker-duplicate-trial" ]]; then
     broker_report="$2"
     set -- --real-broker --report-file "$broker_report"
 fi
-if [[ "${1:-}" == "--single-development-trial" || "${1:-}" == "--book-018-development-trial" || "${1:-}" == "--book-018-real-model-trial" ]]; then
+if [[ "${1:-}" == "--single-development-trial" || "${1:-}" == "--book-018-development-trial" || "${1:-}" == "--book-018-real-model-trial" || "${1:-}" == "--book-026-development-trial" || "${1:-}" == "--book-026-real-model-trial" ]]; then
     [[ "$#" -ge 2 && "$2" == /* && ! -e "$2" ]] || {
         printf 'Provide a new absolute report path for the development trial.\n' >&2
         exit 1
     }
-    [[ "$1" == "--book-018-real-model-trial" || "$#" -eq 2 ]] || exit 1
+    [[ "$1" == "--book-018-real-model-trial" || "$1" == "--book-026-real-model-trial" || "$#" -eq 2 ]] || exit 1
     single_development_trial=true
     single_report="$2"
     if [[ "$1" == "--book-018-development-trial" || "$1" == "--book-018-real-model-trial" ]]; then
         development_module=app.evaluation.task_eval.dev_sandbox_book_018
     fi
-    if [[ "$1" == "--book-018-real-model-trial" ]]; then
+    if [[ "$1" == "--book-026-development-trial" || "$1" == "--book-026-real-model-trial" ]]; then
+        development_module=app.evaluation.task_eval.dev_sandbox_book_026
+    fi
+    if [[ "$1" == "--book-018-real-model-trial" || "$1" == "--book-026-real-model-trial" ]]; then
         book_real_model=true
         shift 2
         real_model_args=("$@")
@@ -123,6 +126,15 @@ export TASK_EVAL_RUN_ID="$run_id" TASK_EVAL_POSTGRES_CONTAINER_ID="$pg_id"
 export TASK_EVAL_MYSQL_CONTAINER_ID="$mysql_id" TASK_EVAL_MYSQL_PORT="$mysql_port"
 cd "$service_root"
 "$python" -m app.evaluation.task_eval.mysql_sandbox_preflight
+publisher_enabled=false rabbit_port=1
+if [[ "$broker_duplicate_trial" == true ]]; then
+    # Bind the route before the Java scheduler can publish; the helper verifies
+    # the owned tmpfs-backed local container before connecting to its port.
+    export TASK_EVAL_RABBIT_CONTAINER_ID="$rabbit_id" TASK_EVAL_RABBIT_PASSWORD="$RABBITMQ_DEFAULT_PASS"
+    rabbit_port="$("$python" -m app.evaluation.task_eval.booking_rabbit_delivery)"
+    [[ "$rabbit_port" =~ ^[0-9]+$ ]]
+    publisher_enabled=true
+fi
 # Verify PostgreSQL is our tagged disposable container before issuing CREATE DATABASE.
 "$python" - "$pg_id" "$run_id" "$pg_port" <<'PY'
 import sys
@@ -163,7 +175,10 @@ env -i PATH="$PATH" HOME="$run_dir" TMPDIR="$run_dir" \
     BOOKING_DB_URL="$mysql_url" BOOKING_DB_USERNAME="$booking_db_user" BOOKING_DB_PASSWORD="$booking_db_password" \
     BOOKING_SCHEMA_INIT_ENABLED="$booking_schema_init" \
     BOOKING_SERVER_PORT=0 BOOKING_INTERNAL_SERVICE_TOKEN="$booking_token" \
-    BOOKING_OUTBOX_PUBLISHER_ENABLED=false \
+    BOOKING_OUTBOX_PUBLISHER_ENABLED="$publisher_enabled" \
+    BOOKING_RABBITMQ_HOST=127.0.0.1 BOOKING_RABBITMQ_PORT="$rabbit_port" \
+    BOOKING_RABBITMQ_USERNAME=fitness_eval BOOKING_RABBITMQ_PASSWORD="${RABBITMQ_DEFAULT_PASS:-unused}" \
+    BOOKING_OUTBOX_EXCHANGE="fitness-eval-events-$run_id" \
     java -jar "$repo_root/fitness-booking-service/target/fitness-booking-service.jar" \
     --server.address=127.0.0.1 >"$run_dir/booking.log" 2>&1 &
 booking_pid=$!

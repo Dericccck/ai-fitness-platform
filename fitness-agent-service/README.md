@@ -355,6 +355,8 @@ bash scripts/task_eval_cross_service_booking.sh --book-018-real-model-trial /绝
 
 各金额单位均为十亿分之一元，须先核对现有账本及服务商当前定价；密钥从权限为 0600 的文件读取，不要写入命令行。该入口只接受固定合成输入和一个模型请求，报告包含脱敏诊断，仍不能证明正式任务或发布验收通过。
 
+相同启动器还提供 `--book-026-development-trial` 和 `--book-026-real-model-trial`：前者使用脚本模型，后者使用上述相同的凭证、账本和定价确认参数。BOOK-026 按案例步骤重复批准并检查预约、课时及见证租户状态；它使用与 BOOK-018 相同的合成预约消息，但有独立的案例与夹具摘要。完整事务审计及人工评审尚未完成，观察结果不能视为正式验收。
+
 `bash scripts/task_eval_mysql_audit_lab.sh` 在全新临时 MySQL 中实验受限写入账号和独立审计表，检查指定预约相关表的提交、回滚、权限及触发器完整性。它不是任务审计适配器：并发事务的窗口边界和 PostgreSQL 确认的跨库因果尚未证明，因此不能据此把确认前写入断言判为通过。
 
 `bash scripts/task_eval_mysql_barrier_lab.sh` 在全新临时 MySQL 中观察读锁与单个在途事务、新写入的交互。该实验不运行 Agent，也不证明所有写者受控；不能将取得读锁等同于事务已排空。

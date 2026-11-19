@@ -68,6 +68,6 @@ bash scripts/task_eval_cross_service_booking.sh --broker-duplicate-trial \
   "$PWD/var/task-eval/book-030-rabbit-report.json"
 ```
 
-该模式要求本机 Docker、JDK 和离线 Maven 依赖，以及本机已有的 PostgreSQL、MySQL、RabbitMQ 镜像。启动器创建带随机运行标识、临时存储和仅监听 loopback 的容器；RabbitMQ 使用随机凭据与独占队列，退出时删除容器。实验用脚本模型产生一次经确认的合成预约，从隔离 MySQL Outbox 重建事件，通过真正的本机 RabbitMQ 将相同字节投递两次，并检查 PostgreSQL 消费去重、通知 Outbox、预约与课时和另一租户的见证快照。
+该模式要求本机 Docker、JDK 和离线 Maven 依赖，以及本机已有的 PostgreSQL、MySQL、RabbitMQ 镜像。启动器创建带随机运行标识、临时存储和仅监听 loopback 的容器；RabbitMQ 使用随机凭据和本次运行专用的交换机、队列，退出时删除容器。实验用脚本模型产生一次经确认的合成预约；真实 Java Outbox 发布器将事件发送至隔离 RabbitMQ，评测读取原始消息并核对 MySQL 发布状态，再以完全相同的消息字节重投。实际通知 Worker 将通知写入临时 PostgreSQL 站内收件箱，核验学员与教练各收到一次，以及投递后再次重投仍无重复；同时检查预约、课时和另一租户的见证快照。
 
-这是组件观察，不运行 Java 的事件发布器、真实模型或通知投递；数据库快照不是完整独立事务审计。案例仍为草稿，组件成功不代表 BOOK-030 任务或 120 条案例验收通过。重复运行时应使用新的报告文件名。
+这是组件观察，重投由评测程序发出；不运行真实模型，也不向外部通知渠道或真实用户投递。数据库快照不是完整独立事务审计。案例仍为草稿，组件成功不代表 BOOK-030 任务或 120 条案例验收通过。重复运行时应使用新的报告文件名。

@@ -54,7 +54,7 @@ from .booking_rabbit_delivery import BrokerFixture
 from .booking_signed_identity import _identity
 from .budget_store import DurableBudget
 from .dataset import load_dataset
-from .mysql_booking_observer import read_created_event, snapshot_booking
+from .mysql_booking_observer import read_created_event, read_publisher_status, snapshot_booking
 from .mysql_sandbox_preflight import verify_container
 from .sandbox_preflight import PreflightError, _inspect, _verify_container
 
@@ -485,8 +485,20 @@ async def evaluate(
                     async def mysql_snapshot() -> dict[str, Any]:
                         return await asyncio.to_thread(snapshot)
 
+                    async def publisher_status(event_id: str = event.event_id) -> dict[str, Any]:
+                        return await asyncio.to_thread(
+                            read_publisher_status,
+                            run_id=run_id,
+                            container_id=mysql_id,
+                            event_id=event_id,
+                        )
+
                     results["duplicate_event"] = await run_duplicate_event_probe(
-                        database=database, event=event, mysql_snapshot=mysql_snapshot, broker=broker
+                        database=database,
+                        event=event,
+                        mysql_snapshot=mysql_snapshot,
+                        broker=broker,
+                        publisher_status=publisher_status if broker else None,
                     )
         if model is not None:
             return {
