@@ -59,12 +59,19 @@ def _profile(case_id: str) -> _Profile:
     """Only fixed, unreviewed synthetic development inputs can leave this process."""
     if case_id == "KNOW-001":
         return _Profile(case_id, QUERY, "eval-breathing", DOCUMENTS)
-    if case_id == "KNOW-011":
-        # No document identifies the unknown product or its ingredients. This
-        # authored corpus is a draft premise, not a verified product catalogue.
+    unanswered = {
+        "KNOW-011": "这款未知补剂具体含什么成分？",
+        "KNOW-012": "下个月门店装修什么时候结束？",
+        "KNOW-013": "我当前的体脂率是多少？",
+        "KNOW-015": "当前私教课多少钱？",
+        "KNOW-017": "现在最晚什么时候取消课程？",
+    }
+    if case_id in unanswered:
+        # This synthetic corpus contains no requested product, personal or
+        # operational facts. It makes no claim about real business data.
         return _Profile(
             case_id,
-            "这款未知补剂具体含什么成分？",
+            unanswered[case_id],
             None,
             (
                 ("eval-decoy", "eval-org-a", "合成示例：合理安排休息和训练时间。"),
@@ -341,6 +348,9 @@ async def observe(
             return {
                 "case_id": profile.case_id,
                 "scope": "isolated_synthetic_dev_observation",
+                "router_mode": "RULE_COMPATIBILITY",
+                "production_hybrid_router_verified": False,
+                "business_tools_enabled": False,
                 "component_status": "OBSERVED",
                 "task_status": "UNKNOWN",
                 "human_review": "NOT_REVIEWED",
@@ -392,7 +402,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--confirm-current-pricing", required=True, action="store_true")
     parser.add_argument(
         "--case-id",
-        choices=[*[f"KNOW-{i:03d}" for i in range(1, 8)], "KNOW-011"],
+        choices=[
+            *[f"KNOW-{i:03d}" for i in range(1, 8)],
+            *[f"KNOW-{i:03d}" for i in (11, 12, 13, 15, 17)],
+        ],
         default="KNOW-001",
     )
     args = parser.parse_args(argv)

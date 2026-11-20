@@ -241,7 +241,7 @@ def _verified_knowledge_answer(answer: str, retrieved_ids: list[str]) -> str:
         not re.fullmatch(r"[1-9][0-9]{0,2}", marker) or int(marker) > len(retrieved_ids)
         for marker in markers
     ):
-        return "本次回答未提供可核验的知识引用，请重试或咨询专业人员。"
+        return "当前资料不足，暂时无法确认。建议向相关机构或专业人员核实。"
     return answer
 
 

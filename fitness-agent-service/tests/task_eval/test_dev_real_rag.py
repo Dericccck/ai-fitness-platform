@@ -36,11 +36,12 @@ def test_development_profiles_reject_unbound_test_and_injected_cases():
             rag._profile(case_id)
 
 
-def test_unanswerable_development_fixture_is_distinct_and_frozen():
+@pytest.mark.parametrize("case_id", ["KNOW-011", "KNOW-012", "KNOW-013", "KNOW-015", "KNOW-017"])
+def test_unanswerable_development_fixture_is_distinct_and_frozen(case_id):
     source = SERVICE / "evals/task_eval/datasets/v1.jsonl"
     cases = [json.loads(line) for line in source.read_text().splitlines()]
-    case = next(item for item in cases if item["case_id"] == "KNOW-011")
-    profile = rag._profile("KNOW-011")
+    case = next(item for item in cases if item["case_id"] == case_id)
+    profile = rag._profile(case_id)
     assert case["split"] == "dev" and case["review"]["status"] == "draft"
     assert profile.query == case["steps"][0]["message"]
     assert profile.relevant_id is None
@@ -52,7 +53,13 @@ def test_unanswerable_development_fixture_is_distinct_and_frozen():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case_id", [*[f"KNOW-{number:03d}" for number in range(1, 8)], "KNOW-011"])
+@pytest.mark.parametrize(
+    "case_id",
+    [
+        *[f"KNOW-{number:03d}" for number in range(1, 8)],
+        *[f"KNOW-{i:03d}" for i in (11, 12, 13, 15, 17)],
+    ],
+)
 async def test_profile_query_reaches_knowledge_route_without_hidden_router_model(case_id):
     decision = await RuleIntentRouter().decide(
         rag._profile(case_id).query, recent_messages=[], previous_route=None
