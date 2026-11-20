@@ -71,3 +71,13 @@ bash scripts/task_eval_cross_service_booking.sh --broker-duplicate-trial \
 该模式要求本机 Docker、JDK 和离线 Maven 依赖，以及本机已有的 PostgreSQL、MySQL、RabbitMQ 镜像。启动器创建带随机运行标识、临时存储和仅监听 loopback 的容器；RabbitMQ 使用随机凭据和本次运行专用的交换机、队列，退出时删除容器。实验用脚本模型产生一次经确认的合成预约；真实 Java Outbox 发布器将事件发送至隔离 RabbitMQ，评测读取原始消息并核对 MySQL 发布状态，再以完全相同的消息字节重投。实际通知 Worker 将通知写入临时 PostgreSQL 站内收件箱，核验学员与教练各收到一次，以及投递后再次重投仍无重复；同时检查预约、课时和另一租户的见证快照。
 
 这是组件观察，重投由评测程序发出；不运行真实模型，也不向外部通知渠道或真实用户投递。数据库快照不是完整独立事务审计。案例仍为草稿，组件成功不代表 BOOK-030 任务或 120 条案例验收通过。重复运行时应使用新的报告文件名。
+
+全量本地探索报告可显式启用此观察：
+
+```bash
+TASK_EVAL_BOOK030_BROKER=1 .venv/bin/python -m app.evaluation.task_eval.cli dataset-local \
+  --dataset evals/task_eval/datasets/v1.jsonl --split all --execute \
+  --output-dir "$PWD/var/task-eval/with-book030-new-run"
+```
+
+每次运行新建隔离服务并生成一次性报告，检查启动器退出码、来源、事件和投递证据及报告摘要，不复用历史报告。组件失败或证据不足时案例标记为 `ERROR`；成功也仅为 `INCONCLUSIVE`，模型结果与完整任务仍是未知。临时环境需要本机 Docker、JDK、离线 Maven 依赖和指定的本地镜像。

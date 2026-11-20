@@ -21,7 +21,7 @@ def test_generated_proposal_is_reproducible_and_remains_unreviewed(tmp_path):
     assert raw == (PROPOSAL / "cases.jsonl").read_bytes()
     assert manifest == json.loads((PROPOSAL / "manifest.json").read_bytes())
     assert hashlib.sha256(raw).hexdigest() == manifest["proposal_dataset_sha256"]
-    assert manifest["changed_assertions"] == 90
+    assert manifest["changed_assertions"] == 102
     path = tmp_path / "cases.jsonl"
     path.write_bytes(raw)
     proposal = load_dataset(path)
@@ -29,7 +29,7 @@ def test_generated_proposal_is_reproducible_and_remains_unreviewed(tmp_path):
     assert all(
         c.review.status == "draft" and c.capability_status == "planned" for c in proposal.cases
     )
-    assert build_review_queue(proposal)["cases_with_missing_grader_parameters"] == 35
+    assert build_review_queue(proposal)["cases_with_missing_grader_parameters"] == 20
     for old, new in zip(original.cases, proposal.cases, strict=True):
         assert (new.case_id, new.split, new.steps, new.fixture, new.source, new.review) == (
             old.case_id,
@@ -96,12 +96,12 @@ def test_rubric_tampering_fails_closed(tmp_path, monkeypatch):
         build_proposal(load_dataset(SOURCE))
 
 
-def test_zero_delivery_proposals_do_not_invent_recipients(tmp_path):
+def test_unverified_eligibility_cases_do_not_invent_recipients(tmp_path):
     raw, _ = build_proposal(load_dataset(SOURCE))
     path = tmp_path / "proposal.jsonl"
     path.write_bytes(raw)
     cases = {c.case_id: c for c in load_dataset(path).cases}
-    for cid in ("OPER-009", "OPER-011", "OPER-013", "OPER-015", "OPER-016"):
+    for cid in ("OPER-015", "OPER-016"):
         assertion = cases[cid].expected.assertions[0]
         assert assertion.parameters["delivery_count"] == 0
         assert "recipient" not in assertion.parameters
@@ -113,3 +113,60 @@ def test_zero_delivery_proposals_do_not_invent_recipients(tmp_path):
             )["status"]
             == "UNKNOWN"
         )
+
+
+def test_outreach_parameters_are_bound_to_synthetic_fixture_and_window(tmp_path):
+    from app.evaluation.task_eval.outreach_draft_fixtures import load_contracts
+
+    original = load_dataset(SOURCE)
+    contracts = {row["case_id"]: row for row in load_contracts(original)}
+    raw, manifest = build_proposal(original)
+    path = tmp_path / "proposal.jsonl"
+    path.write_bytes(raw)
+    cases = {c.case_id: c for c in load_dataset(path).cases}
+    for index in range(9, 14):
+        cid = f"OPER-{index:03}"
+        parameters = cases[cid].expected.assertions[0].parameters
+        assert parameters["recipient"] == contracts[cid]["subject"]
+        assert parameters["delivery_count"] == contracts[cid]["expected_delivery_count"]
+        assert cases[cid].review.status == "draft"
+        change = next(c for c in manifest["changes"] if c["case_id"] == cid)
+        assert change["fixture_sha256"] == manifest["outreach_fixture_sha256"]
+        assert grade_rule("notification_policy", parameters, None)["status"] == "UNKNOWN"
+        assert (
+            grade_rule(
+                "notification_policy",
+                parameters,
+                {
+                    "evidence_refs": ["synthetic-window"],
+                    "delivery_window_complete": False,
+                    "deliveries": [],
+                },
+            )["status"]
+            == "UNKNOWN"
+        )
+        assert (
+            grade_rule(
+                "notification_policy",
+                parameters,
+                {
+                    "evidence_refs": ["synthetic-window"],
+                    "delivery_window_complete": True,
+                    "deliveries": [{"recipient": "wrong"}],
+                },
+            )["status"]
+            == "FAIL"
+        )
+    assert "recipient" not in cases["OPER-014"].expected.assertions[0].parameters
+    assert "delivery_count" not in cases["OPER-014"].expected.assertions[0].parameters
+    assert any("quiet-hours observation window" in item for item in manifest["limitations"])
+
+
+def test_modified_outreach_fixture_is_rejected(tmp_path, monkeypatch):
+    from app.evaluation.task_eval import outreach_draft_fixtures
+
+    path = tmp_path / "outreach.json"
+    path.write_bytes(outreach_draft_fixtures._FIXTURE_PATH.read_bytes() + b" ")
+    monkeypatch.setattr(outreach_draft_fixtures, "_FIXTURE_PATH", path)
+    with pytest.raises(ValueError, match="OUTREACH_FIXTURE_CHANGED"):
+        build_proposal(load_dataset(SOURCE))

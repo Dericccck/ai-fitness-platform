@@ -55,14 +55,20 @@ def _event(event_type: str, payload: dict[str, Any]) -> ProactiveEventMessage:
     )
 
 
-async def evaluate_outreach_case_observations(dataset: Dataset, *, split: str) -> dict[str, Any]:
+async def evaluate_outreach_case_observations(
+    dataset: Dataset, *, split: str, case_ids: frozenset[str] | None = None
+) -> dict[str, Any]:
     if split not in {"dev", "test"}:
         raise ValueError("split must be dev or test")
     rows: list[dict[str, Any]] = []
     worker_report: dict[str, Any] | None = None
     for case in dataset.cases:
         reference = _CASES.get(case.case_id)
-        if case.split != split or reference is None:
+        if (
+            case.split != split
+            or reference is None
+            or (case_ids is not None and case.case_id not in case_ids)
+        ):
             continue
         if not _bound(case, reference):
             rows.append(
@@ -86,7 +92,7 @@ async def evaluate_outreach_case_observations(dataset: Dataset, *, split: str) -
                 # Treat a disabled in-app preference as a simulated opt-out. This
                 # cannot establish the mapping from actual consent to preference.
                 if worker_report is None:
-                    worker_report = await evaluate_notification_worker()
+                    worker_report = await evaluate_notification_worker(case_id="OPER-009")
                 worker_row = next(r for r in worker_report["cases"] if r["case_id"] == "OPER-009")
                 observed = dict(worker_row.get("observed", {}))
                 passed = worker_row["component_status"] == "PASS"

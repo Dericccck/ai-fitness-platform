@@ -57,7 +57,8 @@ async def test_outreach_probe_reports_worker_failure(monkeypatch):
     dataset = load_dataset(DATASET)
     case = next(c for c in dataset.cases if c.case_id == "OPER-015")
 
-    async def failing_worker():
+    async def failing_worker(*, case_id):
+        assert case_id == "OPER-009"
         return {
             "cases": [
                 {

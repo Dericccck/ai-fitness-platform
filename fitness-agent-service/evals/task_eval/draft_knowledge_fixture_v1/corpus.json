@@ -1,0 +1,24 @@
+{
+  "schema_version": "1.0",
+  "version": "synthetic-knowledge-draft-v1",
+  "status": "synthetic_unreviewed_not_for_user_guidance",
+  "policy": {"top_k": 1, "min_recall_at_k": 1.0, "scope": "isolated_per_case"},
+  "limitations": [
+    "All records are invented for evaluation; exercise content has not received clinical review.",
+    "The cancellation rule is fictional, applies only to its fixture, and is not a real policy.",
+    "Relevance labels are developer-authored drafts; answerability is relative to the supplied fixture only.",
+    "Test cases and their relevance labels are visible to development; this is not an unbiased held-out test set."
+  ],
+  "cases": [
+    {"case_id":"KNOW-001","split":"dev","document_id":"draft-know-001-breathing-v1","title":"合成资料：深蹲呼吸","content":"一般动作练习中，深蹲下降时自然吸气，站起上推时呼气；避免憋气，有不适时停止并咨询专业人员。"},
+    {"case_id":"KNOW-002","split":"dev","document_id":"draft-know-002-frequency-v1","title":"合成资料：初学训练频率","content":"本示例面向无特殊禁忌的初学者：力量训练可以从每周两次、间隔安排开始，再根据恢复情况调整；有疾病或伤痛时应先寻求专业建议。"},
+    {"case_id":"KNOW-003","split":"dev","document_id":"draft-know-003-warmup-v1","title":"合成资料：训练前热身","content":"力量训练前，先进行轻度活动提高体温，再围绕计划动作做低负荷、逐步递增的练习组；疼痛或异常不适时停止。"},
+    {"case_id":"KNOW-004","split":"dev","document_id":"draft-know-004-deadlift-v1","title":"合成资料：硬拉姿势","content":"硬拉练习时保持背部稳定，尽量维持自然脊柱曲线，通过髋部屈伸完成动作；不要在疼痛或无法控制姿势时强行加重。"},
+    {"case_id":"KNOW-005","split":"dev","document_id":"draft-know-005-recovery-v1","title":"合成资料：训练恢复","content":"两次高强度训练之间关注休息、睡眠、饮食和水分，根据疲劳与疼痛情况调整下一次训练；持续或明显不适时咨询专业人员。"},
+    {"case_id":"KNOW-006","split":"dev","document_id":"draft-know-006-protein-v1","title":"合成资料：蛋白质食物","content":"常见蛋白质食物包括鸡蛋、鱼、乳制品、瘦肉及豆腐等豆制品；应结合个人过敏、饮食限制和专业建议选择。"},
+    {"case_id":"KNOW-007","split":"dev","document_id":"draft-know-007-rpe-v1","title":"合成资料：RPE 强度","content":"RPE 是主观用力程度评分，用来描述训练时自身感觉的强度；评分依赖个人感受，需要结合动作和上下文解释。"},
+    {"case_id":"KNOW-008","split":"test","document_id":"draft-know-008-cancellation-v1","title":"虚构测试门店课程取消规则 v1","content":"仅用于测试的虚构门店规则：学员可在课程开始至少 24 小时前自助取消；不足 24 小时应联系该虚构门店处理。此规则不代表任何真实门店政策。"},
+    {"case_id":"KNOW-009","split":"test","document_id":"draft-know-009-seated-row-v1","title":"合成资料：坐姿划船调节","content":"调节坐姿划船器械时先调整座椅和脚踏，使起始姿势能稳定坐好并舒适握住把手；选择可控负荷，动作中保持稳定，不应勉强拉到疼痛。"},
+    {"case_id":"KNOW-010","split":"test","document_id":"draft-know-010-bench-v1","title":"合成资料：卧推幅度","content":"卧推时在肩部舒适、姿势稳定且可控制的范围内下降和上推；不要因追求幅度而强行进入疼痛范围，必要时请合格人员指导。"}
+  ]
+}

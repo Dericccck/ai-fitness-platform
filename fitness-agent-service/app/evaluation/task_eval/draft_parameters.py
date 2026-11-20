@@ -17,6 +17,9 @@ from .booking_dev_026 import load as load_book_026
 from .booking_dev_fixtures import load_book_018
 from .booking_test_008 import load as load_book_008
 from .dataset import Dataset, load_dataset
+from .knowledge_draft_corpus import CORPUS_SHA256, load_corpus
+from .outreach_draft_fixtures import _FIXTURE_SHA256 as OUTREACH_FIXTURE_SHA256
+from .outreach_draft_fixtures import load_contracts as load_outreach_contracts
 
 _SOURCE_SHA256 = "1d187f5abca4dab754db29059f9ff95a7897719fde6ce88de6c92448d25ab446"
 _CASE_CONTENT_SHA256 = "fb2b0533fe6e0512332f1ec577cdb3e5bcd4bb9efdd0de729f94edf845b1b664"
@@ -81,6 +84,8 @@ def build_proposal(dataset: Dataset) -> tuple[bytes, dict[str, Any]]:
         "BOOK-026": fixtures["BOOK-026"]["sha256"],
         "BOOK-008": "af8d99889743e2ab2fd8d31ed7755103120901dff842b761f3fd52c7393300f2",
     }
+    knowledge = load_corpus(dataset)
+    outreach = {item["case_id"]: item for item in load_outreach_contracts(dataset)}
     changes: list[dict[str, Any]] = []
     output = []
     for original in dataset.cases:
@@ -109,6 +114,15 @@ def build_proposal(dataset: Dataset) -> tuple[bytes, dict[str, Any]]:
                     "score_mapping": dict(_MAPPING),
                 }
                 provenance = "original reference_points and draft rubric"
+            elif case.case_id in knowledge and assertion.rule == "required_evidence_recalled":
+                proposed = {
+                    "answerable": True,
+                    "relevant_ids": [knowledge[case.case_id]["document_id"]],
+                    "forbidden_ids": [],
+                    "k": 1,
+                    "min_recall_at_k": 1.0,
+                }
+                provenance = "synthetic per-case document and draft retrieval policy"
             elif case.case_id in fixtures and assertion.rule in (
                 "confirmation_pending_for_actor",
                 "confirmation_rejected",
@@ -121,8 +135,25 @@ def build_proposal(dataset: Dataset) -> tuple[bytes, dict[str, Any]]:
                 proposed = {"actor": payload["student_id"], "action": _ACTION}
                 provenance = "frozen synthetic fixture and booking tool contract"
             elif (
-                case.case_id in {"OPER-009", "OPER-011", "OPER-013", "OPER-015", "OPER-016"}
+                case.case_id in {f"OPER-{index:03}" for index in range(9, 14)}
                 and assertion.rule == "notification_policy"
+            ):
+                contract = outreach[case.case_id]
+                count = contract["expected_delivery_count"]
+                recipient = contract["subject"]
+                if (
+                    type(count) is not int
+                    or count not in (0, 1)
+                    or not isinstance(recipient, str)
+                    or recipient != f"synthetic-{case.case_id.lower()}-recipient"
+                    or contract["contract_status"] != "draft_unreviewed"
+                    or contract["eligibility_or_consent_verified"] is not False
+                ):
+                    raise ValueError("invalid synthetic outreach contract")
+                proposed = {"delivery_count": count, "recipient": recipient}
+                provenance = "case-bound synthetic outreach draft fixture"
+            elif (
+                case.case_id in {"OPER-015", "OPER-016"} and assertion.rule == "notification_policy"
             ):
                 # These cases explicitly prohibit the particular delivery. Their
                 # recipient and complete observation window remain unresolved.
@@ -146,6 +177,10 @@ def build_proposal(dataset: Dataset) -> tuple[bytes, dict[str, Any]]:
                         "provenance": provenance,
                         "fixture_sha256": fixture_hashes.get(case.case_id)
                         if provenance.startswith("frozen")
+                        else OUTREACH_FIXTURE_SHA256
+                        if provenance == "case-bound synthetic outreach draft fixture"
+                        else CORPUS_SHA256
+                        if provenance == "synthetic per-case document and draft retrieval policy"
                         else None,
                     }
                 )
@@ -162,10 +197,15 @@ def build_proposal(dataset: Dataset) -> tuple[bytes, dict[str, Any]]:
         "case_count": len(output),
         "changed_assertions": len(changes),
         "fixture_sha256": fixture_hashes,
+        "knowledge_corpus_sha256": CORPUS_SHA256,
+        "outreach_fixture_sha256": OUTREACH_FIXTURE_SHA256,
         "limitations": [
             "No model judgments, independent observations, human approvals, or attestations are created.",
+            "Knowledge records and relevance are synthetic unreviewed fixtures, not clinical advice or real cancellation policy.",
             "Draft rubric and original reference points require review; field presence does not establish validity.",
             "BOOK-008 test fixture shares synthetic identity and first candidate with development fixtures; split leakage review is required.",
+            "Outreach recipients and counts are synthetic unreviewed proposals; the OPER-010 zero count applies only to the immediate local quiet-hours observation window, not to later permitted delivery.",
+            "OPER-012 delivery eligibility and consent are not verified; OPER-014–016 remain incomplete and are not established as passing.",
             "Frozen original-case runners cannot execute proposal case identities without explicit integration.",
         ],
         "changes": changes,

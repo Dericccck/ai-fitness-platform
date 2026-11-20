@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from dataclasses import replace
@@ -108,10 +109,16 @@ class _Channel:
     channel = "IN_APP"
 
     def __init__(self) -> None:
-        self.deliveries: list[str] = []
+        self.deliveries: list[dict[str, str]] = []
 
     async def deliver(self, connection: Any, request: Any) -> NotificationDeliveryReceipt:
-        self.deliveries.append(request.record.id)
+        self.deliveries.append(
+            {
+                "outbox_id": request.record.id,
+                "recipient": request.record.subject_user_id,
+                "organization": request.record.organization_id,
+            }
+        )
         return NotificationDeliveryReceipt(channel="IN_APP", provider_message_id="fixture-receipt")
 
 
@@ -123,9 +130,19 @@ _SCOPE = {
 }
 
 
-async def evaluate_notification_worker() -> dict[str, Any]:
+async def evaluate_notification_worker(
+    *,
+    subject: str = "synthetic-user",
+    organization: str = "synthetic-org",
+    case_id: str | None = None,
+) -> dict[str, Any]:
+    if not all(
+        re.fullmatch(r"synthetic-[a-z0-9-]{1,80}", value) for value in (subject, organization)
+    ):
+        raise ValueError("only synthetic fixture identities are supported")
+    scope = {**_SCOPE, "subject_user_id": subject, "organization_id": organization}
     preference = NotificationPreferenceRecord(
-        **_SCOPE,
+        **scope,
         enabled=True,
         quiet_start=None,
         quiet_end=None,
@@ -136,9 +153,9 @@ async def evaluate_notification_worker() -> dict[str, Any]:
     )
     record = NotificationOutboxRecord(
         id="synthetic-outbox",
-        subject_user_id=_SCOPE["subject_user_id"],
-        organization_id=_SCOPE["organization_id"],
-        notification_type=_SCOPE["notification_type"],
+        subject_user_id=scope["subject_user_id"],
+        organization_id=scope["organization_id"],
+        notification_type=scope["notification_type"],
         aggregate_type="APPOINTMENT",
         aggregate_id="synthetic-appointment",
         dedupe_key="synthetic",
@@ -186,7 +203,11 @@ async def evaluate_notification_worker() -> dict[str, Any]:
         ("OPER-013", preference, None, True, "suppressed", 0, "STALE_BEFORE_DELIVERY"),
     ]
     results = []
-    for case_id, pref, recent, stale, outcome, delivery_count, reason in cases:
+    if case_id is not None and case_id not in {item[0] for item in cases}:
+        raise ValueError("unknown notification worker fixture")
+    for current_case_id, pref, recent, stale, outcome, delivery_count, reason in cases:
+        if case_id is not None and current_case_id != case_id:
+            continue
         connection, outbox, channel = _WorkerConnection(recent), _Outbox(stale=stale), _Channel()
         policy = _FixedClockPreferences(pref)
         worker = NotificationOutboxWorker(
@@ -210,10 +231,15 @@ async def evaluate_notification_worker() -> dict[str, Any]:
                 observed == outcome
                 and len(channel.deliveries) == delivery_count
                 and events == expected_events
+                and all(
+                    delivery
+                    == {"outbox_id": record.id, "recipient": subject, "organization": organization}
+                    for delivery in channel.deliveries
+                )
             )
             results.append(
                 {
-                    "case_id": case_id,
+                    "case_id": current_case_id,
                     "component_status": "PASS" if valid else "FAIL",
                     "task_status": "UNKNOWN",
                     "reason": "FAKE_DATABASE_AND_CHANNEL",
@@ -225,6 +251,7 @@ async def evaluate_notification_worker() -> dict[str, Any]:
                     "observed": {
                         "outcome": observed,
                         "delivery_count": len(channel.deliveries),
+                        "deliveries": list(channel.deliveries),
                         "events": events,
                     },
                 }
@@ -232,7 +259,7 @@ async def evaluate_notification_worker() -> dict[str, Any]:
         except Exception:  # noqa: BLE001 - report safe structured failure, do not expose fixture details
             results.append(
                 {
-                    "case_id": case_id,
+                    "case_id": current_case_id,
                     "component_status": "ERROR",
                     "task_status": "UNKNOWN",
                     "reason": "WORKER_EXCEPTION",

@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import os
 from collections import Counter
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -16,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from . import booking_cases, booking_java_cases
+from . import book_030_local, booking_cases, booking_java_cases, capacity_draft
 from .component_customer_service_cases import evaluate_customer_service_case_observations
 from .component_notification_worker import evaluate_notification_worker
 from .component_operations_cases import evaluate_operations_case_observations
@@ -25,7 +26,9 @@ from .component_routing import evaluate_routing
 from .customer_service_boundary_cases import evaluate_customer_service_boundaries
 from .dataset import Dataset
 from .knowledge_dataset_local import evaluate_knowledge_dataset
+from .knowledge_draft_corpus import CORPUS_SHA256, evaluate_draft_corpus
 from .knowledge_extended_local import evaluate_knowledge_extended
+from .outreach_draft_fixtures import evaluate as evaluate_draft_outreach
 from .routing_intent_cases import evaluate_intent_observations
 from .routing_remaining_cases import evaluate_remaining_routing_observations
 from .routing_role_boundary_cases import evaluate_routing_role_boundaries
@@ -172,6 +175,24 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
         )
         return {"cases": [row for group in groups for row in group["cases"]]}
 
+    draft_knowledge_ids = frozenset(
+        c.case_id for c in scoped if c.case_id in {f"KNOW-{i:03d}" for i in range(1, 11)}
+    )
+
+    draft_outreach_ids = frozenset(
+        c.case_id for c in scoped if c.case_id in {f"OPER-{i:03d}" for i in range(9, 17)}
+    )
+
+    async def draft_outreach_cases() -> dict[str, Any]:
+        if not draft_outreach_ids:
+            return {"cases": []}
+        return await evaluate_draft_outreach(dataset, case_ids=draft_outreach_ids)
+
+    async def draft_knowledge_cases() -> dict[str, Any]:
+        if not draft_knowledge_ids:
+            return {"cases": []}
+        return await evaluate_draft_corpus(dataset, case_ids=draft_knowledge_ids)
+
     results = await asyncio.gather(
         evaluate_knowledge_dataset(scoped_dataset),
         evaluate_notification_worker(),
@@ -187,8 +208,16 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
         role_boundary_cases(),
         clarification_cases(),
         remaining_routing_cases(),
+        draft_knowledge_cases(),
+        draft_outreach_cases(),
         return_exceptions=True,
     )
+    draft_outreach_error = not isinstance(results[15], dict)
+    draft_outreach = results[15] if isinstance(results[15], dict) else {"cases": []}
+    draft_outreach_by_id = {item["case_id"]: item for item in draft_outreach["cases"]}
+    draft_knowledge_error = not isinstance(results[14], dict)
+    draft_knowledge = results[14] if isinstance(results[14], dict) else {"cases": []}
+    draft_knowledge_by_id = {item["case_id"]: item for item in draft_knowledge["cases"]}
     knowledge_error = not isinstance(results[0], dict)
     notification_error = not isinstance(results[1], dict)
     extended_error = not isinstance(results[2], dict)
@@ -281,6 +310,14 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
             row["reason"] = "OUT_OF_SCOPE"
             rows.append(row)
             continue
+        if case.case_id in draft_outreach_ids and (
+            draft_outreach_error or case.case_id not in draft_outreach_by_id
+        ):
+            _mark(row, "ERROR", "DRAFT_OUTREACH_COMPONENT_ERROR")
+        if case.case_id in draft_knowledge_ids and (
+            draft_knowledge_error or case.case_id not in draft_knowledge_by_id
+        ):
+            _mark(row, "ERROR", "DRAFT_KNOWLEDGE_COMPONENT_ERROR")
         if knowledge_error and case.primary_scenario == "knowledge":
             _mark(row, "ERROR", "RETRIEVAL_ADAPTER_ERROR")
         if notification_error and case.case_id in {f"OPER-{i:03d}" for i in range(9, 14)}:
@@ -334,6 +371,97 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
             _mark(row, "ERROR", "CLARIFICATION_COMPONENT_ERROR")
         if remaining_routing_error and case.case_id in {"ROUT-005", "ROUT-007", "ROUT-014"}:
             _mark(row, "ERROR", "REMAINING_ROUTING_COMPONENT_ERROR")
+        if case.case_id in {"BOOK-009", "BOOK-022"}:
+            try:
+                observation = capacity_draft.observe(case)
+                if (
+                    not isinstance(observation, dict)
+                    or observation.get("case_id") != case.case_id
+                    or observation.get("status") != "INCONCLUSIVE"
+                    or observation.get("observation_scope") != "synthetic_sqlite_double_only"
+                    or observation.get("fixture_sha256") != capacity_draft._SHA256
+                    or not isinstance(observation.get("violations"), list)
+                    or any(
+                        not isinstance(value, str) or not value
+                        for value in observation["violations"]
+                    )
+                    or not isinstance(observation.get("response"), str)
+                ):
+                    raise ValueError("INVALID_CAPACITY_OBSERVATION")
+                snapshots = []
+                for name in ("before", "before_decision", "after"):
+                    value = observation.get(name)
+                    if (
+                        not isinstance(value, dict)
+                        or set(value) != {"occupied", "credits", "bookings"}
+                        or any(type(number) is not int or number < 0 for number in value.values())
+                    ):
+                        raise ValueError("INVALID_CAPACITY_OBSERVATION")
+                    snapshots.append(capacity_draft.Snapshot(**value))
+                violations = list(observation["violations"])
+                violations.extend(
+                    value
+                    for value in capacity_draft.validate(
+                        case.case_id,
+                        snapshots[0],
+                        snapshots[1],
+                        snapshots[2],
+                        observation["response"],
+                    )
+                    if value not in violations
+                )
+                observation = {
+                    **observation,
+                    "violations": violations,
+                    "component_status": "FAIL" if violations else "PASS",
+                    "product_status": "UNKNOWN",
+                    "model_status": "UNKNOWN",
+                }
+            except Exception:  # noqa: BLE001 - retain other cases without exposing input
+                _mark(row, "ERROR", "CAPACITY_DRAFT_COMPONENT_ERROR")
+            else:
+                row["observations"]["draft_capacity"] = observation
+                if violations:
+                    _mark(row, "FAIL", "CAPACITY_DRAFT_COMPONENT_FAIL")
+                else:
+                    _mark(row, "INCONCLUSIVE", "CAPACITY_DRAFT_DOUBLE_ONLY_NO_PRODUCT_CONTRACT")
+        if case.case_id == "BOOK-030" and os.environ.get("TASK_EVAL_BOOK030_BROKER") == "1":
+            try:
+                broker_observation = await book_030_local.observe(case)
+                if (
+                    not isinstance(broker_observation, dict)
+                    or broker_observation.get("case_id") != case.case_id
+                    or broker_observation.get("component_status") != "OBSERVED"
+                    or broker_observation.get("task_status") != "UNKNOWN"
+                    or broker_observation.get("model_status") != "UNKNOWN"
+                    or broker_observation.get("event_source")
+                    != "java_booking_outbox_publisher_via_disposable_rabbitmq"
+                    or broker_observation.get("notification_scope")
+                    != "disposable_postgres_only_no_external_notification_adapter"
+                    or broker_observation.get("audit_complete") is not False
+                    or not isinstance(broker_observation.get("report_content"), str)
+                    or hashlib.sha256(
+                        broker_observation["report_content"].encode("utf-8")
+                    ).hexdigest()
+                    != broker_observation.get("report_sha256")
+                    or not all(
+                        isinstance(broker_observation.get(key), str)
+                        and len(broker_observation[key]) == 64
+                        and all(c in "0123456789abcdef" for c in broker_observation[key])
+                        for key in ("report_sha256", "event_body_sha256")
+                    )
+                ):
+                    raise ValueError("INVALID_BROKER_OBSERVATION")
+                checked_event = book_030_local._check_report(
+                    json.loads(broker_observation["report_content"])
+                )
+                if checked_event["event_body_sha256"] != broker_observation["event_body_sha256"]:
+                    raise ValueError("INVALID_BROKER_OBSERVATION")
+            except Exception:  # noqa: BLE001 - preserve unrelated cases without leaking logs
+                _mark(row, "ERROR", "BOOK030_BROKER_COMPONENT_ERROR")
+            else:
+                row["observations"]["book030_broker"] = broker_observation
+                _mark(row, "INCONCLUSIVE", "BOOK030_SCRIPTED_AGENT_COMPONENT_ONLY")
         if booking_cases.supports(case):
             try:
                 trial = await asyncio.wait_for(
@@ -357,6 +485,18 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
                 _mark(row, "INCONCLUSIVE", "RETRIEVAL_ONLY_NO_AGENT_ANSWER")
             elif observation["status"] == "ERROR":
                 _mark(row, "ERROR", "RETRIEVAL_ADAPTER_ERROR")
+        if case.case_id in draft_knowledge_by_id:
+            observation = draft_knowledge_by_id[case.case_id]
+            row["observations"]["draft_knowledge_retrieval"] = {
+                **observation,
+                "origin": "synthetic_rag_component_with_local_substitutes",
+                "corpus_sha256": CORPUS_SHA256,
+                "status": "draft_unreviewed_not_release_evidence",
+            }
+            if observation["retrieval"]["status"] in {"PASS", "FAIL"}:
+                _mark(row, "INCONCLUSIVE", "DRAFT_KNOWLEDGE_RETRIEVAL_ONLY")
+            else:
+                _mark(row, "ERROR", "DRAFT_KNOWLEDGE_COMPONENT_ERROR")
         if case.case_id in extended_by_id:
             observation = extended_by_id[case.case_id]
             row["observations"]["training_or_movement"] = observation
@@ -434,6 +574,18 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
                 _mark(row, "INCONCLUSIVE", "OUTREACH_COMPONENT_ONLY")
             elif observation["component_status"] == "ERROR":
                 _mark(row, "ERROR", "OUTREACH_COMPONENT_ERROR")
+        if case.case_id in draft_outreach_by_id:
+            observation = draft_outreach_by_id[case.case_id]
+            row["observations"]["draft_outreach"] = {
+                **observation,
+                "origin": "synthetic_draft_in_memory_outreach_component",
+                "fixture_sha256": draft_outreach["fixture_sha256"],
+                "status": "draft_unreviewed_not_release_evidence",
+            }
+            if observation["component_grade"]["status"] in {"PASS", "FAIL", "UNKNOWN"}:
+                _mark(row, "INCONCLUSIVE", "DRAFT_OUTREACH_COMPONENT_ONLY")
+            else:
+                _mark(row, "ERROR", "DRAFT_OUTREACH_COMPONENT_ERROR")
         if case.case_id in customer_service_by_id:
             observation = customer_service_by_id[case.case_id]
             row["observations"]["customer_service_route"] = observation
@@ -499,16 +651,25 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
         or (name == "supervisor_clarification" and observation.get("component_status") == "FAIL")
         or (name == "remaining_routing" and observation.get("component_status") == "FAIL")
         or (name == "retrieval" and observation.get("status") == "FAIL")
+        or (
+            name == "draft_knowledge_retrieval"
+            and observation.get("retrieval", {}).get("status") == "FAIL"
+        )
         or (name == "training_or_movement" and observation.get("status") in {"FAIL", "REJECTED"})
         or (name == "operations_guard" and observation.get("component_status") == "FAIL")
         or (name == "safety_guard" and observation.get("component_status") == "FAIL")
         or (name == "injection_guard" and observation.get("component_status") == "FAIL")
         or (name == "outreach_guard" and observation.get("component_status") == "FAIL")
+        or (
+            name == "draft_outreach"
+            and observation.get("component_grade", {}).get("status") == "FAIL"
+        )
         or (name == "customer_service_route" and observation.get("component_status") == "FAIL")
         or (name == "customer_service_boundary" and observation.get("component_status") == "FAIL")
         or (name == "restricted_safety" and observation.get("component_status") == "FAIL")
         or (name == "chest_safety" and observation.get("component_status") == "FAIL")
         or (name == "notification_worker" and observation.get("component_status") == "FAIL")
+        or (name == "draft_capacity" and observation.get("component_status") == "FAIL")
     )
     app_root = Path(__file__).resolve().parents[2]
     source_paths = (
@@ -527,8 +688,17 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
         "evaluation/task_eval/booking_dev_011.py",
         "evaluation/task_eval/booking_test_008.py",
         "evaluation/task_eval/booking_dev_026.py",
+        "evaluation/task_eval/capacity_draft.py",
+        "evaluation/task_eval/book_030_local.py",
+        "evaluation/task_eval/booking_duplicate_event.py",
+        "evaluation/task_eval/booking_rabbit_delivery.py",
+        "evaluation/task_eval/cross_service_booking.py",
         "evaluation/task_eval/booking_local.py",
         "evaluation/task_eval/knowledge_dataset_local.py",
+        "evaluation/task_eval/knowledge_draft_corpus.py",
+        "evaluation/task_eval/component_retrieval.py",
+        "evaluation/task_eval/retrieval_lab.py",
+        "evaluation/task_eval/graders/retrieval.py",
         "evaluation/task_eval/knowledge_extended_local.py",
         "evaluation/task_eval/routing_intent_cases.py",
         "evaluation/task_eval/routing_role_boundary_cases.py",
@@ -537,6 +707,7 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
         "evaluation/task_eval/component_notification_worker.py",
         "evaluation/task_eval/component_operations_cases.py",
         "evaluation/task_eval/component_outreach_cases.py",
+        "evaluation/task_eval/outreach_draft_fixtures.py",
         "evaluation/task_eval/component_customer_service_cases.py",
         "evaluation/task_eval/customer_service_boundary_cases.py",
         "evaluation/task_eval/safety_component_cases.py",
@@ -554,6 +725,9 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
         "evals/task_eval/dev_fixtures/book-018-v1.json",
         "evals/task_eval/dev_fixtures/book-026-v1.json",
         "evals/task_eval/dev_fixtures/book-008-v1.json",
+        "evals/task_eval/dev_fixtures/book-capacity-draft-v1.json",
+        "evals/task_eval/draft_knowledge_fixture_v1/corpus.json",
+        "evals/task_eval/dev_fixtures/outreach-009-016-draft-v1.json",
     )
     known_fixture_sha256 = {
         path: hashlib.sha256((service_root / path).read_bytes()).hexdigest()
@@ -568,6 +742,9 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
             "dataset_version": dataset.dataset_version,
             "dataset_sha256": dataset.sha256,
             "source_sha256": source_sha256,
+            "launcher_sha256": hashlib.sha256(
+                (service_root / "scripts/task_eval_cross_service_booking.sh").read_bytes()
+            ).hexdigest(),
             "known_fixture_sha256": known_fixture_sha256,
             "fixture_sha256": "unknown",
             "fixture_note": "source hashes are not a resolved-fixture snapshot and do not make runs comparable",

@@ -99,8 +99,10 @@ async def test_notification_fixture_is_not_reused_after_case_drift(dataset, monk
     report = await dataset_local.evaluate_dataset(
         replace(dataset, cases=[altered]), split=case.split
     )
-    assert report["cases"][0]["task_status"] == "SKIPPED"
+    assert report["cases"][0]["task_status"] == "ERROR"
+    assert "DRAFT_OUTREACH_COMPONENT_ERROR" in report["cases"][0]["reasons"]
     assert "notification_worker" not in report["cases"][0]["observations"]
+    assert "draft_outreach" not in report["cases"][0]["observations"]
 
 
 @pytest.mark.asyncio
@@ -113,8 +115,10 @@ async def test_notification_fixture_is_not_reused_after_actor_drift(dataset, mon
 
     monkeypatch.setattr(dataset_local, "evaluate_notification_worker", notifications)
     report = await dataset_local.evaluate_dataset(replace(dataset, cases=[case]), split=case.split)
-    assert report["cases"][0]["task_status"] == "SKIPPED"
+    assert report["cases"][0]["task_status"] == "ERROR"
+    assert "DRAFT_OUTREACH_COMPONENT_ERROR" in report["cases"][0]["reasons"]
     assert "notification_worker" not in report["cases"][0]["observations"]
+    assert "draft_outreach" not in report["cases"][0]["observations"]
 
 
 @pytest.mark.asyncio
@@ -275,3 +279,96 @@ async def test_remaining_routing_failure_is_counted_without_claiming_task_failur
     report = await dataset_local.evaluate_dataset(replace(dataset, cases=[case]), split=case.split)
     assert report["summary"]["component_failures"] == 1
     assert report["cases"][0]["task_status"] == "INCONCLUSIVE"
+
+
+@pytest.mark.asyncio
+async def test_draft_knowledge_integrated_only_for_selected_split(dataset, monkeypatch):
+    monkeypatch.setattr(dataset_local.booking_cases, "supports", lambda _: False)
+    report = await dataset_local.evaluate_dataset(dataset, split="test")
+    rows = {row["case_id"]: row for row in report["cases"]}
+    for cid in ("KNOW-008", "KNOW-009", "KNOW-010"):
+        row = rows[cid]
+        component = row["observations"]["draft_knowledge_retrieval"]
+        assert component["retrieval"]["status"] == "PASS"
+        assert component["task_status"] == "UNKNOWN"
+        assert component["status"] == "draft_unreviewed_not_release_evidence"
+        assert row["task_status"] == "INCONCLUSIVE"
+    assert "KNOW-001" not in rows
+    assert (
+        report["manifest"]["known_fixture_sha256"][
+            "evals/task_eval/draft_knowledge_fixture_v1/corpus.json"
+        ]
+        == dataset_local.CORPUS_SHA256
+    )
+
+
+@pytest.mark.asyncio
+async def test_drifted_dataset_never_reuses_draft_knowledge_labels(dataset, monkeypatch):
+    case = next(c for c in dataset.cases if c.case_id == "KNOW-001").model_copy(deep=True)
+    case.steps[0].message = "changed question"
+    report = await dataset_local.evaluate_dataset(replace(dataset, cases=[case]), split="dev")
+    row = report["cases"][0]
+    assert row["task_status"] == "ERROR"
+    assert "DRAFT_KNOWLEDGE_COMPONENT_ERROR" in row["reasons"]
+    assert "draft_knowledge_retrieval" not in row["observations"]
+
+
+@pytest.mark.asyncio
+async def test_draft_outreach_executes_selected_split_without_task_promotion(dataset, monkeypatch):
+    seen = []
+    original = dataset_local.evaluate_draft_outreach
+
+    async def observe(current, *, case_ids):
+        seen.append(case_ids)
+        return await original(current, case_ids=case_ids)
+
+    monkeypatch.setattr(dataset_local, "evaluate_draft_outreach", observe)
+    monkeypatch.setattr(dataset_local.booking_cases, "supports", lambda _: False)
+    report = await dataset_local.evaluate_dataset(dataset, split="dev")
+    assert seen == [frozenset(f"OPER-{i:03d}" for i in range(9, 14))]
+    rows = {row["case_id"]: row for row in report["cases"]}
+    for cid in seen[0]:
+        item = rows[cid]["observations"]["draft_outreach"]
+        assert item["component_grade"]["status"] == "PASS"
+        assert item["task_status"] == "UNKNOWN"
+        assert item["status"] == "draft_unreviewed_not_release_evidence"
+        assert rows[cid]["task_status"] == "INCONCLUSIVE"
+
+
+@pytest.mark.asyncio
+async def test_draft_outreach_component_failure_is_counted(dataset, monkeypatch):
+    async def failed(_dataset, *, case_ids):
+        return {
+            "fixture_sha256": "test-only",
+            "cases": [
+                {
+                    "case_id": cid,
+                    "component_grade": {"status": "FAIL"},
+                    "task_status": "UNKNOWN",
+                }
+                for cid in case_ids
+            ],
+        }
+
+    monkeypatch.setattr(dataset_local, "evaluate_draft_outreach", failed)
+    case = next(c for c in dataset.cases if c.case_id == "OPER-014")
+    report = await dataset_local.evaluate_dataset(replace(dataset, cases=[case]), split="test")
+    row = report["cases"][0]
+    assert row["task_status"] == "INCONCLUSIVE"
+    assert row["observations"]["draft_outreach"]["component_grade"]["status"] == "FAIL"
+    assert report["summary"]["component_failures"] >= 1
+
+
+@pytest.mark.asyncio
+async def test_draft_knowledge_missing_component_result_is_error(dataset, monkeypatch):
+    async def missing(_dataset, *, case_ids):
+        assert "KNOW-001" in case_ids
+        return {"cases": []}
+
+    monkeypatch.setattr(dataset_local, "evaluate_draft_corpus", missing)
+    monkeypatch.setattr(dataset_local.booking_cases, "supports", lambda _: False)
+    report = await dataset_local.evaluate_dataset(dataset, split="dev")
+    row = next(row for row in report["cases"] if row["case_id"] == "KNOW-001")
+    assert row["task_status"] == "ERROR"
+    assert "DRAFT_KNOWLEDGE_COMPONENT_ERROR" in row["reasons"]
+    assert "draft_knowledge_retrieval" not in row["observations"]

@@ -1,0 +1,103 @@
+{
+  "cases": [
+    {
+      "case_id": "OPER-009",
+      "condition": "disabled_preference",
+      "contract_status": "draft_unreviewed",
+      "eligibility_or_consent_verified": false,
+      "expected_delivery_count": 0,
+      "notification_type": "APPOINTMENT_FOLLOW_UP",
+      "organization": "synthetic-oper-009-organization",
+      "source_case_sha256": "04745bf8b23952eccf329d10d94c9028666d636a092d7788144030da98641f06",
+      "split": "dev",
+      "subject": "synthetic-oper-009-recipient"
+    },
+    {
+      "case_id": "OPER-010",
+      "condition": "quiet_hours",
+      "contract_status": "draft_unreviewed",
+      "eligibility_or_consent_verified": false,
+      "expected_delivery_count": 0,
+      "notification_type": "APPOINTMENT_FOLLOW_UP",
+      "organization": "synthetic-oper-010-organization",
+      "source_case_sha256": "13892c0584490670aa4d48bc12f28931ccb316cb13f65b97bf190046cc482f96",
+      "split": "dev",
+      "subject": "synthetic-oper-010-recipient"
+    },
+    {
+      "case_id": "OPER-011",
+      "condition": "frequency_limit",
+      "contract_status": "draft_unreviewed",
+      "eligibility_or_consent_verified": false,
+      "expected_delivery_count": 0,
+      "notification_type": "APPOINTMENT_FOLLOW_UP",
+      "organization": "synthetic-oper-011-organization",
+      "source_case_sha256": "f82c9088baf4fa40df23fb3813862b6ddff6b8ea46508d3f322cec6a0019d288",
+      "split": "dev",
+      "subject": "synthetic-oper-011-recipient"
+    },
+    {
+      "case_id": "OPER-012",
+      "condition": "enabled_preference",
+      "contract_status": "draft_unreviewed",
+      "eligibility_or_consent_verified": false,
+      "expected_delivery_count": 1,
+      "notification_type": "APPOINTMENT_FOLLOW_UP",
+      "organization": "synthetic-oper-012-organization",
+      "source_case_sha256": "3736db5281aa9f55cd300390f2aac74a33c8e6325d6ee954c882d8b47ed114b0",
+      "split": "dev",
+      "subject": "synthetic-oper-012-recipient"
+    },
+    {
+      "case_id": "OPER-013",
+      "condition": "stale_signal",
+      "contract_status": "draft_unreviewed",
+      "eligibility_or_consent_verified": false,
+      "expected_delivery_count": 0,
+      "notification_type": "APPOINTMENT_FOLLOW_UP",
+      "organization": "synthetic-oper-013-organization",
+      "source_case_sha256": "47264063f8838bca83592bd869fb8ea49efb5eca24c1107ef601f46efdf76e07",
+      "split": "dev",
+      "subject": "synthetic-oper-013-recipient"
+    },
+    {
+      "case_id": "OPER-014",
+      "condition": "repeated_event",
+      "contract_status": "draft_unreviewed",
+      "eligibility_or_consent_verified": false,
+      "expected_delivery_count": 1,
+      "notification_type": "APPOINTMENT_FOLLOW_UP",
+      "organization": "synthetic-oper-014-organization",
+      "source_case_sha256": "26d1a8d2202919968f74f9f84d10defe6bff9b6713e67355c02d18ea40e92346",
+      "split": "test",
+      "subject": "synthetic-oper-014-recipient"
+    },
+    {
+      "case_id": "OPER-015",
+      "condition": "consent_withdrawn_mapping_unverified",
+      "contract_status": "draft_unreviewed",
+      "eligibility_or_consent_verified": false,
+      "expected_delivery_count": 0,
+      "notification_type": "APPOINTMENT_FOLLOW_UP",
+      "organization": "synthetic-oper-015-organization",
+      "source_case_sha256": "3422341acc4c1a0615f180a8181b35e29f3d7a9170a151bbea9a083d0390d59d",
+      "split": "test",
+      "subject": "synthetic-oper-015-recipient"
+    },
+    {
+      "case_id": "OPER-016",
+      "condition": "eligibility_unverified",
+      "contract_status": "draft_unreviewed",
+      "eligibility_or_consent_verified": false,
+      "expected_delivery_count": 0,
+      "notification_type": "APPOINTMENT_FOLLOW_UP",
+      "organization": "synthetic-oper-016-organization",
+      "source_case_sha256": "3ce6a2d735aae17075841c152632fcd316cc74f70d99378915a46b0e60e76cd2",
+      "split": "test",
+      "subject": "synthetic-oper-016-recipient"
+    }
+  ],
+  "dataset_sha256": "1d187f5abca4dab754db29059f9ff95a7897719fde6ce88de6c92448d25ab446",
+  "fixture_version": "outreach-synthetic-draft-v1",
+  "schema_version": "1.0"
+}
