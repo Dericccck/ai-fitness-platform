@@ -69,6 +69,7 @@ class AgentChatResponse(BaseModel):
     route_source: str | None = None
     route_confidence: float | None = None
     request_usage: dict[str, Any] | None = None
+    retrieved_evidence_ids: tuple[str, ...] = ()
 
 
 @router.post(
@@ -231,6 +232,7 @@ async def _chat_impl(
         route_source=response.route_source,
         route_confidence=response.route_confidence,
         request_usage=response.request_usage,
+        retrieved_evidence_ids=response.retrieved_evidence_ids,
     )
 
 

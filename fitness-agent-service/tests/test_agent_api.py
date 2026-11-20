@@ -100,3 +100,26 @@ async def test_chat_rejects_extra_request_fields() -> None:
         )
 
     assert response.status_code == 422
+
+
+async def test_chat_forwards_retrieval_ids_as_metadata_only() -> None:
+    supervisor = FakeSupervisor(
+        SupervisorResponse(
+            "回答",
+            "FITNESS_COACHING",
+            0,
+            None,
+            None,
+            retrieved_evidence_ids=("chunk-1",),
+        )
+    )
+    async with AsyncClient(
+        transport=ASGITransport(app=build_app(supervisor)), base_url="http://test"
+    ) as client:
+        response = await client.post(
+            "/api/v1/agent/chat",
+            headers={"X-Agent-Context": "signed-context"},
+            json={"conversation_id": "c", "message": "如何热身？"},
+        )
+    assert response.status_code == 200
+    assert response.json()["retrieved_evidence_ids"] == ["chunk-1"]

@@ -84,6 +84,8 @@ class FakeSessionSummaryService:
 
 
 class FakeRagResult:
+    chunks: tuple = ()
+
     def as_prompt_context(self) -> str:
         return "知识引用：预约取消规则需要在开课前完成。"
 

@@ -12,7 +12,7 @@ import asyncio
 import json
 from collections.abc import Awaitable, Callable, Hashable, Mapping
 from contextlib import aclosing
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from typing import Any, Literal, TypedDict, cast
 
 import structlog
@@ -147,6 +147,8 @@ class SupervisorRuntimeContext:
     user_message: str | None = None
     locale: str = "zh-CN"
     defer_memory_extraction: bool = False
+    # 请求内收集经 ACL 过滤的实际召回 ID，不进入 LangGraph checkpoint。
+    retrieved_evidence_ids: list[str] = field(default_factory=list, repr=False, compare=False)
 
 
 @dataclass(frozen=True)
@@ -168,6 +170,8 @@ class SupervisorResponse:
     route_confidence: float | None = None
     # 原字段保持会话累计口径；新增字段只包含本次实际模型调用，未知值保留 null。
     request_usage: dict[str, Any] | None = None
+    # 检索命中不代表答案引用或支持关系已验证。
+    retrieved_evidence_ids: tuple[str, ...] = ()
 
 
 class SupervisorState(TypedDict, total=False):
@@ -311,6 +315,7 @@ class Supervisor:
         # 放在同一 Redis 会话锁内，确保“读取旧上下文→判定意图→执行→写 Checkpoint”
         # 看到一致的会话历史。
         thread_id = request.thread_id or request.conversation_id
+        retrieved_evidence_ids: list[str] = []
         initial: SupervisorState = {
             "graph_version": 3,
             "active_domain": "",
@@ -448,6 +453,7 @@ class Supervisor:
                 user_message=request.user_message,
                 locale=request.locale,
                 defer_memory_extraction=request.defer_memory_extraction,
+                retrieved_evidence_ids=retrieved_evidence_ids,
             )
             if emit is None:
                 invoked = await self._graph.ainvoke(initial, config=config, context=context)
@@ -556,6 +562,7 @@ class Supervisor:
                 routes=response_routes,
                 route_source=_optional_text(final_state.get("route_source")),
                 route_confidence=_optional_float(final_state.get("route_confidence")),
+                retrieved_evidence_ids=tuple(retrieved_evidence_ids),
             )
         answer = _sanitize_model_answer(final_state.get("final_answer", ""))
         if not answer:
@@ -575,6 +582,7 @@ class Supervisor:
             routes=response_routes,
             route_source=_optional_text(final_state.get("route_source")),
             route_confidence=_optional_float(final_state.get("route_confidence")),
+            retrieved_evidence_ids=tuple(retrieved_evidence_ids),
         )
         return response
 
@@ -944,6 +952,9 @@ class Supervisor:
                 context = rag.as_prompt_context()
                 if context:
                     system_prompt = f"{system_prompt}\n\n{context}"
+                    for chunk in rag.chunks:
+                        if chunk.id not in runtime.context.retrieved_evidence_ids:
+                            runtime.context.retrieved_evidence_ids.append(chunk.id)
             except RagSearchError as exc:
                 raise SupervisorRuntimeError("知识检索失败") from exc
         system_messages = [{"role": "system", "content": system_prompt}]
