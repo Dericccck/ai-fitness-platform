@@ -35,6 +35,7 @@ from scripts.project_evidence_benchmark import isolated_database
 
 from .budget_store import DurableBudget
 from .dev_review_probe import _Gateway, _read_credential, _sanitized, _sha, _write_private
+from .graders.retrieval import grade_retrieval
 from .supervisor_model_probe import SYSTEM_PROMPT
 
 QUERY = "深蹲上推时怎么呼吸？"
@@ -136,6 +137,19 @@ def _fixture_hash(profile: _Profile) -> str:
     return hashlib.sha256(
         json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
+
+
+def _draft_retrieval_grade(profile: _Profile, ids: list[str]) -> dict[str, Any]:
+    """Score the synthetic relevance proposal; it is neither reviewed nor attested."""
+    return grade_retrieval(
+        {
+            "answerable": profile.relevant_id is not None,
+            "relevant_ids": [profile.relevant_id] if profile.relevant_id is not None else [],
+            "forbidden_ids": ["eval-foreign"],
+            "k": 2,
+        },
+        {"retrieved_ids": ids, "evidence_refs": ["local://synthetic-retrieval"]},
+    )
 
 
 def _docker_output(*args: str) -> str:
@@ -297,10 +311,9 @@ async def observe(
             scope = RetrievalScope(identity.subject, identity.organization_ids, identity.roles)
             result = await service.search(profile.query, scope)
             ids = [chunk.id for chunk in result.chunks]
-            if (profile.relevant_id is not None and profile.relevant_id not in ids) or (
-                "eval-foreign" in ids
-            ):
+            if "eval-foreign" in ids:
                 raise ValueError("retrieval or scope check failed")
+            retrieval_grade = _draft_retrieval_grade(profile, ids)
             # Positive control proves the foreign fixture exists and its ACL is
             # accessible from its own authorized scope, before the model call.
             foreign = await repository.search_candidates(
@@ -358,6 +371,7 @@ async def observe(
                 "synthetic_fixture_sha256": _fixture_hash(profile),
                 "fixture_review": "NOT_REVIEWED",
                 "relevant_id_proposal": profile.relevant_id,
+                "draft_retrieval_grade": retrieval_grade,
                 "answerability_proposal": (
                     "UNANSWERABLE" if profile.relevant_id is None else "ANSWERABLE"
                 ),

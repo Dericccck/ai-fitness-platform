@@ -52,6 +52,16 @@ def test_unanswerable_development_fixture_is_distinct_and_frozen(case_id):
     assert len(rag._fixture_hash(profile)) == 64
 
 
+def test_draft_retrieval_grade_distinguishes_hits_misses_and_unanswerable():
+    answerable = rag._profile("KNOW-002")
+    assert rag._draft_retrieval_grade(answerable, ["eval-frequency"])["status"] == "PASS"
+    assert rag._draft_retrieval_grade(answerable, ["eval-decoy"])["status"] == "FAIL"
+    assert rag._draft_retrieval_grade(answerable, ["eval-foreign"])["status"] == "FAIL"
+    unanswerable = rag._profile("KNOW-011")
+    assert rag._draft_retrieval_grade(unanswerable, ["eval-decoy"])["status"] == "NA"
+    assert rag._draft_retrieval_grade(unanswerable, ["eval-foreign"])["status"] == "FAIL"
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
     "case_id",
