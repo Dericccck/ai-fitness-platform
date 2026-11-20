@@ -1,4 +1,4 @@
-"""Fixed synthetic KNOW-001 observation with isolated pgvector and local RAG models.
+"""Fixed synthetic knowledge observations with isolated pgvector and local RAG models.
 
 Run only via task_eval_rag_real.sh. This is a draft observation, not an accepted task.
 """
@@ -13,6 +13,7 @@ import os
 import re
 import stat
 import subprocess
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -44,6 +45,78 @@ DOCUMENTS = (
     ("eval-decoy", "eval-org-a", "训练计划示例：合理安排休息和训练时间。"),
     ("eval-foreign", "eval-org-b", "深蹲上推时怎么呼吸？其他机构专用的合成材料。"),
 )
+
+
+@dataclass(frozen=True)
+class _Profile:
+    case_id: str
+    query: str
+    relevant_id: str
+    documents: tuple[tuple[str, str, str], ...]
+
+
+def _profile(case_id: str) -> _Profile:
+    """Only fixed, unreviewed synthetic development inputs can leave this process."""
+    if case_id == "KNOW-001":
+        return _Profile(case_id, QUERY, "eval-breathing", DOCUMENTS)
+    subjects = {
+        "KNOW-002": (
+            "初学者一周训练几次？",
+            "frequency",
+            "合成示例：初学者可从每周两次训练开始，并根据恢复情况调整。",
+        ),
+        "KNOW-003": (
+            "力量训练前如何热身？",
+            "warmup",
+            "合成示例：力量训练前可进行轻度活动，再逐步增加动作和负荷。",
+        ),
+        "KNOW-004": (
+            "硬拉时背部姿势有什么要求？",
+            "back",
+            "合成示例：硬拉中保持脊柱自然稳定，避免强行过度弯曲或后仰。",
+        ),
+        "KNOW-005": (
+            "两次高强度训练之间如何恢复？",
+            "recovery",
+            "合成示例：恢复可结合睡眠、饮食、疲劳程度和训练负荷综合调整。",
+        ),
+        "KNOW-006": (
+            "常见优质蛋白质来源有哪些？",
+            "protein",
+            "合成示例：鸡蛋、鱼、乳制品以及豆制品均可提供蛋白质。",
+        ),
+        "KNOW-007": (
+            "RPE 是什么？",
+            "rpe",
+            "合成示例：RPE 指主观用力程度评分，用来表达个人感受到的运动强度。",
+        ),
+    }
+    if case_id not in subjects:
+        raise ValueError("unsupported synthetic development case")
+    query, suffix, relevant_text = subjects[case_id]
+    relevant_id = f"eval-{suffix}"
+    return _Profile(
+        case_id,
+        query,
+        relevant_id,
+        (
+            (relevant_id, "eval-org-a", relevant_text),
+            ("eval-decoy", "eval-org-a", "合成示例：合理安排休息和训练时间。"),
+            ("eval-foreign", "eval-org-b", f"{query}其他机构专用的合成材料。"),
+        ),
+    )
+
+
+def _fixture_hash(profile: _Profile) -> str:
+    value = {
+        "case_id": profile.case_id,
+        "query": profile.query,
+        "relevant_id": profile.relevant_id,
+        "documents": profile.documents,
+    }
+    return hashlib.sha256(
+        json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
+    ).hexdigest()
 
 
 def _docker_output(*args: str) -> str:
@@ -117,12 +190,14 @@ def validate_models(settings: Settings) -> None:
             raise ValueError("local model files unavailable")
 
 
-async def seed(repository: KnowledgeRepository, models: ModelGateway) -> None:
-    embeddings = await models.embed([text for _, _, text in DOCUMENTS])
-    if len(embeddings) != len(DOCUMENTS):
+async def seed(repository: KnowledgeRepository, models: ModelGateway, profile: _Profile) -> None:
+    embeddings = await models.embed([text for _, _, text in profile.documents])
+    if len(embeddings) != len(profile.documents):
         raise ValueError("incomplete fixture embeddings")
     date = datetime(2025, 1, 1, tzinfo=UTC)
-    for (identifier, organization, content), embedding in zip(DOCUMENTS, embeddings, strict=True):
+    for (identifier, organization, content), embedding in zip(
+        profile.documents, embeddings, strict=True
+    ):
         checksum = hashlib.sha256(content.encode()).hexdigest()
         document = KnowledgeDocumentInput(
             identifier,
@@ -156,7 +231,9 @@ async def seed(repository: KnowledgeRepository, models: ModelGateway) -> None:
         await repository.replace_document(document, [chunk], [embedding])
 
 
-async def observe(credential: str, budget: DurableBudget, review_dir: Path) -> dict[str, Any]:
+async def observe(
+    credential: str, budget: DurableBudget, review_dir: Path, case_id: str = "KNOW-001"
+) -> dict[str, Any]:
     """Search real scoped SQL and invoke the real Supervisor exactly once."""
     if (
         review_dir.is_symlink()
@@ -165,6 +242,7 @@ async def observe(credential: str, budget: DurableBudget, review_dir: Path) -> d
         or stat.S_IMODE(review_dir.stat().st_mode) != 0o700
     ):
         raise ValueError("private review directory unavailable")
+    profile = _profile(case_id)
     settings = Settings()
     validate_models(settings)
     if _system_prompt("FITNESS_COACHING", "zh-CN", intent="FITNESS_KNOWLEDGE_QA") != SYSTEM_PROMPT:
@@ -173,15 +251,20 @@ async def observe(credential: str, budget: DurableBudget, review_dir: Path) -> d
     if hashlib.sha256(case_path.read_bytes()).hexdigest() != DATASET_SHA:
         raise ValueError("frozen dataset changed")
     cases = [json.loads(line) for line in case_path.read_text().splitlines()]
-    matching = [case for case in cases if case["case_id"] == "KNOW-001"]
-    if len(matching) != 1 or matching[0]["steps"][0].get("message") != QUERY:
+    matching = [case for case in cases if case["case_id"] == profile.case_id]
+    if (
+        len(matching) != 1
+        or matching[0]["steps"][0].get("message") != profile.query
+        or matching[0]["split"] != "dev"
+        or matching[0]["review"]["status"] != "draft"
+    ):
         raise ValueError("frozen case changed")
     async with isolated_database(settings) as scoped:
         db = Database(scoped)
         embeddings = ModelGateway(scoped)
         try:
             repository = KnowledgeRepository(db)
-            await seed(repository, embeddings)
+            await seed(repository, embeddings, profile)
             service = RagService(
                 repository,
                 embeddings,
@@ -193,29 +276,29 @@ async def observe(credential: str, budget: DurableBudget, review_dir: Path) -> d
                 "eval-user", frozenset({"eval-org-a"}), frozenset({"STUDENT"}), 1, 9999999999
             )
             scope = RetrievalScope(identity.subject, identity.organization_ids, identity.roles)
-            result = await service.search(QUERY, scope)
+            result = await service.search(profile.query, scope)
             ids = [chunk.id for chunk in result.chunks]
-            if "eval-breathing" not in ids or "eval-foreign" in ids:
+            if profile.relevant_id not in ids or "eval-foreign" in ids:
                 raise ValueError("retrieval or scope check failed")
             # Positive control proves the foreign fixture exists and its ACL is
             # accessible from its own authorized scope, before the model call.
             foreign = await repository.search_candidates(
-                (await embeddings.embed([QUERY]))[0],
+                (await embeddings.embed([profile.query]))[0],
                 RetrievalScope("foreign-user", frozenset({"eval-org-b"}), frozenset({"STUDENT"})),
                 limit=5,
             )
             if "eval-foreign" not in [chunk.id for chunk in foreign]:
                 raise ValueError("foreign ACL positive control failed")
-            gateway = _Gateway(QUERY, credential, budget, None)
+            gateway = _Gateway(profile.query, credential, budget, None)
             gateway.messages[0]["content"] = SYSTEM_PROMPT + "\n\n" + result.as_prompt_context()
             supervisor = Supervisor(
                 cast(ModelGateway, gateway), ToolRegistry(), rag_service=service
             )
             response = await supervisor.invoke(
                 SupervisorRequest(
-                    user_message=QUERY,
+                    user_message=profile.query,
                     gateway_context=GatewayRequestContext("synthetic-context"),
-                    conversation_id="synthetic-rag-know-001",
+                    conversation_id=f"synthetic-rag-{profile.case_id.lower()}",
                     identity=identity,
                 )
             )
@@ -235,19 +318,22 @@ async def observe(credential: str, budget: DurableBudget, review_dir: Path) -> d
             review_file = _write_private(
                 review_dir,
                 {
-                    "case_id": "KNOW-001",
+                    "case_id": profile.case_id,
                     "review_status": "NOT_REVIEWED",
                     "answer": answer,
                     "warning": "Unreviewed model output; synthetic evidence is not clinical guidance.",
                 },
             )
             return {
-                "case_id": "KNOW-001",
+                "case_id": profile.case_id,
                 "scope": "isolated_synthetic_dev_observation",
                 "component_status": "OBSERVED",
                 "task_status": "UNKNOWN",
                 "human_review": "NOT_REVIEWED",
                 "dataset_sha256": DATASET_SHA,
+                "synthetic_fixture_sha256": _fixture_hash(profile),
+                "fixture_review": "NOT_REVIEWED",
+                "relevant_id_proposal": profile.relevant_id,
                 "retrieved_evidence_ids": ids,
                 "foreign_positive_control": True,
                 "foreign_id_returned_to_subject": False,
@@ -287,6 +373,9 @@ def main(argv: list[str] | None = None) -> int:
         parser.add_argument("--" + key, required=True)
     parser.add_argument("--execute", required=True, action="store_true")
     parser.add_argument("--confirm-current-pricing", required=True, action="store_true")
+    parser.add_argument(
+        "--case-id", choices=[f"KNOW-{i:03d}" for i in range(1, 8)], default="KNOW-001"
+    )
     args = parser.parse_args(argv)
     try:
         output_fd = os.open(
@@ -313,7 +402,7 @@ def main(argv: list[str] | None = None) -> int:
         ):
             raise ValueError("budget history unavailable")
         credential = _read_credential(Path(args.credential_file))
-        report = asyncio.run(observe(credential, budget, Path(args.review_directory)))
+        report = asyncio.run(observe(credential, budget, Path(args.review_directory), args.case_id))
     except Exception as exc:  # noqa: BLE001 - never expose provider/database exception details
         safe_reasons = {
             "invalid isolated container identity",
