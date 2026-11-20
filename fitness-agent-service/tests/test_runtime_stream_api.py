@@ -138,3 +138,25 @@ async def test_cancel_api_auth_scope_quota_and_canonical_response() -> None:
         canonical = await client.get(f"/api/v1/agent/runs/{run_id}", headers=headers)
         assert canonical.json() == repeated.json()
     app.state.cache.consume_fixed_window.assert_not_awaited()
+
+
+async def test_stream_final_response_contains_retrieval_marker_mapping() -> None:
+    app, supervisor = stream_app()
+    supervisor.response = SupervisorResponse(
+        "已检索的回答[证据1]",
+        "FITNESS_COACHING",
+        0,
+        10,
+        5,
+        retrieved_evidence_ids=("chunk-1",),
+        knowledge_citation_evidence_ids=("chunk-1",),
+    )
+    headers = {"X-Agent-Context": "signed-context"}
+    payload = {"run_id": str(uuid4()), "conversation_id": "conversation", "message": "热身"}
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        result = await client.post("/api/v1/agent/chat/stream", headers=headers, json=payload)
+        assert result.status_code == 200
+        assert '"knowledge_citation_evidence_ids":["chunk-1"]' in result.text.replace(" ", "")
+        recovered = await client.get("/api/v1/agent/runs/" + payload["run_id"], headers=headers)
+        assert recovered.json()["response"]["knowledge_citation_evidence_ids"] == ["chunk-1"]
+    await app.state.chat_runs.close()

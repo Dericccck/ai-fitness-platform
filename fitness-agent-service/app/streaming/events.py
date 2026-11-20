@@ -19,6 +19,16 @@ def stream_events() -> Iterator[None]:
         _enabled.reset(token)
 
 
+@contextmanager
+def suppress_stream_events() -> Iterator[None]:
+    """Buffer a model turn until request-level validation has completed."""
+    token = _enabled.set(False)
+    try:
+        yield
+    finally:
+        _enabled.reset(token)
+
+
 def streaming_enabled() -> bool:
     return _enabled.get()
 

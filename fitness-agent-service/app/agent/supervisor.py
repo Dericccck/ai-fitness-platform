@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import re
 from collections.abc import Awaitable, Callable, Hashable, Mapping
 from contextlib import aclosing
 from dataclasses import dataclass, field, replace
@@ -62,7 +63,7 @@ from app.streaming.control import (
     current_control,
     run_owner,
 )
-from app.streaming.events import emit_event, stream_events
+from app.streaming.events import emit_event, stream_events, suppress_stream_events
 from app.streaming.repository import ChatRunRepository
 
 from .domain_subgraphs import (
@@ -149,6 +150,10 @@ class SupervisorRuntimeContext:
     defer_memory_extraction: bool = False
     # 请求内收集经 ACL 过滤的实际召回 ID，不进入 LangGraph checkpoint。
     retrieved_evidence_ids: list[str] = field(default_factory=list, repr=False, compare=False)
+    knowledge_retrievals: list[list[str]] = field(default_factory=list, repr=False, compare=False)
+    citation_mapping_ambiguities: list[bool] = field(
+        default_factory=list, repr=False, compare=False
+    )
 
 
 @dataclass(frozen=True)
@@ -172,6 +177,7 @@ class SupervisorResponse:
     request_usage: dict[str, Any] | None = None
     # 检索命中不代表答案引用或支持关系已验证。
     retrieved_evidence_ids: tuple[str, ...] = ()
+    knowledge_citation_evidence_ids: tuple[str, ...] = ()
 
 
 class SupervisorState(TypedDict, total=False):
@@ -206,6 +212,37 @@ class SupervisorState(TypedDict, total=False):
     memory_candidates_prepared: bool
     previous_route: str
     continue_domain: bool
+
+
+def _multiple_rag_domains_possible(plan: list[dict[str, Any]]) -> bool:
+    """A second RAG domain may reuse marker numbers in the combined answer."""
+    return bool(
+        sum(
+            item.get("route") == "FITNESS_COACHING"
+            or (
+                item.get("route") == "CUSTOMER_SERVICE" and item.get("intent") == "BUSINESS_RULE_QA"
+            )
+            for item in plan
+            if isinstance(item, dict)
+        )
+        > 1
+    )
+
+
+def _verified_knowledge_answer(answer: str, retrieved_ids: list[str]) -> str:
+    """Bind explicit evidence markers to this retrieval, or return a safe fallback.
+
+    Marker validity is not a semantic or clinical judgment of the answer.
+    """
+    if not retrieved_ids:
+        return "未检索到可用的知识资料，暂时无法提供有来源支持的回答。"
+    markers = re.findall(r"\[证据([^\]]*)\]", answer)
+    if not markers or any(
+        not re.fullmatch(r"[1-9][0-9]{0,2}", marker) or int(marker) > len(retrieved_ids)
+        for marker in markers
+    ):
+        return "本次回答未提供可核验的知识引用，请重试或咨询专业人员。"
+    return answer
 
 
 class Supervisor:
@@ -316,6 +353,8 @@ class Supervisor:
         # 看到一致的会话历史。
         thread_id = request.thread_id or request.conversation_id
         retrieved_evidence_ids: list[str] = []
+        knowledge_retrievals: list[list[str]] = []
+        citation_mapping_ambiguities: list[bool] = []
         initial: SupervisorState = {
             "graph_version": 3,
             "active_domain": "",
@@ -454,6 +493,8 @@ class Supervisor:
                 locale=request.locale,
                 defer_memory_extraction=request.defer_memory_extraction,
                 retrieved_evidence_ids=retrieved_evidence_ids,
+                knowledge_retrievals=knowledge_retrievals,
+                citation_mapping_ambiguities=citation_mapping_ambiguities,
             )
             if emit is None:
                 invoked = await self._graph.ainvoke(initial, config=config, context=context)
@@ -563,6 +604,11 @@ class Supervisor:
                 route_source=_optional_text(final_state.get("route_source")),
                 route_confidence=_optional_float(final_state.get("route_confidence")),
                 retrieved_evidence_ids=tuple(retrieved_evidence_ids),
+                knowledge_citation_evidence_ids=(
+                    tuple(knowledge_retrievals[0])
+                    if len(knowledge_retrievals) == 1 and not any(citation_mapping_ambiguities)
+                    else ()
+                ),
             )
         answer = _sanitize_model_answer(final_state.get("final_answer", ""))
         if not answer:
@@ -583,6 +629,11 @@ class Supervisor:
             route_source=_optional_text(final_state.get("route_source")),
             route_confidence=_optional_float(final_state.get("route_confidence")),
             retrieved_evidence_ids=tuple(retrieved_evidence_ids),
+            knowledge_citation_evidence_ids=(
+                tuple(knowledge_retrievals[0])
+                if len(knowledge_retrievals) == 1 and not any(citation_mapping_ambiguities)
+                else ()
+            ),
         )
         return response
 
@@ -950,6 +1001,10 @@ class Supervisor:
                     ),
                 )
                 context = rag.as_prompt_context()
+                if _multiple_rag_domains_possible(state.get("route_plan", [])):
+                    runtime.context.citation_mapping_ambiguities.append(True)
+                if route == "FITNESS_COACHING" and intent == "FITNESS_KNOWLEDGE_QA":
+                    runtime.context.knowledge_retrievals.append([chunk.id for chunk in rag.chunks])
                 if context:
                     system_prompt = f"{system_prompt}\n\n{context}"
                     for chunk in rag.chunks:
@@ -1131,7 +1186,32 @@ class Supervisor:
             except Exception as exc:  # noqa: BLE001 - 对话降级不记录敏感正文
                 # 记忆不可用时继续对话，日志不记录记忆正文。
                 _logger.warning("conversation_memory_unavailable", error_type=type(exc).__name__)
-        turn = await self.models.chat_with_tools(messages, **model_kwargs)
+        verify_knowledge = bool(
+            context is not None
+            and (
+                (
+                    context.knowledge_retrievals
+                    and state["route"] == "FITNESS_COACHING"
+                    and state.get("intent") == "FITNESS_KNOWLEDGE_QA"
+                )
+                or (
+                    any(context.citation_mapping_ambiguities)
+                    and (
+                        state["route"] == "FITNESS_COACHING"
+                        or (
+                            state["route"] == "CUSTOMER_SERVICE"
+                            and state.get("intent") == "BUSINESS_RULE_QA"
+                        )
+                    )
+                )
+            )
+        )
+        if verify_knowledge:
+            # Validate the complete answer before streaming any content.
+            with suppress_stream_events():
+                turn = await self.models.chat_with_tools(messages, **model_kwargs)
+        else:
+            turn = await self.models.chat_with_tools(messages, **model_kwargs)
         tool_calls = list(turn.tool_calls)
         for call in tool_calls:
             definition = self.tools.get(call.name)
@@ -1196,9 +1276,20 @@ class Supervisor:
                 "input_tokens": state.get("input_tokens", 0) + (turn.input_tokens or 0),
                 "output_tokens": state.get("output_tokens", 0) + (turn.output_tokens or 0),
             }
+        answer_content = turn.content
+        if verify_knowledge and not tool_calls and context is not None:
+            answer_content = (
+                _verified_knowledge_answer(
+                    _sanitize_model_answer(turn.content), context.knowledge_retrievals[0]
+                )
+                if len(context.knowledge_retrievals) == 1
+                and not any(context.citation_mapping_ambiguities)
+                else "本次回答的知识来源无法可靠对应，请重试或咨询专业人员。"
+            )
+            emit_event("answer.delta", {"text": answer_content})
         regular_assistant_message: dict[str, Any] = {
             "role": "assistant",
-            "content": turn.content,
+            "content": answer_content,
         }
         if tool_calls:
             regular_assistant_message["tool_calls"] = [
@@ -1215,7 +1306,7 @@ class Supervisor:
         return {
             "messages": [*state["messages"], regular_assistant_message],
             "model_tool_calls": tool_calls,
-            "final_answer": _sanitize_model_answer(turn.content) if not tool_calls else "",
+            "final_answer": _sanitize_model_answer(answer_content) if not tool_calls else "",
             "input_tokens": state.get("input_tokens", 0) + (turn.input_tokens or 0),
             "output_tokens": state.get("output_tokens", 0) + (turn.output_tokens or 0),
         }

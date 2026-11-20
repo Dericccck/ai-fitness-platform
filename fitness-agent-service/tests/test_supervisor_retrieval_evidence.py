@@ -146,3 +146,146 @@ async def test_retrieval_ids_do_not_survive_into_a_later_turn() -> None:
     second = await supervisor.invoke(request("alice", conversation="one-thread"))
     assert first.retrieved_evidence_ids == ("chunk-alice",)
     assert second.retrieved_evidence_ids == ()
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("资料说先热身。[证据1]", "资料说先热身。[证据1]"),
+        ("资料说先热身。", "本次回答未提供可核验的知识引用，请重试或咨询专业人员。"),
+        ("资料说先热身。[证据2]", "本次回答未提供可核验的知识引用，请重试或咨询专业人员。"),
+        (
+            "资料说先热身。[证据1][证据999]",
+            "本次回答未提供可核验的知识引用，请重试或咨询专业人员。",
+        ),
+        ("资料说先热身。[证据x]", "本次回答未提供可核验的知识引用，请重试或咨询专业人员。"),
+    ],
+)
+def test_citation_validation_is_limited_to_actual_retrieval_ids(text, expected) -> None:
+    from app.agent.supervisor import _verified_knowledge_answer
+
+    assert _verified_knowledge_answer(text, ["chunk-1"]) == expected
+    assert (
+        _verified_knowledge_answer(text, [])
+        == "未检索到可用的知识资料，暂时无法提供有来源支持的回答。"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("model_answer", "expected"),
+    [
+        ("先热身。[证据1]", "先热身。[证据1]"),
+        ("无引用的内容", "本次回答未提供可核验的知识引用，请重试或咨询专业人员。"),
+        ("伪造来源。[证据9]", "本次回答未提供可核验的知识引用，请重试或咨询专业人员。"),
+    ],
+)
+async def test_stream_buffers_model_output_until_knowledge_citations_are_checked(
+    model_answer, expected
+) -> None:
+    from app.streaming.events import emit_event
+
+    class StreamingModel(Model):
+        async def chat_with_tools(self, messages, **kwargs):
+            emit_event("answer.delta", {"text": model_answer})
+            return ModelTurn(content=model_answer, tool_calls=())
+
+    repository, model = Repository(), StreamingModel()
+    rag = RagService(cast(Any, repository), cast(Any, model), cast(Any, Reranker()))
+    supervisor = Supervisor(cast(ModelGateway, model), ToolRegistry(), rag_service=rag)
+    events = []
+
+    async def emit(event, data):
+        events.append((event, data))
+
+    result = await supervisor.stream(request("alice", conversation="stream"), emit)
+    assert result.answer == expected
+    assert result.knowledge_citation_evidence_ids == ("chunk-alice",)
+    assert [data["text"] for event, data in events if event == "answer.delta"] == [expected]
+
+
+@pytest.mark.asyncio
+async def test_failed_model_call_does_not_stream_unvalidated_knowledge_answer() -> None:
+    from app.streaming.events import emit_event
+
+    class BrokenModel(Model):
+        async def chat_with_tools(self, messages, **kwargs):
+            emit_event("answer.delta", {"text": "未验证的内容"})
+            raise RuntimeError("failure")
+
+    repository, model = Repository(), BrokenModel()
+    rag = RagService(cast(Any, repository), cast(Any, model), cast(Any, Reranker()))
+    supervisor = Supervisor(cast(ModelGateway, model), ToolRegistry(), rag_service=rag)
+    events = []
+
+    async def emit(event, data):
+        events.append((event, data))
+
+    with pytest.raises(RuntimeError, match="failure"):
+        await supervisor.stream(request("alice", conversation="broken"), emit)
+    assert not [data for event, data in events if event == "answer.delta"]
+
+
+@pytest.mark.asyncio
+async def test_cancelled_model_never_streams_unverified_text() -> None:
+    from app.streaming.events import emit_event, streaming_enabled
+
+    started = asyncio.Event()
+
+    class CancelledModel(Model):
+        async def chat_with_tools(self, messages, **kwargs):
+            emit_event("answer.delta", {"text": "未验证的内容"})
+            started.set()
+            await asyncio.Event().wait()
+            raise AssertionError("unreachable")
+
+    repository, model = Repository(), CancelledModel()
+    rag = RagService(cast(Any, repository), cast(Any, model), cast(Any, Reranker()))
+    supervisor = Supervisor(cast(ModelGateway, model), ToolRegistry(), rag_service=rag)
+    events = []
+
+    async def emit(event, data):
+        events.append((event, data))
+
+    task = asyncio.create_task(supervisor.stream(request("alice", conversation="cancelled"), emit))
+    await asyncio.wait_for(started.wait(), timeout=5)
+    task.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await task
+    assert not [data for event, data in events if event == "answer.delta"]
+    assert not streaming_enabled()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse", [False, True])
+async def test_two_rag_domains_do_not_publish_an_ambiguous_marker_mapping(reverse) -> None:
+    from app.agent.routing import RouteDecision, RoutedIntent
+
+    class Router:
+        async def decide(self, user_message, *, recent_messages, previous_route):
+            items = (
+                RoutedIntent("FITNESS_COACHING", "FITNESS_KNOWLEDGE_QA"),
+                RoutedIntent("CUSTOMER_SERVICE", "BUSINESS_RULE_QA"),
+            )
+            return RouteDecision(
+                intents=tuple(reversed(items)) if reverse else items,
+                source="DETERMINISTIC_RULE",
+                confidence=0.99,
+                reason_code="TEST_MULTI",
+                classifier_version="test",
+            )
+
+    class CitingModel(Model):
+        async def chat_with_tools(self, messages, **kwargs):
+            return ModelTurn(content="内容[证据1]", tool_calls=())
+
+    repository, model = Repository(), CitingModel()
+    rag = RagService(cast(Any, repository), cast(Any, model), cast(Any, Reranker()))
+    supervisor = Supervisor(
+        cast(ModelGateway, model), ToolRegistry(), rag_service=rag, intent_router=Router()
+    )
+    response = await supervisor.invoke(request("alice", conversation="multi-rag"))
+    assert "本次回答的知识来源无法可靠对应" in response.answer
+    assert "[证据1]" not in response.answer
+    assert response.knowledge_citation_evidence_ids == ()
+    assert len(repository.scopes) == 2
