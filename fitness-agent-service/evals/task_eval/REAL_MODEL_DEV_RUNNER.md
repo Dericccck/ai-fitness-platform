@@ -58,3 +58,13 @@ review, never published in the report. Deterministic safety guards can complete
 without a model call; consult `attempts` instead of assuming a provider call.
 An observed response is not an assessment pass: the task remains UNKNOWN and
 requires the case's actual evidence and human review.
+
+The isolated cross-service launcher supports `--booking-positive-real-model-trial`
+for v1 cases BOOK-001, BOOK-002, BOOK-003, BOOK-005 and BOOK-007. Supply the
+case ID, a new absolute report path and the same private credential, existing
+budget and current-price confirmation used by the other real-model trials.
+Each trial uses a fixed synthetic setup conversation, a fixture-bound unreviewed
+grading proposal and an added repeat of the same approval request. BOOK-001,
+BOOK-002 and BOOK-003 in v1 differ from the identically numbered original-plan
+examples; their reports explicitly retain that distinction. The trials do not
+establish independent audit completeness or release acceptance.

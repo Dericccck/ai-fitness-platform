@@ -141,6 +141,13 @@ _BOOK_009_PROFILE = _Profile(
     "2608b3148a61545932c9198719f22d4effd98ecbce169f206e4364dec9e6f911",
     _BOOK_018_PROFILE.payload_items,
 )
+_BOOK_POSITIVE_INPUT_HASHES = {
+    "BOOK-001": "7968c307cdb30ab05e1bda0e79dfffd748bc423df47552bd80fafdaeafd679ab",
+    "BOOK-002": "157c159449b3ae9536f7d7d0c08c320b1f3e381ac50f49eee9f0b5db6ba209e1",
+    "BOOK-003": "ca53041a9f22b53043730efe37f93c13080b98cb77b9525e6448d5f469a902ba",
+    "BOOK-005": "7dd5e329751713532d9a8db0c20cf0248309373459cef81194d6eeb7e3dc8ee0",
+    "BOOK-007": "7eec0720639a52b08e6ecb4e700b4dfb40168ed8f92817c8c1409f52f1f68674",
+}
 
 
 def _profile(name: str) -> _Profile:
@@ -154,6 +161,8 @@ def _profile(name: str) -> _Profile:
         return _BOOK_006_PROFILE
     if name == "BOOK-009":
         return _BOOK_009_PROFILE
+    if name in _BOOK_POSITIVE_INPUT_HASHES:
+        return _Profile(name, _BOOK_POSITIVE_INPUT_HASHES[name], _BOOK_018_PROFILE.payload_items)
     raise ValueError("unsupported booking model profile")
 
 

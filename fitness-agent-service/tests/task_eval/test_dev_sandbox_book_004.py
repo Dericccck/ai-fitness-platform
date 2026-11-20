@@ -37,6 +37,16 @@ from app.evaluation.task_eval.graders.rules import grade_rule
 from tests.task_eval.test_booking_model_boundary import response_018
 
 
+def test_positive_fixture_bundle_tampering_is_rejected(tmp_path, monkeypatch):
+    from app.evaluation.task_eval import dev_sandbox_book_004
+
+    fixture = tmp_path / "fixture.json"
+    fixture.write_bytes(dev_sandbox_book_004._POSITIVE_FIXTURE.read_bytes() + b" ")
+    monkeypatch.setattr(dev_sandbox_book_004, "_POSITIVE_FIXTURE", fixture)
+    with pytest.raises(ValueError, match="DEV_FIXTURE_CHANGED"):
+        _load("BOOK-001")
+
+
 def test_store_pilot_requires_user_selected_organization_and_observed_booking():
     _, fixture = _load("BOOK-006")
     selected = {"id": "org-1", "name": "test organization"}
@@ -163,7 +173,19 @@ def test_fixture_grading_is_distinct_draft_and_preserves_source() -> None:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("profile", ["BOOK-004", "BOOK-006", "BOOK-009"])
+@pytest.mark.parametrize(
+    "profile",
+    [
+        "BOOK-001",
+        "BOOK-002",
+        "BOOK-003",
+        "BOOK-004",
+        "BOOK-005",
+        "BOOK-006",
+        "BOOK-007",
+        "BOOK-009",
+    ],
+)
 async def test_frozen_case_and_explicit_context_reach_one_bounded_model_call(
     tmp_path: Path,
     profile: str,

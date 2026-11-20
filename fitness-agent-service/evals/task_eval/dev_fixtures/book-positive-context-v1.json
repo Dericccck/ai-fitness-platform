@@ -1,0 +1,111 @@
+{
+  "version": "1.0",
+  "status": "synthetic_dev_draft",
+  "cases": [
+    {
+      "version": "1.0",
+      "status": "synthetic_dev_draft",
+      "case_id": "BOOK-001",
+      "setup_message": "我选择机构 org-1、教练 coach-1 的课程 course-1，学员 student-1，合同 contract-1，时间是 2030-01-01 10:00 至 11:00（东八区），请整理预约信息。",
+      "setup_response": "已选机构 org-1、教练 coach-1 的课程 course-1，学员 student-1，合同 contract-1，时间是 2030-01-01 10:00 至 11:00（东八区）。",
+      "case_message": "预约指定课程，确认后提交",
+      "identity": {
+        "organization_id": "org-1",
+        "student_id": "student-1"
+      },
+      "payload": {
+        "organization_id": "org-1",
+        "student_id": "student-1",
+        "contract_id": "contract-1",
+        "coach_id": "coach-1",
+        "course_id": "course-1",
+        "start_time": "2030-01-01T10:00:00+08:00",
+        "end_time": "2030-01-01T11:00:00+08:00"
+      }
+    },
+    {
+      "version": "1.0",
+      "status": "synthetic_dev_draft",
+      "case_id": "BOOK-002",
+      "setup_message": "我选择机构 org-1、教练 coach-1 的课程 course-1，学员 student-1，合同 contract-1，时间是 2030-01-01 10:00 至 11:00（东八区），请整理预约信息。",
+      "setup_response": "已选机构 org-1、教练 coach-1 的课程 course-1，学员 student-1，合同 contract-1，时间是 2030-01-01 10:00 至 11:00（东八区）。",
+      "case_message": "预约指定教练的指定时段",
+      "identity": {
+        "organization_id": "org-1",
+        "student_id": "student-1"
+      },
+      "payload": {
+        "organization_id": "org-1",
+        "student_id": "student-1",
+        "contract_id": "contract-1",
+        "coach_id": "coach-1",
+        "course_id": "course-1",
+        "start_time": "2030-01-01T10:00:00+08:00",
+        "end_time": "2030-01-01T11:00:00+08:00"
+      }
+    },
+    {
+      "version": "1.0",
+      "status": "synthetic_dev_draft",
+      "case_id": "BOOK-003",
+      "setup_message": "我选择机构 org-1、教练 coach-1 的课程 course-1，学员 student-1，合同 contract-1，时间是 2030-01-01 10:00 至 11:00（东八区），请整理预约信息。",
+      "setup_response": "已选机构 org-1、教练 coach-1 的课程 course-1，学员 student-1，合同 contract-1，时间是 2030-01-01 10:00 至 11:00（东八区）。",
+      "case_message": "帮我预约这节指定课程",
+      "identity": {
+        "organization_id": "org-1",
+        "student_id": "student-1"
+      },
+      "payload": {
+        "organization_id": "org-1",
+        "student_id": "student-1",
+        "contract_id": "contract-1",
+        "coach_id": "coach-1",
+        "course_id": "course-1",
+        "start_time": "2030-01-01T10:00:00+08:00",
+        "end_time": "2030-01-01T11:00:00+08:00"
+      }
+    },
+    {
+      "version": "1.0",
+      "status": "synthetic_dev_draft",
+      "case_id": "BOOK-005",
+      "setup_message": "我选择机构 org-1、教练 coach-1 的课程 course-1，学员 student-1，合同 contract-1，时间是 2030-01-01 10:00 至 11:00（东八区），请整理预约信息。",
+      "setup_response": "已选机构 org-1、教练 coach-1 的课程 course-1，学员 student-1，合同 contract-1，时间是 2030-01-01 10:00 至 11:00（东八区）。",
+      "case_message": "预约我指定的教练",
+      "identity": {
+        "organization_id": "org-1",
+        "student_id": "student-1"
+      },
+      "payload": {
+        "organization_id": "org-1",
+        "student_id": "student-1",
+        "contract_id": "contract-1",
+        "coach_id": "coach-1",
+        "course_id": "course-1",
+        "start_time": "2030-01-01T10:00:00+08:00",
+        "end_time": "2030-01-01T11:00:00+08:00"
+      }
+    },
+    {
+      "version": "1.0",
+      "status": "synthetic_dev_draft",
+      "case_id": "BOOK-007",
+      "setup_message": "我选择机构 org-1、教练 coach-1 的课程 course-1，学员 student-1，合同 contract-1，时间是 2030-01-01 10:00 至 11:00（东八区），请整理预约信息。",
+      "setup_response": "已选机构 org-1、教练 coach-1 的课程 course-1，学员 student-1，合同 contract-1，时间是 2030-01-01 10:00 至 11:00（东八区）。",
+      "case_message": "为我预约指定时段的课",
+      "identity": {
+        "organization_id": "org-1",
+        "student_id": "student-1"
+      },
+      "payload": {
+        "organization_id": "org-1",
+        "student_id": "student-1",
+        "contract_id": "contract-1",
+        "coach_id": "coach-1",
+        "course_id": "course-1",
+        "start_time": "2030-01-01T10:00:00+08:00",
+        "end_time": "2030-01-01T11:00:00+08:00"
+      }
+    }
+  ]
+}

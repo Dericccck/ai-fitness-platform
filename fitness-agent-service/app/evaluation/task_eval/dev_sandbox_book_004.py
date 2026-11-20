@@ -64,11 +64,14 @@ _STORE_FIXTURE = _ROOT / "evals/task_eval/dev_fixtures/book-006-store-context-v1
 _STORE_FIXTURE_SHA256 = "11cfa6e9a60519e01c65619f26cd49620d11e17640d0961b45b36abb530e8c90"
 _SLOT_FIXTURE = _ROOT / "evals/task_eval/dev_fixtures/book-009-private-slot-context-v1.json"
 _SLOT_FIXTURE_SHA256 = "438fdaef11caaa6acc1eb2d43aa640311f3775dc9502595168c9d71eb1e7735e"
+_POSITIVE_FIXTURE = _ROOT / "evals/task_eval/dev_fixtures/book-positive-context-v1.json"
+_POSITIVE_FIXTURE_SHA256 = "96b1568534f90b1e429c11e511f824d1ec0b1f5544560b5c925dab77b2d26d74"
+_POSITIVE_PROFILES = frozenset({"BOOK-001", "BOOK-002", "BOOK-003", "BOOK-005", "BOOK-007"})
 _DATASET_SHA256 = "1d187f5abca4dab754db29059f9ff95a7897719fde6ce88de6c92448d25ab446"
 
 
 def _load(profile: str = "BOOK-004") -> tuple[Any, dict[str, Any]]:
-    if profile not in {"BOOK-004", "BOOK-006", "BOOK-009"}:
+    if profile not in {"BOOK-004", "BOOK-006", "BOOK-009"} | _POSITIVE_PROFILES:
         raise ValueError("DEV_PROFILE_UNSUPPORTED")
     dataset_path = _ROOT / "evals/task_eval/datasets/v1.jsonl"
     if hashlib.sha256(dataset_path.read_bytes()).hexdigest() != _DATASET_SHA256:
@@ -82,11 +85,24 @@ def _load(profile: str = "BOOK-004") -> tuple[Any, dict[str, Any]]:
         "BOOK-004": (_FIXTURE, _FIXTURE_SHA256),
         "BOOK-006": (_STORE_FIXTURE, _STORE_FIXTURE_SHA256),
         "BOOK-009": (_SLOT_FIXTURE, _SLOT_FIXTURE_SHA256),
+        **{name: (_POSITIVE_FIXTURE, _POSITIVE_FIXTURE_SHA256) for name in _POSITIVE_PROFILES},
     }[profile]
     raw = fixture_path.read_bytes()
     if hashlib.sha256(raw).hexdigest() != fixture_sha:
         raise ValueError("DEV_FIXTURE_CHANGED")
     fixture = json.loads(raw)
+    if profile in _POSITIVE_PROFILES:
+        if (
+            not isinstance(fixture, dict)
+            or fixture.get("version") != "1.0"
+            or fixture.get("status") != "synthetic_dev_draft"
+            or not isinstance(fixture.get("cases"), list)
+            or len(fixture["cases"]) != len(_POSITIVE_PROFILES)
+            or {item.get("case_id") for item in fixture["cases"] if isinstance(item, dict)}
+            != _POSITIVE_PROFILES
+        ):
+            raise ValueError("DEV_FIXTURE_INCONSISTENT")
+        fixture = next(item for item in fixture["cases"] if item["case_id"] == profile)
     if (
         case.split != ("test" if profile == "BOOK-009" else "dev")
         or case.review.status != "draft"
@@ -117,6 +133,7 @@ def _fixture_bound_grading_case(case: Any, fixture: dict[str, Any]) -> tuple[Any
         ("BOOK-004", _FIXTURE_SHA256),
         ("BOOK-006", _STORE_FIXTURE_SHA256),
         ("BOOK-009", _SLOT_FIXTURE_SHA256),
+        *((name, _POSITIVE_FIXTURE_SHA256) for name in _POSITIVE_PROFILES),
     }:
         raise ValueError("DEV_GRADING_CASE_MISMATCH")
     result = case.model_copy(deep=True)
@@ -372,11 +389,16 @@ async def _observe_setup(
 async def run(
     model: OneBookingModel, *, allow_exposed_test_diagnostic: bool = False
 ) -> dict[str, Any]:
-    if type(model) is not OneBookingModel or model.profile not in {
-        "BOOK-004",
-        "BOOK-006",
-        "BOOK-009",
-    }:
+    if (
+        type(model) is not OneBookingModel
+        or model.profile
+        not in {
+            "BOOK-004",
+            "BOOK-006",
+            "BOOK-009",
+        }
+        | _POSITIVE_PROFILES
+    ):
         raise ValueError("unsupported model boundary")
     if model.profile == "BOOK-009" and allow_exposed_test_diagnostic is not True:
         raise ValueError("exposed test diagnostic not explicitly enabled")
@@ -580,6 +602,13 @@ async def run(
                 "No independent report provenance or human review; not release evidence.",
                 "Fixtures are shared across development and planning test cases; split isolation is not established.",
                 "Local reservation is not a provider-side spending cap.",
+                *(
+                    [
+                        "The original plan example with the same BOOK identifier has different semantics; this trial evaluates the v1 case, not that plan example."
+                    ]
+                    if case.case_id in {"BOOK-001", "BOOK-002", "BOOK-003"}
+                    else []
+                ),
             ],
         }
     finally:
@@ -591,7 +620,9 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report-file", required=True)
     parser.add_argument(
-        "--case-profile", choices=("BOOK-004", "BOOK-006", "BOOK-009"), default="BOOK-004"
+        "--case-profile",
+        choices=sorted({"BOOK-004", "BOOK-006", "BOOK-009"} | _POSITIVE_PROFILES),
+        default="BOOK-004",
     )
     parser.add_argument("--allow-exposed-test-diagnostic", action="store_true")
     parser.add_argument("--real-model", required=True, action="store_true")

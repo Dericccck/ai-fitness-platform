@@ -8,6 +8,16 @@ book_real_model=false
 broker_duplicate_trial=false
 booking_capabilities_trial=false
 development_module=app.evaluation.task_eval.dev_sandbox_booking
+positive_profile=""
+if [[ "${1:-}" == "--booking-positive-real-model-trial" ]]; then
+    [[ "$#" -ge 3 ]] || { printf 'Provide a supported case and a new absolute report path.\n' >&2; exit 1; }
+    case "$2" in
+        BOOK-001|BOOK-002|BOOK-003|BOOK-005|BOOK-007) positive_profile="$2" ;;
+        *) printf 'Unsupported positive booking case.\n' >&2; exit 1 ;;
+    esac
+    shift 2
+    set -- --book-004-real-model-trial "$@"
+fi
 if [[ "${1:-}" == "--booking-capabilities-trial" ]]; then
     [[ "$#" -eq 2 && "$2" == /* && ! -e "$2" && ! -L "$2" ]] || {
         printf 'Provide a new absolute report path for the capabilities trial.\n' >&2
@@ -37,7 +47,7 @@ if [[ "${1:-}" == "--book-009-exposed-test-diagnostic" || "${1:-}" == "--book-00
     if [[ "$1" == "--book-004-real-model-trial" || "$1" == "--book-006-real-model-trial" || "$1" == "--book-009-exposed-test-diagnostic" ]]; then
         development_module=app.evaluation.task_eval.dev_sandbox_book_004
     fi
-    context_profile=BOOK-004
+    context_profile="${positive_profile:-BOOK-004}"
     context_diagnostic=false
     if [[ "$1" == "--book-006-real-model-trial" ]]; then
         context_profile=BOOK-006
