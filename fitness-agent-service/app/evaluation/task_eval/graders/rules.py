@@ -11,6 +11,10 @@ from typing import Any, TypeGuard
 from .retrieval import grade_retrieval
 from .semantic import grade_semantic
 
+_BOOKING_IDENTITY_FIELDS = frozenset(
+    {"organizationId", "studentId", "contractId", "coachId", "courseId", "startTime", "endTime"}
+)
+
 
 def _result(passed: bool, name: str) -> dict[str, Any]:
     return {
@@ -195,7 +199,11 @@ def grade_rule(
             return _result(False, "BOOKING")
         if (
             not isinstance(params, dict)
-            or not params
+            or not _BOOKING_IDENTITY_FIELDS.issubset(params)
+            or any(
+                not isinstance(params[key], str) or not params[key].strip()
+                for key in _BOOKING_IDENTITY_FIELDS
+            )
             or not _list_of_dicts(bookings)
             or evidence.get("snapshot_complete") is not True
         ):

@@ -105,11 +105,13 @@ def test_snapshot_delta_does_not_prove_absence_of_unconfirmed_write() -> None:
 def test_booking_count_parameters_and_retry() -> None:
     expected = {
         "booking": {
-            "user": "u",
-            "organization": "org",
-            "course": "c",
-            "coach": "t",
-            "time": "2030-01-01T10:00:00+08:00",
+            "studentId": "u",
+            "organizationId": "org",
+            "contractId": "contract",
+            "courseId": "c",
+            "coachId": "t",
+            "startTime": "2030-01-01T10:00:00+08:00",
+            "endTime": "2030-01-01T11:00:00+08:00",
         },
         "credit_delta": -1,
     }
@@ -133,7 +135,7 @@ def test_booking_count_parameters_and_retry() -> None:
         grade_rule(
             "booking_created_once",
             expected,
-            {**obs, "created_bookings": [{**expected["booking"], "organization": "other"}]},
+            {**obs, "created_bookings": [{**expected["booking"], "organizationId": "other"}]},
         )["status"]
         == "FAIL"
     )
@@ -161,11 +163,20 @@ def test_snapshot_rejects_noncount_or_negative_booking_counts(invalid) -> None:
 
 @pytest.mark.parametrize("invalid", [True, "-1", [], {}])
 def test_booking_rejects_noninteger_credit_deltas(invalid) -> None:
-    expected = {"booking": {"user": "u"}, "credit_delta": -1}
+    booking = {
+        "studentId": "u",
+        "organizationId": "org",
+        "contractId": "contract",
+        "courseId": "c",
+        "coachId": "t",
+        "startTime": "start",
+        "endTime": "end",
+    }
+    expected = {"booking": booking, "credit_delta": -1}
     obs = {
         **REFS,
         "snapshot_complete": True,
-        "created_bookings": [{"user": "u"}],
+        "created_bookings": [booking],
         "credit_delta": invalid,
         "idempotency_checked": True,
     }
@@ -173,15 +184,83 @@ def test_booking_rejects_noninteger_credit_deltas(invalid) -> None:
 
 
 def test_booking_values_do_not_treat_booleans_as_integers() -> None:
-    expected = {"booking": {"slot": {"number": 1}}, "credit_delta": -1}
+    expected = {
+        "booking": {
+            "studentId": "u",
+            "organizationId": "org",
+            "contractId": "contract",
+            "courseId": "c",
+            "coachId": "t",
+            "startTime": "start",
+            "endTime": "end",
+            "slot": {"number": 1},
+        },
+        "credit_delta": -1,
+    }
     obs = {
         **REFS,
         "snapshot_complete": True,
-        "created_bookings": [{"slot": {"number": True}}],
+        "created_bookings": [{**expected["booking"], "slot": {"number": True}}],
         "credit_delta": -1,
         "idempotency_checked": True,
     }
     assert grade_rule("booking_created_once", expected, obs)["status"] == "FAIL"
+
+
+@pytest.mark.parametrize(
+    "missing",
+    ["studentId", "organizationId", "contractId", "courseId", "coachId", "startTime", "endTime"],
+)
+def test_booking_incomplete_identity_cannot_pass(missing) -> None:
+    booking = {
+        "studentId": "u",
+        "organizationId": "org",
+        "contractId": "contract",
+        "courseId": "c",
+        "coachId": "t",
+        "startTime": "start",
+        "endTime": "end",
+    }
+    del booking[missing]
+    evidence = {
+        **REFS,
+        "snapshot_complete": True,
+        "created_bookings": [booking],
+        "credit_delta": -1,
+        "idempotency_checked": True,
+    }
+    assert (
+        grade_rule("booking_created_once", {"booking": booking, "credit_delta": -1}, evidence)[
+            "status"
+        ]
+        == "UNKNOWN"
+    )
+
+
+@pytest.mark.parametrize("invalid", [None, "", "  ", 1, True])
+def test_booking_empty_or_invalid_identity_cannot_pass(invalid) -> None:
+    booking = {
+        "studentId": invalid,
+        "organizationId": "org",
+        "contractId": "contract",
+        "courseId": "c",
+        "coachId": "t",
+        "startTime": "start",
+        "endTime": "end",
+    }
+    evidence = {
+        **REFS,
+        "snapshot_complete": True,
+        "created_bookings": [booking],
+        "credit_delta": -1,
+        "idempotency_checked": True,
+    }
+    assert (
+        grade_rule("booking_created_once", {"booking": booking, "credit_delta": -1}, evidence)[
+            "status"
+        ]
+        == "UNKNOWN"
+    )
 
 
 def test_authorization_and_delivery_require_complete_evidence() -> None:
