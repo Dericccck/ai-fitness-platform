@@ -46,3 +46,15 @@ is an uncalibrated review proposal: the observation is an unauthenticated
 caller claim and the task remains UNKNOWN until independently verified and
 reviewed. The command writes a new private output file and returns 3 even when
 the model provides a valid proposal.
+
+For `KNOW-001` through `KNOW-007`, `KNOW-020`, `SAFE-013` and `SAFE-014`,
+`python -m app.evaluation.task_eval.dev_review_probe --help` describes the
+separate fixed-input Supervisor observation. Each invocation runs one case,
+requires an existing private `0700` review directory and a new report file, and
+uses the existing budget ledger. The empty registry prevents business tool
+calls; it also means this observation does not exercise retrieval or establish
+that a knowledge answer is grounded. The answer is stored in a private file for
+review, never published in the report. Deterministic safety guards can complete
+without a model call; consult `attempts` instead of assuming a provider call.
+An observed response is not an assessment pass: the task remains UNKNOWN and
+requires the case's actual evidence and human review.

@@ -357,3 +357,45 @@ def test_cli_prechecks_fail_before_request(tmp_path, kind):
     )
     if kind == "existing_report":
         assert (tmp_path / "report.json").read_text() == "preserve"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("case_id", "message"),
+    [
+        ("KNOW-002", "初学者一周训练几次？"),
+        ("KNOW-003", "力量训练前如何热身？"),
+        ("KNOW-004", "硬拉时背部姿势有什么要求？"),
+        ("KNOW-005", "两次高强度训练之间如何恢复？"),
+        ("KNOW-006", "常见优质蛋白质来源有哪些？"),
+        ("KNOW-007", "RPE 是什么？"),
+    ],
+)
+async def test_knowledge_dev_cases_run_real_supervisor_without_tools(tmp_path, case_id, message):
+    path = private(tmp_path)
+    budget = DurableBudget(tmp_path / "budget.sqlite", limit_nano=500_000_000)
+    requests = []
+
+    def handler(request):
+        body = json.loads(request.content)
+        assert body["messages"][-1]["content"] == message
+        assert "tools" not in body
+        requests.append(request)
+        return httpx.Response(200, json=response("供人工复核的回答。"))
+
+    result = await observe_dev_case(
+        load_dataset(DATASET),
+        case_id,
+        credential="secret-private-key",
+        budget=budget,
+        review_directory=path,
+        execute=True,
+        confirmed_current_pricing=True,
+        transport=httpx.MockTransport(handler),
+    )
+    assert len(requests) == result["attempts"] == 1
+    assert result["component_status"] == "OBSERVED"
+    assert result["task_status"] == "UNKNOWN"
+    assert result["human_review"] == "NOT_REVIEWED"
+    assert result["tool_steps"] == 0
+    assert json.loads((path / result["review_file"]).read_text())["review_status"] == "NOT_REVIEWED"
