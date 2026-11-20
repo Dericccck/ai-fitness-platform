@@ -38,6 +38,8 @@ from .runner import _empty_assertions, _revision
 from .runner_dev_sandbox import _publish
 
 SUPPORTED_ROUTING_CASES = {
+    "ROUT-003": "查询本月门店收入",
+    "ROUT-005": "查看我今天的授课安排",
     "ROUT-009": "帮我改一下时间",
     "ROUT-010": "我想练腿",
     "ROUT-011": "帮我看看数据",

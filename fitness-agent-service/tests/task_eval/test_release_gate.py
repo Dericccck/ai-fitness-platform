@@ -38,8 +38,18 @@ class TestOnlyVerifier:
 def setup():
     dataset = load_dataset(DATASET)
     original = next(c for c in dataset.cases if c.case_id == "SAFE-015")
+    clinical_assertion = original.expected.assertions[0].model_copy(
+        update={
+            "parameters": {
+                "metric_id": "test-clinical-safety",
+                "prompt_version": "test-clinical-rubric-v1",
+                "score_mapping": {"0": "FAIL", "1": "UNKNOWN", "2": "PASS"},
+            }
+        }
+    )
     case = original.model_copy(
         update={
+            "expected": original.expected.model_copy(update={"assertions": [clinical_assertion]}),
             "review": Review(
                 status="reviewed",
                 annotator_ref="test-only-a",
@@ -446,6 +456,90 @@ def test_unsafe_guidance_case_requires_applicable_required_clinical_assertion():
     expected = case.expected.model_copy(update={"assertions": [ordinary]})
     dataset = replace(dataset, cases=[case.model_copy(update={"expected": expected})])
     trials[0]["assertions"][0].update(rule="semantic", risk=None)
+    result = _assess(dataset, manifest, trials, policy, TestOnlyVerifier())
+    assert result["status"] == "BLOCKED"
+    assert "CLINICAL_ASSERTION_MISSING:SAFE-015" in result["reasons"]
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "unrelated_rule_with_clinical_risk",
+        "wrong_phase",
+        "wrong_risk",
+        "missing_mapping",
+        "reversed_mapping",
+        "missing_metric",
+        "empty_prompt_version",
+    ],
+)
+def test_clinical_case_cannot_pass_with_nonclinical_or_unfrozen_rule(change):
+    dataset, policy, manifest, trials = setup()
+    case = dataset.cases[0]
+    original = case.expected.assertions[0]
+    parameters = dict(original.parameters)
+    updates = {}
+    if change == "unrelated_rule_with_clinical_risk":
+        updates["rule"] = "route_allowed"
+        trials[0]["assertions"][0]["rule"] = "route_allowed"
+        policy = policy.model_copy(update={"metric_coverage": {"route_allowed": 1.0}})
+        manifest["gate_policy_sha256"] = gate_policy_sha256(policy)
+    elif change == "wrong_phase":
+        updates["phase"] = "before_decision"
+        trials[0]["assertions"][0]["phase"] = "before_decision"
+    elif change == "wrong_risk":
+        updates["risk"] = None
+        trials[0]["assertions"][0]["risk"] = None
+    elif change == "missing_mapping":
+        parameters.pop("score_mapping")
+    elif change == "reversed_mapping":
+        parameters["score_mapping"] = {"0": "PASS", "1": "UNKNOWN", "2": "FAIL"}
+    elif change == "missing_metric":
+        parameters.pop("metric_id")
+    else:
+        parameters["prompt_version"] = "  "
+    updates["parameters"] = parameters
+    updated_assertion = original.model_copy(update=updates)
+    updated_expected = case.expected.model_copy(update={"assertions": [updated_assertion]})
+    dataset = replace(dataset, cases=[case.model_copy(update={"expected": updated_expected})])
+    result = _assess(dataset, manifest, trials, policy, TestOnlyVerifier())
+    assert result["status"] == "BLOCKED"
+    assert "CLINICAL_ASSERTION_MISSING:SAFE-015" in result["reasons"]
+
+
+def test_clinical_risk_outside_safety_category_still_requires_safety_rule():
+    dataset, policy, manifest, trials = setup()
+    case = dataset.cases[0]
+    assertion = case.expected.assertions[0].model_copy(update={"rule": "route_allowed"})
+    updated_case = case.model_copy(
+        update={
+            "primary_scenario": "routing",
+            "expected": case.expected.model_copy(update={"assertions": [assertion]}),
+        }
+    )
+    dataset = replace(dataset, cases=[updated_case])
+    trials[0]["primary_scenario"] = "routing"
+    trials[0]["assertions"][0]["rule"] = "route_allowed"
+    policy = policy.model_copy(update={"metric_coverage": {"route_allowed": 1.0}})
+    manifest["gate_policy_sha256"] = gate_policy_sha256(policy)
+    result = _assess(dataset, manifest, trials, policy, TestOnlyVerifier())
+    assert result["status"] == "BLOCKED"
+    assert "CLINICAL_ASSERTION_MISSING:SAFE-015" in result["reasons"]
+
+
+def test_clinical_rule_requires_clinical_risk_even_outside_safety_category():
+    dataset, policy, manifest, trials = setup()
+    case = dataset.cases[0]
+    assertion = case.expected.assertions[0].model_copy(update={"risk": None})
+    updated_case = case.model_copy(
+        update={
+            "primary_scenario": "routing",
+            "expected": case.expected.model_copy(update={"assertions": [assertion]}),
+        }
+    )
+    dataset = replace(dataset, cases=[updated_case])
+    trials[0]["primary_scenario"] = "routing"
+    trials[0]["assertions"][0]["risk"] = None
     result = _assess(dataset, manifest, trials, policy, TestOnlyVerifier())
     assert result["status"] == "BLOCKED"
     assert "CLINICAL_ASSERTION_MISSING:SAFE-015" in result["reasons"]

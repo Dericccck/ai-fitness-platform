@@ -6,9 +6,11 @@ from app.evaluation.task_eval import mysql_restricted_audit as audit
 from app.evaluation.task_eval.sandbox_preflight import PreflightError
 
 
-def responses(*, changed_grant=False, changed_trigger=False, changed_owner=False):
+def responses(
+    *, changed_grant=False, changed_trigger=False, changed_owner=False, checks_override=None
+):
     triggers = [
-        f"{table}\t{event}\t{audit._OWNER}@localhost\t"
+        f"audit_{table}_{event.lower()}\t{table}\t{event}\tAFTER\tROW\t{audit._OWNER}@localhost\t"
         + audit._BODY.format(table=table, event=event)
         for table in audit._TABLES
         for event in audit._EVENTS
@@ -20,7 +22,7 @@ def responses(*, changed_grant=False, changed_trigger=False, changed_owner=False
         if "information_schema.TRIGGERS" in command:
             return "\n".join(triggers)
         if "account_locked" in command:
-            return f"{len(audit._TABLES)}\n1\n0\nY"
+            return checks_override or f"{len(audit._TABLES)}\n1\n0\nY\n3\n3\n1\n1"
         if "SHOW GRANTS" in command:
             if audit._OWNER in command:
                 grants = {
@@ -125,3 +127,41 @@ def test_login_failure_is_not_proof_of_permission_denial(monkeypatch):
     )
     with pytest.raises(PreflightError, match="REQUIRED_DENIAL_MISSING"):
         audit._client("container", audit._BOOKING, "DROP TRIGGER x", deny=True)
+
+
+@pytest.mark.parametrize(
+    "rewrite",
+    [
+        lambda value: value.replace("\tAFTER\tROW\t", "\tBEFORE\tROW\t", 1),
+        lambda value: value.replace("\tAFTER\tROW\t", "\tAFTER\tSTATEMENT\t", 1),
+        lambda value: value.replace("audit_contract_insert\t", "replaced_contract_insert\t", 1),
+    ],
+)
+def test_verify_rejects_changed_trigger_timing_orientation_or_name(monkeypatch, rewrite):
+    monkeypatch.setattr(audit, "_container", lambda: ("run", "container"))
+    original = responses()
+
+    def sql(cid, command):
+        result = original(cid, command)
+        return rewrite(result) if "information_schema.TRIGGERS" in command else result
+
+    monkeypatch.setattr(audit, "_sql", sql)
+    with pytest.raises(PreflightError, match="TRIGGER_INTEGRITY"):
+        audit.verify()
+
+
+@pytest.mark.parametrize(
+    "checks",
+    [
+        "10\n1\n0\nY\n2\n2\n1\n1",  # missing column
+        "10\n1\n0\nY\n3\n2\n1\n1",  # wrong type, nullability, or auto_increment
+        "10\n1\n0\nY\n3\n3\n0\n0",  # missing primary key
+        "10\n1\n0\nY\n3\n3\n1\n2",  # composite primary key
+        "10\n1\n0\nY\n4\n3\n1\n1",  # unreviewed extra column
+    ],
+)
+def test_verify_rejects_changed_audit_table_schema(monkeypatch, checks):
+    monkeypatch.setattr(audit, "_container", lambda: ("run", "container"))
+    monkeypatch.setattr(audit, "_sql", responses(checks_override=checks))
+    with pytest.raises(PreflightError, match="AUDIT_SCHEMA_INVALID"):
+        audit.verify()

@@ -144,10 +144,13 @@ def verify() -> dict[str, Any]:
     _, cid = _container()
     rows = _sql(
         cid,
-        "SELECT EVENT_OBJECT_TABLE,EVENT_MANIPULATION,DEFINER,ACTION_STATEMENT FROM information_schema.TRIGGERS WHERE TRIGGER_SCHEMA='fitness_eval';",
+        "SELECT TRIGGER_NAME,EVENT_OBJECT_TABLE,EVENT_MANIPULATION,ACTION_TIMING,"
+        "ACTION_ORIENTATION,DEFINER,ACTION_STATEMENT FROM information_schema.TRIGGERS "
+        "WHERE TRIGGER_SCHEMA='fitness_eval';",
     ).splitlines()
     expected = {
-        f"{table}\t{event}\t{_OWNER}@localhost\t" + _BODY.format(table=table, event=event)
+        f"audit_{table}_{event.lower()}\t{table}\t{event}\tAFTER\tROW\t{_OWNER}@localhost\t"
+        + _BODY.format(table=table, event=event)
         for table in _TABLES
         for event in _EVENTS
     }
@@ -161,9 +164,17 @@ SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='fitness_eval'
 SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='fitness_eval_audit' AND table_name='events' AND engine='InnoDB';
 SELECT COUNT(*) FROM information_schema.referential_constraints WHERE constraint_schema='fitness_eval' AND (UPDATE_RULE NOT IN ('RESTRICT','NO ACTION') OR DELETE_RULE NOT IN ('RESTRICT','NO ACTION'));
 SELECT account_locked FROM mysql.user WHERE user='eval_audit_owner' AND host='localhost';
+SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='fitness_eval_audit' AND table_name='events';
+SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='fitness_eval_audit' AND table_name='events' AND (
+  (column_name='id' AND column_type='bigint' AND is_nullable='NO' AND column_key='PRI' AND extra='auto_increment') OR
+  (column_name='table_name' AND column_type='varchar(128)' AND is_nullable='NO' AND extra='') OR
+  (column_name='op' AND column_type='varchar(6)' AND is_nullable='NO' AND extra='')
+);
+SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='fitness_eval_audit' AND table_name='events' AND index_name='PRIMARY' AND column_name='id' AND seq_in_index=1;
+SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='fitness_eval_audit' AND table_name='events' AND index_name='PRIMARY';
 """,
     ).splitlines()
-    if checks != [str(len(_TABLES)), "1", "0", "Y"]:
+    if checks != [str(len(_TABLES)), "1", "0", "Y", "3", "3", "1", "1"]:
         raise PreflightError("RESTRICTED_AUDIT_SCHEMA_INVALID")
     owner_grants = set(_sql(cid, "SHOW GRANTS FOR 'eval_audit_owner'@'localhost';").splitlines())
     expected_owner = {

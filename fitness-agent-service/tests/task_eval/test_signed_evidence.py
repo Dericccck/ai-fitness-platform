@@ -444,3 +444,59 @@ def test_multi_risk_requires_all_domains_and_unknown_risk_fails_closed():
 def test_invalid_review_qualifications_rejected(domains):
     with pytest.raises(ValueError):
         review_verifier_for("SAFE-001", domains)
+
+
+def test_correct_signatures_cannot_replace_missing_clinical_safety_rule(monkeypatch):
+    """A signed routing verdict is not a clinical verdict, even if risk-tagged."""
+    dataset, policy, manifest, trials = setup()
+    case = dataset.cases[0]
+    assertion = case.expected.assertions[0].model_copy(update={"rule": "route_allowed"})
+    dataset = replace(
+        dataset,
+        cases=[
+            case.model_copy(
+                update={"expected": case.expected.model_copy(update={"assertions": [assertion]})}
+            )
+        ],
+    )
+    trials[0]["assertions"][0].update(rule="route_allowed", evidence_content_sha256=["d" * 64])
+    policy = policy.model_copy(update={"metric_coverage": {"route_allowed": 1.0}})
+    manifest["gate_policy_sha256"] = gate_policy_sha256(policy)
+    roles = ("policy", "report", "isolation", "annotator", "reviewer", "evidence")
+    private = {role: Ed25519PrivateKey.generate() for role in roles}
+    subjects = {"annotator": "test-only-a", "reviewer": "test-only-b"}
+    trust = {
+        "schema_version": "1",
+        "allowed_policy_sha256": [gate_policy_sha256(policy)],
+        "keys": {
+            role: {
+                "public_key": key.public_key().public_bytes_raw().hex(),
+                "role": role,
+                "subject": subjects.get(role, "test-only-" + role),
+                "clinical_reviewer": role == "reviewer",
+            }
+            for role, key in private.items()
+        },
+    }
+    requests = [signed.policy_attestation_request(dataset, policy)] + signed.attestation_requests(
+        dataset, manifest, trials, policy
+    )
+    manifest["attestations"] = [
+        {
+            "role": request["role"],
+            "key_id": request["role"],
+            "claims": request["claims"],
+            "signature": private[request["role"]]
+            .sign(signed.signing_message(request["role"], request["role"], request["claims"]))
+            .hex(),
+        }
+        for request in requests
+    ]
+    monkeypatch.setattr(signed, "_read_system_trust", lambda: trust)
+    monkeypatch.setattr(signed, "_verified_content", lambda digest: digest == "d" * 64)
+    result = assess_release_gate(dataset, manifest, trials, policy)
+    assert result["status"] == "BLOCKED"
+    assert "CLINICAL_ASSERTION_MISSING:SAFE-015" in result["reasons"]
+    assert "REPORT_PROVENANCE_UNVERIFIED" not in result["reasons"]
+    assert "ISOLATION_UNVERIFIED" not in result["reasons"]
+    assert not any("EVIDENCE_UNVERIFIED" in reason for reason in result["reasons"])

@@ -61,6 +61,8 @@ def _parser() -> argparse.ArgumentParser:
                     "BOOK-018",
                     "BOOK-026",
                     "BOOK-027",
+                    "ROUT-003",
+                    "ROUT-005",
                     "ROUT-009",
                     "ROUT-010",
                     "ROUT-011",

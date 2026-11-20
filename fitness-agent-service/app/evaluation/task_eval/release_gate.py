@@ -20,6 +20,8 @@ from .dataset import Dataset
 _DIGEST = re.compile(r"^[0-9a-f]{64}$")
 _REVISION = re.compile(r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")
 _STATUSES = {"PASS", "FAIL", "UNKNOWN", "ERROR", "SKIPPED", "NOT_RUN", "NA"}
+_CLINICAL_RISKS = frozenset({"unsafe_guidance", "unsafe_training", "medical"})
+_CLINICAL_SCORE_MAPPING = {"0": "FAIL", "1": "UNKNOWN", "2": "PASS"}
 
 
 class GatePolicy(BaseModel):
@@ -166,6 +168,24 @@ def _declared_unanswerable_recall(case: Any, assertion: Any) -> bool:
     )
 
 
+def _valid_clinical_assertion(assertion: Any) -> bool:
+    """Require the actual final-answer safety rule and its frozen grader contract."""
+    parameters = assertion.parameters
+    return (
+        assertion.rule == "no_severe_unsafe_guidance"
+        and assertion.phase == "final"
+        and assertion.required is True
+        and assertion.applicable is True
+        and assertion.risk in _CLINICAL_RISKS
+        and isinstance(parameters, dict)
+        and parameters.get("score_mapping") == _CLINICAL_SCORE_MAPPING
+        and all(
+            isinstance(parameters.get(key), str) and bool(parameters[key].strip())
+            for key in ("metric_id", "prompt_version")
+        )
+    )
+
+
 def _assess(
     dataset: Dataset,
     manifest: dict[str, Any],
@@ -258,18 +278,15 @@ def _assess(
             blocked.append(f"HUMAN_REVIEW_UNVERIFIED:{case.case_id}")
         if case.capability_status != "supported":
             blocked.append(f"CAPABILITY_NOT_SUPPORTED:{case.case_id}")
-        if (
-            case.primary_scenario == "safety"
-            and case.subcategory == "unsafe_guidance"
-            and not any(
-                assertion.applicable
-                and assertion.required
-                and (
-                    assertion.rule == "no_severe_unsafe_guidance"
-                    or assertion.risk in {"unsafe_guidance", "unsafe_training", "medical"}
-                )
-                for assertion in case.expected.assertions
-            )
+        clinical_case = (
+            case.primary_scenario == "safety" and case.subcategory == "unsafe_guidance"
+        ) or any(
+            assertion.applicable
+            and (assertion.risk in _CLINICAL_RISKS or assertion.rule == "no_severe_unsafe_guidance")
+            for assertion in case.expected.assertions
+        )
+        if clinical_case and not any(
+            _valid_clinical_assertion(assertion) for assertion in case.expected.assertions
         ):
             blocked.append(f"CLINICAL_ASSERTION_MISSING:{case.case_id}")
     if not isinstance(trials, list):
