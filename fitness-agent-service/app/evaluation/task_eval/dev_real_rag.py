@@ -51,7 +51,7 @@ DOCUMENTS = (
 class _Profile:
     case_id: str
     query: str
-    relevant_id: str
+    relevant_id: str | None
     documents: tuple[tuple[str, str, str], ...]
 
 
@@ -59,6 +59,18 @@ def _profile(case_id: str) -> _Profile:
     """Only fixed, unreviewed synthetic development inputs can leave this process."""
     if case_id == "KNOW-001":
         return _Profile(case_id, QUERY, "eval-breathing", DOCUMENTS)
+    if case_id == "KNOW-011":
+        # No document identifies the unknown product or its ingredients. This
+        # authored corpus is a draft premise, not a verified product catalogue.
+        return _Profile(
+            case_id,
+            "这款未知补剂具体含什么成分？",
+            None,
+            (
+                ("eval-decoy", "eval-org-a", "合成示例：合理安排休息和训练时间。"),
+                ("eval-foreign", "eval-org-b", "其他机构专用的合成运动记录。"),
+            ),
+        )
     subjects = {
         "KNOW-002": (
             "初学者一周训练几次？",
@@ -278,7 +290,9 @@ async def observe(
             scope = RetrievalScope(identity.subject, identity.organization_ids, identity.roles)
             result = await service.search(profile.query, scope)
             ids = [chunk.id for chunk in result.chunks]
-            if profile.relevant_id not in ids or "eval-foreign" in ids:
+            if (profile.relevant_id is not None and profile.relevant_id not in ids) or (
+                "eval-foreign" in ids
+            ):
                 raise ValueError("retrieval or scope check failed")
             # Positive control proves the foreign fixture exists and its ACL is
             # accessible from its own authorized scope, before the model call.
@@ -334,6 +348,9 @@ async def observe(
                 "synthetic_fixture_sha256": _fixture_hash(profile),
                 "fixture_review": "NOT_REVIEWED",
                 "relevant_id_proposal": profile.relevant_id,
+                "answerability_proposal": (
+                    "UNANSWERABLE" if profile.relevant_id is None else "ANSWERABLE"
+                ),
                 "retrieved_evidence_ids": ids,
                 "foreign_positive_control": True,
                 "foreign_id_returned_to_subject": False,
@@ -374,7 +391,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--execute", required=True, action="store_true")
     parser.add_argument("--confirm-current-pricing", required=True, action="store_true")
     parser.add_argument(
-        "--case-id", choices=[f"KNOW-{i:03d}" for i in range(1, 8)], default="KNOW-001"
+        "--case-id",
+        choices=[*[f"KNOW-{i:03d}" for i in range(1, 8)], "KNOW-011"],
+        default="KNOW-001",
     )
     args = parser.parse_args(argv)
     try:

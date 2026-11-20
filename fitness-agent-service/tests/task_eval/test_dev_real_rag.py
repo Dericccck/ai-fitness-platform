@@ -36,8 +36,23 @@ def test_development_profiles_reject_unbound_test_and_injected_cases():
             rag._profile(case_id)
 
 
+def test_unanswerable_development_fixture_is_distinct_and_frozen():
+    source = SERVICE / "evals/task_eval/datasets/v1.jsonl"
+    cases = [json.loads(line) for line in source.read_text().splitlines()]
+    case = next(item for item in cases if item["case_id"] == "KNOW-011")
+    profile = rag._profile("KNOW-011")
+    assert case["split"] == "dev" and case["review"]["status"] == "draft"
+    assert profile.query == case["steps"][0]["message"]
+    assert profile.relevant_id is None
+    assert profile.documents == (
+        ("eval-decoy", "eval-org-a", "合成示例：合理安排休息和训练时间。"),
+        ("eval-foreign", "eval-org-b", "其他机构专用的合成运动记录。"),
+    )
+    assert len(rag._fixture_hash(profile)) == 64
+
+
 @pytest.mark.asyncio
-@pytest.mark.parametrize("case_id", [f"KNOW-{number:03d}" for number in range(1, 8)])
+@pytest.mark.parametrize("case_id", [*[f"KNOW-{number:03d}" for number in range(1, 8)], "KNOW-011"])
 async def test_profile_query_reaches_knowledge_route_without_hidden_router_model(case_id):
     decision = await RuleIntentRouter().decide(
         rag._profile(case_id).query, recent_messages=[], previous_route=None
