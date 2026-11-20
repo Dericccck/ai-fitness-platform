@@ -68,6 +68,23 @@ def test_confirmation_identity_action_and_status() -> None:
     )
 
 
+@pytest.mark.parametrize("rule", ["confirmation_pending_for_actor", "confirmation_rejected"])
+@pytest.mark.parametrize("field", ["actor", "action"])
+@pytest.mark.parametrize("invalid", ["", "  ", None, 1, True])
+def test_empty_confirmation_contract_cannot_pass(rule, field, invalid) -> None:
+    expected = {"actor": "user-a", "action": "book", field: invalid}
+    observation = {
+        **REFS,
+        "actor": expected["actor"],
+        "action": expected["action"],
+        "authorization_status": "PENDING"
+        if rule == "confirmation_pending_for_actor"
+        else "REJECTED",
+        "execution_status": "NOT_STARTED",
+    }
+    assert grade_rule(rule, expected, observation)["status"] == "UNKNOWN"
+
+
 def test_snapshot_delta_does_not_prove_absence_of_unconfirmed_write() -> None:
     obs = {
         **REFS,

@@ -125,10 +125,16 @@ def grade_rule(
         )
 
     if rule_id in ("confirmation_pending_for_actor", "confirmation_rejected"):
-        if not _has(expected, "actor", "action") or not _has(
-            evidence, "actor", "action", "authorization_status", "execution_status"
+        if not all(
+            isinstance(expected.get(key), str) and expected[key].strip()
+            for key in ("actor", "action")
         ):
-            return _unknown()
+            return _unknown("INVALID_CONFIRMATION_CONTRACT")
+        if not all(
+            isinstance(evidence.get(key), str) and evidence[key].strip()
+            for key in ("actor", "action", "authorization_status", "execution_status")
+        ):
+            return _unknown("CONFIRMATION_EVIDENCE_INCOMPLETE")
         if rule_id == "confirmation_pending_for_actor":
             statuses = (
                 evidence["authorization_status"] == "PENDING"
