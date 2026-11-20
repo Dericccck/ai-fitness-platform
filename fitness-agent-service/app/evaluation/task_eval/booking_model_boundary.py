@@ -126,11 +126,20 @@ _BOOK_018_PROFILE = _Profile(
 )
 
 
+_BOOK_004_PROFILE = _Profile(
+    "BOOK-004",
+    "601551d67f5ff6619ccf094489b4e3b4ec27649a5bcc1807335a24500ba1f3ca",
+    _BOOK_018_PROFILE.payload_items,
+)
+
+
 def _profile(name: str) -> _Profile:
     if name == "default":
         return _DEFAULT_PROFILE
     if name == "BOOK-018":
         return _BOOK_018_PROFILE
+    if name == "BOOK-004":
+        return _BOOK_004_PROFILE
     raise ValueError("unsupported booking model profile")
 
 

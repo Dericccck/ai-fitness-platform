@@ -384,7 +384,7 @@ async def run(model: OneBookingModel | None = None) -> dict[str, Any]:
             await db.close()
 
 
-def _real_model(args: Any) -> OneBookingModel:
+def _real_model(args: Any, *, profile: str = "BOOK-018") -> OneBookingModel:
     """Open an already established ledger and a private file, without exposing either."""
     key_path, ledger_path = Path(args.credential_file), Path(args.budget_file)
     if (
@@ -407,7 +407,7 @@ def _real_model(args: Any) -> OneBookingModel:
         raise ValueError("budget history unavailable or unresolved")
     credential = read_private_credential(key_path)
     return OneBookingModel(
-        credential, budget, execute=True, confirmed_current_pricing=True, profile="BOOK-018"
+        credential, budget, execute=True, confirmed_current_pricing=True, profile=profile
     )
 
 
