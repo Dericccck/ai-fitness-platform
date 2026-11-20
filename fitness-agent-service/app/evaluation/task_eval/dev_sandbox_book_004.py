@@ -39,6 +39,7 @@ from .audit_observation import (
     invalidate_failed_audit,
     matching_final_integrity,
 )
+from .booking_commit_link import read_commit_link
 from .booking_contracts import matches_frozen_case
 from .booking_local import Router
 from .booking_model_boundary import OneBookingModel, expected_payload
@@ -507,7 +508,18 @@ async def run(
                     model.profile, slot_before, fixture["payload"]
                 )
                 if slot_ready:
-                    trial = await _drive(case, fixture, agent, repo, snapshot, details, observer)
+                    trial = await _drive(
+                        case,
+                        fixture,
+                        agent,
+                        repo,
+                        snapshot,
+                        details,
+                        observer,
+                        lambda record: read_commit_link(
+                            run_id=run_id, container_id=mysql_id, record=record
+                        ),
+                    )
                 else:
                     trial = {
                         "case_id": case.case_id,

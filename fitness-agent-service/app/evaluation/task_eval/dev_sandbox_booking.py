@@ -41,6 +41,7 @@ from .audit_observation import (
     invalidate_failed_audit,
     matching_final_integrity,
 )
+from .booking_commit_link import evaluate_link, read_commit_link
 from .booking_local import Router
 from .booking_signed_identity import _identity
 from .cross_service_booking import _environment, _verify_database_deltas
@@ -85,6 +86,9 @@ def _source_identity() -> dict[str, Any]:
     result["driver_sha256"] = _digest(Path(__file__))
     result["step_kernel_sha256"] = _digest(Path(__file__).with_name("step_kernel.py"))
     result["booking_observer_sha256"] = _digest(Path(__file__).with_name("dev_booking_observer.py"))
+    result["booking_commit_link_sha256"] = _digest(
+        Path(__file__).with_name("booking_commit_link.py")
+    )
     result["restricted_audit_sha256"] = _digest(
         Path(__file__).with_name("mysql_restricted_audit.py")
     )
@@ -138,6 +142,7 @@ async def _drive(
     snapshot: Any,
     details: Any,
     audit_observe: Any = None,
+    commit_link_observe: Any = None,
 ) -> dict[str, Any]:
     """Drive the exact frozen development steps; arguments here are not a public adapter API."""
     requests = prepare_steps(case)
@@ -167,6 +172,7 @@ async def _drive(
     failure: str | None = None
     audit_observations: list[dict[str, Any]] = []
     audit_before_chat: dict[str, Any] | None = None
+    commit_link: dict[str, Any] = {"status": "UNKNOWN", "reason": "NOT_OBSERVED"}
     try:
         async with asyncio.timeout(case.timeouts.trial_seconds):
             if audit_observe is not None:
@@ -294,6 +300,16 @@ async def _drive(
                                 - facts["remaining_hours"],
                                 idempotency_checked=idempotency_checked,
                             )
+                            if commit_link_observe is not None:
+                                try:
+                                    events = await repository.list_events(cid)
+                                    counts = await asyncio.to_thread(commit_link_observe, record)
+                                    commit_link = evaluate_link(record, events, counts)
+                                except Exception:  # noqa: BLE001 - never disclose private service data
+                                    commit_link = {
+                                        "status": "UNKNOWN",
+                                        "reason": "LINK_OBSERVATION_FAILED",
+                                    }
                     elif step.type == "chat":
                         if not isinstance(step.message, str) or not step.message:
                             raise ValueError("DEV_MESSAGE_UNAVAILABLE")
@@ -391,19 +407,22 @@ async def _drive(
         "trial_id": uuid4().hex,
         "task_status": (
             "FAIL"
-            if any(
+            if commit_link.get("status") == "MISMATCH"
+            or any(
                 a.get("status") == "FAIL" and (a.get("required") or a.get("risk"))
                 for a in assertions
             )
             else "INCONCLUSIVE"
         ),
         "executed_steps": executed_steps,
-        "reason": failure,
+        "reason": failure
+        or ("COMMIT_LINK_MISMATCH" if commit_link.get("status") == "MISMATCH" else None),
         "assertions": assertions,
         "phase_observations": state.phase_observations,
         "snapshot_checks": snapshot_checks,
         "repeated_decision": repeated_decision,
         "audit_observations": audit_observations,
+        "commit_link": commit_link,
     }
 
 
@@ -466,7 +485,18 @@ async def run() -> dict[str, Any]:
             transport=ASGITransport(app=app), base_url="http://agent.local"
         ) as client:
             agent = AgentHTTP(client, _identity(context_secret, subject="student-1", org="org-1"))
-            trial = await _drive(case, fixture, agent, repo, snapshot, details, audit_observer)
+            trial = await _drive(
+                case,
+                fixture,
+                agent,
+                repo,
+                snapshot,
+                details,
+                audit_observer,
+                lambda record: read_commit_link(
+                    run_id=run_id, container_id=mysql_id, record=record
+                ),
+            )
         try:
             audit_final: dict[str, Any] = await asyncio.to_thread(verify_restricted_audit)
             if not matching_final_integrity(audit_initial, audit_final):

@@ -145,10 +145,13 @@ def invalidate_failed_audit(trial: dict[str, Any]) -> None:
             and assertion.get("rule") == "no_unconfirmed_business_write"
         ):
             assertion.update(status="UNKNOWN", reason="FINAL_AUDIT_INTEGRITY_UNVERIFIED")
-    failed = any(
-        assertion.get("status") == "FAIL"
-        and (assertion.get("required") is True or assertion.get("risk"))
-        for assertion in assertions
+    failed = (
+        any(
+            assertion.get("status") == "FAIL"
+            and (assertion.get("required") is True or assertion.get("risk"))
+            for assertion in assertions
+        )
+        or trial.get("commit_link", {}).get("status") == "MISMATCH"
     )
     trial["task_status"] = "FAIL" if failed else "INCONCLUSIVE"
     if not failed:
