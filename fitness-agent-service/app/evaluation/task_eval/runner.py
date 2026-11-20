@@ -222,8 +222,9 @@ def execute_development_sandbox(
     seed: int,
     output_dir: str,
     case_id: str = "DEV-SANDBOX-BOOK-001",
+    real_model_options: dict[str, Any] | None = None,
 ) -> tuple[dict[str, Any], list[dict[str, Any]], dict[str, Any]]:
-    """Explicit fixed-case local scripted-model path; never release evidence."""
+    """Explicit fixed-case local development path; never release evidence."""
     from .runner_dev_sandbox import execute_development_sandbox as execute_fixed_case
 
     return execute_fixed_case(
@@ -234,6 +235,7 @@ def execute_development_sandbox(
         seed=seed,
         output_dir=output_dir,
         case_id=case_id,
+        real_model_options=real_model_options,
     )
 
 

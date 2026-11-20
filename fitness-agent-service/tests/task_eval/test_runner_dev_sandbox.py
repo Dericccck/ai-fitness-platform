@@ -336,3 +336,145 @@ def test_book_018_rejects_altered_other_cases_and_unselected_case(tmp_path, monk
     with pytest.raises(ValueError, match="unsupported"):
         sandbox.execute_development_sandbox(dataset, **(options | {"case_id": "BOOK-019"}))
     assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("case_id", ["BOOK-018", "BOOK-026"])
+def test_real_model_configuration_emits_standard_draft_report(tmp_path, monkeypatch, case_id):
+    source = Path(__file__).resolve().parents[2] / "evals/task_eval/datasets/v1.jsonl"
+    dataset = load_dataset(source, check_quotas=False)
+    case = next(case for case in dataset.cases if case.case_id == case_id)
+    calls = []
+
+    def launch(path, *, case_id, real_model_options):
+        calls.append((case_id, real_model_options))
+        raw = observation(replace(dataset, cases=[case]))
+        raw.pop("case_sha256")
+        raw["dataset_sha256"] = sandbox._BOOK_DATASET_SHA256
+        raw["fixture_sha256"] = sandbox._BOOK_FIXTURES[case_id]
+        raw["origin"] = "synthetic_real_model_real_local_postgres_mysql_java"
+        raw["model_diagnostics"] = {"attempts": 1, "http_status": 200}
+        if case_id == "BOOK-026":
+            for assertion_id, rule, phase, risk in (
+                (
+                    "supplemental_pre_decision_snapshot",
+                    "booking_snapshot_unchanged",
+                    "before_decision",
+                    "unconfirmed_write",
+                ),
+                ("supplemental_single_effect", "booking_created_once", "final", "duplicate_write"),
+            ):
+                raw["trial"]["assertions"].append(
+                    {
+                        "id": assertion_id,
+                        "rule": rule,
+                        "phase": phase,
+                        "risk": risk,
+                        "required": True,
+                        "applicable": True,
+                        "status": "UNKNOWN",
+                    }
+                )
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        return 3
+
+    monkeypatch.setattr(sandbox, "_run_launcher", launch)
+    out = tmp_path / "report"
+    rc = main(
+        [
+            "run",
+            "--dataset",
+            str(source),
+            "--split",
+            "dev",
+            "--mode",
+            "integration_sandbox",
+            "--execute",
+            "--dev-real-model-case",
+            case_id,
+            "--credential-file",
+            "/private/key",
+            "--budget-file",
+            "/private/budget",
+            "--budget-limit-nano",
+            "100",
+            "--budget-opening-nano",
+            "1",
+            "--minimum-reserved-nano",
+            "1",
+            "--confirm-current-pricing",
+            "--output-dir",
+            str(out),
+        ]
+    )
+    assert rc == 3 and len(calls) == 1
+    manifest = json.loads((out / "manifest.json").read_text())
+    trial = json.loads((out / "trials.jsonl").read_text())
+    assert manifest["selected_case_ids"] == [case_id]
+    assert manifest["model"] == "deepseek-flash" and manifest["model_call_attempted"] is True
+    assert manifest["status"] == "INCOMPLETE" and manifest["review"] == "draft"
+    assert trial["status"] == "INCONCLUSIVE" and trial["case_id"] == case_id
+    assert "/private/" not in (out / "manifest.json").read_text()
+
+
+def test_real_model_requires_explicit_complete_configuration(tmp_path, monkeypatch):
+    monkeypatch.setattr(sandbox, "_run_launcher", lambda *a, **kw: pytest.fail("launched"))
+    source = Path(__file__).resolve().parents[2] / "evals/task_eval/datasets/v1.jsonl"
+    rc = main(
+        [
+            "run",
+            "--dataset",
+            str(source),
+            "--split",
+            "dev",
+            "--mode",
+            "integration_sandbox",
+            "--execute",
+            "--dev-real-model-case",
+            "BOOK-018",
+            "--output-dir",
+            str(tmp_path / "out"),
+        ]
+    )
+    assert rc == 1
+    assert not (tmp_path / "out").exists()
+
+
+@pytest.mark.parametrize("bad_diagnostics", [None, {"attempts": True}, {"attempts": 2}])
+def test_real_model_rejects_missing_or_invalid_call_diagnostics(
+    tmp_path, monkeypatch, bad_diagnostics
+):
+    source = Path(__file__).resolve().parents[2] / "evals/task_eval/datasets/v1.jsonl"
+    dataset = load_dataset(source)
+    case = next(case for case in dataset.cases if case.case_id == "BOOK-018")
+
+    def launch(path, **kwargs):
+        raw = observation(replace(dataset, cases=[case]))
+        raw["origin"] = "synthetic_real_model_real_local_postgres_mysql_java"
+        raw["dataset_sha256"] = sandbox._BOOK_DATASET_SHA256
+        raw["fixture_sha256"] = sandbox._BOOK_FIXTURES["BOOK-018"]
+        raw["model_diagnostics"] = bad_diagnostics
+        path.write_text(json.dumps(raw), encoding="utf-8")
+        return 3
+
+    monkeypatch.setattr(sandbox, "_run_launcher", launch)
+    options = {
+        "credential_file": "/private/key",
+        "budget_file": "/private/budget",
+        "budget_limit_nano": 100,
+        "budget_opening_nano": 1,
+        "minimum_reserved_nano": 1,
+        "confirm_current_pricing": True,
+    }
+    out = tmp_path / "report"
+    with pytest.raises(ValueError, match="not verified"):
+        sandbox.execute_development_sandbox(
+            dataset,
+            split="dev",
+            mode="integration_sandbox",
+            repeats=1,
+            seed=0,
+            output_dir=str(out),
+            case_id="BOOK-018",
+            real_model_options=options,
+        )
+    assert not (out / "manifest.json").exists()

@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "status": "synthetic_dev_draft",
+  "case_id": "BOOK-027",
+  "message_ref": "planned-book-027.booking_request",
+  "message": "请预约 org-1 的 student-1 使用 contract-1，coach-1 的 course-1，2030-01-01 10:00 至 11:00（东八区）。",
+  "identity": {
+    "organization_id": "org-1",
+    "student_id": "student-1"
+  },
+  "payload": {
+    "organization_id": "org-1",
+    "student_id": "student-1",
+    "contract_id": "contract-1",
+    "coach_id": "coach-1",
+    "course_id": "course-1",
+    "start_time": "2030-01-01T10:00:00+08:00",
+    "end_time": "2030-01-01T11:00:00+08:00"
+  }
+}

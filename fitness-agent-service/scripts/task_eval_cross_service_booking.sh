@@ -16,12 +16,12 @@ if [[ "${1:-}" == "--broker-duplicate-trial" ]]; then
     broker_report="$2"
     set -- --real-broker --report-file "$broker_report"
 fi
-if [[ "${1:-}" == "--single-development-trial" || "${1:-}" == "--book-018-development-trial" || "${1:-}" == "--book-018-real-model-trial" || "${1:-}" == "--book-026-development-trial" || "${1:-}" == "--book-026-real-model-trial" ]]; then
+if [[ "${1:-}" == "--single-development-trial" || "${1:-}" == "--book-018-development-trial" || "${1:-}" == "--book-018-real-model-trial" || "${1:-}" == "--book-026-development-trial" || "${1:-}" == "--book-026-real-model-trial" || "${1:-}" == "--book-027-development-trial" || "${1:-}" == "--book-027-real-model-trial" ]]; then
     [[ "$#" -ge 2 && "$2" == /* && ! -e "$2" ]] || {
         printf 'Provide a new absolute report path for the development trial.\n' >&2
         exit 1
     }
-    [[ "$1" == "--book-018-real-model-trial" || "$1" == "--book-026-real-model-trial" || "$#" -eq 2 ]] || exit 1
+    [[ "$1" == "--book-018-real-model-trial" || "$1" == "--book-026-real-model-trial" || "$1" == "--book-027-real-model-trial" || "$#" -eq 2 ]] || exit 1
     single_development_trial=true
     single_report="$2"
     if [[ "$1" == "--book-018-development-trial" || "$1" == "--book-018-real-model-trial" ]]; then
@@ -30,7 +30,10 @@ if [[ "${1:-}" == "--single-development-trial" || "${1:-}" == "--book-018-develo
     if [[ "$1" == "--book-026-development-trial" || "$1" == "--book-026-real-model-trial" ]]; then
         development_module=app.evaluation.task_eval.dev_sandbox_book_026
     fi
-    if [[ "$1" == "--book-018-real-model-trial" || "$1" == "--book-026-real-model-trial" ]]; then
+    if [[ "$1" == "--book-027-development-trial" || "$1" == "--book-027-real-model-trial" ]]; then
+        development_module=app.evaluation.task_eval.dev_sandbox_book_027
+    fi
+    if [[ "$1" == "--book-018-real-model-trial" || "$1" == "--book-026-real-model-trial" || "$1" == "--book-027-real-model-trial" ]]; then
         book_real_model=true
         shift 2
         real_model_args=("$@")

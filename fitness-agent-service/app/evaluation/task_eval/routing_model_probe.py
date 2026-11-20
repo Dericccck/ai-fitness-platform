@@ -49,11 +49,14 @@ class _RouterModel:
         budget: DurableBudget,
         transport: httpx.MockTransport | None,
         max_calls: int,
+        *,
+        supervisor_context: bool = False,
     ):
         self.credential = credential
         self.budget = budget
         self.transport = transport
         self.max_calls = max_calls
+        self.supervisor_context = supervisor_context
         self.attempts = 0
         self.expected_message = ""
         self.last_status = "NOT_CALLED"
@@ -74,7 +77,11 @@ class _RouterModel:
                 "content": json.dumps(
                     {
                         "previous_route": None,
-                        "recent_messages": [],
+                        "recent_messages": (
+                            [{"role": "user", "content": self.expected_message}]
+                            if self.supervisor_context
+                            else []
+                        ),
                         "current_message": self.expected_message,
                     },
                     ensure_ascii=False,

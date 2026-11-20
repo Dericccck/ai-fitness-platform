@@ -55,6 +55,26 @@ def _parser() -> argparse.ArgumentParser:
                 choices=("DEV-SANDBOX-BOOK-001", "BOOK-018"),
                 help="fixed draft case to run with --dev-scripted-sandbox",
             )
+            cmd.add_argument(
+                "--dev-real-model-case",
+                choices=(
+                    "BOOK-018",
+                    "BOOK-026",
+                    "BOOK-027",
+                    "ROUT-009",
+                    "ROUT-010",
+                    "ROUT-011",
+                    "ROUT-012",
+                    "ROUT-017",
+                    "ROUT-019",
+                ),
+            )
+            cmd.add_argument("--credential-file", help="absolute path to private model key file")
+            cmd.add_argument("--budget-file", help="absolute path to existing budget ledger")
+            cmd.add_argument("--budget-limit-nano", type=int)
+            cmd.add_argument("--budget-opening-nano", type=int)
+            cmd.add_argument("--minimum-reserved-nano", type=int)
+            cmd.add_argument("--confirm-current-pricing", action="store_true")
     gate = sub.add_parser("release-gate", help="fail-closed offline release assessment")
     gate.add_argument("--dataset", required=True)
     gate.add_argument("--manifest", required=True)
@@ -310,7 +330,49 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.dev_scripted_case and not args.dev_scripted_sandbox:
             raise ValueError("--dev-scripted-case requires --dev-scripted-sandbox")
-        if args.dev_scripted_sandbox:
+        model_values = (
+            args.credential_file,
+            args.budget_file,
+            args.budget_limit_nano,
+            args.budget_opening_nano,
+            args.minimum_reserved_nano,
+        )
+        if args.dev_real_model_case:
+            if (
+                args.dev_scripted_sandbox
+                or any(v is None for v in model_values)
+                or not args.confirm_current_pricing
+            ):
+                raise ValueError(
+                    "real model sandbox requires private credential, existing budget and confirmed pricing"
+                )
+            real_model_options = {
+                "credential_file": args.credential_file,
+                "budget_file": args.budget_file,
+                "budget_limit_nano": args.budget_limit_nano,
+                "budget_opening_nano": args.budget_opening_nano,
+                "minimum_reserved_nano": args.minimum_reserved_nano,
+                "confirm_current_pricing": True,
+            }
+            if args.dev_real_model_case.startswith("ROUT-"):
+                from .runner_dev_routing import execute_development_routing
+
+                run_development = execute_development_routing
+            else:
+                run_development = execute_development_sandbox
+            manifest, trials, summary = run_development(
+                dataset,
+                split=args.split,
+                mode=args.mode,
+                repeats=args.repeats,
+                seed=args.seed,
+                output_dir=args.output_dir,
+                case_id=args.dev_real_model_case,
+                real_model_options=real_model_options,
+            )
+        elif any(v is not None for v in model_values) or args.confirm_current_pricing:
+            raise ValueError("model options require --dev-real-model-case")
+        elif args.dev_scripted_sandbox:
             manifest, trials, summary = execute_development_sandbox(
                 dataset,
                 split=args.split,

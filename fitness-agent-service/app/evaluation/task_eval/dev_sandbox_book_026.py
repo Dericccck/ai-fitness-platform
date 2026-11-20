@@ -7,7 +7,6 @@ import asyncio
 import hashlib
 import json
 import secrets
-import stat
 from pathlib import Path
 from typing import Any, cast
 from uuid import uuid4
@@ -43,6 +42,7 @@ from .graders.rules import grade_rule
 from .mysql_booking_observer import snapshot_booking
 from .mysql_restricted_audit import observe as observe_restricted_audit
 from .mysql_restricted_audit import verify as verify_restricted_audit
+from .private_credential import read_private_credential
 from .step_kernel import StepState, execute_steps, prepare_steps
 
 _DATASET = Path(__file__).resolve().parents[3] / "evals/task_eval/datasets/v1.jsonl"
@@ -440,7 +440,7 @@ async def run(model: OneBookingModel | None = None) -> dict[str, Any]:
         Path(__file__).with_name("booking_dev_026.py").read_bytes()
     ).hexdigest()
     if model is not None:
-        for name in ("booking_model_boundary", "budget_store"):
+        for name in ("booking_model_boundary", "budget_store", "private_credential"):
             identity[f"{name}_sha256"] = hashlib.sha256(
                 Path(__file__).with_name(f"{name}.py").read_bytes()
             ).hexdigest()
@@ -558,10 +558,6 @@ def _real_model(args: Any) -> OneBookingModel:
     key_path, ledger_path = Path(args.credential_file), Path(args.budget_file)
     if (
         not args.confirm_current_pricing
-        or not key_path.is_absolute()
-        or key_path.is_symlink()
-        or not key_path.is_file()
-        or stat.S_IMODE(key_path.stat().st_mode) & 0o077
         or not ledger_path.is_absolute()
         or ledger_path.is_symlink()
         or not ledger_path.is_file()
@@ -578,7 +574,7 @@ def _real_model(args: Any) -> OneBookingModel:
         or snapshot["pending"]
     ):
         raise ValueError("budget history unavailable or unresolved")
-    credential = key_path.read_text(encoding="utf-8").strip()
+    credential = read_private_credential(key_path)
     return OneBookingModel(
         credential, budget, execute=True, confirmed_current_pricing=True, profile="BOOK-018"
     )
