@@ -169,13 +169,18 @@ async def test_committed_write_before_decision_fails_and_stops_before_approval()
     case, fixture = module._load()
     agent = FakeAgent()
     repo = FakeRepository(agent)
+    from tests.task_eval.test_audit_observation import snapshot
+
     snapshots = iter(
         [
-            {"records": [], "audit_window_complete": False},
-            {
-                "records": [{"table": "appointment", "operation": "INSERT", "count": 1}],
-                "audit_window_complete": False,
-            },
+            snapshot({"records": [], "audit_window_complete": False}, 1),
+            snapshot(
+                {
+                    "records": [{"table": "appointment", "operation": "INSERT", "count": 1}],
+                    "audit_window_complete": False,
+                },
+                3,
+            ),
         ]
     )
     report = await module._drive(

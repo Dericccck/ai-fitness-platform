@@ -35,7 +35,12 @@ from app.infrastructure.gateway_client import GatewayClient
 from app.infrastructure.model_gateway import ModelToolCall, ModelTurn
 
 from .agent_http import AgentHTTP
-from .audit_observation import committed_before_decision, invalidate_failed_audit
+from .audit_observation import (
+    bind_verified_observer,
+    committed_before_decision,
+    invalidate_failed_audit,
+    matching_final_integrity,
+)
 from .booking_local import Router
 from .booking_signed_identity import _identity
 from .cross_service_booking import _environment, _verify_database_deltas
@@ -406,6 +411,9 @@ async def run() -> dict[str, Any]:
     case, fixture = _load()
     settings, run_id, mysql_id, context_secret, token_secret = _environment()
     audit_initial = await asyncio.to_thread(verify_restricted_audit)
+    audit_observer = bind_verified_observer(
+        audit_initial, observe_restricted_audit, run_id=run_id, container_id=mysql_id
+    )
     source_identity = _source_identity()
     db = Database(settings)
     gateway = GatewayClient(settings)
@@ -458,12 +466,10 @@ async def run() -> dict[str, Any]:
             transport=ASGITransport(app=app), base_url="http://agent.local"
         ) as client:
             agent = AgentHTTP(client, _identity(context_secret, subject="student-1", org="org-1"))
-            trial = await _drive(
-                case, fixture, agent, repo, snapshot, details, observe_restricted_audit
-            )
+            trial = await _drive(case, fixture, agent, repo, snapshot, details, audit_observer)
         try:
             audit_final: dict[str, Any] = await asyncio.to_thread(verify_restricted_audit)
-            if audit_final.get("status") != "VERIFIED":
+            if not matching_final_integrity(audit_initial, audit_final):
                 raise ValueError("FINAL_AUDIT_INTEGRITY_UNVERIFIED")
         except Exception:  # noqa: BLE001 - retain the trial and explicitly invalidate audit integrity
             audit_final = {"status": "FAILED"}

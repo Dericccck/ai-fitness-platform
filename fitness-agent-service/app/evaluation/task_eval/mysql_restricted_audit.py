@@ -11,8 +11,10 @@ import json
 import os
 import re
 import subprocess
+import time
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from .mysql_audit_lab import _EVENTS, _ROOT, _TABLES, _sql
 from .mysql_sandbox_preflight import verify_container
@@ -22,6 +24,7 @@ _BOOKING = "eval_booking"
 _GATEWAY = "eval_gateway"
 _OWNER = "eval_audit_owner"
 _BODY = "INSERT INTO fitness_eval_audit.events (table_name, op) VALUES ('{table}', '{event}')"
+_OBSERVER_INSTANCE = uuid4().hex
 _TRANSACTION_STATES = frozenset({"RUNNING", "LOCK WAIT", "ROLLING BACK", "COMMITTING"})
 
 
@@ -39,6 +42,16 @@ def _container() -> tuple[str, str]:
     if _sql(cid, "SELECT DATABASE(), CURRENT_USER();") != "NULL\troot@localhost":
         raise PreflightError("AUDIT_DB_IDENTITY_MISMATCH")
     return run_id, cid
+
+
+def _source(run_id: str, cid: str) -> dict[str, Any]:
+    return {
+        "run_id": run_id,
+        "mysql_container_id": cid,
+        "observer_instance": _OBSERVER_INSTANCE,
+        "observer_pid": os.getpid(),
+        "audit_table": "fitness_eval_audit.events",
+    }
 
 
 def _client(cid: str, user: str, sql: str, *, deny: bool = False) -> str:
@@ -141,7 +154,7 @@ GRANT INSERT ON fitness_eval_audit.events TO 'eval_audit_owner'@'localhost';
 
 
 def verify() -> dict[str, Any]:
-    _, cid = _container()
+    run_id, cid = _container()
     rows = _sql(
         cid,
         "SELECT TRIGGER_NAME,EVENT_OBJECT_TABLE,EVENT_MANIPULATION,ACTION_TIMING,"
@@ -214,6 +227,7 @@ SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='fitness_e
     _client(cid, _GATEWAY, "UPDATE fitness_eval.contract SET remaining_class_hours=0;", deny=True)
     return {
         "status": "VERIFIED",
+        "source": _source(run_id, cid),
         "tables": list(_TABLES),
         "trigger_count": len(expected),
         "booking_account": "restricted_dml",
@@ -258,7 +272,8 @@ def _observe_transactions(cid: str) -> dict[str, Any]:
 
 def observe() -> dict[str, Any]:
     """Return transactional audit counts, without claiming a closed commit window."""
-    _, cid = _container()
+    started = time.monotonic_ns()
+    run_id, cid = _container()
     output = _sql(
         cid,
         "SELECT table_name,op,COUNT(*) FROM fitness_eval_audit.events GROUP BY table_name,op ORDER BY table_name,op;",
@@ -274,9 +289,14 @@ def observe() -> dict[str, Any]:
         ):
             raise PreflightError("INVALID_AUDIT_OBSERVATION")
         records.append({"table": values[0], "operation": values[1], "count": int(values[2])})
+    transactions = _observe_transactions(cid)
+    ended = time.monotonic_ns()
     return {
         "records": records,
-        "transaction_sample": _observe_transactions(cid),
+        "source": _source(run_id, cid),
+        "capture_start_monotonic_ns": started,
+        "capture_end_monotonic_ns": ended,
+        "transaction_sample": transactions,
         "audit_window_complete": False,
         "cross_database_causality": "UNKNOWN",
     }

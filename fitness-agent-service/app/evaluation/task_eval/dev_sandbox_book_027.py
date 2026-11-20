@@ -28,7 +28,12 @@ from app.infrastructure.database import Database
 from app.infrastructure.gateway_client import GatewayClient, GatewayExecutionUnknownError
 
 from .agent_http import AgentHTTP
-from .audit_observation import committed_before_decision, invalidate_failed_audit
+from .audit_observation import (
+    bind_verified_observer,
+    committed_before_decision,
+    invalidate_failed_audit,
+    matching_final_integrity,
+)
 from .booking_dev_027 import load as load_book_027
 from .booking_local import Router
 from .booking_model_boundary import OneBookingModel
@@ -439,6 +444,9 @@ async def run(model: OneBookingModel | None = None) -> dict[str, Any]:
         raise ValueError("unsupported model boundary")
     settings, run_id, mysql_id, context_secret, token_secret = _environment()
     audit_initial = await asyncio.to_thread(verify_restricted_audit)
+    audit_observer = bind_verified_observer(
+        audit_initial, observe_restricted_audit, run_id=run_id, container_id=mysql_id
+    )
     identity = _source_identity()
     identity["book_027_driver_sha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
     identity["book_027_fixture_loader_sha256"] = hashlib.sha256(
@@ -508,12 +516,12 @@ async def run(model: OneBookingModel | None = None) -> dict[str, Any]:
                 confirmation,
                 snapshot,
                 details,
-                observe_restricted_audit,
+                audit_observer,
                 gateway,
             )
         try:
             audit_final = await asyncio.to_thread(verify_restricted_audit)
-            if audit_final.get("status") != "VERIFIED":
+            if not matching_final_integrity(audit_initial, audit_final):
                 raise ValueError("FINAL_AUDIT_INTEGRITY_UNVERIFIED")
         except Exception:  # noqa: BLE001
             audit_final = {"status": "FAILED"}
