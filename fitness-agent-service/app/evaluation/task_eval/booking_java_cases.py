@@ -36,7 +36,8 @@ _METHODS = {
     "BOOK-023": "existingCoachAppointmentRejectsNewBookingWithoutWrite",
     "BOOK-024": "existingStudentAppointmentRejectsNewBookingWithoutWrite",
 }
-_TEST_SOURCE_SHA = "595702c658011ddf230076e8ae8c2819ab3b795a878f3bf200329ba44d2e31b6"
+# The five mapped methods are unchanged; additional cross-midnight tests were added.
+_TEST_SOURCE_SHA = "903854e7aedc2d654499f7ce7863fc1dd1fa1e5181ed223da63945ba65684ebf"
 _TEST_REL = Path("src/test/java/com/shuyiwa/fitness/booking/service/BookingServiceTest.java")
 _CLASS = "com.shuyiwa.fitness.booking.service.BookingServiceTest"
 _ROOT = Path(__file__).resolve().parents[4]
