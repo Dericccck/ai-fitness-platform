@@ -24,6 +24,7 @@
 
 ```bash
 bash scripts/task_eval_mysql_booking_observation.sh --coach-slot-concurrency
+bash scripts/task_eval_mysql_booking_observation.sh --coach-slot-midnight-concurrency
 ```
 
 该命令只接受本机 Docker Unix socket，在临时 MySQL 中以两份有效合成合同让两名
@@ -32,3 +33,9 @@ Java 源码复制到临时目录执行，报告绑定运行前后核对的源码
 签署的来源证明。测试直接调用 Java 业务服务，确认身份为合成测试对象，不经过
 真实模型、Gateway 或完整 PostgreSQL 确认流程，且不证明完整事务审计或 BOOK-009
 任务通过。运行结束后会清理临时容器和构建目录。
+
+跨午夜版本让第一人预约 23:30—00:30、第二人预约 00:15—01:15（机构时区），
+检查两个开始日期不同但实际重叠的私教预约不能同时提交。预约创建和改约对
+`[开始, 结束)` 涉及的教练和学员日期均按顺序获取事务锁，并检查各日营业状态、
+教练请假和合同有效期；恰好在午夜结束不占用次日。此测试不替代完整任务链路、
+确认前独立审计、事务收敛证明或人工审核。

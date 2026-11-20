@@ -161,6 +161,81 @@ public class BookingServiceTest {
                 .thenReturn(Optional.of(new BookingRepository.CourseRecord("course-1", "力量训练", 1)));
     }
 
+    @Test
+    public void crossMidnightCreateLocksBothDaysAndChecksBothCalendars() {
+        setupCreateChecks();
+        BookingCreateRequest request = request();
+        request.setStartTime(Instant.parse("2026-08-20T15:30:00Z"));
+        request.setEndTime(Instant.parse("2026-08-20T16:30:00Z"));
+        service.create(studentActor(), request);
+        LocalDate first = LocalDate.of(2026, 8, 20), second = first.plusDays(1);
+        verify(repository).acquireCoachDayLock("org-1", "coach-1", first);
+        verify(repository).acquireCoachDayLock("org-1", "coach-1", second);
+        verify(repository).acquireStudentDayLock("org-1", "student-1", first);
+        verify(repository).acquireStudentDayLock("org-1", "student-1", second);
+        verify(repository).findNonBusinessDays("org-1", first, second);
+        verify(repository).findCoachVacationDays("org-1", "coach-1", first, second);
+    }
+
+    @Test
+    public void bookingEndingAtMidnightDoesNotLockNextDay() {
+        setupCreateChecks();
+        BookingCreateRequest request = request();
+        request.setStartTime(Instant.parse("2026-08-20T15:30:00Z"));
+        request.setEndTime(Instant.parse("2026-08-20T16:00:00Z"));
+        service.create(studentActor(), request);
+        verify(repository).acquireCoachDayLock("org-1", "coach-1", LocalDate.of(2026, 8, 20));
+        verify(repository, never()).acquireCoachDayLock("org-1", "coach-1", LocalDate.of(2026, 8, 21));
+    }
+
+    @Test
+    public void crossMidnightBookingRejectsSecondDayClosure() {
+        setupCreateChecks();
+        BookingCreateRequest request = request();
+        request.setStartTime(Instant.parse("2026-08-20T15:30:00Z"));
+        request.setEndTime(Instant.parse("2026-08-20T16:30:00Z"));
+        when(repository.findNonBusinessDays("org-1", LocalDate.of(2026, 8, 20),
+                LocalDate.of(2026, 8, 21))).thenReturn(Collections.singletonList(LocalDate.of(2026, 8, 21)));
+        assertCreateRejected(request, 409, "机构当天不是营业日");
+        verify(repository, never()).insertBooking(any(), any(), any(), any(), any(), any(), anyInt());
+    }
+
+    @Test
+    public void crossMidnightBookingRejectsContractExpiredOnSecondDay() {
+        setupCreateChecks();
+        BookingCreateRequest request = request();
+        request.setStartTime(Instant.parse("2026-12-31T15:30:00Z"));
+        request.setEndTime(Instant.parse("2026-12-31T16:30:00Z"));
+        assertCreateRejected(request, 409, "预约时间不在合同有效期内");
+        verify(repository, never()).insertBooking(any(), any(), any(), any(), any(), any(), anyInt());
+    }
+
+    @Test
+    public void crossMidnightRescheduleLocksBothDays() {
+        BookingRescheduleRequest request = rescheduleRequest();
+        request.setStartTime(Instant.parse("2026-08-21T15:30:00Z"));
+        request.setEndTime(Instant.parse("2026-08-21T16:30:00Z"));
+        BookingAppointmentView current = new BookingAppointmentView(
+                "appointment-1", "org-1", "student-1", "coach-1", "course-1", "力量训练",
+                request.getExpectedStartTime(), Instant.parse("2026-08-20T11:00:00Z"),
+                1, "contract-1", 0);
+        when(repository.findByRescheduleRequestId("request-2")).thenReturn(Optional.empty());
+        when(repository.findAppointmentForUpdate("org-1", "appointment-1")).thenReturn(Optional.of(current));
+        when(repository.isOrganizationMember("org-1", "student-1")).thenReturn(true);
+        when(repository.isCoachInOrganization("org-1", "coach-2")).thenReturn(true);
+        when(repository.findContractForUpdate("org-1", "student-1", "contract-1")).thenReturn(contract(0));
+        when(repository.findActiveCourse("org-1", "course-1"))
+                .thenReturn(Optional.of(new BookingRepository.CourseRecord("course-1", "力量训练", 1)));
+        service.reschedule(rescheduleActor(), request);
+        LocalDate first = LocalDate.of(2026, 8, 21), second = first.plusDays(1);
+        verify(repository).acquireCoachDayLock("org-1", "coach-2", first);
+        verify(repository).acquireCoachDayLock("org-1", "coach-2", second);
+        verify(repository).acquireStudentDayLock("org-1", "student-1", first);
+        verify(repository).acquireStudentDayLock("org-1", "student-1", second);
+        verify(repository).findNonBusinessDays("org-1", first, second);
+        verify(repository).findCoachVacationDays("org-1", "coach-2", first, second);
+    }
+
     private void assertCreateRejected(BookingCreateRequest request, int status, String reason) {
         try {
             service.create(studentActor(), request);

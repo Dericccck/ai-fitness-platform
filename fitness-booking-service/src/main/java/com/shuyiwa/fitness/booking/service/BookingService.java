@@ -20,6 +20,8 @@ import java.time.Clock;
 import java.time.Instant;
 import java.time.LocalDate;
 import java.time.ZoneId;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * 创建预约的业务编排层。
@@ -99,19 +101,24 @@ public class BookingService {
         }
         // 请求锁解决同一 request_id 的并发重试；教练日期锁解决不同请求的冲突竞态。
         repository.acquireRequestLock(actor.getRequestId());
-        boolean coachLocked = false;
-        boolean studentLocked = false;
+        List<LocalDate> coachLockedDates = new ArrayList<>();
+        List<LocalDate> studentLockedDates = new ArrayList<>();
         LocalDate bookingDate = request.getStartTime().atZone(BUSINESS_ZONE).toLocalDate();
+        LocalDate lastBookingDate = request.getEndTime().minusNanos(1).atZone(BUSINESS_ZONE).toLocalDate();
         try {
             repository.assertRequestBinding(actor.getRequestId(), actor.getUserId(), actor.getConfirmation());
             BookingAppointmentView applied = repository.findByRequestId(actor.getRequestId()).orElse(null);
             if (applied != null) {
                 return applied;
             }
-            repository.acquireCoachDayLock(request.getOrganizationId(), request.getCoachId(), bookingDate);
-            coachLocked = true;
-            repository.acquireStudentDayLock(request.getOrganizationId(), request.getStudentId(), bookingDate);
-            studentLocked = true;
+            for (LocalDate date = bookingDate; !date.isAfter(lastBookingDate); date = date.plusDays(1)) {
+                repository.acquireCoachDayLock(request.getOrganizationId(), request.getCoachId(), date);
+                coachLockedDates.add(date);
+            }
+            for (LocalDate date = bookingDate; !date.isAfter(lastBookingDate); date = date.plusDays(1)) {
+                repository.acquireStudentDayLock(request.getOrganizationId(), request.getStudentId(), date);
+                studentLockedDates.add(date);
+            }
 
             BookingRepository.ContractRecord contract = repository.findContractForUpdate(
                     request.getOrganizationId(), request.getStudentId(), request.getContractId());
@@ -120,7 +127,7 @@ public class BookingService {
             }
             if (contract.startDate == null || contract.endDate == null
                     || bookingDate.isBefore(contract.startDate.toLocalDate())
-                    || bookingDate.isAfter(contract.endDate.toLocalDate())) {
+                    || lastBookingDate.isAfter(contract.endDate.toLocalDate())) {
                 throw new BookingApiException(HttpStatus.CONFLICT, "预约时间不在合同有效期内");
             }
             if (contract.remainingClassHours < 1) {
@@ -135,10 +142,10 @@ public class BookingService {
             if (course.status != COURSE_ENABLED) {
                 throw new BookingApiException(HttpStatus.CONFLICT, "预约课程已下线");
             }
-            if (!repository.findNonBusinessDays(request.getOrganizationId(), bookingDate, bookingDate).isEmpty()) {
+            if (!repository.findNonBusinessDays(request.getOrganizationId(), bookingDate, lastBookingDate).isEmpty()) {
                 throw new BookingApiException(HttpStatus.CONFLICT, "机构当天不是营业日");
             }
-            if (!repository.findCoachVacationDays(request.getOrganizationId(), request.getCoachId(), bookingDate, bookingDate).isEmpty()) {
+            if (!repository.findCoachVacationDays(request.getOrganizationId(), request.getCoachId(), bookingDate, lastBookingDate).isEmpty()) {
                 throw new BookingApiException(HttpStatus.CONFLICT, "教练当天正在请假");
             }
             if (!repository.findCoachConflicts(request.getOrganizationId(), request.getCoachId(),
@@ -159,11 +166,11 @@ public class BookingService {
                     contract.remainingClassHours - 1
             );
         } finally {
-            if (coachLocked) {
-                repository.releaseCoachDayLock(request.getOrganizationId(), request.getCoachId(), bookingDate);
+            for (LocalDate date : coachLockedDates) {
+                repository.releaseCoachDayLock(request.getOrganizationId(), request.getCoachId(), date);
             }
-            if (studentLocked) {
-                repository.releaseStudentDayLock(request.getOrganizationId(), request.getStudentId(), bookingDate);
+            for (LocalDate date : studentLockedDates) {
+                repository.releaseStudentDayLock(request.getOrganizationId(), request.getStudentId(), date);
             }
             repository.releaseRequestLock(actor.getRequestId());
         }
@@ -175,10 +182,11 @@ public class BookingService {
         requireOrganization(actor, request.getOrganizationId());
         requireRescheduleConfirmation(actor, request);
         repository.acquireRequestLock(actor.getRequestId());
-        boolean coachLocked = false;
-        boolean studentLocked = false;
+        List<LocalDate> coachLockedDates = new ArrayList<>();
+        List<LocalDate> studentLockedDates = new ArrayList<>();
         String lockedStudentId = null;
         LocalDate bookingDate = request.getStartTime().atZone(BUSINESS_ZONE).toLocalDate();
+        LocalDate lastBookingDate = request.getEndTime().minusNanos(1).atZone(BUSINESS_ZONE).toLocalDate();
         try {
             repository.assertRequestBinding(actor.getRequestId(), actor.getUserId(), actor.getConfirmation());
             BookingAppointmentView applied = repository.findByRescheduleRequestId(actor.getRequestId())
@@ -203,10 +211,14 @@ public class BookingService {
                 throw new BookingApiException(HttpStatus.NOT_FOUND, "教练不属于当前机构");
             }
 
-            repository.acquireCoachDayLock(request.getOrganizationId(), request.getCoachId(), bookingDate);
-            coachLocked = true;
-            repository.acquireStudentDayLock(request.getOrganizationId(), current.getUserId(), bookingDate);
-            studentLocked = true;
+            for (LocalDate date = bookingDate; !date.isAfter(lastBookingDate); date = date.plusDays(1)) {
+                repository.acquireCoachDayLock(request.getOrganizationId(), request.getCoachId(), date);
+                coachLockedDates.add(date);
+            }
+            for (LocalDate date = bookingDate; !date.isAfter(lastBookingDate); date = date.plusDays(1)) {
+                repository.acquireStudentDayLock(request.getOrganizationId(), current.getUserId(), date);
+                studentLockedDates.add(date);
+            }
             BookingRepository.ContractRecord contract = repository.findContractForUpdate(
                     request.getOrganizationId(), current.getUserId(), current.getContractId());
             if (contract.status != CONTRACT_NORMAL) {
@@ -214,7 +226,7 @@ public class BookingService {
             }
             if (contract.startDate == null || contract.endDate == null
                     || bookingDate.isBefore(contract.startDate.toLocalDate())
-                    || bookingDate.isAfter(contract.endDate.toLocalDate())) {
+                    || lastBookingDate.isAfter(contract.endDate.toLocalDate())) {
                 throw new BookingApiException(HttpStatus.CONFLICT, "改约时间不在合同有效期内");
             }
             BookingRepository.CourseRecord course = repository.findActiveCourse(
@@ -223,11 +235,11 @@ public class BookingService {
             if (course.status != COURSE_ENABLED) {
                 throw new BookingApiException(HttpStatus.CONFLICT, "原预约课程已下线");
             }
-            if (!repository.findNonBusinessDays(request.getOrganizationId(), bookingDate, bookingDate).isEmpty()) {
+            if (!repository.findNonBusinessDays(request.getOrganizationId(), bookingDate, lastBookingDate).isEmpty()) {
                 throw new BookingApiException(HttpStatus.CONFLICT, "机构当天不是营业日");
             }
             if (!repository.findCoachVacationDays(request.getOrganizationId(), request.getCoachId(),
-                    bookingDate, bookingDate).isEmpty()) {
+                    bookingDate, lastBookingDate).isEmpty()) {
                 throw new BookingApiException(HttpStatus.CONFLICT, "教练当天正在请假");
             }
             if (!repository.findCoachConflicts(request.getOrganizationId(), request.getCoachId(),
@@ -242,11 +254,11 @@ public class BookingService {
                     new BookingRepository.BookingActorData(actor.getUserId(), actor.getRequestId()),
                     actor.getConfirmation());
         } finally {
-            if (coachLocked) {
-                repository.releaseCoachDayLock(request.getOrganizationId(), request.getCoachId(), bookingDate);
+            for (LocalDate date : coachLockedDates) {
+                repository.releaseCoachDayLock(request.getOrganizationId(), request.getCoachId(), date);
             }
-            if (studentLocked) {
-                repository.releaseStudentDayLock(request.getOrganizationId(), lockedStudentId, bookingDate);
+            for (LocalDate date : studentLockedDates) {
+                repository.releaseStudentDayLock(request.getOrganizationId(), lockedStudentId, date);
             }
             repository.releaseRequestLock(actor.getRequestId());
         }

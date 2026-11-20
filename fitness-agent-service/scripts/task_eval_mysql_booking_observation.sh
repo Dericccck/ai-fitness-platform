@@ -5,6 +5,8 @@ set -euo pipefail
 test_method=createsReschedulesCancelsAndRollsBackWhenConfirmationJtiIsReused
 if [[ "${1:-}" == "--coach-slot-concurrency" && "$#" -eq 1 ]]; then
     test_method=serializesTwoStudentsCompetingForTheSameCoachSlot
+elif [[ "${1:-}" == "--coach-slot-midnight-concurrency" && "$#" -eq 1 ]]; then
+    test_method=serializesOverlappingCoachSlotsAcrossMidnight
 elif [[ "$#" -ne 0 ]]; then
     printf 'Unsupported booking observation mode.\n' >&2
     exit 1
@@ -110,10 +112,13 @@ PY
     printf 'Java sources changed during the observation.\n' >&2
     exit 1
 }
-if [[ "$test_method" == serializesTwoStudentsCompetingForTheSameCoachSlot ]]; then
-    "$TASK_EVAL_PYTHON" - "$source_sha" <<'PY'
+if [[ "$test_method" == serializesTwoStudentsCompetingForTheSameCoachSlot || "$test_method" == serializesOverlappingCoachSlotsAcrossMidnight ]]; then
+    "$TASK_EVAL_PYTHON" - "$source_sha" "$test_method" <<'PY'
 import json, sys
-print(json.dumps({'status':'PASS','scope':'java_private_coach_slot_concurrency',
+scope = ('java_private_coach_slot_midnight_concurrency'
+         if sys.argv[2] == 'serializesOverlappingCoachSlotsAcrossMidnight'
+         else 'java_private_coach_slot_concurrency')
+print(json.dumps({'status':'PASS','scope':scope,
  'origin':'java_booking_service_real_mysql','source_sha256':sys.argv[1],
  'source_attestation':'NOT_INDEPENDENTLY_VERIFIED','model':'not_exercised',
  'gateway_http':'not_exercised','audit_complete':False,'task_status':'UNKNOWN'}))

@@ -28,6 +28,7 @@ import java.sql.Date;
 import java.sql.Timestamp;
 import java.time.Instant;
 import java.time.LocalDate;
+import java.time.ZoneId;
 import java.time.ZoneOffset;
 import java.time.temporal.ChronoUnit;
 import java.util.Collections;
@@ -205,13 +206,28 @@ public class BookingRepositoryIntegrationTest {
 
     @Test
     public void serializesTwoStudentsCompetingForTheSameCoachSlot() throws Exception {
+        Instant start = Instant.now().plus(8, ChronoUnit.DAYS).truncatedTo(ChronoUnit.HOURS);
+        runCompetingCoachSlots(start, start.plus(1, ChronoUnit.HOURS),
+                start, start.plus(1, ChronoUnit.HOURS));
+    }
+
+    @Test
+    public void serializesOverlappingCoachSlotsAcrossMidnight() throws Exception {
+        ZoneId businessZone = ZoneId.of("Asia/Shanghai");
+        Instant firstStart = LocalDate.now(businessZone).plusDays(8).atTime(23, 30)
+                .atZone(businessZone).toInstant();
+        Instant secondStart = firstStart.plus(45, ChronoUnit.MINUTES);
+        runCompetingCoachSlots(firstStart, firstStart.plus(1, ChronoUnit.HOURS),
+                secondStart, secondStart.plus(1, ChronoUnit.HOURS));
+    }
+
+    private void runCompetingCoachSlots(Instant start, Instant end,
+                                        Instant secondStart, Instant secondEnd) throws Exception {
         Assume.assumeTrue("true".equalsIgnoreCase(System.getenv("BOOKING_IT_ENABLED")));
 
         Fixture fixture = new Fixture();
         JdbcTemplate jdbc = new JdbcTemplate(fixture.dataSource);
         BookingService service = new BookingService(new BookingRepository(jdbc));
-        Instant start = Instant.now().plus(8, ChronoUnit.DAYS).truncatedTo(ChronoUnit.HOURS);
-        Instant end = start.plus(1, ChronoUnit.HOURS);
         ExecutorService executor = Executors.newFixedThreadPool(2);
         try (Fixture ignored = fixture) {
           try {
@@ -231,14 +247,14 @@ public class BookingRepositoryIntegrationTest {
                     fixture.dataSource, service,
                     fixture.actorFor(fixture.secondStudentId, fixture.secondContractId,
                             fixture.concurrentRequest2, "it-concurrent-jti-2-" + fixture.suffix),
-                    fixture.requestFor(fixture.secondStudentId, fixture.secondContractId, start, end),
+                    fixture.requestFor(fixture.secondStudentId, fixture.secondContractId, secondStart, secondEnd),
                     ready, startTogether));
             ready.await();
             startTogether.countDown();
 
             int successes = (first.get() ? 1 : 0) + (second.get() ? 1 : 0);
             assertEquals("同一教练时段只能提交一个预约", 1, successes);
-            assertEquals(1, countCoachAppointments(jdbc, fixture.coachId, start, end));
+            assertEquals(1, countCoachAppointments(jdbc, fixture.coachId, start, secondEnd));
             assertEquals("两份合同合计只能扣减一个课时", 1,
                     remainingHours(jdbc, fixture.contractId)
                             + remainingHours(jdbc, fixture.secondContractId));
