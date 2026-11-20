@@ -21,7 +21,7 @@ def test_generated_proposal_is_reproducible_and_remains_unreviewed(tmp_path):
     assert raw == (PROPOSAL / "cases.jsonl").read_bytes()
     assert manifest == json.loads((PROPOSAL / "manifest.json").read_bytes())
     assert hashlib.sha256(raw).hexdigest() == manifest["proposal_dataset_sha256"]
-    assert manifest["changed_assertions"] == 102
+    assert manifest["changed_assertions"] == 104
     path = tmp_path / "cases.jsonl"
     path.write_bytes(raw)
     proposal = load_dataset(path)
@@ -29,7 +29,7 @@ def test_generated_proposal_is_reproducible_and_remains_unreviewed(tmp_path):
     assert all(
         c.review.status == "draft" and c.capability_status == "planned" for c in proposal.cases
     )
-    assert build_review_queue(proposal)["cases_with_missing_grader_parameters"] == 20
+    assert build_review_queue(proposal)["cases_with_missing_grader_parameters"] == 18
     for old, new in zip(original.cases, proposal.cases, strict=True):
         assert (new.case_id, new.split, new.steps, new.fixture, new.source, new.review) == (
             old.case_id,
@@ -68,7 +68,7 @@ def test_booking_values_are_bound_to_fixture_and_safety_is_not_auto_parameterize
     path.write_bytes(raw)
     dataset = load_dataset(path)
     cases = {case.case_id: case for case in dataset.cases}
-    for cid in ("BOOK-008", "BOOK-018", "BOOK-026"):
+    for cid in ("BOOK-008", "BOOK-018", "BOOK-026", "BOOK-027", "BOOK-030"):
         assertion = next(
             a for a in cases[cid].expected.assertions if a.rule == "confirmation_pending_for_actor"
         )
@@ -170,3 +170,22 @@ def test_modified_outreach_fixture_is_rejected(tmp_path, monkeypatch):
     monkeypatch.setattr(outreach_draft_fixtures, "_FIXTURE_PATH", path)
     with pytest.raises(ValueError, match="OUTREACH_FIXTURE_CHANGED"):
         build_proposal(load_dataset(SOURCE))
+
+
+def test_book_030_fixture_and_case_tampering_fail_closed(tmp_path, monkeypatch):
+    from app.evaluation.task_eval import booking_test_030
+
+    original = load_dataset(SOURCE)
+    case = next(c for c in original.cases if c.case_id == "BOOK-030")
+    fixture = booking_test_030.load(case)
+    assert fixture["payload"]["student_id"] == "student-1"
+    assert fixture["payload"]["organization_id"] == "org-1"
+    altered = case.model_copy(deep=True)
+    altered.steps[0].message_ref = "planned-other.booking_request"
+    with pytest.raises(ValueError, match="TEST_CASE_CHANGED"):
+        booking_test_030.load(altered)
+    fixture_file = tmp_path / "book-030.json"
+    fixture_file.write_bytes(booking_test_030._FIXTURE.read_bytes() + b" ")
+    monkeypatch.setattr(booking_test_030, "_FIXTURE", fixture_file)
+    with pytest.raises(ValueError, match="TEST_FIXTURE_CHANGED"):
+        build_proposal(original)

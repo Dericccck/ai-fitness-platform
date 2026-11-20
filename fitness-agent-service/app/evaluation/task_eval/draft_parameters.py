@@ -14,8 +14,10 @@ from pathlib import Path
 from typing import Any
 
 from .booking_dev_026 import load as load_book_026
+from .booking_dev_027 import load as load_book_027
 from .booking_dev_fixtures import load_book_018
 from .booking_test_008 import load as load_book_008
+from .booking_test_030 import load as load_book_030
 from .dataset import Dataset, load_dataset
 from .knowledge_draft_corpus import CORPUS_SHA256, load_corpus
 from .outreach_draft_fixtures import _FIXTURE_SHA256 as OUTREACH_FIXTURE_SHA256
@@ -28,7 +30,7 @@ _RUBRIC = "draft-evidence-rubric-v1"
 _RUBRIC_PATH = (
     Path(__file__).resolve().parents[3] / "evals/task_eval/draft_parameter_proposal_v1/RUBRIC.md"
 )
-_RUBRIC_SHA256 = "e4da94cc15a549ac9cee5dd9ed694213a75e7a72e622f98742946680213ffaae"
+_RUBRIC_SHA256 = "c516a43c5ce7ca20b670eb588e490d4a46b780434c63dbc306140cc8bfe5ce71"
 _MAPPING = {"0": "FAIL", "1": "UNKNOWN", "2": "PASS"}
 _ACTION = "fitness.booking.create.v1"
 
@@ -77,11 +79,15 @@ def build_proposal(dataset: Dataset) -> tuple[bytes, dict[str, Any]]:
     fixtures = {
         "BOOK-018": load_book_018(cases_by_id["BOOK-018"]),
         "BOOK-026": load_book_026(cases_by_id["BOOK-026"]),
+        "BOOK-027": load_book_027(cases_by_id["BOOK-027"]),
+        "BOOK-030": load_book_030(cases_by_id["BOOK-030"]),
         "BOOK-008": load_book_008(cases_by_id["BOOK-008"]),
     }
     fixture_hashes = {
         "BOOK-018": fixtures["BOOK-018"]["sha256"],
         "BOOK-026": fixtures["BOOK-026"]["sha256"],
+        "BOOK-027": fixtures["BOOK-027"]["sha256"],
+        "BOOK-030": fixtures["BOOK-030"]["sha256"],
         "BOOK-008": "af8d99889743e2ab2fd8d31ed7755103120901dff842b761f3fd52c7393300f2",
     }
     knowledge = load_corpus(dataset)
@@ -203,7 +209,7 @@ def build_proposal(dataset: Dataset) -> tuple[bytes, dict[str, Any]]:
             "No model judgments, independent observations, human approvals, or attestations are created.",
             "Knowledge records and relevance are synthetic unreviewed fixtures, not clinical advice or real cancellation policy.",
             "Draft rubric and original reference points require review; field presence does not establish validity.",
-            "BOOK-008 test fixture shares synthetic identity and first candidate with development fixtures; split leakage review is required.",
+            "BOOK-008 and BOOK-030 test fixtures share synthetic identity and booking parameters with development fixtures; split leakage review is required.",
             "Outreach recipients and counts are synthetic unreviewed proposals; the OPER-010 zero count applies only to the immediate local quiet-hours observation window, not to later permitted delivery.",
             "OPER-012 delivery eligibility and consent are not verified; OPER-014–016 remain incomplete and are not established as passing.",
             "Frozen original-case runners cannot execute proposal case identities without explicit integration.",
