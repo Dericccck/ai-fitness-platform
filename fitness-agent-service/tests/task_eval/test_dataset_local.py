@@ -55,6 +55,32 @@ async def test_selected_split_only_and_no_component_becomes_task_pass(dataset, m
 
 
 @pytest.mark.asyncio
+async def test_private_slot_component_never_becomes_a_task_pass(dataset, monkeypatch):
+    case = next(c for c in dataset.cases if c.case_id == "BOOK-009")
+    monkeypatch.setenv("TASK_EVAL_BOOK009_PRIVATE_CONCURRENCY", "1")
+
+    async def observe(_):
+        return {
+            "case_id": "BOOK-009",
+            "component_status": "OBSERVED",
+            "task_status": "UNKNOWN",
+            "model_status": "UNKNOWN",
+            "audit_complete": False,
+            "blind_holdout_valid": False,
+            "scope": "java_booking_service_real_mysql_two_student_private_slot_race",
+            "source_sha256": "a" * 64,
+            "report_sha256": "b" * 64,
+            "launcher_sha256": "c" * 64,
+        }
+
+    monkeypatch.setattr(dataset_local.book_009_local, "observe", observe)
+    report = await dataset_local.evaluate_dataset(replace(dataset, cases=[case]), split="test")
+    assert report["cases"][0]["task_status"] == "INCONCLUSIVE"
+    assert report["cases"][0]["reason"] == "PRIVATE_SLOT_COMPONENT_ONLY"
+    assert report["summary"]["task_status_counts"] == {"INCONCLUSIVE": 1}
+
+
+@pytest.mark.asyncio
 async def test_out_of_scope_and_adapter_error_preserve_planned_counts(dataset, monkeypatch):
     case = next(c for c in dataset.cases if c.primary_scenario == "knowledge")
     other = case.model_copy(update={"case_id": "out", "delivery_scope": "out_of_scope"})

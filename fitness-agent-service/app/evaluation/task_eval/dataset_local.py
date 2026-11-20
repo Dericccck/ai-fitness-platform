@@ -17,7 +17,7 @@ from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
-from . import book_030_local, booking_cases, booking_java_cases, capacity_draft
+from . import book_009_local, book_030_local, booking_cases, booking_java_cases, capacity_draft
 from .component_customer_service_cases import evaluate_customer_service_case_observations
 from .component_notification_worker import evaluate_notification_worker
 from .component_operations_cases import evaluate_operations_case_observations
@@ -376,6 +376,32 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
             # clarification: this case concerns one private-coach time slot.
             # A separately invoked real diagnostic is never silently reused here.
             row["reason"] = "PRIVATE_COACH_SLOT_ADAPTER_NOT_EXECUTED"
+            if os.environ.get("TASK_EVAL_BOOK009_PRIVATE_CONCURRENCY") == "1":
+                try:
+                    observation = await book_009_local.observe(case)
+                    if (
+                        not isinstance(observation, dict)
+                        or observation.get("case_id") != "BOOK-009"
+                        or observation.get("component_status") != "OBSERVED"
+                        or observation.get("task_status") != "UNKNOWN"
+                        or observation.get("model_status") != "UNKNOWN"
+                        or observation.get("audit_complete") is not False
+                        or observation.get("blind_holdout_valid") is not False
+                        or observation.get("scope")
+                        != "java_booking_service_real_mysql_two_student_private_slot_race"
+                        or any(
+                            not isinstance(observation.get(key), str)
+                            or len(observation[key]) != 64
+                            or any(c not in "0123456789abcdef" for c in observation[key])
+                            for key in ("source_sha256", "report_sha256", "launcher_sha256")
+                        )
+                    ):
+                        raise ValueError("PRIVATE_SLOT_OBSERVATION_INVALID")
+                except Exception:  # noqa: BLE001 - retain unrelated cases without leaking logs
+                    _mark(row, "ERROR", "PRIVATE_SLOT_COMPONENT_ERROR")
+                else:
+                    row["observations"]["private_slot_concurrency"] = observation
+                    _mark(row, "INCONCLUSIVE", "PRIVATE_SLOT_COMPONENT_ONLY")
         if case.case_id == "BOOK-022":
             try:
                 observation = capacity_draft.observe(case)
@@ -695,6 +721,7 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
         "evaluation/task_eval/booking_dev_026.py",
         "evaluation/task_eval/capacity_draft.py",
         "evaluation/task_eval/book_030_local.py",
+        "evaluation/task_eval/book_009_local.py",
         "evaluation/task_eval/booking_duplicate_event.py",
         "evaluation/task_eval/booking_rabbit_delivery.py",
         "evaluation/task_eval/cross_service_booking.py",
