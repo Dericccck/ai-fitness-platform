@@ -1,0 +1,23 @@
+{
+  "schema_version": "1.0",
+  "source_proposal_sha256": "1973d22a5d3811b9e1b48d2e3af4f323c7edfbbaa24c5a389ae53cda5b0459fa",
+  "source_content_sha256": "f8c559bb22ae89141c0ce5e6d05e605735a3c0c56ed29a2158a1a0415e37f458",
+  "proposal_dataset_version": "fitness-task-parameter-proposal-v2-private-booking",
+  "proposal_sha256": "a184f8de035760f796b4faa045722ed4aec65c25a603a20969746c581018bd5a",
+  "case_count": 120,
+  "changed_cases": [
+    "BOOK-006",
+    "BOOK-009"
+  ],
+  "business_input": [
+    "User stated that each organization corresponds to one store.",
+    "User stated BOOK-009 concerns a private-coach appointment slot, not group-class capacity."
+  ],
+  "limitations": [
+    "Unreviewed proposal only; no case approval, observation, evidence signature or release is created.",
+    "A store request still needs independently verified resolution to the organization and a scoped booking observation.",
+    "Slot success requires a scoped settled observation of the coach's overlapping appointments; snapshots alone cannot prove transaction settlement.",
+    "BOOK-009 belongs to the exposed planning test split, not a confidential or frozen holdout.",
+    "Legacy v1 store and capacity assumptions are superseded for these two cases, not retrospectively rewritten."
+  ]
+}

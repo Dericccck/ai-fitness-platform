@@ -26,16 +26,25 @@ if [[ "${1:-}" == "--broker-duplicate-trial" ]]; then
     broker_report="$2"
     set -- --real-broker --report-file "$broker_report"
 fi
-if [[ "${1:-}" == "--book-004-real-model-trial" || "${1:-}" == "--single-development-trial" || "${1:-}" == "--book-018-development-trial" || "${1:-}" == "--book-018-real-model-trial" || "${1:-}" == "--book-026-development-trial" || "${1:-}" == "--book-026-real-model-trial" || "${1:-}" == "--book-027-development-trial" || "${1:-}" == "--book-027-real-model-trial" ]]; then
+if [[ "${1:-}" == "--book-009-exposed-test-diagnostic" || "${1:-}" == "--book-006-real-model-trial" || "${1:-}" == "--book-004-real-model-trial" || "${1:-}" == "--single-development-trial" || "${1:-}" == "--book-018-development-trial" || "${1:-}" == "--book-018-real-model-trial" || "${1:-}" == "--book-026-development-trial" || "${1:-}" == "--book-026-real-model-trial" || "${1:-}" == "--book-027-development-trial" || "${1:-}" == "--book-027-real-model-trial" ]]; then
     [[ "$#" -ge 2 && "$2" == /* && ! -e "$2" ]] || {
         printf 'Provide a new absolute report path for the development trial.\n' >&2
         exit 1
     }
-    [[ "$1" == "--book-004-real-model-trial" || "$1" == "--book-018-real-model-trial" || "$1" == "--book-026-real-model-trial" || "$1" == "--book-027-real-model-trial" || "$#" -eq 2 ]] || exit 1
+    [[ "$1" == "--book-009-exposed-test-diagnostic" || "$1" == "--book-006-real-model-trial" || "$1" == "--book-004-real-model-trial" || "$1" == "--book-018-real-model-trial" || "$1" == "--book-026-real-model-trial" || "$1" == "--book-027-real-model-trial" || "$#" -eq 2 ]] || exit 1
     single_development_trial=true
     single_report="$2"
-    if [[ "$1" == "--book-004-real-model-trial" ]]; then
+    if [[ "$1" == "--book-004-real-model-trial" || "$1" == "--book-006-real-model-trial" || "$1" == "--book-009-exposed-test-diagnostic" ]]; then
         development_module=app.evaluation.task_eval.dev_sandbox_book_004
+    fi
+    context_profile=BOOK-004
+    context_diagnostic=false
+    if [[ "$1" == "--book-006-real-model-trial" ]]; then
+        context_profile=BOOK-006
+    fi
+    if [[ "$1" == "--book-009-exposed-test-diagnostic" ]]; then
+        context_profile=BOOK-009
+        context_diagnostic=true
     fi
     if [[ "$1" == "--book-018-development-trial" || "$1" == "--book-018-real-model-trial" ]]; then
         development_module=app.evaluation.task_eval.dev_sandbox_book_018
@@ -46,7 +55,7 @@ if [[ "${1:-}" == "--book-004-real-model-trial" || "${1:-}" == "--single-develop
     if [[ "$1" == "--book-027-development-trial" || "$1" == "--book-027-real-model-trial" ]]; then
         development_module=app.evaluation.task_eval.dev_sandbox_book_027
     fi
-    if [[ "$1" == "--book-004-real-model-trial" || "$1" == "--book-018-real-model-trial" || "$1" == "--book-026-real-model-trial" || "$1" == "--book-027-real-model-trial" ]]; then
+    if [[ "$1" == "--book-009-exposed-test-diagnostic" || "$1" == "--book-006-real-model-trial" || "$1" == "--book-004-real-model-trial" || "$1" == "--book-018-real-model-trial" || "$1" == "--book-026-real-model-trial" || "$1" == "--book-027-real-model-trial" ]]; then
         book_real_model=true
         shift 2
         real_model_args=("$@")
@@ -258,7 +267,15 @@ if [[ "$booking_capabilities_trial" == true ]]; then
     "${runtime_env[@]}" "$python" -m app.evaluation.task_eval.mysql_booking_capabilities --report-file "$single_report"
 elif [[ "$single_development_trial" == true ]]; then
     if [[ "$book_real_model" == true ]]; then
-        "${runtime_env[@]}" "$python" -m "$development_module" --report-file "$single_report" --real-model "${real_model_args[@]}"
+        if [[ "$development_module" == "app.evaluation.task_eval.dev_sandbox_book_004" ]]; then
+            if [[ "$context_diagnostic" == true ]]; then
+                "${runtime_env[@]}" "$python" -m "$development_module" --report-file "$single_report" --real-model --case-profile "$context_profile" --allow-exposed-test-diagnostic "${real_model_args[@]}"
+            else
+                "${runtime_env[@]}" "$python" -m "$development_module" --report-file "$single_report" --real-model --case-profile "$context_profile" "${real_model_args[@]}"
+            fi
+        else
+            "${runtime_env[@]}" "$python" -m "$development_module" --report-file "$single_report" --real-model "${real_model_args[@]}"
+        fi
     else
         "${runtime_env[@]}" "$python" -m "$development_module" --report-file "$single_report"
     fi

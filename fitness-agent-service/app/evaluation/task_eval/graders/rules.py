@@ -6,6 +6,7 @@ evidence and explicitly declare the completeness of relevant audit windows.
 
 from __future__ import annotations
 
+from datetime import datetime
 from typing import Any, TypeGuard
 
 from .retrieval import grade_retrieval
@@ -229,6 +230,84 @@ def grade_rule(
             and all(_same_value(bookings[0][key], value) for key, value in params.items())
             and evidence["credit_delta"] == expected["credit_delta"],
             "BOOKING",
+        )
+
+    if rule_id == "booking_organization_store_matches":
+        booking = expected.get("booking_store")
+        selected = evidence.get("selected_store_organization_id")
+        observed = evidence.get("store_booking")
+        if (
+            not isinstance(booking, dict)
+            or set(booking) != _BOOKING_IDENTITY_FIELDS
+            or any(not isinstance(booking[key], str) or not booking[key].strip() for key in booking)
+        ):
+            return _unknown("INVALID_STORE_CONTRACT")
+        if (
+            evidence.get("organization_store_mapping_complete") is not True
+            or evidence.get("store_snapshot_complete") is not True
+            or not isinstance(selected, str)
+            or not selected.strip()
+            or not isinstance(observed, dict)
+            or not all(
+                isinstance(observed.get(key), str) and observed[key].strip()
+                for key in _BOOKING_IDENTITY_FIELDS
+            )
+        ):
+            return _unknown("STORE_EVIDENCE_INCOMPLETE")
+        return _result(
+            selected == booking["organizationId"]
+            and all(observed[key] == booking[key] for key in _BOOKING_IDENTITY_FIELDS),
+            "BOOKING_ORGANIZATION_STORE",
+        )
+
+    if rule_id == "booking_private_slot_consumed_once":
+        slot = expected.get("slot")
+        keys = {"organizationId", "coachId", "studentId", "courseId", "startTime", "endTime"}
+        scope_keys = {"organizationId", "coachId", "startTime", "endTime"}
+        if (
+            not isinstance(slot, dict)
+            or set(slot) != keys
+            or any(not isinstance(slot[key], str) or not slot[key].strip() for key in keys)
+        ):
+            return _unknown("INVALID_PRIVATE_SLOT_CONTRACT")
+        try:
+            slot_start = datetime.fromisoformat(slot["startTime"])
+            slot_end = datetime.fromisoformat(slot["endTime"])
+            if (
+                slot_start.utcoffset() is None
+                or slot_end.utcoffset() is None
+                or slot_start >= slot_end
+            ):
+                return _unknown("INVALID_PRIVATE_SLOT_CONTRACT")
+        except (TypeError, ValueError, OverflowError):
+            return _unknown("INVALID_PRIVATE_SLOT_CONTRACT")
+        scope, before, after = (
+            evidence.get("slot_scope"),
+            evidence.get("slot_before"),
+            evidence.get("slot_after"),
+        )
+        if (
+            evidence.get("slot_snapshots_complete") is not True
+            or evidence.get("slot_settlement_proven") is not True
+            or not isinstance(scope, dict)
+            or set(scope) != scope_keys
+            or any(scope[key] != slot[key] for key in scope_keys)
+            or not _list_of_dicts(before)
+            or not _list_of_dicts(after)
+        ):
+            return _unknown("PRIVATE_SLOT_EVIDENCE_INCOMPLETE")
+        if before:
+            return _unknown("PRIVATE_SLOT_NOT_AVAILABLE_BEFORE")
+        if any(
+            not all(isinstance(row.get(key), str) and row[key].strip() for key in keys | {"id"})
+            for row in after
+        ):
+            return _unknown("PRIVATE_SLOT_FIELDS_MISSING")
+        if len({row["id"] for row in after}) != len(after):
+            return _unknown("PRIVATE_SLOT_DUPLICATE_OBSERVATION")
+        return _result(
+            len(after) == 1 and all(after[0][key] == slot[key] for key in keys),
+            "BOOKING_PRIVATE_SLOT",
         )
 
     if rule_id == "booking_store_matches":

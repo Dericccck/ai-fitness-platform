@@ -371,7 +371,12 @@ async def _evaluate_dataset(dataset: Dataset, *, split: str = "all") -> dict[str
             _mark(row, "ERROR", "CLARIFICATION_COMPONENT_ERROR")
         if remaining_routing_error and case.case_id in {"ROUT-005", "ROUT-007", "ROUT-014"}:
             _mark(row, "ERROR", "REMAINING_ROUTING_COMPONENT_ERROR")
-        if case.case_id in {"BOOK-009", "BOOK-022"}:
+        if case.case_id == "BOOK-009":
+            # The old group-capacity double was superseded by the user's
+            # clarification: this case concerns one private-coach time slot.
+            # A separately invoked real diagnostic is never silently reused here.
+            row["reason"] = "PRIVATE_COACH_SLOT_ADAPTER_NOT_EXECUTED"
+        if case.case_id == "BOOK-022":
             try:
                 observation = capacity_draft.observe(case)
                 if (

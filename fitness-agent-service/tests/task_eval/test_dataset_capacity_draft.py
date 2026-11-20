@@ -16,13 +16,15 @@ def dataset():
 async def test_capacity_observations_are_inconclusive_with_unknown_product_and_model(dataset):
     cases = [c for c in dataset.cases if c.case_id in {"BOOK-009", "BOOK-022"}]
     report = await dataset_local.evaluate_dataset(replace(dataset, cases=cases))
-    assert report["summary"]["task_status_counts"] == {"INCONCLUSIVE": 2}
+    assert report["summary"]["task_status_counts"] == {"SKIPPED": 1, "INCONCLUSIVE": 1}
     assert report["summary"]["component_failures"] == 0
-    for row in report["cases"]:
-        assert row["reason"] == "CAPACITY_DRAFT_DOUBLE_ONLY_NO_PRODUCT_CONTRACT"
-        observation = row["observations"]["draft_capacity"]
-        assert observation["component_status"] == "PASS"
-        assert observation["model_status"] == observation["product_status"] == "UNKNOWN"
+    rows = {row["case_id"]: row for row in report["cases"]}
+    assert rows["BOOK-009"]["reason"] == "PRIVATE_COACH_SLOT_ADAPTER_NOT_EXECUTED"
+    assert "draft_capacity" not in rows["BOOK-009"]["observations"]
+    assert rows["BOOK-022"]["reason"] == "CAPACITY_DRAFT_DOUBLE_ONLY_NO_PRODUCT_CONTRACT"
+    observation = rows["BOOK-022"]["observations"]["draft_capacity"]
+    assert observation["component_status"] == "PASS"
+    assert observation["model_status"] == observation["product_status"] == "UNKNOWN"
     assert "evaluation/task_eval/capacity_draft.py" in report["manifest"]["source_sha256"]
     assert (
         "evals/task_eval/dev_fixtures/book-capacity-draft-v1.json"
@@ -32,7 +34,7 @@ async def test_capacity_observations_are_inconclusive_with_unknown_product_and_m
 
 @pytest.mark.asyncio
 async def test_failed_component_is_counted_and_never_hidden(dataset, monkeypatch):
-    case = next(c for c in dataset.cases if c.case_id == "BOOK-009")
+    case = next(c for c in dataset.cases if c.case_id == "BOOK-022")
     original = capacity_draft.observe
 
     def faulty(current):
@@ -48,7 +50,7 @@ async def test_failed_component_is_counted_and_never_hidden(dataset, monkeypatch
     assert report["summary"]["component_failures"] == 1
     observation = row["observations"]["draft_capacity"]
     assert observation["component_status"] == "FAIL"
-    assert "last_seat_delta" in observation["violations"]
+    assert "full_course_changed_state" in observation["violations"]
     assert observation["product_status"] == "UNKNOWN"
 
 

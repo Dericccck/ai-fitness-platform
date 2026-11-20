@@ -159,6 +159,7 @@ def observe(case: Any) -> dict[str, Any]:
             "case_id": case.case_id,
             "status": "INCONCLUSIVE",
             "observation_scope": "synthetic_sqlite_double_only",
+            "superseded_for_private_slot": case.case_id == "BOOK-009",
             "fixture_sha256": fixture["fixture_sha256"],
             "response": response,
             "before": vars(before),
@@ -166,7 +167,14 @@ def observe(case: Any) -> dict[str, Any]:
             "after": vars(after),
             "violations": violations,
             "limitations": [
-                "No Agent, product capacity implementation, real confirmation, or semantic answer was exercised."
+                "No Agent, product capacity implementation, real confirmation, or semantic answer was exercised.",
+                *(
+                    [
+                        "BOOK-009 is a private-coach slot under the user's clarified semantics; this historical group-capacity double is not evidence for that case."
+                    ]
+                    if case.case_id == "BOOK-009"
+                    else []
+                ),
             ],
         }
     finally:

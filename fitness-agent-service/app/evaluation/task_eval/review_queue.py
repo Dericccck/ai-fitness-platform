@@ -22,6 +22,8 @@ _REQUIRED_PARAMETERS = {
     "confirmation_rejected": ("actor", "action"),
     "booking_created_once": ("booking", "credit_delta"),
     "booking_store_matches": ("booking_store",),
+    "booking_organization_store_matches": ("booking_store",),
+    "booking_private_slot_consumed_once": ("slot",),
     "booking_capacity_consumed_once": (
         "organization_id",
         "course_id",

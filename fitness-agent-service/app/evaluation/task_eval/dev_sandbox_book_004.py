@@ -49,53 +49,75 @@ from .dev_booking_observer import read_booking_details
 from .dev_sandbox_book_018 import _real_model
 from .dev_sandbox_booking import _drive, _source_identity
 from .draft_parameters import _booking
+from .graders.rules import grade_rule
 from .mysql_audit_lab import _EVENTS, _TABLES
 from .mysql_booking_observer import snapshot_booking
+from .mysql_organization_store_observer import read_organization_store
+from .mysql_private_slot_observer import read_private_slot
 from .mysql_restricted_audit import observe as observe_restricted_audit
 from .mysql_restricted_audit import verify as verify_restricted_audit
 
 _ROOT = Path(__file__).resolve().parents[3]
 _FIXTURE = _ROOT / "evals/task_eval/dev_fixtures/book-004-context-v1.json"
 _FIXTURE_SHA256 = "5f2eb910e5c548b6271cdebdca423db8547697539484af74416a7979168e6375"
+_STORE_FIXTURE = _ROOT / "evals/task_eval/dev_fixtures/book-006-store-context-v1.json"
+_STORE_FIXTURE_SHA256 = "11cfa6e9a60519e01c65619f26cd49620d11e17640d0961b45b36abb530e8c90"
+_SLOT_FIXTURE = _ROOT / "evals/task_eval/dev_fixtures/book-009-private-slot-context-v1.json"
+_SLOT_FIXTURE_SHA256 = "438fdaef11caaa6acc1eb2d43aa640311f3775dc9502595168c9d71eb1e7735e"
 _DATASET_SHA256 = "1d187f5abca4dab754db29059f9ff95a7897719fde6ce88de6c92448d25ab446"
-_GRADING_VERSION = "book-004-fixture-grading-draft-v1"
 
 
-def _load() -> tuple[Any, dict[str, Any]]:
+def _load(profile: str = "BOOK-004") -> tuple[Any, dict[str, Any]]:
+    if profile not in {"BOOK-004", "BOOK-006", "BOOK-009"}:
+        raise ValueError("DEV_PROFILE_UNSUPPORTED")
     dataset_path = _ROOT / "evals/task_eval/datasets/v1.jsonl"
     if hashlib.sha256(dataset_path.read_bytes()).hexdigest() != _DATASET_SHA256:
         raise ValueError("DEV_DATASET_CHANGED")
     dataset = load_dataset(dataset_path)
-    cases = [case for case in dataset.cases if case.case_id == "BOOK-004"]
+    cases = [case for case in dataset.cases if case.case_id == profile]
     if len(cases) != 1 or not matches_frozen_case(cases[0]):
         raise ValueError("DEV_CASE_MISMATCH")
     case = cases[0]
-    raw = _FIXTURE.read_bytes()
-    if hashlib.sha256(raw).hexdigest() != _FIXTURE_SHA256:
+    fixture_path, fixture_sha = {
+        "BOOK-004": (_FIXTURE, _FIXTURE_SHA256),
+        "BOOK-006": (_STORE_FIXTURE, _STORE_FIXTURE_SHA256),
+        "BOOK-009": (_SLOT_FIXTURE, _SLOT_FIXTURE_SHA256),
+    }[profile]
+    raw = fixture_path.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != fixture_sha:
         raise ValueError("DEV_FIXTURE_CHANGED")
     fixture = json.loads(raw)
     if (
-        case.split != "dev"
+        case.split != ("test" if profile == "BOOK-009" else "dev")
         or case.review.status != "draft"
         or case.capability_status != "planned"
         or [step.type for step in case.steps]
         != ["chat", "assert", "decision", "await_terminal", "assert"]
         or case.steps[0].message != fixture["case_message"]
-        or fixture["case_id"] != "BOOK-004"
+        or fixture["case_id"] != profile
         or fixture["version"] != "1.0"
         or fixture["status"] != "synthetic_dev_draft"
         or fixture["identity"] != {"organization_id": "org-1", "student_id": "student-1"}
-        or not expected_payload(fixture["payload"], profile="BOOK-004")
+        or not expected_payload(fixture["payload"], profile=profile)
+        or (
+            profile == "BOOK-006"
+            and fixture.get("selected_store")
+            != {"organization_id": "org-1", "name": "test organization"}
+        )
         or datetime.fromisoformat(fixture["payload"]["start_time"]) <= datetime.now(UTC)
     ):
         raise ValueError("DEV_FIXTURE_INCONSISTENT")
     BookingCreateToolInput.model_validate(fixture["payload"])
-    return case, {**fixture, "booking": fixture["payload"], "sha256": _FIXTURE_SHA256}
+    return case, {**fixture, "booking": fixture["payload"], "sha256": fixture_sha}
 
 
 def _fixture_bound_grading_case(case: Any, fixture: dict[str, Any]) -> tuple[Any, str]:
     """Bind provisional grader parameters without mutating the frozen source case."""
-    if case.case_id != "BOOK-004" or fixture.get("sha256") != _FIXTURE_SHA256:
+    if (case.case_id, fixture.get("sha256")) not in {
+        ("BOOK-004", _FIXTURE_SHA256),
+        ("BOOK-006", _STORE_FIXTURE_SHA256),
+        ("BOOK-009", _SLOT_FIXTURE_SHA256),
+    }:
         raise ValueError("DEV_GRADING_CASE_MISMATCH")
     result = case.model_copy(deep=True)
     by_id = {assertion.id: assertion for assertion in result.expected.assertions}
@@ -107,7 +129,7 @@ def _fixture_bound_grading_case(case: Any, fixture: dict[str, Any]) -> tuple[Any
         or set(by_id["task_result"].parameters) != {"reference_points"}
     ):
         raise ValueError("DEV_GRADING_CONTRACT_CHANGED")
-    result.dataset_version = _GRADING_VERSION
+    result.dataset_version = f"{case.case_id.lower()}-fixture-grading-draft-v1"
     # Add an explicit retry to this proposed trial so the shared booking grader
     # can verify idempotency; it is not a step in the frozen source case.
     result.steps.insert(4, result.steps[2].model_copy(deep=True))
@@ -191,6 +213,98 @@ def _snapshot_hash(snapshot: Any) -> str:
     return hashlib.sha256(raw).hexdigest()
 
 
+def _slot_pilot(
+    before: dict[str, Any], after: dict[str, Any], payload: dict[str, Any]
+) -> dict[str, Any]:
+    """Record a scoped transition without inventing transaction settlement."""
+    booking = _booking(payload)
+    slot = {key: value for key, value in booking.items() if key != "contractId"}
+    if before.get("scope") != after.get("scope"):
+        return {"status": "UNKNOWN", "reason": "SLOT_SCOPE_CHANGED"}
+    evidence = {
+        "evidence_refs": ["local://disposable-mysql-private-slot"],
+        "slot_scope": before.get("scope"),
+        "slot_snapshots_complete": before.get("snapshot_complete") is True
+        and after.get("snapshot_complete") is True,
+        # A terminal confirmation plus snapshots does not drain all writers.
+        "slot_settlement_proven": False,
+        "slot_before": before.get("rows"),
+        "slot_after": after.get("rows"),
+    }
+    grade = grade_rule("booking_private_slot_consumed_once", {"slot": slot}, evidence)
+    before_rows, after_rows = before.get("rows"), after.get("rows")
+    return {
+        "status": grade["status"],
+        "reason": grade["reason"],
+        "scope": before.get("scope"),
+        "before_count": len(before_rows) if isinstance(before_rows, list) else None,
+        "after_count": len(after_rows) if isinstance(after_rows, list) else None,
+        "observed_exact_booking": bool(
+            isinstance(after_rows, list)
+            and len(after_rows) == 1
+            and isinstance(after_rows[0], dict)
+            and all(after_rows[0].get(key) == value for key, value in slot.items())
+        ),
+        "settlement_proven": False,
+        "limitation": "Private-slot pilot only; this is not an execution of BOOK-009.",
+    }
+
+
+def _slot_ready_for_diagnostic(profile: str, before: Any, payload: dict[str, Any]) -> bool:
+    if profile != "BOOK-009":
+        return True
+    booking = _booking(payload)
+    scope = {key: booking[key] for key in ("organizationId", "coachId", "startTime", "endTime")}
+    return bool(
+        isinstance(before, dict)
+        and before.get("origin") == "disposable_mysql_consistent_read"
+        and before.get("snapshot_complete") is True
+        and before.get("scope") == scope
+        and before.get("rows") == []
+    )
+
+
+def _store_pilot(
+    before: dict[str, Any], after: dict[str, Any], details: dict[str, Any], fixture: dict[str, Any]
+) -> dict[str, Any]:
+    """Check a fixture-selected store against the scoped organization and booking."""
+    selected = fixture["selected_store"]
+    expected_row = {"id": selected["organization_id"], "name": selected["name"]}
+    rows = details.get("created_bookings")
+    mapping_complete = (
+        before.get("snapshot_complete") is True
+        and after.get("snapshot_complete") is True
+        and before.get("organization") == expected_row
+        and after.get("organization") == expected_row
+    )
+    evidence = {
+        "evidence_refs": ["local://synthetic-store-and-booking"],
+        "organization_store_mapping_complete": mapping_complete,
+        "store_snapshot_complete": details.get("snapshot_complete") is True,
+        "selected_store_organization_id": selected["organization_id"],
+        "store_booking": rows[0] if isinstance(rows, list) and len(rows) == 1 else None,
+    }
+    grade = grade_rule(
+        "booking_organization_store_matches",
+        {"booking_store": _booking(fixture["payload"])},
+        evidence,
+    )
+    return {
+        "status": grade["status"],
+        "reason": grade["reason"],
+        "mapping_basis": "user_stated_one_store_per_organization_and_synthetic_selected_store",
+        "mapping_independently_reviewed": False,
+        "limitation": "Synthetic setup selects the organization; this is not an independently reviewed store mapping.",
+    }
+
+
+def _retain_store_failure(trial: dict[str, Any], store_observation: dict[str, Any]) -> None:
+    """A scoped store mismatch is independent of the trigger audit outcome."""
+    if store_observation.get("status") == "FAIL":
+        trial["task_status"] = "FAIL"
+        trial["reason"] = "STORE_OBSERVATION_MISMATCH"
+
+
 async def _observe_setup(
     agent: Any, fixture: dict[str, Any], snapshot: Any, observer: Any
 ) -> dict[str, Any]:
@@ -255,14 +369,20 @@ async def _observe_setup(
     return result
 
 
-async def run(model: OneBookingModel) -> dict[str, Any]:
-    original, fixture = _load()
+async def run(
+    model: OneBookingModel, *, allow_exposed_test_diagnostic: bool = False
+) -> dict[str, Any]:
+    if type(model) is not OneBookingModel or model.profile not in {
+        "BOOK-004",
+        "BOOK-006",
+        "BOOK-009",
+    }:
+        raise ValueError("unsupported model boundary")
+    if model.profile == "BOOK-009" and allow_exposed_test_diagnostic is not True:
+        raise ValueError("exposed test diagnostic not explicitly enabled")
+    original, fixture = _load(model.profile)
     case, grading_case_sha256 = _fixture_bound_grading_case(original, fixture)
-    if (
-        type(model) is not OneBookingModel
-        or model.profile != "BOOK-004"
-        or model._transport is not None
-    ):
+    if model._transport is not None:
         raise ValueError("unsupported model boundary")
     settings, run_id, mysql_id, context_secret, token_secret = _environment()
     initial = await asyncio.to_thread(verify_restricted_audit)
@@ -270,10 +390,19 @@ async def run(model: OneBookingModel) -> dict[str, Any]:
         initial, observe_restricted_audit, run_id=run_id, container_id=mysql_id
     )
     identity = _source_identity()
-    identity["book_004_driver_sha256"] = hashlib.sha256(Path(__file__).read_bytes()).hexdigest()
+    identity["booking_context_driver_sha256"] = hashlib.sha256(
+        Path(__file__).read_bytes()
+    ).hexdigest()
     identity["booking_model_boundary_sha256"] = hashlib.sha256(
         Path(__file__).with_name("booking_model_boundary.py").read_bytes()
     ).hexdigest()
+    identity["private_slot_observer_sha256"] = hashlib.sha256(
+        Path(__file__).with_name("mysql_private_slot_observer.py").read_bytes()
+    ).hexdigest()
+    if model.profile == "BOOK-006":
+        identity["organization_store_observer_sha256"] = hashlib.sha256(
+            Path(__file__).with_name("mysql_organization_store_observer.py").read_bytes()
+        ).hexdigest()
     db, gateway = Database(settings), GatewayClient(settings)
     try:
         repo = ConfirmationRepository(db)
@@ -324,9 +453,81 @@ async def run(model: OneBookingModel) -> dict[str, Any]:
             transport=ASGITransport(app=app), base_url="http://agent.local"
         ) as client:
             agent = AgentHTTP(client, _identity(context_secret, subject="student-1", org="org-1"))
+            store_before = None
+            store_pilot: dict[str, Any] = {"status": "UNKNOWN", "reason": "STORE_NOT_OBSERVED"}
+            if model.profile == "BOOK-006":
+                try:
+                    store_before = await asyncio.to_thread(
+                        read_organization_store,
+                        run_id=run_id,
+                        container_id=mysql_id,
+                        organization_id=fixture["selected_store"]["organization_id"],
+                    )
+                except Exception:  # noqa: BLE001 - never disclose SQL or credentials
+                    store_pilot = {"status": "UNKNOWN", "reason": "STORE_BEFORE_UNAVAILABLE"}
             setup = await _observe_setup(agent, fixture, snapshot, observer)
+            slot_before = None
+            slot_pilot: dict[str, Any] = {"status": "UNKNOWN", "reason": "SLOT_NOT_OBSERVED"}
             if setup["status"] == "OBSERVED_NO_CHANGE":
-                trial = await _drive(case, fixture, agent, repo, snapshot, details, observer)
+                try:
+                    slot_before = await asyncio.to_thread(
+                        read_private_slot,
+                        run_id=run_id,
+                        container_id=mysql_id,
+                        organization_id=fixture["payload"]["organization_id"],
+                        coach_id=fixture["payload"]["coach_id"],
+                        start_time=fixture["payload"]["start_time"],
+                        end_time=fixture["payload"]["end_time"],
+                    )
+                except Exception:  # noqa: BLE001 - preserve existing trial on observer failure
+                    slot_pilot = {"status": "UNKNOWN", "reason": "SLOT_BEFORE_UNAVAILABLE"}
+                slot_ready = _slot_ready_for_diagnostic(
+                    model.profile, slot_before, fixture["payload"]
+                )
+                if slot_ready:
+                    trial = await _drive(case, fixture, agent, repo, snapshot, details, observer)
+                else:
+                    trial = {
+                        "case_id": case.case_id,
+                        "task_status": "INCONCLUSIVE",
+                        "reason": "PRIVATE_SLOT_PRECONDITION_UNPROVEN",
+                        "assertions": [],
+                        "executed_steps": [],
+                    }
+                if slot_before is not None and slot_ready:
+                    try:
+                        slot_after = await asyncio.to_thread(
+                            read_private_slot,
+                            run_id=run_id,
+                            container_id=mysql_id,
+                            organization_id=fixture["payload"]["organization_id"],
+                            coach_id=fixture["payload"]["coach_id"],
+                            start_time=fixture["payload"]["start_time"],
+                            end_time=fixture["payload"]["end_time"],
+                        )
+                        slot_pilot = _slot_pilot(slot_before, slot_after, fixture["payload"])
+                        if model.profile == "BOOK-009":
+                            slot_pilot["limitation"] = (
+                                "Exposed planning test case used as a development diagnostic; not a blind holdout or acceptance."
+                            )
+                    except Exception:  # noqa: BLE001 - never disclose SQL or credentials
+                        slot_pilot = {"status": "UNKNOWN", "reason": "SLOT_AFTER_UNAVAILABLE"}
+                if store_before is not None:
+                    try:
+                        store_after = await asyncio.to_thread(
+                            read_organization_store,
+                            run_id=run_id,
+                            container_id=mysql_id,
+                            organization_id=fixture["selected_store"]["organization_id"],
+                        )
+                        store_pilot = _store_pilot(
+                            store_before, store_after, await asyncio.to_thread(details), fixture
+                        )
+                        if store_pilot["status"] == "FAIL":
+                            trial["task_status"] = "FAIL"
+                            trial["reason"] = "STORE_OBSERVATION_MISMATCH"
+                    except Exception:  # noqa: BLE001 - never disclose SQL or credentials
+                        store_pilot = {"status": "UNKNOWN", "reason": "STORE_AFTER_UNAVAILABLE"}
             else:
                 trial = {
                     "case_id": case.case_id,
@@ -342,14 +543,17 @@ async def run(model: OneBookingModel) -> dict[str, Any]:
         except Exception:  # noqa: BLE001
             final = {"status": "FAILED"}
             invalidate_failed_audit(trial)
+        # The store comparison comes from independent scoped reads, so an audit
+        # failure must not erase an already observed store mismatch.
+        _retain_store_failure(trial, store_pilot)
         return {
             "status": "FAIL" if trial["task_status"] == "FAIL" else "INCOMPLETE",
             "origin": "synthetic_context_real_model_real_local_postgres_mysql_java",
             "dataset_version": original.dataset_version,
             "dataset_sha256": _DATASET_SHA256,
-            "fixture_sha256": _FIXTURE_SHA256,
+            "fixture_sha256": fixture["sha256"],
             "grading_contract": {
-                "version": _GRADING_VERSION,
+                "version": case.dataset_version,
                 "case_sha256": grading_case_sha256,
                 "status": "DRAFT_UNREVIEWED",
                 "source_case_modified": False,
@@ -358,10 +562,14 @@ async def run(model: OneBookingModel) -> dict[str, Any]:
             "source_identity": identity,
             "run_id": run_id,
             "review": "draft",
+            "exposed_test_diagnostic": model.profile == "BOOK-009",
+            "blind_holdout_valid": False,
             "audit_complete": False,
             "audit_initial_integrity": initial,
             "audit_final_integrity": final,
             "setup_observation": setup,
+            "private_slot_pilot": slot_pilot,
+            "store_observation": store_pilot,
             "trial": trial,
             "model_diagnostics": model.diagnostics(),
             "limitations": [
@@ -370,6 +578,7 @@ async def run(model: OneBookingModel) -> dict[str, Any]:
                 "The fixture-bound proposal adds a duplicate approval after terminal status to observe idempotency; the original case has no retry step.",
                 "Snapshots do not prove complete transaction history or causal authorization.",
                 "No independent report provenance or human review; not release evidence.",
+                "Fixtures are shared across development and planning test cases; split isolation is not established.",
                 "Local reservation is not a provider-side spending cap.",
             ],
         }
@@ -381,6 +590,10 @@ async def run(model: OneBookingModel) -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report-file", required=True)
+    parser.add_argument(
+        "--case-profile", choices=("BOOK-004", "BOOK-006", "BOOK-009"), default="BOOK-004"
+    )
+    parser.add_argument("--allow-exposed-test-diagnostic", action="store_true")
     parser.add_argument("--real-model", required=True, action="store_true")
     parser.add_argument("--confirm-current-pricing", required=True, action="store_true")
     parser.add_argument("--credential-file", required=True)
@@ -392,8 +605,10 @@ def main() -> int:
     try:
         with Path(args.report_file).open("x", encoding="utf-8") as stream:
             try:
-                model = _real_model(args, profile="BOOK-004")
-                report = asyncio.run(run(model))
+                model = _real_model(args, profile=args.case_profile)
+                report = asyncio.run(
+                    run(model, allow_exposed_test_diagnostic=args.allow_exposed_test_diagnostic)
+                )
             except Exception:  # noqa: BLE001
                 report = {"status": "ERROR", "reason": "PREFLIGHT_OR_TRIAL_SETUP_FAILED"}
             json.dump(report, stream, ensure_ascii=False, indent=2)

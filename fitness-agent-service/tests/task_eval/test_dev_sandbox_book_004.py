@@ -27,9 +27,90 @@ from app.evaluation.task_eval.dev_sandbox_book_004 import (
     _fixture_bound_grading_case,
     _load,
     _observe_setup,
+    _retain_store_failure,
+    _slot_pilot,
+    _slot_ready_for_diagnostic,
+    _store_pilot,
+    run,
 )
 from app.evaluation.task_eval.graders.rules import grade_rule
 from tests.task_eval.test_booking_model_boundary import response_018
+
+
+def test_store_pilot_requires_user_selected_organization_and_observed_booking():
+    _, fixture = _load("BOOK-006")
+    selected = {"id": "org-1", "name": "test organization"}
+    organization = {"snapshot_complete": True, "organization": selected}
+    booking = {
+        "organizationId": "org-1",
+        "studentId": "student-1",
+        "contractId": "contract-1",
+        "coachId": "coach-1",
+        "courseId": "course-1",
+        "startTime": "2030-01-01T02:00:00Z",
+        "endTime": "2030-01-01T03:00:00Z",
+    }
+    details = {"snapshot_complete": True, "created_bookings": [booking]}
+    result = _store_pilot(organization, organization, details, fixture)
+    assert result["status"] == "PASS" and result["mapping_independently_reviewed"] is False
+    changed = {"snapshot_complete": True, "organization": {"id": "org-2", "name": "other"}}
+    assert _store_pilot(organization, changed, details, fixture)["status"] == "UNKNOWN"
+    wrong = {**booking, "organizationId": "org-2"}
+    assert (
+        _store_pilot(organization, organization, {**details, "created_bookings": [wrong]}, fixture)[
+            "status"
+        ]
+        == "FAIL"
+    )
+
+
+def test_store_mismatch_remains_failure_after_audit_is_unavailable():
+    from app.evaluation.task_eval.audit_observation import invalidate_failed_audit
+
+    trial = {"task_status": "FAIL", "assertions": []}
+    invalidate_failed_audit(trial)
+    assert trial["task_status"] == "INCONCLUSIVE"
+    _retain_store_failure(trial, {"status": "FAIL"})
+    assert trial["task_status"] == "FAIL" and trial["reason"] == "STORE_OBSERVATION_MISMATCH"
+
+
+def test_private_slot_pilot_reports_observation_without_claiming_settlement():
+    _, fixture = _load()
+    scope = {
+        "organizationId": "org-1",
+        "coachId": "coach-1",
+        "startTime": "2030-01-01T02:00:00Z",
+        "endTime": "2030-01-01T03:00:00Z",
+    }
+    row = {"id": "appt-1", **scope, "studentId": "student-1", "courseId": "course-1"}
+    before = {"scope": scope, "snapshot_complete": True, "rows": []}
+    after = {"scope": scope, "snapshot_complete": True, "rows": [row]}
+    result = _slot_pilot(before, after, fixture["payload"])
+    assert result["before_count"] == 0 and result["after_count"] == 1
+    assert result["observed_exact_booking"] is True
+    assert result["settlement_proven"] is False and result["status"] == "UNKNOWN"
+    assert _slot_pilot(before, {**after, "scope": {}}, fixture["payload"])["status"] == "UNKNOWN"
+
+
+def test_exposed_slot_diagnostic_requires_a_scoped_empty_snapshot():
+    _, fixture = _load("BOOK-009")
+    before = {
+        "origin": "disposable_mysql_consistent_read",
+        "snapshot_complete": True,
+        "scope": {
+            "organizationId": "org-1",
+            "coachId": "coach-1",
+            "startTime": "2030-01-01T02:00:00Z",
+            "endTime": "2030-01-01T03:00:00Z",
+        },
+        "rows": [],
+    }
+    assert _slot_ready_for_diagnostic("BOOK-009", before, fixture["payload"])
+    assert not _slot_ready_for_diagnostic(
+        "BOOK-009", {**before, "rows": [{"id": "occupied"}]}, fixture["payload"]
+    )
+    assert not _slot_ready_for_diagnostic("BOOK-009", {**before, "scope": {}}, fixture["payload"])
+    assert not _slot_ready_for_diagnostic("BOOK-009", None, fixture["payload"])
 
 
 def test_fixture_grading_is_distinct_draft_and_preserves_source() -> None:
@@ -82,11 +163,13 @@ def test_fixture_grading_is_distinct_draft_and_preserves_source() -> None:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("profile", ["BOOK-004", "BOOK-006", "BOOK-009"])
 async def test_frozen_case_and_explicit_context_reach_one_bounded_model_call(
     tmp_path: Path,
+    profile: str,
 ) -> None:
-    case, fixture = _load()
-    assert case.case_id == "BOOK-004" and case.steps[0].message == "预约这节适用课程"
+    case, fixture = _load(profile)
+    assert case.case_id == profile and case.steps[0].message == fixture["case_message"]
     ledger = DurableBudget(tmp_path / "budget.sqlite", limit_nano=1_000_000_000)
     requests = []
 
@@ -104,7 +187,7 @@ async def test_frozen_case_and_explicit_context_reach_one_bounded_model_call(
     model = OneBookingModel(
         "synthetic-credential",
         ledger,
-        profile="BOOK-004",
+        profile=profile,
         transport=httpx.MockTransport(respond),
         execute=True,
         confirmed_current_pricing=True,
@@ -147,6 +230,21 @@ async def test_frozen_case_and_explicit_context_reach_one_bounded_model_call(
         gateway.db.close()
     assert len(requests) == model.ledger.attempts == 1
     assert ledger.snapshot()["pending"] == 0
+
+
+@pytest.mark.asyncio
+async def test_exposed_test_case_requires_explicit_diagnostic_opt_in(tmp_path: Path) -> None:
+    ledger = DurableBudget(tmp_path / "budget.sqlite", limit_nano=1_000_000_000)
+    model = OneBookingModel(
+        "synthetic-credential",
+        ledger,
+        profile="BOOK-009",
+        execute=True,
+        confirmed_current_pricing=True,
+    )
+    with pytest.raises(ValueError, match="exposed test diagnostic"):
+        await run(model)
+    assert ledger.snapshot()["reserved_nano"] == 0
 
 
 @pytest.mark.asyncio
