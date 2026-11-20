@@ -16,8 +16,18 @@ from typing import Any
 from .booking_dev_026 import load as load_book_026
 from .booking_dev_027 import load as load_book_027
 from .booking_dev_fixtures import load_book_018
+from .booking_parameter_fixtures import FIXTURE_SHA256 as BOOKING_PARAMETER_FIXTURE_SHA256
+from .booking_parameter_fixtures import PARTIAL as BOOKING_PARTIAL
+from .booking_parameter_fixtures import POSITIVE as BOOKING_POSITIVE
+from .booking_parameter_fixtures import load_contracts as load_booking_contracts
 from .booking_test_008 import load as load_book_008
 from .booking_test_030 import load as load_book_030
+from .capacity_draft import load as load_capacity
+from .clinical_draft_parameters import CASE_SHA256 as CLINICAL_CASE_SHA256
+from .clinical_draft_parameters import RUBRIC_SHA256 as CLINICAL_RUBRIC_SHA256
+from .clinical_draft_parameters import RUBRIC_VERSION as CLINICAL_RUBRIC_VERSION
+from .clinical_draft_parameters import proposal_for_case as clinical_proposal_for_case
+from .contracts import Assertion
 from .dataset import Dataset, load_dataset
 from .knowledge_draft_corpus import CORPUS_SHA256, load_corpus
 from .outreach_draft_fixtures import _FIXTURE_SHA256 as OUTREACH_FIXTURE_SHA256
@@ -92,6 +102,7 @@ def build_proposal(dataset: Dataset) -> tuple[bytes, dict[str, Any]]:
     }
     knowledge = load_corpus(dataset)
     outreach = {item["case_id"]: item for item in load_outreach_contracts(dataset)}
+    booking_proposal = load_booking_contracts(dataset)
     changes: list[dict[str, Any]] = []
     output = []
     for original in dataset.cases:
@@ -102,7 +113,13 @@ def build_proposal(dataset: Dataset) -> tuple[bytes, dict[str, Any]]:
         for assertion in case.expected.assertions:
             proposed: dict[str, Any] = {}
             provenance = ""
-            if assertion.rule == "semantic" and assertion.applicable:
+            if (
+                case.case_id in CLINICAL_CASE_SHA256
+                and assertion.rule == "no_severe_unsafe_guidance"
+            ):
+                proposed = clinical_proposal_for_case(original)
+                provenance = "case-bound unreviewed clinical rubric proposal"
+            elif assertion.rule == "semantic" and assertion.applicable:
                 points = assertion.parameters.get("reference_points")
                 if (
                     not isinstance(points, list)
@@ -141,6 +158,23 @@ def build_proposal(dataset: Dataset) -> tuple[bytes, dict[str, Any]]:
                 proposed = {"actor": payload["student_id"], "action": _ACTION}
                 provenance = "frozen synthetic fixture and booking tool contract"
             elif (
+                case.case_id in booking_proposal
+                and assertion.rule == "confirmation_pending_for_actor"
+            ):
+                payload = booking_proposal[case.case_id]["payload"]
+                proposed = {"actor": payload["student_id"], "action": _ACTION}
+                provenance = "case-bound synthetic booking proposal"
+            elif (
+                case.case_id in BOOKING_POSITIVE | BOOKING_PARTIAL
+                and assertion.rule == "booking_created_once"
+            ):
+                fixture = booking_proposal[case.case_id]
+                proposed = {
+                    "booking": _booking(fixture["payload"]),
+                    "credit_delta": -fixture["synthetic_assumptions"]["credits_per_booking"],
+                }
+                provenance = "case-bound synthetic booking proposal"
+            elif (
                 case.case_id in {f"OPER-{index:03}" for index in range(9, 14)}
                 and assertion.rule == "notification_policy"
             ):
@@ -159,12 +193,26 @@ def build_proposal(dataset: Dataset) -> tuple[bytes, dict[str, Any]]:
                 proposed = {"delivery_count": count, "recipient": recipient}
                 provenance = "case-bound synthetic outreach draft fixture"
             elif (
-                case.case_id in {"OPER-015", "OPER-016"} and assertion.rule == "notification_policy"
+                case.case_id in {"OPER-014", "OPER-015", "OPER-016"}
+                and assertion.rule == "notification_policy"
             ):
-                # These cases explicitly prohibit the particular delivery. Their
-                # recipient and complete observation window remain unresolved.
-                proposed = {"delivery_count": 0}
-                provenance = "original planning reference prohibits delivery"
+                # The fixture identifies the hypothetical subject. It does not
+                # prove eligibility/consent or delivery. Duplicate prevention
+                # alone does not imply that any delivery must happen.
+                contract = outreach[case.case_id]
+                recipient = contract["subject"]
+                if (
+                    recipient != f"synthetic-{case.case_id.lower()}-recipient"
+                    or contract["contract_status"] != "draft_unreviewed"
+                    or contract["eligibility_or_consent_verified"] is not False
+                ):
+                    raise ValueError("invalid synthetic outreach contract")
+                proposed = {"recipient": recipient}
+                if case.case_id in {"OPER-015", "OPER-016"}:
+                    proposed["delivery_count"] = 0
+                else:
+                    proposed["max_delivery_count"] = 1
+                provenance = "case-bound synthetic outreach draft fixture"
             elif case.case_id == "BOOK-008" and assertion.rule == "booking_created_once":
                 proposed = {
                     "booking": _booking(fixtures["BOOK-008"]["first_payload"]),
@@ -183,6 +231,8 @@ def build_proposal(dataset: Dataset) -> tuple[bytes, dict[str, Any]]:
                         "provenance": provenance,
                         "fixture_sha256": fixture_hashes.get(case.case_id)
                         if provenance.startswith("frozen")
+                        else BOOKING_PARAMETER_FIXTURE_SHA256
+                        if provenance == "case-bound synthetic booking proposal"
                         else OUTREACH_FIXTURE_SHA256
                         if provenance == "case-bound synthetic outreach draft fixture"
                         else CORPUS_SHA256
@@ -190,6 +240,49 @@ def build_proposal(dataset: Dataset) -> tuple[bytes, dict[str, Any]]:
                         else None,
                     }
                 )
+        if case.case_id in BOOKING_PARTIAL:
+            fixture = booking_proposal[case.case_id]
+            payload = fixture["payload"]
+            if case.case_id == "BOOK-006":
+                extra = Assertion(
+                    id="booking_store",
+                    phase="final",
+                    rule="booking_store_matches",
+                    required=True,
+                    parameters={
+                        "booking_store": {
+                            **_booking(payload),
+                            "storeId": fixture["store_id"],
+                        }
+                    },
+                )
+            else:
+                capacity = load_capacity(original)
+                extra = Assertion(
+                    id="capacity_consumed",
+                    phase="final",
+                    rule="booking_capacity_consumed_once",
+                    required=True,
+                    parameters={
+                        "course_id": capacity["course_id"],
+                        "student_id": payload["student_id"],
+                        "capacity": capacity["capacity"],
+                        "organization_id": payload["organization_id"],
+                        "start_time": _booking(payload)["startTime"],
+                        "end_time": _booking(payload)["endTime"],
+                        "occupied_before": capacity["occupied"],
+                    },
+                )
+            case.expected.assertions.append(extra)
+            changes.append(
+                {
+                    "case_id": case.case_id,
+                    "assertion_id": extra.id,
+                    "fields": sorted(extra.parameters),
+                    "provenance": "added proposed business assertion",
+                    "fixture_sha256": BOOKING_PARAMETER_FIXTURE_SHA256,
+                }
+            )
         output.append(_json_bytes(case.model_dump(mode="json")))
     raw = b"\n".join(output) + b"\n"
     return raw, {
@@ -200,18 +293,24 @@ def build_proposal(dataset: Dataset) -> tuple[bytes, dict[str, Any]]:
         "proposal_dataset_version": _PROPOSAL_VERSION,
         "rubric_version": _RUBRIC,
         "rubric_sha256": _RUBRIC_SHA256,
+        "clinical_rubric_version": CLINICAL_RUBRIC_VERSION,
+        "clinical_rubric_sha256": CLINICAL_RUBRIC_SHA256,
         "case_count": len(output),
         "changed_assertions": len(changes),
         "fixture_sha256": fixture_hashes,
         "knowledge_corpus_sha256": CORPUS_SHA256,
         "outreach_fixture_sha256": OUTREACH_FIXTURE_SHA256,
+        "booking_parameter_fixture_sha256": BOOKING_PARAMETER_FIXTURE_SHA256,
         "limitations": [
             "No model judgments, independent observations, human approvals, or attestations are created.",
             "Knowledge records and relevance are synthetic unreviewed fixtures, not clinical advice or real cancellation policy.",
             "Draft rubric and original reference points require review; field presence does not establish validity.",
+            "SAFE-013–015 use an unreviewed clinical rubric proposal; parameter presence is not clinical judgment, qualified human review, or evidence of a safe answer.",
             "BOOK-008 and BOOK-030 test fixtures share synthetic identity and booking parameters with development fixtures; split leakage review is required.",
+            "BOOK-001–005, 007, 010, 028, 029 and 031 use supplemental synthetic booking inputs and eligibility assumptions; they have not been integrated into the original runner or independently observed. Parameter completeness does not establish successful execution, product capability, or split isolation.",
+            "BOOK-006 and BOOK-009 add separate proposed store and capacity assertions bound to synthetic fixtures; no actual store or capacity adapter or independent business observation is provided. Ordinary booking success alone cannot prove either assertion.",
             "Outreach recipients and counts are synthetic unreviewed proposals; the OPER-010 zero count applies only to the immediate local quiet-hours observation window, not to later permitted delivery.",
-            "OPER-012 delivery eligibility and consent are not verified; OPER-014–016 remain incomplete and are not established as passing.",
+            "OPER-012 delivery eligibility and consent are not verified; OPER-014–016 synthetic recipients and counts do not establish eligibility, consent withdrawal mapping, a complete delivery window, or task success. OPER-014 checks at most one delivery, not that an eligible notification was actually delivered.",
             "Frozen original-case runners cannot execute proposal case identities without explicit integration.",
         ],
         "changes": changes,

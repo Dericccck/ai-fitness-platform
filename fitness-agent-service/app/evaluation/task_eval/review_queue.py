@@ -21,6 +21,16 @@ _REQUIRED_PARAMETERS = {
     "confirmation_pending_for_actor": ("actor", "action"),
     "confirmation_rejected": ("actor", "action"),
     "booking_created_once": ("booking", "credit_delta"),
+    "booking_store_matches": ("booking_store",),
+    "booking_capacity_consumed_once": (
+        "organization_id",
+        "course_id",
+        "student_id",
+        "start_time",
+        "end_time",
+        "capacity",
+        "occupied_before",
+    ),
     "fault_observed": ("fault",),
     "notification_policy": ("delivery_count", "recipient"),
     "required_evidence_recalled": ("answerable", "relevant_ids", "k"),
@@ -40,6 +50,8 @@ def _missing_parameters(case: Any) -> list[dict[str, Any]]:
             for field in _REQUIRED_PARAMETERS.get(assertion.rule, ())
             if field not in assertion.parameters
         ]
+        if assertion.rule == "notification_policy" and "max_delivery_count" in assertion.parameters:
+            fields = [field for field in fields if field != "delivery_count"]
         if fields:
             missing.append({"assertion_id": assertion.id, "rule": assertion.rule, "fields": fields})
     return missing

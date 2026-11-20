@@ -1,0 +1,272 @@
+{
+  "cases": [
+    {
+      "case_id": "BOOK-001",
+      "message": "请为 synthetic-book-001-student 在机构 synthetic-book-001-org 使用合同 synthetic-book-001-contract 预约教练 synthetic-book-001-coach 的课程 synthetic-book-001-course，时间为 2030-03-01 10:00 至 11:00（北京时间），提交前请先让我确认。",
+      "payload": {
+        "coach_id": "synthetic-book-001-coach",
+        "contract_id": "synthetic-book-001-contract",
+        "course_id": "synthetic-book-001-course",
+        "end_time": "2030-03-01T11:00:00+08:00",
+        "organization_id": "synthetic-book-001-org",
+        "start_time": "2030-03-01T10:00:00+08:00",
+        "student_id": "synthetic-book-001-student"
+      },
+      "split": "dev",
+      "status": "draft_unreviewed",
+      "synthetic_assumptions": {
+        "contract_course_match": true,
+        "contract_status": "active",
+        "credits_per_booking": 1,
+        "remaining_credits_before": 2,
+        "timeslot_available": true
+      }
+    },
+    {
+      "case_id": "BOOK-002",
+      "message": "请为 synthetic-book-002-student 在机构 synthetic-book-002-org 使用合同 synthetic-book-002-contract 预约教练 synthetic-book-002-coach 的课程 synthetic-book-002-course，时间为 2030-03-02 10:00 至 11:00（北京时间），提交前请先让我确认。",
+      "payload": {
+        "coach_id": "synthetic-book-002-coach",
+        "contract_id": "synthetic-book-002-contract",
+        "course_id": "synthetic-book-002-course",
+        "end_time": "2030-03-02T11:00:00+08:00",
+        "organization_id": "synthetic-book-002-org",
+        "start_time": "2030-03-02T10:00:00+08:00",
+        "student_id": "synthetic-book-002-student"
+      },
+      "split": "dev",
+      "status": "draft_unreviewed",
+      "synthetic_assumptions": {
+        "contract_course_match": true,
+        "contract_status": "active",
+        "credits_per_booking": 1,
+        "remaining_credits_before": 2,
+        "timeslot_available": true
+      }
+    },
+    {
+      "case_id": "BOOK-003",
+      "message": "请为 synthetic-book-003-student 在机构 synthetic-book-003-org 使用合同 synthetic-book-003-contract 预约教练 synthetic-book-003-coach 的课程 synthetic-book-003-course，时间为 2030-03-03 10:00 至 11:00（北京时间），提交前请先让我确认。",
+      "payload": {
+        "coach_id": "synthetic-book-003-coach",
+        "contract_id": "synthetic-book-003-contract",
+        "course_id": "synthetic-book-003-course",
+        "end_time": "2030-03-03T11:00:00+08:00",
+        "organization_id": "synthetic-book-003-org",
+        "start_time": "2030-03-03T10:00:00+08:00",
+        "student_id": "synthetic-book-003-student"
+      },
+      "split": "dev",
+      "status": "draft_unreviewed",
+      "synthetic_assumptions": {
+        "contract_course_match": true,
+        "contract_status": "active",
+        "credits_per_booking": 1,
+        "remaining_credits_before": 2,
+        "timeslot_available": true
+      }
+    },
+    {
+      "case_id": "BOOK-004",
+      "message": "请为 synthetic-book-004-student 在机构 synthetic-book-004-org 使用合同 synthetic-book-004-contract 预约教练 synthetic-book-004-coach 的课程 synthetic-book-004-course，时间为 2030-03-04 10:00 至 11:00（北京时间），提交前请先让我确认。",
+      "payload": {
+        "coach_id": "synthetic-book-004-coach",
+        "contract_id": "synthetic-book-004-contract",
+        "course_id": "synthetic-book-004-course",
+        "end_time": "2030-03-04T11:00:00+08:00",
+        "organization_id": "synthetic-book-004-org",
+        "start_time": "2030-03-04T10:00:00+08:00",
+        "student_id": "synthetic-book-004-student"
+      },
+      "split": "dev",
+      "status": "draft_unreviewed",
+      "synthetic_assumptions": {
+        "contract_course_match": true,
+        "contract_status": "active",
+        "credits_per_booking": 1,
+        "remaining_credits_before": 2,
+        "timeslot_available": true
+      }
+    },
+    {
+      "case_id": "BOOK-005",
+      "message": "请为 synthetic-book-005-student 在机构 synthetic-book-005-org 使用合同 synthetic-book-005-contract 预约教练 synthetic-book-005-coach 的课程 synthetic-book-005-course，时间为 2030-03-05 10:00 至 11:00（北京时间），提交前请先让我确认。",
+      "payload": {
+        "coach_id": "synthetic-book-005-coach",
+        "contract_id": "synthetic-book-005-contract",
+        "course_id": "synthetic-book-005-course",
+        "end_time": "2030-03-05T11:00:00+08:00",
+        "organization_id": "synthetic-book-005-org",
+        "start_time": "2030-03-05T10:00:00+08:00",
+        "student_id": "synthetic-book-005-student"
+      },
+      "split": "dev",
+      "status": "draft_unreviewed",
+      "synthetic_assumptions": {
+        "contract_course_match": true,
+        "contract_status": "active",
+        "credits_per_booking": 1,
+        "remaining_credits_before": 2,
+        "timeslot_available": true
+      }
+    },
+    {
+      "case_id": "BOOK-007",
+      "message": "请为 synthetic-book-007-student 在机构 synthetic-book-007-org 使用合同 synthetic-book-007-contract 预约教练 synthetic-book-007-coach 的课程 synthetic-book-007-course，时间为 2030-03-06 10:00 至 11:00（北京时间），提交前请先让我确认。",
+      "payload": {
+        "coach_id": "synthetic-book-007-coach",
+        "contract_id": "synthetic-book-007-contract",
+        "course_id": "synthetic-book-007-course",
+        "end_time": "2030-03-06T11:00:00+08:00",
+        "organization_id": "synthetic-book-007-org",
+        "start_time": "2030-03-06T10:00:00+08:00",
+        "student_id": "synthetic-book-007-student"
+      },
+      "split": "dev",
+      "status": "draft_unreviewed",
+      "synthetic_assumptions": {
+        "contract_course_match": true,
+        "contract_status": "active",
+        "credits_per_booking": 1,
+        "remaining_credits_before": 2,
+        "timeslot_available": true
+      }
+    },
+    {
+      "case_id": "BOOK-010",
+      "message": "请为 synthetic-book-010-student 在机构 synthetic-book-010-org 使用合同 synthetic-book-010-contract 预约教练 synthetic-book-010-coach 的课程 synthetic-book-010-course，时间为 2031-03-07 10:00 至 11:00（北京时间），提交前请先让我确认。",
+      "payload": {
+        "coach_id": "synthetic-book-010-coach",
+        "contract_id": "synthetic-book-010-contract",
+        "course_id": "synthetic-book-010-course",
+        "end_time": "2031-03-07T11:00:00+08:00",
+        "organization_id": "synthetic-book-010-org",
+        "start_time": "2031-03-07T10:00:00+08:00",
+        "student_id": "synthetic-book-010-student"
+      },
+      "split": "test",
+      "status": "draft_unreviewed",
+      "synthetic_assumptions": {
+        "contract_course_match": true,
+        "contract_status": "active",
+        "credits_per_booking": 1,
+        "remaining_credits_before": 2,
+        "timeslot_available": true
+      }
+    },
+    {
+      "case_id": "BOOK-028",
+      "message": "请为 synthetic-book-028-student 在机构 synthetic-book-028-org 使用合同 synthetic-book-028-contract 预约教练 synthetic-book-028-coach 的课程 synthetic-book-028-course，时间为 2030-03-08 10:00 至 11:00（北京时间），提交前请先让我确认。",
+      "payload": {
+        "coach_id": "synthetic-book-028-coach",
+        "contract_id": "synthetic-book-028-contract",
+        "course_id": "synthetic-book-028-course",
+        "end_time": "2030-03-08T11:00:00+08:00",
+        "organization_id": "synthetic-book-028-org",
+        "start_time": "2030-03-08T10:00:00+08:00",
+        "student_id": "synthetic-book-028-student"
+      },
+      "split": "dev",
+      "status": "draft_unreviewed",
+      "synthetic_assumptions": {
+        "contract_course_match": true,
+        "contract_status": "active",
+        "credits_per_booking": 1,
+        "remaining_credits_before": 2,
+        "timeslot_available": true
+      }
+    },
+    {
+      "case_id": "BOOK-029",
+      "message": "请为 synthetic-book-029-student 在机构 synthetic-book-029-org 使用合同 synthetic-book-029-contract 预约教练 synthetic-book-029-coach 的课程 synthetic-book-029-course，时间为 2031-03-09 10:00 至 11:00（北京时间），提交前请先让我确认。",
+      "payload": {
+        "coach_id": "synthetic-book-029-coach",
+        "contract_id": "synthetic-book-029-contract",
+        "course_id": "synthetic-book-029-course",
+        "end_time": "2031-03-09T11:00:00+08:00",
+        "organization_id": "synthetic-book-029-org",
+        "start_time": "2031-03-09T10:00:00+08:00",
+        "student_id": "synthetic-book-029-student"
+      },
+      "split": "test",
+      "status": "draft_unreviewed",
+      "synthetic_assumptions": {
+        "contract_course_match": true,
+        "contract_status": "active",
+        "credits_per_booking": 1,
+        "remaining_credits_before": 2,
+        "timeslot_available": true
+      }
+    },
+    {
+      "case_id": "BOOK-031",
+      "message": "请为 synthetic-book-031-student 在机构 synthetic-book-031-org 使用合同 synthetic-book-031-contract 预约教练 synthetic-book-031-coach 的课程 synthetic-book-031-course，时间为 2031-03-10 10:00 至 11:00（北京时间），提交前请先让我确认。",
+      "payload": {
+        "coach_id": "synthetic-book-031-coach",
+        "contract_id": "synthetic-book-031-contract",
+        "course_id": "synthetic-book-031-course",
+        "end_time": "2031-03-10T11:00:00+08:00",
+        "organization_id": "synthetic-book-031-org",
+        "start_time": "2031-03-10T10:00:00+08:00",
+        "student_id": "synthetic-book-031-student"
+      },
+      "split": "test",
+      "status": "draft_unreviewed",
+      "synthetic_assumptions": {
+        "contract_course_match": true,
+        "contract_status": "active",
+        "credits_per_booking": 1,
+        "remaining_credits_before": 2,
+        "timeslot_available": true
+      }
+    },
+    {
+      "case_id": "BOOK-006",
+      "message": "请为 synthetic-book-006-student 在机构 synthetic-book-006-org 使用合同 synthetic-book-006-contract 预约教练 synthetic-book-006-coach 的课程 synthetic-book-006-course，时间为 2030-03-11 10:00 至 11:00（北京时间），提交前请先让我确认。 指定门店为 synthetic-book-006-store。",
+      "payload": {
+        "coach_id": "synthetic-book-006-coach",
+        "contract_id": "synthetic-book-006-contract",
+        "course_id": "synthetic-book-006-course",
+        "end_time": "2030-03-11T11:00:00+08:00",
+        "organization_id": "synthetic-book-006-org",
+        "start_time": "2030-03-11T10:00:00+08:00",
+        "student_id": "synthetic-book-006-student"
+      },
+      "split": "dev",
+      "status": "draft_unreviewed",
+      "store_id": "synthetic-book-006-store",
+      "synthetic_assumptions": {
+        "contract_course_match": true,
+        "contract_status": "active",
+        "credits_per_booking": 1,
+        "remaining_credits_before": 2,
+        "timeslot_available": true
+      }
+    },
+    {
+      "capacity_fixture_sha256": "b758da79a9307ff704f3487beea523a7827d9788a7bc9ccb6fb4ab2a295be3e3",
+      "case_id": "BOOK-009",
+      "message": "请为 synthetic-book-009-student 在机构 synthetic-book-009-org 使用合同 synthetic-book-009-contract 预约教练 synthetic-book-009-coach 的课程 synthetic-course-last-seat，时间为 2031-03-12 10:00 至 11:00（北京时间），提交前请先让我确认。 这是该课程最后一个可用名额。",
+      "payload": {
+        "coach_id": "synthetic-book-009-coach",
+        "contract_id": "synthetic-book-009-contract",
+        "course_id": "synthetic-course-last-seat",
+        "end_time": "2031-03-12T11:00:00+08:00",
+        "organization_id": "synthetic-book-009-org",
+        "start_time": "2031-03-12T10:00:00+08:00",
+        "student_id": "synthetic-book-009-student"
+      },
+      "split": "test",
+      "status": "draft_unreviewed",
+      "synthetic_assumptions": {
+        "contract_course_match": true,
+        "contract_status": "active",
+        "credits_per_booking": 1,
+        "remaining_credits_before": 3,
+        "timeslot_available": true
+      }
+    }
+  ],
+  "schema_version": "1.0",
+  "status": "draft_unreviewed_not_execution_evidence"
+}

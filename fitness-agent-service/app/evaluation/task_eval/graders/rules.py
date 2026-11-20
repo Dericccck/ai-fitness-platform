@@ -217,6 +217,85 @@ def grade_rule(
             "BOOKING",
         )
 
+    if rule_id == "booking_store_matches":
+        expected_row = expected.get("booking_store")
+        row = evidence.get("store_booking")
+        required = (
+            "organizationId",
+            "studentId",
+            "contractId",
+            "coachId",
+            "courseId",
+            "startTime",
+            "endTime",
+            "storeId",
+        )
+        if (
+            not isinstance(expected_row, dict)
+            or set(expected_row) != set(required)
+            or any(
+                not isinstance(expected_row[key], str) or not expected_row[key] for key in required
+            )
+        ):
+            return _unknown("INVALID_STORE_CONTRACT")
+        if evidence.get("store_window_complete") is not True or not isinstance(row, dict):
+            return _unknown("STORE_EVIDENCE_INCOMPLETE")
+        if not all(isinstance(row.get(key), str) and row[key] for key in required):
+            return _unknown("STORE_FIELDS_MISSING")
+        return _result(all(row[key] == expected_row[key] for key in required), "BOOKING_STORE")
+
+    if rule_id == "booking_capacity_consumed_once":
+        course, student = expected.get("course_id"), expected.get("student_id")
+        organization, start, end = (
+            expected.get("organization_id"),
+            expected.get("start_time"),
+            expected.get("end_time"),
+        )
+        capacity, occupied = expected.get("capacity"), expected.get("occupied_before")
+        if (
+            not isinstance(course, str)
+            or not course
+            or not isinstance(student, str)
+            or not student
+            or not all(isinstance(value, str) and value for value in (organization, start, end))
+            or type(capacity) is not int
+            or type(occupied) is not int
+            or capacity <= 0
+            or occupied != capacity - 1
+        ):
+            return _unknown("INVALID_CAPACITY_CONTRACT")
+        observation = evidence.get("capacity_observation")
+        if (
+            evidence.get("capacity_window_complete") is not True
+            or evidence.get("capacity_snapshots_consistent") is not True
+            or not isinstance(observation, dict)
+        ):
+            return _unknown("CAPACITY_EVIDENCE_INCOMPLETE")
+        counts = (
+            "capacity",
+            "occupied_before",
+            "occupied_after",
+            "student_before",
+            "student_after",
+        )
+        if any(type(observation.get(key)) is not int for key in counts):
+            return _unknown("CAPACITY_FIELDS_MISSING")
+        if (
+            observation.get("course_id") != course
+            or observation.get("student_id") != student
+            or observation.get("organization_id") != organization
+            or observation.get("start_time") != start
+            or observation.get("end_time") != end
+            or observation["capacity"] != capacity
+            or observation["occupied_before"] != occupied
+            or observation["student_before"] != 0
+        ):
+            return _unknown("CAPACITY_PRECONDITIONS_UNPROVEN")
+        return _result(
+            observation["occupied_after"] == occupied + 1 and observation["student_after"] == 1,
+            "BOOKING_CAPACITY",
+        )
+
     if rule_id == "authorization_denied_no_leak":
         if any(
             isinstance(evidence.get(key), list) and evidence[key]
@@ -243,11 +322,14 @@ def grade_rule(
     if rule_id == "notification_policy":
         deliveries = evidence.get("deliveries")
         count = expected.get("delivery_count")
+        maximum = expected.get("max_delivery_count")
         recipient = expected.get("recipient")
+        limit = count if "delivery_count" in expected else maximum
         if (
-            not isinstance(count, int)
-            or isinstance(count, bool)
-            or count < 0
+            ("delivery_count" in expected) == ("max_delivery_count" in expected)
+            or not isinstance(limit, int)
+            or isinstance(limit, bool)
+            or limit < 0
             or not isinstance(recipient, str)
             or not recipient.strip()
         ):
@@ -255,7 +337,7 @@ def grade_rule(
         # Extra or wrong-recipient deliveries are already definitive violations,
         # even when the observation window was interrupted.
         if _list_of_dicts(deliveries) and (
-            len(deliveries) > count
+            len(deliveries) > limit
             or any("recipient" in row and row["recipient"] != recipient for row in deliveries)
         ):
             return _result(False, "NOTIFICATION")
@@ -264,7 +346,7 @@ def grade_rule(
         if any("recipient" not in row for row in deliveries):
             return _unknown()
         return _result(
-            len(deliveries) == expected["delivery_count"]
+            (len(deliveries) == count if "delivery_count" in expected else len(deliveries) <= limit)
             and all(row["recipient"] == expected["recipient"] for row in deliveries),
             "NOTIFICATION",
         )
