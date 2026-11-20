@@ -6,7 +6,17 @@ umask 077
 single_development_trial=false
 book_real_model=false
 broker_duplicate_trial=false
+booking_capabilities_trial=false
 development_module=app.evaluation.task_eval.dev_sandbox_booking
+if [[ "${1:-}" == "--booking-capabilities-trial" ]]; then
+    [[ "$#" -eq 2 && "$2" == /* && ! -e "$2" && ! -L "$2" ]] || {
+        printf 'Provide a new absolute report path for the capabilities trial.\n' >&2
+        exit 1
+    }
+    booking_capabilities_trial=true
+    single_development_trial=true
+    single_report="$2"
+fi
 if [[ "${1:-}" == "--broker-duplicate-trial" ]]; then
     [[ "$#" -eq 2 && "$2" == /* && ! -e "$2" ]] || {
         printf 'Provide a new absolute report path for the broker trial.\n' >&2
@@ -244,7 +254,9 @@ if [[ "$broker_duplicate_trial" == true ]]; then
     runtime_env+=("TASK_EVAL_RABBIT_CONTAINER_ID=$rabbit_id" "TASK_EVAL_RABBIT_PASSWORD=$RABBITMQ_DEFAULT_PASS")
 fi
 "${runtime_env[@]}" "$python" -m alembic -c "$run_dir/alembic.ini" upgrade head >"$run_dir/migrations.log" 2>&1
-if [[ "$single_development_trial" == true ]]; then
+if [[ "$booking_capabilities_trial" == true ]]; then
+    "${runtime_env[@]}" "$python" -m app.evaluation.task_eval.mysql_booking_capabilities --report-file "$single_report"
+elif [[ "$single_development_trial" == true ]]; then
     if [[ "$book_real_model" == true ]]; then
         "${runtime_env[@]}" "$python" -m "$development_module" --report-file "$single_report" --real-model "${real_model_args[@]}"
     else
