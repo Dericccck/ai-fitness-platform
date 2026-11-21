@@ -138,6 +138,39 @@ public class FitnessToolServiceTest {
         assertEquals(0, result.getConflicts().size());
     }
 
+    @Test
+    public void crossMidnightAvailabilityChecksTheSecondDay() {
+        AgentContext context = context("student-1", AgentContext.ROLE_STUDENT);
+        LocalDate first = LocalDate.of(2026, 8, 20), second = first.plusDays(1);
+        Instant start = Instant.parse("2026-08-20T15:30:00Z");
+        Instant end = Instant.parse("2026-08-20T16:30:00Z");
+        when(repository.isOrganizationMember("org-1", "student-1")).thenReturn(true);
+        when(repository.isCoachInOrganization("org-1", "coach-1")).thenReturn(true);
+        when(repository.findNonBusinessDays("org-1", first, second))
+                .thenReturn(Collections.singletonList(second));
+        when(repository.findCoachVacationDays("org-1", "coach-1", first, second))
+                .thenReturn(Collections.singletonList(second));
+
+        ToolViews.BookingAvailabilityView result = service.bookingAvailability(
+                context, "org-1", null, "coach-1", "course-1", start, end, null);
+
+        assertEquals(false, result.isAvailable());
+        assertEquals(true, result.getReasonCodes().contains("ORGANIZATION_NON_BUSINESS_DAY"));
+        assertEquals(true, result.getReasonCodes().contains("COACH_ON_LEAVE"));
+    }
+
+    @Test
+    public void availabilityEndingAtMidnightDoesNotIncludeNextDay() {
+        AgentContext context = context("student-1", AgentContext.ROLE_STUDENT);
+        LocalDate day = LocalDate.of(2026, 8, 20);
+        when(repository.isOrganizationMember("org-1", "student-1")).thenReturn(true);
+        when(repository.isCoachInOrganization("org-1", "coach-1")).thenReturn(true);
+        service.bookingAvailability(context, "org-1", null, "coach-1", "course-1",
+                Instant.parse("2026-08-20T15:30:00Z"), Instant.parse("2026-08-20T16:00:00Z"), null);
+        org.mockito.Mockito.verify(repository).findNonBusinessDays("org-1", day, day);
+        org.mockito.Mockito.verify(repository).findCoachVacationDays("org-1", "coach-1", day, day);
+    }
+
     private static void assertForbidden(Runnable action) {
         try {
             action.run();

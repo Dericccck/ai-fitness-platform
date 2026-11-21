@@ -9,7 +9,17 @@ broker_duplicate_trial=false
 booking_capabilities_trial=false
 development_module=app.evaluation.task_eval.dev_sandbox_booking
 positive_profile=""
+clarification_profile=""
 phase_negative_control=false
+if [[ "${1:-}" == "--booking-clarification-real-model-trial" ]]; then
+    [[ "$#" -ge 3 ]] || { printf 'Provide a supported case and a new absolute report path.\n' >&2; exit 1; }
+    case "$2" in
+        BOOK-011|BOOK-012|BOOK-013|BOOK-014|BOOK-015) clarification_profile="$2" ;;
+        *) printf 'Unsupported clarification case.\n' >&2; exit 1 ;;
+    esac
+    shift 2
+    set -- --book-018-real-model-trial "$@"
+fi
 if [[ "${1:-}" == "--single-development-phase-negative-trial" ]]; then
     [[ "$#" -eq 2 ]] || { printf 'Provide a new absolute report path.\n' >&2; exit 1; }
     phase_negative_control=true
@@ -64,6 +74,9 @@ if [[ "${1:-}" == "--book-009-exposed-test-diagnostic" || "${1:-}" == "--book-00
     fi
     if [[ "$1" == "--book-018-development-trial" || "$1" == "--book-018-real-model-trial" ]]; then
         development_module=app.evaluation.task_eval.dev_sandbox_book_018
+        if [[ -n "$clarification_profile" ]]; then
+            development_module=app.evaluation.task_eval.dev_sandbox_book_clarification
+        fi
     fi
     if [[ "$1" == "--book-026-development-trial" || "$1" == "--book-026-real-model-trial" ]]; then
         development_module=app.evaluation.task_eval.dev_sandbox_book_026
@@ -75,12 +88,15 @@ if [[ "${1:-}" == "--book-009-exposed-test-diagnostic" || "${1:-}" == "--book-00
         book_real_model=true
         shift 2
         real_model_args=("$@")
-        has_credential=false has_budget=false has_limit=false has_opening=false has_minimum=false has_pricing=false
+        has_credential=false has_budget=false has_limit=false has_opening=false has_minimum=false has_pricing=false has_review=false
         while [[ "$#" -gt 0 ]]; do
             case "$1" in
                 --confirm-current-pricing)
                     [[ "$has_pricing" == false ]] || exit 1
                     has_pricing=true; shift ;;
+                --review-dir)
+                    [[ -n "$clarification_profile" && "$has_review" == false && "$#" -ge 2 && -n "$2" && "$2" != --* ]] || exit 1
+                    has_review=true; shift 2 ;;
                 --credential-file|--budget-file|--budget-limit-nano|--budget-opening-nano|--minimum-reserved-nano)
                     [[ "$#" -ge 2 && -n "$2" && "$2" != --* ]] || exit 1
                     case "$1" in
@@ -96,6 +112,10 @@ if [[ "${1:-}" == "--book-009-exposed-test-diagnostic" || "${1:-}" == "--book-00
         done
         [[ "$has_credential" == true && "$has_budget" == true && "$has_limit" == true && "$has_opening" == true && "$has_minimum" == true && "$has_pricing" == true ]] || {
             printf 'Real-model trial requires private credentials, existing budget and confirmed pricing.\n' >&2
+            exit 1
+        }
+        [[ -z "$clarification_profile" || "$has_review" == true ]] || {
+            printf 'Clarification trial requires a private review directory.\n' >&2
             exit 1
         }
     fi
@@ -289,6 +309,8 @@ elif [[ "$single_development_trial" == true ]]; then
             else
                 "${runtime_env[@]}" "$python" -m "$development_module" --report-file "$single_report" --real-model --case-profile "$context_profile" "${real_model_args[@]}"
             fi
+        elif [[ "$development_module" == "app.evaluation.task_eval.dev_sandbox_book_clarification" ]]; then
+            "${runtime_env[@]}" "$python" -m "$development_module" --report-file "$single_report" --real-model --case-id "$clarification_profile" "${real_model_args[@]}"
         else
             "${runtime_env[@]}" "$python" -m "$development_module" --report-file "$single_report" --real-model "${real_model_args[@]}"
         fi

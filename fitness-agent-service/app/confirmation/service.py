@@ -14,7 +14,7 @@ from datetime import UTC, datetime, timedelta
 from typing import Any
 from uuid import uuid4
 
-from app.agent.tool_registry import ToolRegistry
+from app.agent.tool_registry import ToolConfirmationNormalizationError, ToolRegistry
 from app.confirmation.cipher import AesGcmPayloadCipher, ConfirmationPayloadCipherError
 from app.confirmation.models import ConfirmationDecision, ConfirmationRecord, ConfirmationStateError
 from app.confirmation.normalization import (
@@ -112,6 +112,7 @@ class ConfirmationService:
             organization_id=organization_id,
             resource=resource,
         )
+        _validate_future_booking_start(tool_id, normalized.canonical_payload, datetime.now(UTC))
         ciphertext = self.cipher.encrypt(
             normalized.canonical_payload,
             associated_data=normalized.payload_hash,
@@ -393,6 +394,28 @@ def _ensure_identity_snapshot(record: ConfirmationRecord, identity: AgentIdentit
     ) or record.actor_organization_ids != tuple(sorted(identity.organization_ids)):
         # 对外按“不可见”处理，避免通过确认接口探测其他授权快照。
         raise ConfirmationStateError("确认单身份范围已变更")
+
+
+def _validate_future_booking_start(tool_id: str, canonical_payload: bytes, now: datetime) -> None:
+    """Do not create confirmation cards for booking times already in the past.
+
+    The booking service still revalidates at execution; time may pass between
+    approval and commit. This checks time, not provenance of model parameters.
+    """
+    if tool_id not in {"fitness.booking.create.v1", "fitness.booking.reschedule.v1"}:
+        return
+    try:
+        payload = json.loads(canonical_payload)
+        value = payload.get("startTime") if isinstance(payload, dict) else None
+        if not isinstance(value, str):
+            raise TypeError("missing start")
+        start = datetime.fromisoformat(value)
+        if start.tzinfo is None or start.utcoffset() is None or now.tzinfo is None:
+            raise ValueError("timezone missing")
+        if start <= now:
+            raise ValueError("start not in future")
+    except (ValueError, TypeError, OverflowError) as exc:
+        raise ToolConfirmationNormalizationError("预约开始时间必须晚于当前时间") from exc
 
 
 def _execution_tool_input(

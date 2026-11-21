@@ -154,10 +154,11 @@ public class FitnessToolService {
             reasons.add("COACH_TIME_CONFLICT");
         }
         LocalDate date = start.atZone(java.time.ZoneId.of("Asia/Shanghai")).toLocalDate();
-        if (repository.findNonBusinessDays(organizationId, date, date).contains(date)) {
+        LocalDate lastDate = end.minusNanos(1).atZone(java.time.ZoneId.of("Asia/Shanghai")).toLocalDate();
+        if (!repository.findNonBusinessDays(organizationId, date, lastDate).isEmpty()) {
             reasons.add("ORGANIZATION_NON_BUSINESS_DAY");
         }
-        if (repository.findCoachVacationDays(organizationId, coachId, date, date).contains(date)) {
+        if (!repository.findCoachVacationDays(organizationId, coachId, date, lastDate).isEmpty()) {
             reasons.add("COACH_ON_LEAVE");
         }
 
