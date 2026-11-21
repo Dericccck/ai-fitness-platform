@@ -22,12 +22,16 @@ def responses(
         if "information_schema.TRIGGERS" in command:
             return "\n".join(triggers)
         if "account_locked" in command:
-            return checks_override or f"{len(audit._TABLES)}\n1\n0\nY\n3\n3\n1\n1"
+            return (
+                checks_override
+                or f"{len(audit._TABLES)}\n1\n1\n0\nY\n4\n4\n1\n1\n2\n2\n1\n1\n1\n1\nREPEATABLE-READ"
+            )
         if "SHOW GRANTS" in command:
             if audit._OWNER in command:
                 grants = {
                     "GRANT USAGE ON *.* TO `eval_audit_owner`@`localhost`",
                     "GRANT INSERT ON `fitness_eval_audit`.`events` TO `eval_audit_owner`@`localhost`",
+                    "GRANT SELECT ON `fitness_eval_audit`.`phase` TO `eval_audit_owner`@`localhost`",
                 } | {
                     f"GRANT TRIGGER ON `fitness_eval`.`{table}` TO `eval_audit_owner`@`localhost`"
                     for table in audit._TABLES
@@ -65,7 +69,7 @@ def test_verify_rejects_modified_trigger_and_extra_privilege(monkeypatch):
     monkeypatch.setattr(audit, "_client", client)
     result = audit.verify()
     assert result["status"] == "VERIFIED" and result["trigger_count"] == 30
-    assert sum(denied for _, denied in calls) == 8
+    assert sum(denied for _, denied in calls) == 10
     monkeypatch.setattr(audit, "_sql", responses(changed_trigger=True))
     with pytest.raises(PreflightError, match="TRIGGER_INTEGRITY"):
         audit.verify()
@@ -153,11 +157,12 @@ def test_verify_rejects_changed_trigger_timing_orientation_or_name(monkeypatch, 
 @pytest.mark.parametrize(
     "checks",
     [
-        "10\n1\n0\nY\n2\n2\n1\n1",  # missing column
-        "10\n1\n0\nY\n3\n2\n1\n1",  # wrong type, nullability, or auto_increment
-        "10\n1\n0\nY\n3\n3\n0\n0",  # missing primary key
-        "10\n1\n0\nY\n3\n3\n1\n2",  # composite primary key
-        "10\n1\n0\nY\n4\n3\n1\n1",  # unreviewed extra column
+        "10\n1\n1\n0\nY\n3\n3\n1\n1\n2\n2\n1\n1\n1\n1\nREPEATABLE-READ",  # missing column
+        "10\n1\n1\n0\nY\n4\n3\n1\n1\n2\n2\n1\n1\n1\n1\nREPEATABLE-READ",  # wrong type
+        "10\n1\n1\n0\nY\n4\n4\n0\n0\n2\n2\n1\n1\n1\n1\nREPEATABLE-READ",  # missing key
+        "10\n1\n1\n0\nY\n4\n4\n1\n2\n2\n2\n1\n1\n1\n1\nREPEATABLE-READ",  # composite key
+        "10\n1\n1\n0\nY\n5\n4\n1\n1\n2\n2\n1\n1\n1\n1\nREPEATABLE-READ",  # extra column
+        "10\n1\n1\n0\nY\n4\n4\n1\n1\n2\n2\n1\n1\n1\n1\nREAD-COMMITTED",  # wrong isolation
     ],
 )
 def test_verify_rejects_changed_audit_table_schema(monkeypatch, checks):

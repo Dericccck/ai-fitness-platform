@@ -23,7 +23,10 @@ from .sandbox_preflight import PreflightError, _inspect
 _BOOKING = "eval_booking"
 _GATEWAY = "eval_gateway"
 _OWNER = "eval_audit_owner"
-_BODY = "INSERT INTO fitness_eval_audit.events (table_name, op) VALUES ('{table}', '{event}')"
+_BODY = (
+    "INSERT INTO fitness_eval_audit.events (table_name, op, phase_at_write) "
+    "VALUES ('{table}', '{event}', (SELECT phase FROM fitness_eval_audit.phase WHERE id=1))"
+)
 _OBSERVER_INSTANCE = uuid4().hex
 _TRANSACTION_STATES = frozenset({"RUNNING", "LOCK WAIT", "ROLLING BACK", "COMMITTING"})
 
@@ -122,9 +125,12 @@ ALTER TABLE agent_booking_outbox
  ADD COLUMN last_replayed_at TIMESTAMP NULL AFTER last_replayed_by;
 CREATE INDEX idx_agent_booking_outbox_claim ON agent_booking_outbox (status,next_attempt_at,claimed_at,created_at);
 CREATE DATABASE fitness_eval_audit;
-CREATE TABLE fitness_eval_audit.events (id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, table_name VARCHAR(128) NOT NULL, op VARCHAR(6) NOT NULL) ENGINE=InnoDB;
+CREATE TABLE fitness_eval_audit.phase (id TINYINT NOT NULL PRIMARY KEY, phase VARCHAR(16) NOT NULL) ENGINE=InnoDB;
+INSERT INTO fitness_eval_audit.phase VALUES (1, 'PENDING');
+CREATE TABLE fitness_eval_audit.events (id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY, table_name VARCHAR(128) NOT NULL, op VARCHAR(6) NOT NULL, phase_at_write VARCHAR(16) NOT NULL) ENGINE=InnoDB;
 CREATE USER 'eval_audit_owner'@'localhost' ACCOUNT LOCK;
 GRANT INSERT ON fitness_eval_audit.events TO 'eval_audit_owner'@'localhost';
+GRANT SELECT ON fitness_eval_audit.phase TO 'eval_audit_owner'@'localhost';
 """,
     )
     for user, env_name in (
@@ -175,24 +181,54 @@ def verify() -> dict[str, Any]:
         f"""
 SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='fitness_eval' AND table_name IN ({names}) AND engine='InnoDB';
 SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='fitness_eval_audit' AND table_name='events' AND engine='InnoDB';
+SELECT COUNT(*) FROM information_schema.tables WHERE table_schema='fitness_eval_audit' AND table_name='phase' AND engine='InnoDB';
 SELECT COUNT(*) FROM information_schema.referential_constraints WHERE constraint_schema='fitness_eval' AND (UPDATE_RULE NOT IN ('RESTRICT','NO ACTION') OR DELETE_RULE NOT IN ('RESTRICT','NO ACTION'));
 SELECT account_locked FROM mysql.user WHERE user='eval_audit_owner' AND host='localhost';
 SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='fitness_eval_audit' AND table_name='events';
 SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='fitness_eval_audit' AND table_name='events' AND (
   (column_name='id' AND column_type='bigint' AND is_nullable='NO' AND column_key='PRI' AND extra='auto_increment') OR
   (column_name='table_name' AND column_type='varchar(128)' AND is_nullable='NO' AND extra='') OR
-  (column_name='op' AND column_type='varchar(6)' AND is_nullable='NO' AND extra='')
+  (column_name='op' AND column_type='varchar(6)' AND is_nullable='NO' AND extra='') OR
+  (column_name='phase_at_write' AND column_type='varchar(16)' AND is_nullable='NO' AND extra='')
 );
 SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='fitness_eval_audit' AND table_name='events' AND index_name='PRIMARY' AND column_name='id' AND seq_in_index=1;
 SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='fitness_eval_audit' AND table_name='events' AND index_name='PRIMARY';
+SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='fitness_eval_audit' AND table_name='phase';
+SELECT COUNT(*) FROM information_schema.columns WHERE table_schema='fitness_eval_audit' AND table_name='phase' AND (
+ (column_name='id' AND column_type='tinyint' AND is_nullable='NO' AND column_key='PRI' AND extra='') OR
+ (column_name='phase' AND column_type='varchar(16)' AND is_nullable='NO' AND extra='')
+);
+SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='fitness_eval_audit' AND table_name='phase' AND index_name='PRIMARY' AND column_name='id' AND seq_in_index=1;
+SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='fitness_eval_audit' AND table_name='phase' AND index_name='PRIMARY';
+SELECT COUNT(*) FROM fitness_eval_audit.phase WHERE id=1 AND BINARY phase IN (BINARY 'PENDING',BINARY 'APPROVED');
+SELECT COUNT(*) FROM fitness_eval_audit.phase;
+SELECT @@transaction_isolation;
 """,
     ).splitlines()
-    if checks != [str(len(_TABLES)), "1", "0", "Y", "3", "3", "1", "1"]:
+    if checks != [
+        str(len(_TABLES)),
+        "1",
+        "1",
+        "0",
+        "Y",
+        "4",
+        "4",
+        "1",
+        "1",
+        "2",
+        "2",
+        "1",
+        "1",
+        "1",
+        "1",
+        "REPEATABLE-READ",
+    ]:
         raise PreflightError("RESTRICTED_AUDIT_SCHEMA_INVALID")
     owner_grants = set(_sql(cid, "SHOW GRANTS FOR 'eval_audit_owner'@'localhost';").splitlines())
     expected_owner = {
         "GRANT USAGE ON *.* TO `eval_audit_owner`@`localhost`",
         "GRANT INSERT ON `fitness_eval_audit`.`events` TO `eval_audit_owner`@`localhost`",
+        "GRANT SELECT ON `fitness_eval_audit`.`phase` TO `eval_audit_owner`@`localhost`",
     } | {
         f"GRANT TRIGGER ON `fitness_eval`.`{table}` TO `eval_audit_owner`@`localhost`"
         for table in _TABLES
@@ -216,6 +252,9 @@ SELECT COUNT(*) FROM information_schema.statistics WHERE table_schema='fitness_e
         if _client(cid, user, "SELECT CURRENT_USER();") != f"{user}@%":
             raise PreflightError("RESTRICTED_IDENTITY_MISMATCH")
         _client(cid, user, "SELECT * FROM fitness_eval_audit.events;", deny=True)
+        _client(
+            cid, user, "UPDATE fitness_eval_audit.phase SET phase='APPROVED' WHERE id=1;", deny=True
+        )
         _client(cid, user, "DROP TRIGGER fitness_eval.audit_contract_insert;", deny=True)
         _client(cid, user, "ALTER TABLE fitness_eval.contract ADD COLUMN unwanted INT;", deny=True)
     _client(
@@ -299,6 +338,46 @@ def observe() -> dict[str, Any]:
         "transaction_sample": transactions,
         "audit_window_complete": False,
         "cross_database_causality": "UNKNOWN",
+    }
+
+
+def transition_approved() -> dict[str, Any]:
+    """Fence guarded writes while advancing one disposable trial's phase.
+
+    The caller must arrange and independently establish that PostgreSQL approval
+    committed before invoking this function. The marker itself cannot establish
+    that causal relationship, independent provenance, or production isolation.
+    """
+    started = time.monotonic_ns()
+    run_id, cid = _container()
+    output = _sql(
+        cid,
+        """
+START TRANSACTION;
+UPDATE fitness_eval_audit.phase SET phase='APPROVED' WHERE id=1 AND BINARY phase=BINARY 'PENDING';
+SELECT ROW_COUNT();
+SELECT COUNT(*) FROM fitness_eval_audit.events WHERE BINARY phase_at_write=BINARY 'PENDING';
+SELECT COUNT(*) FROM fitness_eval_audit.events WHERE BINARY phase_at_write NOT IN (BINARY 'PENDING', BINARY 'APPROVED');
+COMMIT;
+""",
+    ).splitlines()
+    if (
+        len(output) != 3
+        or output[0] != "1"
+        or any(re.fullmatch(r"0|[1-9][0-9]*", item) is None for item in output[1:])
+        or output[2] != "0"
+    ):
+        raise PreflightError("PHASE_TRANSITION_UNVERIFIED")
+    return {
+        "status": "OBSERVED",
+        "source": _source(run_id, cid),
+        "pending_phase_events": int(output[1]),
+        "capture_start_monotonic_ns": started,
+        "capture_end_monotonic_ns": time.monotonic_ns(),
+        "phase_update_committed": True,
+        "all_writers_independently_verified": False,
+        "cross_database_approval_causality": "UNKNOWN",
+        "audit_window_complete": False,
     }
 
 

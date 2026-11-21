@@ -25,7 +25,6 @@ from app.agent.supervisor import Supervisor
 from app.api.routes.agent import router as agent_router
 from app.api.routes.confirmations import router as confirmation_router
 from app.confirmation.cipher import AesGcmPayloadCipher
-from app.confirmation.repository import ConfirmationRepository
 from app.confirmation.service import ConfirmationService
 from app.confirmation.token import ConfirmationTokenIssuer
 from app.infrastructure.agent_context import AgentContextVerifier
@@ -43,6 +42,7 @@ from .booking_commit_link import read_commit_link
 from .booking_contracts import matches_frozen_case
 from .booking_local import Router
 from .booking_model_boundary import OneBookingModel, expected_payload
+from .booking_phase_witness import PhaseWitnessRepository, scoped_phase_diagnostic
 from .booking_signed_identity import _identity
 from .cross_service_booking import _environment
 from .dataset import load_dataset
@@ -428,7 +428,7 @@ async def run(
         ).hexdigest()
     db, gateway = Database(settings), GatewayClient(settings)
     try:
-        repo = ConfirmationRepository(db)
+        repo = PhaseWitnessRepository(db, expected_source=initial["source"])
         registry = build_fitness_tool_registry(gateway)
         confirmation = ConfirmationService(
             repo,
@@ -601,6 +601,7 @@ async def run(
             "audit_complete": False,
             "audit_initial_integrity": initial,
             "audit_final_integrity": final,
+            "approval_phase_diagnostic": scoped_phase_diagnostic(repo, initial, final),
             "setup_observation": setup,
             "private_slot_pilot": slot_pilot,
             "store_observation": store_pilot,

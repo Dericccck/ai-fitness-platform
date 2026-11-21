@@ -43,6 +43,7 @@ from .audit_observation import (
 )
 from .booking_commit_link import evaluate_link, read_commit_link
 from .booking_local import Router
+from .booking_phase_witness import PhaseWitnessRepository, scoped_phase_diagnostic
 from .booking_signed_identity import _identity
 from .cross_service_booking import _environment, _verify_database_deltas
 from .dataset import load_dataset
@@ -88,6 +89,9 @@ def _source_identity() -> dict[str, Any]:
     result["booking_observer_sha256"] = _digest(Path(__file__).with_name("dev_booking_observer.py"))
     result["booking_commit_link_sha256"] = _digest(
         Path(__file__).with_name("booking_commit_link.py")
+    )
+    result["booking_phase_witness_sha256"] = _digest(
+        Path(__file__).with_name("booking_phase_witness.py")
     )
     result["restricted_audit_sha256"] = _digest(
         Path(__file__).with_name("mysql_restricted_audit.py")
@@ -143,6 +147,7 @@ async def _drive(
     details: Any,
     audit_observe: Any = None,
     commit_link_observe: Any = None,
+    before_decision_inject: Any = None,
 ) -> dict[str, Any]:
     """Drive the exact frozen development steps; arguments here are not a public adapter API."""
     requests = prepare_steps(case)
@@ -193,6 +198,12 @@ async def _drive(
                             fixture["identity"]["student_id"],
                             [fixture["identity"]["organization_id"]],
                         )
+                        if (
+                            before_decision_inject is not None
+                            and step.phase == "before_decision"
+                            and decision_count == 0
+                        ):
+                            await asyncio.to_thread(before_decision_inject)
                         current = await asyncio.to_thread(snapshot, record.request_id)
                         if not current.get("snapshot_complete") or not current.get(
                             "witness_observed"
@@ -426,8 +437,17 @@ async def _drive(
     }
 
 
-async def run() -> dict[str, Any]:
+async def run(*, inject_noop_before_confirmation: bool = False) -> dict[str, Any]:
     case, fixture = _load()
+    if inject_noop_before_confirmation:
+        # A separate negative-control contract allows the trial to continue to
+        # the phase fence after deliberately introducing an unconfirmed write.
+        # The frozen case is not changed, and this is never acceptance evidence.
+        case = case.model_copy(deep=True)
+        original = case.expected.assertions
+        case.expected.assertions = [item for item in original if item.id != "no_write_before"]
+        if len(case.expected.assertions) != len(original) - 1:
+            raise ValueError("NEGATIVE_CONTROL_CASE_CHANGED")
     settings, run_id, mysql_id, context_secret, token_secret = _environment()
     audit_initial = await asyncio.to_thread(verify_restricted_audit)
     audit_observer = bind_verified_observer(
@@ -437,7 +457,7 @@ async def run() -> dict[str, Any]:
     db = Database(settings)
     gateway = GatewayClient(settings)
     try:
-        repo = ConfirmationRepository(db)
+        repo = PhaseWitnessRepository(db, expected_source=audit_initial["source"])
         registry = build_fitness_tool_registry(gateway)
         confirmation = ConfirmationService(
             repo,
@@ -481,6 +501,15 @@ async def run() -> dict[str, Any]:
                 contract_id="contract-1",
             )
 
+        def inject_noop() -> None:
+            from .mysql_restricted_audit import _BOOKING, _client
+
+            _client(
+                mysql_id,
+                _BOOKING,
+                "UPDATE fitness_eval.contract SET remaining_class_hours=remaining_class_hours WHERE id='contract-1';",
+            )
+
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://agent.local"
         ) as client:
@@ -496,6 +525,7 @@ async def run() -> dict[str, Any]:
                 lambda record: read_commit_link(
                     run_id=run_id, container_id=mysql_id, record=record
                 ),
+                inject_noop if inject_noop_before_confirmation else None,
             )
         try:
             audit_final: dict[str, Any] = await asyncio.to_thread(verify_restricted_audit)
@@ -504,8 +534,35 @@ async def run() -> dict[str, Any]:
         except Exception:  # noqa: BLE001 - retain the trial and explicitly invalidate audit integrity
             audit_final = {"status": "FAILED"}
             invalidate_failed_audit(trial)
+        phase_diagnostic = scoped_phase_diagnostic(repo, audit_initial, audit_final)
+        negative_control: dict[str, Any] | None = None
+        if inject_noop_before_confirmation:
+            observations = trial.get("audit_observations", [])
+            before = next(
+                (item for item in observations if item.get("phase") == "before_chat"), None
+            )
+            pending = next(
+                (item for item in observations if item.get("phase") == "before_decision"), None
+            )
+            snapshots = trial.get("snapshot_checks", [])
+            valid = bool(
+                phase_diagnostic.get("phase_result") == "PENDING_PHASE_WRITES_OBSERVED"
+                and committed_before_decision(before, pending)
+                and any(
+                    item.get("phase") == "before_decision" and item.get("status") == "MATCH"
+                    for item in snapshots
+                )
+            )
+            negative_control = {
+                "status": "DETECTED" if valid else "NOT_VERIFIED",
+                "scope": "synthetic_noop_update_before_approval",
+                "grading_case_modified": True,
+            }
         return {
-            "status": "FAIL" if trial["task_status"] == "FAIL" else "INCOMPLETE",
+            "status": "FAIL"
+            if trial["task_status"] == "FAIL"
+            or (negative_control is not None and negative_control["status"] != "DETECTED")
+            else "INCOMPLETE",
             "origin": "synthetic_scripted_model_real_local_postgres_mysql_java",
             "dataset_version": case.dataset_version,
             "case_sha256": _CASE_DIGEST,
@@ -514,13 +571,24 @@ async def run() -> dict[str, Any]:
             "run_id": run_id,
             "review": "draft",
             "audit_complete": False,
+            "synthetic_preapproval_write_negative_control": inject_noop_before_confirmation,
+            "grading_case_modified": inject_noop_before_confirmation,
+            "negative_control": negative_control,
             "audit_initial_integrity": audit_initial,
             "audit_final_integrity": audit_final,
+            "approval_phase_diagnostic": phase_diagnostic,
             "trial": trial,
             "limitations": [
                 "Fixed scripted model does not test language understanding.",
                 "Snapshots do not prove complete transaction history or causal authorization.",
                 "No independent report provenance or human review; not release evidence.",
+                *(
+                    [
+                        "The negative control deliberately writes before approval and uses a modified grading case."
+                    ]
+                    if inject_noop_before_confirmation
+                    else []
+                ),
             ],
         }
     finally:
@@ -533,11 +601,16 @@ async def run() -> dict[str, Any]:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report-file", required=True)
+    parser.add_argument("--inject-noop-before-confirmation", action="store_true")
     args = parser.parse_args()
     try:
         with Path(args.report_file).open("x", encoding="utf-8") as stream:
             try:
-                report = asyncio.run(run())
+                report = asyncio.run(
+                    run(inject_noop_before_confirmation=True)
+                    if args.inject_noop_before_confirmation
+                    else run()
+                )
             except Exception:  # noqa: BLE001 - keep errors sanitized
                 report = {"status": "ERROR", "reason": "PREFLIGHT_OR_TRIAL_SETUP_FAILED"}
             json.dump(report, stream, ensure_ascii=False, indent=2)

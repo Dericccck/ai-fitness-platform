@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Standalone barrier lab, restricted to a newly created local disposable MySQL.
 set -euo pipefail
+module=app.evaluation.task_eval.mysql_barrier_lab
+if [[ "${1:-}" == "--phase-witness" && "$#" -eq 1 ]]; then
+    module=app.evaluation.task_eval.mysql_phase_witness_lab
+elif [[ "$#" -ne 0 ]]; then
+    printf 'Unsupported MySQL experiment.\n' >&2
+    exit 1
+fi
 service_root="$(cd "$(dirname "$0")/.." && pwd)"
 run_id="$(openssl rand -hex 8)"
 container_id=""
@@ -38,4 +45,4 @@ port="$(docker port "$container_id" 3306/tcp | sed -n 's/^127\.0\.0\.1://p')"
 [[ "$port" =~ ^[0-9]+$ ]]
 cd "$service_root"
 TASK_EVAL_RUN_ID="$run_id" TASK_EVAL_MYSQL_CONTAINER_ID="$container_id" TASK_EVAL_MYSQL_PORT="$port" \
-    "$service_root/.venv/bin/python" -m app.evaluation.task_eval.mysql_barrier_lab
+    "$service_root/.venv/bin/python" -m "$module"

@@ -9,6 +9,12 @@ broker_duplicate_trial=false
 booking_capabilities_trial=false
 development_module=app.evaluation.task_eval.dev_sandbox_booking
 positive_profile=""
+phase_negative_control=false
+if [[ "${1:-}" == "--single-development-phase-negative-trial" ]]; then
+    [[ "$#" -eq 2 ]] || { printf 'Provide a new absolute report path.\n' >&2; exit 1; }
+    phase_negative_control=true
+    set -- --single-development-trial "$2"
+fi
 if [[ "${1:-}" == "--booking-positive-real-model-trial" ]]; then
     [[ "$#" -ge 3 ]] || { printf 'Provide a supported case and a new absolute report path.\n' >&2; exit 1; }
     case "$2" in
@@ -287,7 +293,11 @@ elif [[ "$single_development_trial" == true ]]; then
             "${runtime_env[@]}" "$python" -m "$development_module" --report-file "$single_report" --real-model "${real_model_args[@]}"
         fi
     else
-        "${runtime_env[@]}" "$python" -m "$development_module" --report-file "$single_report"
+        if [[ "$phase_negative_control" == true ]]; then
+            "${runtime_env[@]}" "$python" -m "$development_module" --report-file "$single_report" --inject-noop-before-confirmation
+        else
+            "${runtime_env[@]}" "$python" -m "$development_module" --report-file "$single_report"
+        fi
     fi
 else
     "${runtime_env[@]}" "$python" -m app.evaluation.task_eval.cross_service_booking "$@"
