@@ -106,8 +106,25 @@ def test_supervisor_contains_four_real_domain_subgraphs() -> None:
             assert {"enter", "query_metric", "summarize"}.issubset(nodes)
             assert "tools" not in nodes
             assert "confirmation" not in nodes
+        elif route == "FITNESS_COACHING":
+            assert {
+                "enter",
+                "prepare_memory",
+                "model",
+                "tools",
+                "verify_citations",
+                "confirmation",
+            }.issubset(nodes)
+            edges = {(edge.source, edge.target) for edge in graph.get_graph().edges}
+            assert ("enter", "prepare_memory") in edges
+            assert ("prepare_memory", "model") in edges
+            assert ("model", "verify_citations") in edges
+            assert ("tools", "confirmation") in edges
         else:
             assert {"enter", "model", "tools", "confirmation"}.issubset(nodes)
+            assert "prepare_memory" not in nodes
+            assert "verify_citations" not in nodes
+            assert "query_metric" not in nodes
 
 
 @pytest.mark.parametrize(

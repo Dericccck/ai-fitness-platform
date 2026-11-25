@@ -69,6 +69,7 @@ from app.streaming.repository import ChatRunRepository
 from .domain_subgraphs import (
     SupervisorRoute,
     build_domain_subgraph,
+    build_fitness_subgraph,
     build_operations_subgraph,
     domain_agent_spec,
     executable_domain_specs,
@@ -217,6 +218,7 @@ class SupervisorState(TypedDict, total=False):
     previous_route: str
     continue_domain: bool
     operations_query_result: Any | None
+    fitness_citation_pending: bool
 
 
 def _multiple_rag_domains_possible(plan: list[dict[str, Any]]) -> bool:
@@ -378,6 +380,7 @@ class Supervisor:
             "previous_route": "",
             "continue_domain": False,
             "operations_query_result": None,
+            "fitness_citation_pending": False,
             "messages": [
                 {"role": "system", "content": _routing_system_prompt(request.locale)},
                 {"role": "user", "content": request.user_message},
@@ -853,6 +856,19 @@ class Supervisor:
                     query_node=self._operations_query_node,
                     summarize_node=self._operations_summarize_node,
                 )
+            elif spec.route == "FITNESS_COACHING":
+                domain_graph = build_fitness_subgraph(
+                    spec,
+                    state_schema=SupervisorState,
+                    context_schema=SupervisorRuntimeContext,
+                    prepare_memory_node=self._fitness_prepare_memory_node,
+                    model_node=self._fitness_model_node,
+                    tool_node=self._fitness_tool_node,
+                    verify_citations_node=self._fitness_verify_citations_node,
+                    confirmation_node=self._confirmation_node,
+                    after_model=self._after_fitness_model,
+                    after_tools=self._after_fitness_tools,
+                )
             else:
                 domain_graph = build_domain_subgraph(
                     spec,
@@ -1028,42 +1044,6 @@ class Supervisor:
             except RagSearchError as exc:
                 raise SupervisorRuntimeError("知识检索失败") from exc
         system_messages = [{"role": "system", "content": system_prompt}]
-        memory_prepared = state.get("memory_candidates_prepared", False)
-        if (
-            spec.uses_memory_candidates
-            and not runtime.context.defer_memory_extraction
-            and not memory_prepared
-            and runtime.context.identity is not None
-            and (self.memory_candidate_service or self.memory_candidate_extractor)
-        ):
-            try:
-                if self.memory_candidate_service is not None:
-                    candidates = await self.memory_candidate_service.propose(
-                        user_message=runtime.context.user_message,
-                        identity=runtime.context.identity,
-                        thread_id=runtime.context.thread_id or "unknown-thread",
-                        source_request_id=runtime.context.gateway_context.request_id,
-                    )
-                else:
-                    assert self.memory_candidate_extractor is not None
-                    candidates = await self.memory_candidate_extractor.propose(
-                        runtime.context.user_message
-                    )
-                candidate_context = build_candidate_context(
-                    candidates, runtime.context.identity.organization_ids
-                )
-                if candidate_context:
-                    system_messages.append({"role": "system", "content": candidate_context})
-            except MemoryCandidatePersistenceError as exc:
-                candidate_context = build_candidate_context(
-                    exc.candidates, runtime.context.identity.organization_ids
-                )
-                if candidate_context:
-                    system_messages.append({"role": "system", "content": candidate_context})
-                _logger.warning("memory_candidate_persistence_failed")
-            except (MemoryCandidateExtractionError, ModelConfigurationError, ModelResponseError):
-                _logger.warning("memory_candidate_extraction_failed")
-            memory_prepared = True
         history = [
             m
             for m in state.get("messages", [])
@@ -1075,8 +1055,8 @@ class Supervisor:
             "model_tool_calls": [],
             "final_answer": "",
             "current_tool_steps": 0,
-            "memory_candidates_prepared": memory_prepared,
             "operations_query_result": None,
+            "fitness_citation_pending": False,
         }
 
     @staticmethod
@@ -1115,6 +1095,7 @@ class Supervisor:
             "continue_domain": True,
             "current_tool_steps": 0,
             "operations_query_result": None,
+            "fitness_citation_pending": False,
         }
 
     @staticmethod
@@ -1262,8 +1243,143 @@ class Supervisor:
             "output_tokens": state.get("output_tokens", 0) + (turn.output_tokens or 0),
         }
 
+    async def _fitness_prepare_memory_node(
+        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        """健身领域专属 Memory 候选提取节点，仅在进入 fitness_agent 时执行一次。"""
+
+        context = runtime.context
+        if (
+            context is None
+            or not context.user_message
+            or context.defer_memory_extraction
+            or state.get("memory_candidates_prepared", False)
+            or context.identity is None
+            or not (self.memory_candidate_service or self.memory_candidate_extractor)
+        ):
+            return {}
+        candidate_context: str | None = None
+        try:
+            if self.memory_candidate_service is not None:
+                candidates = await self.memory_candidate_service.propose(
+                    user_message=context.user_message,
+                    identity=context.identity,
+                    thread_id=context.thread_id or "unknown-thread",
+                    source_request_id=context.gateway_context.request_id,
+                )
+            else:
+                assert self.memory_candidate_extractor is not None
+                candidates = await self.memory_candidate_extractor.propose(context.user_message)
+            candidate_context = build_candidate_context(candidates, context.identity.organization_ids)
+        except MemoryCandidatePersistenceError as exc:
+            candidate_context = build_candidate_context(
+                exc.candidates, context.identity.organization_ids
+            )
+            _logger.warning("memory_candidate_persistence_failed")
+        except (MemoryCandidateExtractionError, ModelConfigurationError, ModelResponseError):
+            _logger.warning("memory_candidate_extraction_failed")
+        if not candidate_context:
+            return {"memory_candidates_prepared": True}
+        messages = list(state.get("messages", []))
+        insertion = 1 if messages and messages[0].get("role") == "system" else 0
+        messages.insert(insertion, {"role": "system", "content": candidate_context})
+        return {
+            "messages": messages,
+            "memory_candidates_prepared": True,
+        }
+
+    async def _fitness_model_node(
+        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        """健身领域专属模型节点：支持训练计划输出预算与知识引用缓冲门禁。"""
+
+        context = runtime.context
+        training_plan_budget = getattr(
+            getattr(self.models, "settings", None), "training_plan_max_output_tokens", None
+        )
+        needs_citation_check = bool(
+            context is not None
+            and (
+                (context.knowledge_retrievals and state.get("intent") == "FITNESS_KNOWLEDGE_QA")
+                or any(context.citation_mapping_ambiguities)
+            )
+        )
+        return await self._run_model_step(
+            state,
+            runtime,
+            extra_max_output_tokens=training_plan_budget,
+            suppress_stream=needs_citation_check,
+            defer_citation_verification=needs_citation_check,
+        )
+
+    async def _fitness_verify_citations_node(
+        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        """健身知识问答专属后置引用核验节点：校验 [证据N] 后再向流式客户端下发。"""
+
+        context = runtime.context
+        messages = list(state.get("messages", []))
+        raw_content = str(messages[-1].get("content", "")) if messages else ""
+        if (
+            context is not None
+            and len(context.knowledge_retrievals) == 1
+            and not any(context.citation_mapping_ambiguities)
+        ):
+            verified = _verified_knowledge_answer(
+                _sanitize_model_answer(raw_content), context.knowledge_retrievals[0]
+            )
+        else:
+            verified = "本次回答的知识来源无法可靠对应，请重试或咨询专业人员。"
+        emit_event("answer.delta", {"text": verified})
+        if messages and messages[-1].get("role") == "assistant":
+            messages[-1] = {**messages[-1], "content": verified}
+        else:
+            messages.append({"role": "assistant", "content": verified})
+        return {
+            "messages": messages,
+            "final_answer": verified,
+            "fitness_citation_pending": False,
+        }
+
+    async def _fitness_tool_node(
+        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        """健身领域专属工具节点：生成训练草案后直接构造写确认单，不再折返模型。"""
+
+        return await self._execute_tool_calls(
+            state,
+            runtime,
+            allow_generated_training_draft=True,
+        )
+
     async def _model_node(
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        context = runtime.context
+        ambiguous_cs_citation = bool(
+            context is not None
+            and any(context.citation_mapping_ambiguities)
+            and state["route"] == "CUSTOMER_SERVICE"
+            and state.get("intent") == "BUSINESS_RULE_QA"
+        )
+        return await self._run_model_step(
+            state,
+            runtime,
+            extra_max_output_tokens=None,
+            suppress_stream=ambiguous_cs_citation,
+            defer_citation_verification=False,
+            enforce_ambiguous_citation_fallback=ambiguous_cs_citation,
+        )
+
+    async def _run_model_step(
+        self,
+        state: SupervisorState,
+        runtime: Runtime[SupervisorRuntimeContext],
+        *,
+        extra_max_output_tokens: int | None,
+        suppress_stream: bool,
+        defer_citation_verification: bool,
+        enforce_ambiguous_citation_fallback: bool = False,
     ) -> dict[str, Any]:
         spec = domain_agent_spec(state["route"])
         emit_event("stage.changed", {"stage": "GENERATING", "route": state["route"]})
@@ -1289,39 +1405,12 @@ class Supervisor:
         model_kwargs: dict[str, Any] = {"tools": tool_schemas}
         if force_tool_name and tool_schemas:
             model_kwargs["force_tool_name"] = force_tool_name
-        # 生成结构化训练计划后，下一回合需要把完整的多日动作明细作为创建草案
-        # 工具参数传回模型。这里复用训练计划专用预算，避免第二次 Tool Calling
-        # 仍使用普通对话的 1200 tokens 导致参数 JSON 截断；FakeModels 等测试桩
-        # 没有 settings 时不传该可选参数，保持基础 Runtime 测试兼容。
-        training_plan_budget = getattr(
-            getattr(self.models, "settings", None), "training_plan_max_output_tokens", None
-        )
-        if spec.supports_generated_training_draft and training_plan_budget:
-            model_kwargs["max_output_tokens"] = training_plan_budget
+        if extra_max_output_tokens:
+            model_kwargs["max_output_tokens"] = extra_max_output_tokens
         # 记忆仅加入这一次模型请求，不改写 State 或 Checkpoint。
         context = runtime.context
         messages = await self._messages_with_personalization(list(state["messages"]), context)
-        verify_knowledge = bool(
-            context is not None
-            and (
-                (
-                    context.knowledge_retrievals
-                    and state["route"] == "FITNESS_COACHING"
-                    and state.get("intent") == "FITNESS_KNOWLEDGE_QA"
-                )
-                or (
-                    any(context.citation_mapping_ambiguities)
-                    and (
-                        state["route"] == "FITNESS_COACHING"
-                        or (
-                            state["route"] == "CUSTOMER_SERVICE"
-                            and state.get("intent") == "BUSINESS_RULE_QA"
-                        )
-                    )
-                )
-            )
-        )
-        if verify_knowledge:
+        if suppress_stream:
             # Validate the complete answer before streaming any content.
             with suppress_stream_events():
                 turn = await self.models.chat_with_tools(messages, **model_kwargs)
@@ -1366,6 +1455,7 @@ class Supervisor:
                     ],
                     "model_tool_calls": [],
                     "pending_confirmation_id": None,
+                    "fitness_citation_pending": False,
                     "final_answer": clarification,
                     "clarification_required": True,
                     "input_tokens": state.get("input_tokens", 0) + (turn.input_tokens or 0),
@@ -1387,20 +1477,14 @@ class Supervisor:
                 "messages": [*state["messages"], assistant_message],
                 "model_tool_calls": [],
                 "pending_confirmation_id": confirmation.id,
+                "fitness_citation_pending": False,
                 "final_answer": "",
                 "input_tokens": state.get("input_tokens", 0) + (turn.input_tokens or 0),
                 "output_tokens": state.get("output_tokens", 0) + (turn.output_tokens or 0),
             }
         answer_content = turn.content
-        if verify_knowledge and not tool_calls and context is not None:
-            answer_content = (
-                _verified_knowledge_answer(
-                    _sanitize_model_answer(turn.content), context.knowledge_retrievals[0]
-                )
-                if len(context.knowledge_retrievals) == 1
-                and not any(context.citation_mapping_ambiguities)
-                else "本次回答的知识来源无法可靠对应，请重试或咨询专业人员。"
-            )
+        if enforce_ambiguous_citation_fallback and not tool_calls:
+            answer_content = "本次回答的知识来源无法可靠对应，请重试或咨询专业人员。"
             emit_event("answer.delta", {"text": answer_content})
         regular_assistant_message: dict[str, Any] = {
             "role": "assistant",
@@ -1418,10 +1502,14 @@ class Supervisor:
                 }
                 for call in tool_calls
             ]
+        citation_pending = bool(defer_citation_verification and not tool_calls)
         return {
             "messages": [*state["messages"], regular_assistant_message],
             "model_tool_calls": tool_calls,
-            "final_answer": _sanitize_model_answer(answer_content) if not tool_calls else "",
+            "fitness_citation_pending": citation_pending,
+            "final_answer": (
+                "" if (tool_calls or citation_pending) else _sanitize_model_answer(answer_content)
+            ),
             "input_tokens": state.get("input_tokens", 0) + (turn.input_tokens or 0),
             "output_tokens": state.get("output_tokens", 0) + (turn.output_tokens or 0),
         }
@@ -1597,6 +1685,19 @@ class Supervisor:
     async def _tool_node(
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
     ) -> dict[str, Any]:
+        return await self._execute_tool_calls(
+            state,
+            runtime,
+            allow_generated_training_draft=False,
+        )
+
+    async def _execute_tool_calls(
+        self,
+        state: SupervisorState,
+        runtime: Runtime[SupervisorRuntimeContext],
+        *,
+        allow_generated_training_draft: bool,
+    ) -> dict[str, Any]:
         if runtime.context is None:
             raise SupervisorRuntimeError("缺少 Supervisor 运行时上下文")
         emit_event("stage.changed", {"stage": "QUERYING_BUSINESS", "route": state["route"]})
@@ -1653,7 +1754,8 @@ class Supervisor:
                 }
             )
             if (
-                spec.supports_generated_training_draft
+                allow_generated_training_draft
+                and spec.supports_generated_training_draft
                 and definition.tool_id == "fitness.training.plan.generate_draft.v1"
                 and _is_explicit_training_plan_creation_request(runtime.context.user_message)
             ):
@@ -1724,6 +1826,22 @@ class Supervisor:
         if state.get("pending_confirmation_id"):
             return "confirmation"
         return "tools" if state.get("model_tool_calls") else "finish"
+
+    @staticmethod
+    def _after_fitness_model(state: SupervisorState) -> str:
+        if state.get("pending_confirmation_id"):
+            return "confirmation"
+        if state.get("model_tool_calls"):
+            return "tools"
+        if state.get("fitness_citation_pending"):
+            return "verify"
+        return "finish"
+
+    @staticmethod
+    def _after_fitness_tools(state: SupervisorState) -> str:
+        if state.get("pending_confirmation_id"):
+            return "confirmation"
+        return "model"
 
 
 def classify_route(user_message: str) -> SupervisorRoute:
