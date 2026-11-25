@@ -1,10 +1,13 @@
 """Supervisor 下属领域 Agent 子图的定义与装配。
 
-这里把“多 Agent”落实为真正的 LangGraph 子图，而不是只在 Prompt 中声明角色：
+这里把“多 Agent”落实为真正的 LangGraph 子图，并按领域复杂度采用局部异构拓扑：
 
 * 顶层 Supervisor 只负责意图路由和子图调度；
 * 每个领域 Agent 都拥有独立的图节点命名空间和固定工具白名单；
-* 模型、工具执行和确认节点复用同一套安全实现，避免四份逻辑逐渐漂移；
+* 经营分析 Agent 使用专属的确定性单步子图（enter -> query_metric -> summarize），
+  省去无意义的“空参选工具”LLM 往返，且不挂载写操作确认节点；
+* 需要多轮自主查询与人工确认的领域复用同一套安全内核（model/tools/confirmation），
+  避免四份风控逻辑逐渐漂移；
 * 子图不创建自己的 Checkpointer，统一继承父图的 PostgreSQL Checkpoint，保证一次
   会话、一次确认和一次恢复只存在一个事实来源。
 
@@ -183,4 +186,38 @@ def build_domain_subgraph(
     )
     graph.add_edge("tools", "model")
     graph.add_edge("confirmation", END)
+    return graph.compile()
+
+
+def build_operations_subgraph(
+    spec: DomainAgentSpec,
+    *,
+    state_schema: Any,
+    context_schema: Any,
+    query_node: Callable[..., Any],
+    summarize_node: Callable[..., Any],
+) -> Any:
+    """编译经营分析领域专属的确定性单步子图。
+
+    经营查询全部收敛到固定指标目录且无写操作，因此不走通用 ReAct 工具循环，也不挂载
+    ``confirmation`` 节点：``START -> enter -> query_metric -> summarize -> END``。
+    服务端在 ``query_metric`` 中基于已验签身份与确定性解析器直接执行唯一只读指标工具
+    （歧义问题则跳过查询），随后在 ``summarize`` 中以 ``tools=[]`` 直接流式解读结果。
+    """
+
+    graph = StateGraph(state_schema, context_schema=context_schema)
+
+    def enter_domain(state: Any) -> dict[str, Any]:
+        route = state.get("route")
+        if route != spec.route:
+            raise ValueError(f"领域子图路由不匹配：期望={spec.route}，实际={route}")
+        return {"active_domain": spec.node_name}
+
+    graph.add_node("enter", enter_domain)
+    graph.add_node("query_metric", query_node)
+    graph.add_node("summarize", summarize_node)
+    graph.add_edge(START, "enter")
+    graph.add_edge("enter", "query_metric")
+    graph.add_edge("query_metric", "summarize")
+    graph.add_edge("summarize", END)
     return graph.compile()

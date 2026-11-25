@@ -100,8 +100,14 @@ def test_supervisor_contains_four_real_domain_subgraphs() -> None:
         "operations_agent",
         "customer_service_agent",
     }.issubset(top_level_nodes)
-    for graph in supervisor.domain_graphs.values():
-        assert {"enter", "model", "tools", "confirmation"}.issubset(set(graph.get_graph().nodes))
+    for route, graph in supervisor.domain_graphs.items():
+        nodes = set(graph.get_graph().nodes)
+        if route == "OPERATIONS":
+            assert {"enter", "query_metric", "summarize"}.issubset(nodes)
+            assert "tools" not in nodes
+            assert "confirmation" not in nodes
+        else:
+            assert {"enter", "model", "tools", "confirmation"}.issubset(nodes)
 
 
 @pytest.mark.parametrize(
@@ -118,12 +124,6 @@ def test_supervisor_contains_four_real_domain_subgraphs() -> None:
             "BOOKING",
             "fitness_course_list_v1",
             "fitness_booking_create_v1",
-        ),
-        (
-            "查看本月营收金额",
-            "OPERATIONS",
-            "fitness_operations_metric_query_v1",
-            "fitness_course_list_v1",
         ),
         (
             "查询我的客服工单",
@@ -144,6 +144,58 @@ async def test_domain_subgraph_exposes_only_its_tool_allowlist(
     assert response.route == route
     assert visible in model.tools_seen[0]
     assert hidden not in model.tools_seen[0]
+
+
+async def test_operations_subgraph_runs_deterministic_query_without_exposing_tools() -> None:
+    from app.infrastructure.agent_context import AgentIdentity
+
+    model = RecordingModel()
+    registry = ToolRegistry()
+
+    class OperationsDummyInput(BaseModel):
+        model_config = ConfigDict(extra="allow")
+
+    invoked: list[dict[str, Any]] = []
+
+    async def handler(data: BaseModel, _: ToolContext) -> dict[str, Any]:
+        payload = data.model_dump()
+        invoked.append(payload)
+        return {"report": {"total_value": 100}}
+
+    registry.register(
+        ToolDefinition(
+            tool_id="fitness.operations.metric.query.v1",
+            description="经营指标查询",
+            input_model=OperationsDummyInput,
+            handler=handler,
+            allowed_roles=frozenset({"ORGANIZATION_ADMIN"}),
+            read_only=True,
+            requires_confirmation=False,
+        )
+    )
+    supervisor = Supervisor(cast(ModelGateway, model), registry)
+    identity = AgentIdentity(
+        subject="admin-1",
+        organization_ids=frozenset({"org-1"}),
+        roles=frozenset({"ORGANIZATION_ADMIN"}),
+        issued_at=1,
+        expires_at=2,
+    )
+    request = SupervisorRequest(
+        user_message="查看本月营收金额",
+        gateway_context=GatewayRequestContext("signed", "req-op", "trace-op"),
+        conversation_id="operations-heterogeneous",
+        identity=identity,
+    )
+
+    response = await supervisor.invoke(request)
+
+    assert response.route == "OPERATIONS"
+    assert response.tool_steps == 1
+    assert len(invoked) == 1
+    assert invoked[0]["organization_id"] == "org-1"
+    assert invoked[0]["metric"] == "REVENUE_AMOUNT"
+    assert model.tools_seen == [set()]
 
 
 async def test_domain_subgraph_rejects_noncompliant_cross_domain_tool_call() -> None:

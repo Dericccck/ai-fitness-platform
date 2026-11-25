@@ -13,13 +13,14 @@ from app.infrastructure.gateway_client import (
     GatewayOperationsMetric,
     GatewayRequestContext,
 )
-from app.infrastructure.model_gateway import ModelGateway, ModelToolCall, ModelTurn
+from app.infrastructure.model_gateway import ModelGateway, ModelTurn
 
 
 class FakeOperationsModels:
-    """模拟支持 Tool Calling 的模型，只验证 Supervisor 给出的工具上下文。"""
+    """模拟经营分析异构子图的总结模型：仅被调用一次且不暴露任何工具。"""
 
-    def __init__(self) -> None:
+    def __init__(self, answer: str = "本月营收金额为 30000，按周呈上升趋势。") -> None:
+        self.answer = answer
         self.turn_index = 0
         self.messages_seen: list[list[dict[str, Any]]] = []
         self.tools_seen: list[list[dict[str, Any]]] = []
@@ -32,41 +33,10 @@ class FakeOperationsModels:
     ) -> ModelTurn:
         self.messages_seen.append(messages)
         self.tools_seen.append(tools)
-        if self.turn_index == 0:
-            assert any("当前路由=OPERATIONS" in str(message.get("content")) for message in messages)
-            assert any("REVENUE_AMOUNT" in str(message.get("content")) for message in messages)
-            assert [tool["function"]["name"] for tool in tools] == [
-                "fitness_operations_metric_query_v1"
-            ]
-            assert tools[0]["function"]["parameters"] == {
-                "type": "object",
-                "properties": {},
-                "additionalProperties": False,
-            }
-            self.turn_index += 1
-            return ModelTurn(
-                content="",
-                tool_calls=(
-                    ModelToolCall(
-                        call_id="operations-call-1",
-                        name="fitness.operations.metric.query.v1",
-                        # 即使供应商违反空 Schema 返回了越权或漂移参数，Supervisor
-                        # 也必须丢弃它们，重新从签名身份和用户原问题生成查询参数。
-                        arguments={
-                            "organization_id": "attacker-org",
-                            "metric": "APPOINTMENT_COUNT",
-                            "from": "2020-01-01",
-                            "to": "2020-01-02",
-                        },
-                    ),
-                ),
-                input_tokens=20,
-                output_tokens=6,
-            )
         self.turn_index += 1
         assert tools == []
         return ModelTurn(
-            content="本月营收金额为 30000，按周呈上升趋势。",
+            content=self.answer,
             tool_calls=(),
             input_tokens=18,
             output_tokens=12,
@@ -158,6 +128,10 @@ async def test_operations_request_runs_route_tool_gateway_audit_and_final_answer
     assert response.route == "OPERATIONS"
     assert response.tool_steps == 1
     assert response.answer == "本月营收金额为 30000，按周呈上升趋势。"
+    assert models.turn_index == 1
+    assert any("当前路由=OPERATIONS" in str(m.get("content")) for m in models.messages_seen[0])
+    assert any("REVENUE_AMOUNT" in str(m.get("content")) for m in models.messages_seen[0])
+    assert any("30000" in str(m.get("content")) for m in models.messages_seen[0])
     assert gateway.calls == [
         ("org-1", "REVENUE_AMOUNT", date(2026, 8, 1), date(2026, 8, 15), "WEEK")
     ]
@@ -170,12 +144,7 @@ async def test_operations_request_runs_route_tool_gateway_audit_and_final_answer
 
 
 async def test_student_operations_request_is_rejected_before_gateway() -> None:
-    """验证学员不能通过自然语言绕过经营查询的管理员工具权限。
-
-    这里故意让模型返回合法的固定指标工具调用，测试重点不是模型是否会选错工具，
-    而是 ToolRegistry 是否在真实 Supervisor 链路中先校验签名身份，再决定是否允许
-    触达 Java Gateway。若权限校验位置错误，测试中的 Gateway 会留下调用记录。
-    """
+    """验证学员不能通过自然语言绕过经营查询的管理员工具权限，且不浪费模型调用。"""
 
     models = FakeOperationsModels()
     gateway = FakeOperationsGateway()
@@ -214,5 +183,100 @@ async def test_student_operations_request_is_rejected_before_gateway() -> None:
             )
         )
 
+    assert models.turn_index == 0
     assert gateway.calls == []
     assert audit.events == []
+
+
+async def test_ambiguous_operations_question_skips_query_and_clarifies() -> None:
+    """歧义经营问题不触发查数报错，而是跳过 query_metric 直接澄清。"""
+
+    from app.agent.routing import RouteDecision, RoutedIntent
+
+    class StaticOpsRouter:
+        async def decide(self, *_: Any, **__: Any) -> RouteDecision:
+            return RouteDecision(
+                intents=(RoutedIntent("OPERATIONS", "QUERY_OPERATIONS_METRIC"),),
+                source="LLM",
+                confidence=0.92,
+                reason_code="OPS_AMBIGUOUS",
+                classifier_version="test",
+            )
+
+    models = FakeOperationsModels(answer="请明确你要查询的具体经营指标和时间范围。")
+    gateway = FakeOperationsGateway()
+    audit = RecordingOperationsAudit()
+    registry = ToolRegistry()
+    for definition in build_operations_tool_definitions(
+        cast(Any, gateway),
+        audit_repository=cast(Any, audit),
+    ):
+        registry.register(definition)
+    supervisor = Supervisor(
+        cast(ModelGateway, models),
+        registry,
+        intent_router=StaticOpsRouter(),
+    )
+    identity = AgentIdentity(
+        subject="admin-1",
+        organization_ids=frozenset({"org-1"}),
+        roles=frozenset({"ORGANIZATION_ADMIN"}),
+        issued_at=1,
+        expires_at=2,
+    )
+
+    response = await supervisor.invoke(
+        SupervisorRequest(
+            user_message="查看本月经营情况",
+            gateway_context=GatewayRequestContext(
+                signed_context="signed-context",
+                request_id="ops-ambiguous-1",
+                trace_id="ops-ambiguous-trace-1",
+            ),
+            conversation_id="ops-ambiguous-conv",
+            identity=identity,
+        )
+    )
+
+    assert response.route == "OPERATIONS"
+    assert response.tool_steps == 0
+    assert response.answer == "请明确你要查询的具体经营指标和时间范围。"
+    assert models.turn_index == 1
+    assert any("先向用户澄清" in str(m.get("content")) for m in models.messages_seen[0])
+    assert gateway.calls == []
+    assert audit.events == []
+
+
+async def test_multi_org_operations_request_fails_closed_before_model() -> None:
+    """多机构上下文无法唯一选定门店时必须 fail-closed，且不触发模型或网关调用。"""
+
+    models = FakeOperationsModels()
+    gateway = FakeOperationsGateway()
+    registry = ToolRegistry()
+    for definition in build_operations_tool_definitions(cast(Any, gateway)):
+        registry.register(definition)
+    supervisor = Supervisor(cast(ModelGateway, models), registry)
+    identity = AgentIdentity(
+        subject="admin-1",
+        organization_ids=frozenset({"org-1", "org-2"}),
+        roles=frozenset({"ORGANIZATION_ADMIN"}),
+        issued_at=1,
+        expires_at=2,
+    )
+
+    with pytest.raises(SupervisorRuntimeError, match="无法安全准备经营查询"):
+        await supervisor.invoke(
+            SupervisorRequest(
+                user_message="查看 2026-08-01 到 2026-08-15 的营收金额按周趋势",
+                gateway_context=GatewayRequestContext(
+                    signed_context="signed-context",
+                    request_id="ops-multi-org-1",
+                    trace_id="ops-multi-org-trace-1",
+                ),
+                conversation_id="ops-multi-org-conv",
+                identity=identity,
+            )
+        )
+
+    assert models.turn_index == 0
+    assert gateway.calls == []
