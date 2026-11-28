@@ -74,12 +74,23 @@ from .domain_subgraphs import (
     domain_agent_spec,
     executable_domain_specs,
 )
+from .operations_planner import (
+    MAX_DIAGNOSIS_STEPS,
+    MAX_DIAGNOSIS_TOTAL_QUERIES,
+    OperationsQueryItem,
+    build_diagnosis_synthesis_prompt_payload,
+    build_direct_summary_prompt_payload,
+    build_operations_observation,
+    classify_operations_mode,
+    looks_like_multi_metric_operations_query,
+    plan_diagnosis_step,
+    plan_direct_operations_queries,
+)
 from .operations_tools import (
     OperationsQueryPreparationError,
     build_authorized_operations_tool_input,
     operations_prompt_hint,
     parse_operations_intent,
-    validate_operations_metric_capability,
 )
 from .routing import (
     IntentRouter,
@@ -92,9 +103,11 @@ from .routing import (
 from .tool_registry import (
     ToolConfirmationNormalizationError,
     ToolContext,
+    ToolDefinition,
     ToolInputValidationError,
     ToolRegistry,
     ToolRegistryError,
+    ToolRoleForbiddenError,
     UnknownToolError,
 )
 
@@ -217,7 +230,13 @@ class SupervisorState(TypedDict, total=False):
     memory_candidates_prepared: bool
     previous_route: str
     continue_domain: bool
-    operations_query_result: Any | None
+    operations_mode: str
+    operations_plan_source: str
+    operations_pending_queries: list[dict[str, Any]]
+    operations_observations: list[dict[str, Any]]
+    operations_diagnosis_steps: int
+    operations_diagnosis_rationales: list[str]
+    operations_diagnosis_done: bool
     fitness_citation_pending: bool
 
 
@@ -379,7 +398,13 @@ class Supervisor:
             "memory_candidates_prepared": False,
             "previous_route": "",
             "continue_domain": False,
-            "operations_query_result": None,
+            "operations_mode": "",
+            "operations_plan_source": "",
+            "operations_pending_queries": [],
+            "operations_observations": [],
+            "operations_diagnosis_steps": 0,
+            "operations_diagnosis_rationales": [],
+            "operations_diagnosis_done": False,
             "fitness_citation_pending": False,
             "messages": [
                 {"role": "system", "content": _routing_system_prompt(request.locale)},
@@ -853,8 +878,15 @@ class Supervisor:
                     spec,
                     state_schema=SupervisorState,
                     context_schema=SupervisorRuntimeContext,
-                    query_node=self._operations_query_node,
-                    summarize_node=self._operations_summarize_node,
+                    classify_mode_node=self._operations_classify_mode_node,
+                    after_classify_mode=self._after_operations_classify_mode,
+                    plan_direct_node=self._operations_plan_direct_node,
+                    execute_direct_node=self._operations_execute_direct_node,
+                    summarize_direct_node=self._operations_summarize_node,
+                    diagnose_step_node=self._operations_diagnose_step_node,
+                    after_diagnose_step=self._after_operations_diagnose_step,
+                    execute_diagnosis_node=self._operations_execute_diagnosis_node,
+                    synthesize_diagnosis_node=self._operations_synthesize_diagnosis_node,
                 )
             elif spec.route == "FITNESS_COACHING":
                 domain_graph = build_fitness_subgraph(
@@ -1012,7 +1044,12 @@ class Supervisor:
         intent = state.get("intent", "")
         spec = domain_agent_spec(route)
         system_prompt = _system_prompt(route, runtime.context.locale, intent=intent)
-        if route == "OPERATIONS":
+        if (
+            route == "OPERATIONS"
+            and classify_operations_mode(runtime.context.user_message) == "DIRECT_QUERY"
+            and not looks_like_multi_metric_operations_query(runtime.context.user_message)
+            and parse_operations_intent(runtime.context.user_message) is not None
+        ):
             system_prompt = (
                 f"{system_prompt}\n\n{operations_prompt_hint(runtime.context.user_message)}"
             )
@@ -1055,7 +1092,13 @@ class Supervisor:
             "model_tool_calls": [],
             "final_answer": "",
             "current_tool_steps": 0,
-            "operations_query_result": None,
+            "operations_mode": "",
+            "operations_plan_source": "",
+            "operations_pending_queries": [],
+            "operations_observations": [],
+            "operations_diagnosis_steps": 0,
+            "operations_diagnosis_rationales": [],
+            "operations_diagnosis_done": False,
             "fitness_citation_pending": False,
         }
 
@@ -1094,7 +1137,13 @@ class Supervisor:
             "pending_confirmation_id": None,
             "continue_domain": True,
             "current_tool_steps": 0,
-            "operations_query_result": None,
+            "operations_mode": "",
+            "operations_plan_source": "",
+            "operations_pending_queries": [],
+            "operations_observations": [],
+            "operations_diagnosis_steps": 0,
+            "operations_diagnosis_rationales": [],
+            "operations_diagnosis_done": False,
             "fitness_citation_pending": False,
         }
 
@@ -1144,10 +1193,14 @@ class Supervisor:
             _logger.warning("conversation_memory_unavailable", error_type=type(exc).__name__)
         return messages
 
-    async def _operations_query_node(
-        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
-    ) -> dict[str, Any]:
-        """经营分析专属确定性查询节点：跳过首轮模型选工具，直接执行受控指标聚合。"""
+    def _resolve_operations_tool_access(
+        self,
+        state: SupervisorState,
+        runtime: Runtime[SupervisorRuntimeContext],
+        *,
+        require_single_org: bool = False,
+    ) -> ToolDefinition | None:
+        """在触发任何模型填槽或网关查询前，执行经营工具白名单、管理员角色和租户范围前置校验。"""
 
         if runtime.context is None or not runtime.context.user_message:
             raise SupervisorRuntimeError("经营查询需要原始用户消息")
@@ -1158,86 +1211,308 @@ class Supervisor:
         intent_tools = intent_allowed_tool_ids("OPERATIONS", state.get("intent"))
         if intent_tools is not None and tool_id not in intent_tools:
             raise SupervisorRuntimeError("工具执行不属于当前意图")
-        if state.get("current_tool_steps", state.get("tool_steps", 0)) >= self.max_tool_steps:
-            return {"operations_query_result": None}
         try:
             definition = self.tools.get(tool_id)
         except UnknownToolError:
-            return {"operations_query_result": None}
+            return None
+        identity = runtime.context.identity
+        if identity is not None:
+            if not identity.roles.intersection(definition.allowed_roles):
+                raise ToolRoleForbiddenError("当前签名角色无权调用经营指标查询工具")
+            if require_single_org and len(identity.organization_ids) != 1:
+                raise SupervisorRuntimeError("无法安全准备经营查询")
+        return definition
 
-        # 歧义问题、不支持的时间桶或对比口径不在查询节点报错，而是跳过查数，
-        # 交由下游 summarize 节点结合 operations_prompt_hint 向用户澄清。
-        hint = parse_operations_intent(runtime.context.user_message)
-        if hint is None:
-            return {"operations_query_result": None}
-        try:
-            validate_operations_metric_capability(
-                hint.metric,
-                bucket=hint.bucket,
-                comparison_role=(hint.comparison if hint.comparison != "NONE" else None),
-            )
-        except ValueError:
-            return {"operations_query_result": None}
+    async def _run_operations_query_batch(
+        self,
+        definition: ToolDefinition,
+        runtime: Runtime[SupervisorRuntimeContext],
+        queries: list[OperationsQueryItem],
+        *,
+        enforce_single_query_policy: bool,
+        rationale: str = "",
+    ) -> list[dict[str, Any]]:
+        """并发执行已通过 Schema 与能力校验的固定经营指标查询，并附加程序计算的贡献度分析。"""
 
-        if runtime.context.identity is None:
+        if runtime.context is None or not runtime.context.user_message:
+            raise SupervisorRuntimeError("经营查询需要原始用户消息")
+        identity = runtime.context.identity
+        if identity is None:
             raise SupervisorRuntimeError("经营查询需要已签名身份")
+        if len(identity.organization_ids) != 1:
+            raise SupervisorRuntimeError("无法安全准备经营查询")
+        organization_id = next(iter(identity.organization_ids))
+        gateway_context = runtime.context.gateway_context
+        user_message = runtime.context.user_message
         emit_event("stage.changed", {"stage": "QUERYING_BUSINESS", "route": "OPERATIONS"})
-        try:
-            raw_input = build_authorized_operations_tool_input(
-                runtime.context.user_message,
-                allowed_organization_ids=runtime.context.identity.organization_ids,
+
+        async def execute_one(item: OperationsQueryItem) -> dict[str, Any]:
+            if enforce_single_query_policy:
+                try:
+                    raw_input = build_authorized_operations_tool_input(
+                        user_message,
+                        allowed_organization_ids=identity.organization_ids,
+                    )
+                except OperationsQueryPreparationError as exc:
+                    raise SupervisorRuntimeError("无法安全准备经营查询") from exc
+            else:
+                raw_input = item.to_tool_input(organization_id)
+            _logger.info(
+                "operations_tool_input_prepared",
+                metric=item.metric,
+                request_id=gateway_context.request_id,
+                trace_id=gateway_context.trace_id,
             )
-        except OperationsQueryPreparationError as exc:
-            raise SupervisorRuntimeError("无法安全准备经营查询") from exc
-        _logger.info(
-            "operations_tool_input_prepared",
-            request_id=runtime.context.gateway_context.request_id,
-            trace_id=runtime.context.gateway_context.trace_id,
-        )
-        bound_input = self.tools.bind_context_input(
-            definition.tool_id,
-            raw_input,
-            runtime.context.identity,
-        )
-        context = ToolContext(
-            gateway_context=runtime.context.gateway_context,
-            identity=runtime.context.identity,
-            user_message=runtime.context.user_message,
-        )
-        result = await self.tools.invoke(definition.tool_id, bound_input, context)
+            bound_input = self.tools.bind_context_input(
+                definition.tool_id,
+                raw_input,
+                identity,
+            )
+            context = ToolContext(
+                gateway_context=gateway_context,
+                identity=identity,
+                user_message=(user_message if enforce_single_query_policy else None),
+            )
+            result = await self.tools.invoke(definition.tool_id, bound_input, context)
+            return build_operations_observation(item, result, rationale=rationale)
+
+        if len(queries) == 1:
+            return [await execute_one(queries[0])]
+        return list(await asyncio.gather(*(execute_one(item) for item in queries)))
+
+    async def _operations_classify_mode_node(
+        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        """经营分析入口分流：常规看数走单向流水线，诊断归因走受控只读 ReAct 下钻。"""
+
+        if runtime.context is None or not runtime.context.user_message:
+            raise SupervisorRuntimeError("经营查询需要原始用户消息")
+        mode = classify_operations_mode(runtime.context.user_message)
         return {
-            "operations_query_result": result,
-            "tool_steps": state.get("tool_steps", 0) + 1,
-            "current_tool_steps": state.get("current_tool_steps", state.get("tool_steps", 0)) + 1,
+            "operations_mode": mode,
+            "operations_plan_source": "",
+            "operations_pending_queries": [],
+            "operations_observations": [],
+            "operations_diagnosis_steps": 0,
+            "operations_diagnosis_rationales": [],
+            "operations_diagnosis_done": False,
+        }
+
+    @staticmethod
+    def _after_operations_classify_mode(state: SupervisorState) -> str:
+        return "diagnosis" if state.get("operations_mode") == "DIAGNOSIS" else "direct"
+
+    async def _operations_plan_direct_node(
+        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        """常规看数混合规划：规则快路径优先（0 LLM），口语或复合多指标才走受控 JSON 填槽。"""
+
+        definition = self._resolve_operations_tool_access(state, runtime, require_single_org=False)
+        if definition is None:
+            return {"operations_plan_source": "CLARIFICATION", "operations_pending_queries": []}
+        assert runtime.context is not None and runtime.context.user_message is not None
+        remaining_budget = max(
+            0, self.max_tool_steps - state.get("current_tool_steps", state.get("tool_steps", 0))
+        )
+        if remaining_budget <= 0:
+            return {"operations_plan_source": "CLARIFICATION", "operations_pending_queries": []}
+        plan = await plan_direct_operations_queries(runtime.context.user_message, self.models)
+        queries = [item.as_state_dict() for item in plan.queries[:remaining_budget]]
+        return {
+            "operations_plan_source": plan.source,
+            "operations_pending_queries": queries,
+            "input_tokens": state.get("input_tokens", 0) + plan.input_tokens,
+            "output_tokens": state.get("output_tokens", 0) + plan.output_tokens,
+        }
+
+    async def _operations_execute_direct_node(
+        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        """常规看数确定性执行节点：按规划批量并发查询受控经营指标，无循环。"""
+
+        raw_queries = state.get("operations_pending_queries", [])
+        if not raw_queries:
+            return {"operations_observations": [], "operations_pending_queries": []}
+        definition = self._resolve_operations_tool_access(state, runtime, require_single_org=True)
+        if definition is None:
+            return {"operations_observations": [], "operations_pending_queries": []}
+        items = [OperationsQueryItem.model_validate(item) for item in raw_queries]
+        enforce_single = (
+            state.get("operations_plan_source") == "DETERMINISTIC_RULE" and len(items) == 1
+        )
+        observations = await self._run_operations_query_batch(
+            definition,
+            runtime,
+            items,
+            enforce_single_query_policy=enforce_single,
+        )
+        return {
+            "operations_observations": observations,
+            "operations_pending_queries": [],
+            "tool_steps": state.get("tool_steps", 0) + len(observations),
+            "current_tool_steps": state.get("current_tool_steps", state.get("tool_steps", 0))
+            + len(observations),
         }
 
     async def _operations_summarize_node(
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
     ) -> dict[str, Any]:
-        """经营分析专属总结节点：不暴露任何工具 Schema，直接流式解读真实聚合结果或澄清。"""
+        """常规看数总结节点：不暴露任何工具 Schema，直接流式解读真实聚合结果或澄清。"""
 
         emit_event("stage.changed", {"stage": "GENERATING", "route": "OPERATIONS"})
         messages = await self._messages_with_personalization(
             list(state["messages"]), runtime.context
         )
-        query_result = state.get("operations_query_result")
-        if query_result is not None:
+        observations = state.get("operations_observations", [])
+        if observations:
             messages.append(
                 {
                     "role": "user",
-                    "content": (
-                        "以下是服务端已完成权限校验并从固定经营指标接口查询到的真实聚合结果（JSON），"
-                        "请严格基于其中的 data 与 report 生成简洁准确的中文解读，不得编造数据或因果结论：\n"
-                        + json.dumps(query_result, ensure_ascii=False)
-                    ),
+                    "content": build_direct_summary_prompt_payload(observations),
                 }
             )
+        elif runtime.context is not None and runtime.context.user_message:
+            hint = operations_prompt_hint(runtime.context.user_message)
+            if messages and messages[0].get("role") == "system" and hint not in str(messages[0]):
+                messages[0] = {
+                    **messages[0],
+                    "content": f"{messages[0]['content']}\n\n{hint}",
+                }
         turn = await self.models.chat_with_tools(messages, tools=[])
         answer_content = turn.content
         return {
             "messages": [*state["messages"], {"role": "assistant", "content": answer_content}],
             "model_tool_calls": [],
-            "operations_query_result": None,
+            "operations_pending_queries": [],
+            "operations_observations": [],
+            "operations_diagnosis_rationales": [],
+            "operations_diagnosis_done": False,
+            "final_answer": _sanitize_model_answer(answer_content),
+            "input_tokens": state.get("input_tokens", 0) + (turn.input_tokens or 0),
+            "output_tokens": state.get("output_tokens", 0) + (turn.output_tokens or 0),
+        }
+
+    async def _operations_diagnose_step_node(
+        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        """经营诊断受控 ReAct 推理节点：结合指标拆解树与已有数据决定下一步下钻或收口。"""
+
+        definition = self._resolve_operations_tool_access(state, runtime, require_single_org=True)
+        if definition is None:
+            return {
+                "operations_pending_queries": [],
+                "operations_diagnosis_done": True,
+            }
+        assert runtime.context is not None and runtime.context.user_message is not None
+        step_index = state.get("operations_diagnosis_steps", 0)
+        observations = state.get("operations_observations", [])
+        decision = await plan_diagnosis_step(
+            runtime.context.user_message,
+            observations,
+            self.models,
+            step_index=step_index,
+            max_steps=MAX_DIAGNOSIS_STEPS,
+            max_total_queries=MAX_DIAGNOSIS_TOTAL_QUERIES,
+        )
+        rationales = [*state.get("operations_diagnosis_rationales", [])]
+        if decision.rationale:
+            rationales.append(decision.rationale)
+        if decision.action == "QUERY" and decision.queries:
+            return {
+                "operations_plan_source": decision.source,
+                "operations_pending_queries": [item.as_state_dict() for item in decision.queries],
+                "operations_diagnosis_rationales": rationales,
+                "operations_diagnosis_done": False,
+                "input_tokens": state.get("input_tokens", 0) + decision.input_tokens,
+                "output_tokens": state.get("output_tokens", 0) + decision.output_tokens,
+            }
+        return {
+            "operations_plan_source": decision.source,
+            "operations_pending_queries": [],
+            "operations_diagnosis_rationales": rationales,
+            "operations_diagnosis_done": True,
+            "input_tokens": state.get("input_tokens", 0) + decision.input_tokens,
+            "output_tokens": state.get("output_tokens", 0) + decision.output_tokens,
+        }
+
+    @staticmethod
+    def _after_operations_diagnose_step(state: SupervisorState) -> str:
+        if state.get("operations_diagnosis_done") or not state.get("operations_pending_queries"):
+            return "synthesize"
+        return "query"
+
+    async def _operations_execute_diagnosis_node(
+        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        """经营诊断受控只读查数节点：并发执行下钻指标并由 Python 确定性计算波动贡献度。"""
+
+        raw_queries = state.get("operations_pending_queries", [])
+        if not raw_queries:
+            return {"operations_diagnosis_done": True}
+        definition = self._resolve_operations_tool_access(state, runtime, require_single_org=True)
+        if definition is None:
+            return {"operations_pending_queries": [], "operations_diagnosis_done": True}
+        items = [OperationsQueryItem.model_validate(item) for item in raw_queries]
+        rationales = state.get("operations_diagnosis_rationales", [])
+        current_rationale = rationales[-1] if rationales else ""
+        new_observations = await self._run_operations_query_batch(
+            definition,
+            runtime,
+            items,
+            enforce_single_query_policy=False,
+            rationale=current_rationale,
+        )
+        all_observations = [*state.get("operations_observations", []), *new_observations]
+        next_step = state.get("operations_diagnosis_steps", 0) + 1
+        return {
+            "operations_observations": all_observations,
+            "operations_pending_queries": [],
+            "operations_diagnosis_steps": next_step,
+            "operations_diagnosis_done": (
+                next_step >= MAX_DIAGNOSIS_STEPS
+                or len(all_observations) >= MAX_DIAGNOSIS_TOTAL_QUERIES
+            ),
+            "tool_steps": state.get("tool_steps", 0) + len(new_observations),
+            "current_tool_steps": state.get("current_tool_steps", state.get("tool_steps", 0))
+            + len(new_observations),
+        }
+
+    async def _operations_synthesize_diagnosis_node(
+        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        """经营诊断综合节点：按“已证实事实 / 统计贡献拆解 / 待核实假设”三段式流式输出。"""
+
+        emit_event("stage.changed", {"stage": "GENERATING", "route": "OPERATIONS"})
+        messages = await self._messages_with_personalization(
+            list(state["messages"]), runtime.context
+        )
+        observations = state.get("operations_observations", [])
+        rationales = state.get("operations_diagnosis_rationales", [])
+        if observations:
+            messages.append(
+                {
+                    "role": "user",
+                    "content": build_diagnosis_synthesis_prompt_payload(
+                        observations, rationales=rationales
+                    ),
+                }
+            )
+        elif runtime.context is not None and runtime.context.user_message:
+            hint = operations_prompt_hint(runtime.context.user_message)
+            if messages and messages[0].get("role") == "system" and hint not in str(messages[0]):
+                messages[0] = {
+                    **messages[0],
+                    "content": f"{messages[0]['content']}\n\n{hint}",
+                }
+        turn = await self.models.chat_with_tools(messages, tools=[])
+        answer_content = turn.content
+        return {
+            "messages": [*state["messages"], {"role": "assistant", "content": answer_content}],
+            "model_tool_calls": [],
+            "operations_pending_queries": [],
+            "operations_observations": [],
+            "operations_diagnosis_rationales": [],
+            "operations_diagnosis_done": False,
             "final_answer": _sanitize_model_answer(answer_content),
             "input_tokens": state.get("input_tokens", 0) + (turn.input_tokens or 0),
             "output_tokens": state.get("output_tokens", 0) + (turn.output_tokens or 0),
