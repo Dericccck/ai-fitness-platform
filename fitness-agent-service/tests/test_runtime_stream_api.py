@@ -60,8 +60,8 @@ async def test_stream_repeated_run_is_canonical_and_not_executed_again() -> None
         )
         assert changed.status_code == 409
     assert len(supervisor.requests) == 1
-    # 未配置异步来源时不回退到旧同步提取，避免绕过用户的提取开关。
-    assert supervisor.requests[0].defer_memory_extraction is True
+    # 旧同步记忆提取开关已彻底移除，生产热路径不再执行同步提取。
+    assert not hasattr(supervisor.requests[0], "defer_memory_extraction")
     await app.state.chat_runs.close()
 
 

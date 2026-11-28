@@ -14,6 +14,7 @@ import re
 from collections.abc import Awaitable, Callable, Hashable, Mapping
 from contextlib import aclosing
 from dataclasses import dataclass, field, replace
+from datetime import UTC, datetime
 from typing import Any, Literal, TypedDict, cast
 
 import structlog
@@ -38,15 +39,6 @@ from app.infrastructure.model_gateway import (
     ModelToolCall,
 )
 from app.infrastructure.model_usage import collect_usage
-from app.memory.candidate import (
-    MemoryCandidateExtractionError,
-    MemoryCandidateExtractionService,
-    build_candidate_context,
-)
-from app.memory.candidate_service import (
-    MemoryCandidatePersistenceError,
-    MemoryCandidateService,
-)
 from app.memory.context import MemoryContextBuilder
 from app.memory.service import MemoryService
 from app.rag.models import RetrievalScope
@@ -105,12 +97,14 @@ from .tool_registry import (
     ToolContext,
     ToolContextBindingError,
     ToolDefinition,
+    ToolExecutionError,
     ToolInputValidationError,
     ToolRegistry,
     ToolRegistryError,
     ToolRoleForbiddenError,
     UnknownToolError,
 )
+from .training_plan_generation import TrainingPlanClarificationError
 
 SupervisorRunStatus = Literal["COMPLETED", "CONFIRMATION_REQUIRED", "CLARIFICATION_REQUIRED"]
 _logger = structlog.get_logger("agent.supervisor")
@@ -147,7 +141,6 @@ class SupervisorRequest:
     thread_id: str | None = None
     locale: str = "zh-CN"
     identity: AgentIdentity | None = None
-    defer_memory_extraction: bool = False
 
 
 @dataclass(frozen=True)
@@ -166,7 +159,6 @@ class SupervisorRuntimeContext:
     # 当前问题只传给需要做查询前策略校验的工具，不进入 State 或 Checkpoint。
     user_message: str | None = None
     locale: str = "zh-CN"
-    defer_memory_extraction: bool = False
     # 请求内收集经 ACL 过滤的实际召回 ID，不进入 LangGraph checkpoint。
     retrieved_evidence_ids: list[str] = field(default_factory=list, repr=False, compare=False)
     knowledge_retrievals: list[list[str]] = field(default_factory=list, repr=False, compare=False)
@@ -228,7 +220,6 @@ class SupervisorState(TypedDict, total=False):
     routing_terminal: bool
     clarification_required: bool
     partial_answers: list[dict[str, str]]
-    memory_candidates_prepared: bool
     previous_route: str
     continue_domain: bool
     operations_mode: str
@@ -240,6 +231,7 @@ class SupervisorState(TypedDict, total=False):
     operations_diagnosis_rationales: list[str]
     operations_diagnosis_done: bool
     fitness_citation_pending: bool
+    fitness_no_evidence: bool
 
 
 def _multiple_rag_domains_possible(plan: list[dict[str, Any]]) -> bool:
@@ -286,12 +278,8 @@ class Supervisor:
         session_lock: SessionLockManager | None = None,
         rag_service: RagService | None = None,
         confirmation_service: ConfirmationService | None = None,
-        memory_candidate_service: MemoryCandidateService | None = None,
         memory_service: MemoryService | None = None,
         session_summary_service: SessionSummaryService | None = None,
-        # 保留此参数是为了兼容当前单元测试和旧的内嵌装配；正式应用使用上面的
-        # Service，因为它还负责跨请求持久化和用户批准/拒绝。
-        memory_candidate_extractor: MemoryCandidateExtractionService | None = None,
         telemetry: TruLensTelemetry | None = None,
         intent_router: IntentRouter | None = None,
         chat_run_repository: ChatRunRepository | None = None,
@@ -304,10 +292,8 @@ class Supervisor:
         self.session_lock = session_lock
         self.rag_service = rag_service
         self.confirmation_service = confirmation_service
-        self.memory_candidate_service = memory_candidate_service
         self.memory_service = memory_service
         self.session_summary_service = session_summary_service
-        self.memory_candidate_extractor = memory_candidate_extractor
         self.telemetry = telemetry or TruLensTelemetry.disabled()
         # 测试和离线装配默认保持无供应商调用；正式应用显式注入 HybridIntentRouter。
         self.intent_router = intent_router or RuleIntentRouter()
@@ -397,7 +383,6 @@ class Supervisor:
             "routing_terminal": False,
             "clarification_required": False,
             "partial_answers": [],
-            "memory_candidates_prepared": False,
             "previous_route": "",
             "continue_domain": False,
             "operations_mode": "",
@@ -409,6 +394,7 @@ class Supervisor:
             "operations_diagnosis_rationales": [],
             "operations_diagnosis_done": False,
             "fitness_citation_pending": False,
+            "fitness_no_evidence": False,
             "messages": [
                 {"role": "system", "content": _routing_system_prompt(request.locale)},
                 {"role": "user", "content": request.user_message},
@@ -428,6 +414,8 @@ class Supervisor:
             # 每次请求都先读取同一 thread 的最新状态，再追加当前 user message，
             # 确保跨 HTTP 请求的多轮对话真正连续，同时避免重复写入 system prompt。
             previous_values: dict[str, Any] = {}
+            interrupted_confirmation_id: str | None = None
+            interrupted_messages: list[dict[str, Any]] | None = None
             if self._checkpointer is not None:
                 # 先读取原始 Checkpoint，再让 LangGraph 按当前 Schema 映射 values。旧版
                 # 的 ``request`` 不是当前 State 字段，若只检查 values 会被框架静默丢弃，
@@ -437,8 +425,11 @@ class Supervisor:
                     "channel_values", {}
                 ):
                     raise SupervisorCheckpointIncompatible("Checkpoint 包含不兼容的敏感运行时状态")
-                previous = await self._graph.aget_state(config)
+                previous = await self._graph.aget_state(config, subgraphs=True)
                 previous_values = previous.values if previous else {}
+                interrupted_confirmation_id, interrupted_messages = (
+                    _extract_interrupted_confirmation(previous)
+                )
             if "request" in previous_values:
                 # 旧版本把签名上下文和潜在确认凭证放进 State。不能继续反序列化或
                 # 自动迁移这类状态，避免敏感对象在恢复链路中继续传播；调用方应重建会话。
@@ -446,6 +437,9 @@ class Supervisor:
             control = current_control()
             repository = self.chat_run_repository or (control.repository if control else None)
             prior_run_id = previous_values.get("turn_run_id")
+            prior_confirmation_id = (
+                previous_values.get("pending_confirmation_id") or interrupted_confirmation_id
+            )
             committed = None
             if repository is not None and request.identity is not None:
                 committed = await repository.history_commit(
@@ -454,17 +448,47 @@ class Supervisor:
                     request.identity.subject,
                     str(prior_run_id) if prior_run_id else None,
                 )
-                if prior_run_id and (committed is None or committed.run_id != prior_run_id):
-                    previous_values = {
-                        **previous_values,
-                        "messages": previous_values.get("turn_base_messages", []),
-                        "route": "",
-                        "pending_confirmation_id": None,
-                    }
                 if control is not None:
                     control.completion = TurnCompletion(
                         thread_id, request.identity.subject, committed.version if committed else 0
                     )
+            if prior_confirmation_id:
+                # 上一轮停在确认单暂停态（无论父图还是子图 interrupt，无论流式还是非流式）：
+                # 不直接整轮抹掉用户上下文，而是剥离悬空的 tool_calls 并补齐可读状态说明，
+                # 既彻底避免模型 HTTP 400，又让用户拒绝/过期后能无缝追问微调方案。
+                base_for_recovery = (
+                    interrupted_messages
+                    if interrupted_messages is not None
+                    else previous_values.get("messages", [])
+                )
+                recovered_messages = await self._recover_pending_confirmation_messages(
+                    base_for_recovery,
+                    confirmation_id=str(prior_confirmation_id),
+                    identity=request.identity,
+                )
+                previous_values = {
+                    **previous_values,
+                    "messages": recovered_messages,
+                    "pending_confirmation_id": None,
+                }
+            elif (
+                repository is not None
+                and request.identity is not None
+                and prior_run_id
+                and (committed is None or committed.run_id != prior_run_id)
+            ):
+                # 非确认暂停态（如用户点击停止或运行中途异常）：干净回滚到本轮基线快照。
+                previous_values = {
+                    **previous_values,
+                    "messages": previous_values.get("turn_base_messages", []),
+                    "route": "",
+                    "pending_confirmation_id": None,
+                }
+            if previous_values.get("messages"):
+                previous_values = {
+                    **previous_values,
+                    "messages": _sanitize_unpaired_tool_calls(previous_values["messages"]),
+                }
             # 旧历史可能包含模型复述的已撤销记忆，无法仅凭消息文本可靠剔除。
             # 版本变化或旧版 checkpoint 无版本时，保留历史和确认单，但不再把旧历史
             # 放入新的模型请求；当前消息以新上下文开始。
@@ -528,7 +552,6 @@ class Supervisor:
                 thread_id=thread_id,
                 user_message=request.user_message,
                 locale=request.locale,
-                defer_memory_extraction=request.defer_memory_extraction,
                 retrieved_evidence_ids=retrieved_evidence_ids,
                 knowledge_retrievals=knowledge_retrievals,
                 citation_mapping_ambiguities=citation_mapping_ambiguities,
@@ -896,7 +919,10 @@ class Supervisor:
                     spec,
                     state_schema=SupervisorState,
                     context_schema=SupervisorRuntimeContext,
-                    prepare_memory_node=self._fitness_prepare_memory_node,
+                    after_enter=self._after_fitness_enter,
+                    retrieve_rag_node=self._fitness_retrieve_rag_node,
+                    after_retrieve_rag=self._after_fitness_retrieve_rag,
+                    no_evidence_fallback_node=self._fitness_no_evidence_fallback_node,
                     model_node=self._fitness_model_node,
                     tool_node=self._fitness_tool_node,
                     verify_citations_node=self._fitness_verify_citations_node,
@@ -1056,26 +1082,28 @@ class Supervisor:
             system_prompt = (
                 f"{system_prompt}\n\n{operations_prompt_hint(runtime.context.user_message)}"
             )
+        # FITNESS_COACHING 的 RAG 已下沉至 fitness_agent 子图内部按意图精准触发；
+        # 父图当前仅保留 CUSTOMER_SERVICE 的规则问答检索。
         if (
             spec.uses_rag
+            and route == "CUSTOMER_SERVICE"
+            and intent == "BUSINESS_RULE_QA"
             and self.rag_service is not None
             and runtime.context.identity is not None
-            and (route != "CUSTOMER_SERVICE" or intent == "BUSINESS_RULE_QA")
         ):
+            scope = RetrievalScope(
+                subject=runtime.context.identity.subject,
+                organization_ids=runtime.context.identity.organization_ids,
+                roles=runtime.context.identity.roles,
+            )
             try:
                 rag = await self.rag_service.search(
                     runtime.context.user_message,
-                    RetrievalScope(
-                        subject=runtime.context.identity.subject,
-                        organization_ids=runtime.context.identity.organization_ids,
-                        roles=runtime.context.identity.roles,
-                    ),
+                    scope,
                 )
                 context = rag.as_prompt_context()
                 if _multiple_rag_domains_possible(state.get("route_plan", [])):
                     runtime.context.citation_mapping_ambiguities.append(True)
-                if route == "FITNESS_COACHING" and intent == "FITNESS_KNOWLEDGE_QA":
-                    runtime.context.knowledge_retrievals.append([chunk.id for chunk in rag.chunks])
                 if context:
                     system_prompt = f"{system_prompt}\n\n{context}"
                     for chunk in rag.chunks:
@@ -1089,7 +1117,7 @@ class Supervisor:
             for m in state.get("messages", [])
             if m.get("role") != "system" or "当前会话短期摘要" in str(m.get("content", ""))
         ]
-        return {
+        result_state: dict[str, Any] = {
             "messages": [*system_messages, *history],
             "active_domain": spec.node_name,
             "model_tool_calls": [],
@@ -1104,7 +1132,9 @@ class Supervisor:
             "operations_diagnosis_rationales": [],
             "operations_diagnosis_done": False,
             "fitness_citation_pending": False,
+            "fitness_no_evidence": False,
         }
+        return result_state
 
     @staticmethod
     def _after_prepare_domain(state: SupervisorState) -> str:
@@ -1150,6 +1180,7 @@ class Supervisor:
             "operations_diagnosis_rationales": [],
             "operations_diagnosis_done": False,
             "fitness_citation_pending": False,
+            "fitness_no_evidence": False,
         }
 
     @staticmethod
@@ -1657,50 +1688,117 @@ class Supervisor:
             "output_tokens": state.get("output_tokens", 0) + (turn.output_tokens or 0),
         }
 
-    async def _fitness_prepare_memory_node(
+    @staticmethod
+    def _after_fitness_enter(state: SupervisorState) -> str:
+        """健身子图按意图分流：仅纯知识问答进入子图 RAG，计划/打卡/记忆跳过通用 RAG。"""
+
+        if state.get("intent") == "FITNESS_KNOWLEDGE_QA":
+            return "knowledge_qa"
+        return "model"
+
+    async def _fitness_retrieve_rag_node(
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
     ) -> dict[str, Any]:
-        """健身领域专属 Memory 候选提取节点，仅在进入 fitness_agent 时执行一次。"""
+        """健身知识问答专属 RAG 检索节点：带查询改写、置信度阈值与无证据短路标记。"""
 
         context = runtime.context
         if (
             context is None
             or not context.user_message
-            or context.defer_memory_extraction
-            or state.get("memory_candidates_prepared", False)
+            or self.rag_service is None
             or context.identity is None
-            or not (self.memory_candidate_service or self.memory_candidate_extractor)
         ):
-            return {}
-        candidate_context: str | None = None
+            return {"fitness_no_evidence": False}
+
+        emit_event("stage.changed", {"stage": "RETRIEVING_KNOWLEDGE", "route": state["route"]})
+        scope = RetrievalScope(
+            subject=context.identity.subject,
+            organization_ids=context.identity.organization_ids,
+            roles=context.identity.roles,
+        )
         try:
-            if self.memory_candidate_service is not None:
-                candidates = await self.memory_candidate_service.propose(
-                    user_message=context.user_message,
-                    identity=context.identity,
-                    thread_id=context.thread_id or "unknown-thread",
-                    source_request_id=context.gateway_context.request_id,
-                )
+            rag = await self.rag_service.search(context.user_message, scope)
+        except RagSearchError as exc:
+            raise SupervisorRuntimeError("知识检索失败") from exc
+
+        if _multiple_rag_domains_possible(state.get("route_plan", [])):
+            context.citation_mapping_ambiguities.append(True)
+        context.knowledge_retrievals.append([chunk.id for chunk in rag.chunks])
+        for chunk in rag.chunks:
+            if chunk.id not in context.retrieved_evidence_ids:
+                context.retrieved_evidence_ids.append(chunk.id)
+
+        rag_context = rag.as_prompt_context()
+        result: dict[str, Any] = {"fitness_no_evidence": not rag.chunks and not rag_context}
+        if rag_context:
+            messages = list(state.get("messages", []))
+            if messages and messages[0].get("role") == "system":
+                messages[0] = {
+                    **messages[0],
+                    "content": f"{messages[0]['content']}\n\n{rag_context}",
+                }
             else:
-                assert self.memory_candidate_extractor is not None
-                candidates = await self.memory_candidate_extractor.propose(context.user_message)
-            candidate_context = build_candidate_context(candidates, context.identity.organization_ids)
-        except MemoryCandidatePersistenceError as exc:
-            candidate_context = build_candidate_context(
-                exc.candidates, context.identity.organization_ids
-            )
-            _logger.warning("memory_candidate_persistence_failed")
-        except (MemoryCandidateExtractionError, ModelConfigurationError, ModelResponseError):
-            _logger.warning("memory_candidate_extraction_failed")
-        if not candidate_context:
-            return {"memory_candidates_prepared": True}
-        messages = list(state.get("messages", []))
-        insertion = 1 if messages and messages[0].get("role") == "system" else 0
-        messages.insert(insertion, {"role": "system", "content": candidate_context})
+                messages.insert(0, {"role": "system", "content": rag_context})
+            result["messages"] = messages
+        return result
+
+    @staticmethod
+    def _after_fitness_retrieve_rag(state: SupervisorState) -> str:
+        """有效证据为 0 时直接短路返回兜底，不白调主模型，避免流式撤回闪烁。"""
+
+        if state.get("fitness_no_evidence"):
+            return "fallback"
+        return "model"
+
+    async def _fitness_no_evidence_fallback_node(
+        self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
+    ) -> dict[str, Any]:
+        """无可用知识证据时的确定性短路兜底节点。"""
+
+        _ = runtime
+        fallback = "未检索到可用的知识资料，暂时无法提供有来源支持的回答。"
+        emit_event("answer.delta", {"text": fallback})
+        messages = [*state.get("messages", []), {"role": "assistant", "content": fallback}]
         return {
             "messages": messages,
-            "memory_candidates_prepared": True,
+            "final_answer": fallback,
+            "fitness_citation_pending": False,
+            "fitness_no_evidence": False,
         }
+
+    async def _recover_pending_confirmation_messages(
+        self,
+        previous_messages: list[dict[str, Any]],
+        *,
+        confirmation_id: str,
+        identity: AgentIdentity | None,
+    ) -> list[dict[str, Any]]:
+        """恢复被拒绝、过期或未继续的确认轮次：清理悬空 tool_calls 并保留可读业务上下文。"""
+
+        cleaned = _sanitize_unpaired_tool_calls(previous_messages)
+        note = "上一轮待确认操作未完成，未执行任何写入。"
+        if self.confirmation_service is not None and identity is not None:
+            try:
+                record = await self.confirmation_service.get_for_subject(confirmation_id, identity)
+            except ConfirmationStateError:
+                record = None
+            if record is not None:
+                if (
+                    record.authorization_status == "APPROVED"
+                    and record.execution_status == "SUCCEEDED"
+                ):
+                    return cleaned
+                summary_text = _compact_confirmation_summary(record.display_summary, record.action)
+                if record.authorization_status == "REJECTED":
+                    note = f"上一轮待确认操作（{summary_text}）已被拒绝，未执行写入。"
+                elif (
+                    record.authorization_status == "EXPIRED"
+                    or record.expires_at <= datetime.now(UTC)
+                ):
+                    note = f"上一轮待确认操作（{summary_text}）已过期，未执行写入。"
+                else:
+                    note = f"上一轮待确认操作（{summary_text}）未继续确认，已跳过写入。"
+        return [*cleaned, {"role": "assistant", "content": note}]
 
     async def _fitness_model_node(
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
@@ -1724,6 +1822,7 @@ class Supervisor:
             extra_max_output_tokens=training_plan_budget,
             suppress_stream=needs_citation_check,
             defer_citation_verification=needs_citation_check,
+            disable_tools=needs_citation_check,
         )
 
     async def _fitness_verify_citations_node(
@@ -1794,6 +1893,7 @@ class Supervisor:
         suppress_stream: bool,
         defer_citation_verification: bool,
         enforce_ambiguous_citation_fallback: bool = False,
+        disable_tools: bool = False,
     ) -> dict[str, Any]:
         spec = domain_agent_spec(state["route"])
         emit_event("stage.changed", {"stage": "GENERATING", "route": state["route"]})
@@ -1802,9 +1902,13 @@ class Supervisor:
         if state.get("pending_confirmation_id"):
             return {"model_tool_calls": []}
         tool_schemas = (
-            _model_tools(self.tools, state["route"], state.get("intent"))
-            if state.get("current_tool_steps", state.get("tool_steps", 0)) < self.max_tool_steps
-            else []
+            []
+            if disable_tools
+            else (
+                _model_tools(self.tools, state["route"], state.get("intent"))
+                if state.get("current_tool_steps", state.get("tool_steps", 0)) < self.max_tool_steps
+                else []
+            )
         )
         force_tool_name = forced_tool_for_intent(state.get("intent", ""))
         if force_tool_name is None:
@@ -2138,6 +2242,32 @@ class Supervisor:
             )
             try:
                 result = await self.tools.invoke(definition.tool_id, bound_input, context)
+            except (TrainingPlanClarificationError, ToolExecutionError) as exc:
+                clarification_err = (
+                    exc
+                    if isinstance(exc, TrainingPlanClarificationError)
+                    else exc.__cause__
+                    if isinstance(exc.__cause__, TrainingPlanClarificationError)
+                    else None
+                )
+                if clarification_err is None:
+                    raise
+                # 知识库缺少对应条件资料或用户约束冲突属于业务可恢复场景，交给模型引导用户
+                # 调整条件，不再把业务缺口包装成 HTTP 503。
+                tool_messages.append(
+                    {
+                        "role": "tool",
+                        "tool_call_id": call.call_id,
+                        "content": json.dumps(
+                            {
+                                "error": "CLARIFICATION_NEEDED",
+                                "message": str(clarification_err),
+                            },
+                            ensure_ascii=False,
+                        ),
+                    }
+                )
+                continue
             except ToolInputValidationError:
                 # 供应商偶尔会为只读工具附加 Schema 外字段（例如给预约列表传
                 # ``status=upcoming``）。Registry 必须继续严格拒绝，Supervisor 则把
@@ -2703,3 +2833,93 @@ def _missing_write_parameters_clarification(intent: Any) -> str:
         str(intent or ""),
         "当前信息不足以生成安全、精确的操作确认单，请补充要修改的对象和必要参数。",
     )
+
+
+def _sanitize_unpaired_tool_calls(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """清理历史消息中未配对的 assistant(tool_calls) 与孤立 tool 消息，防止模型接口报 HTTP 400。"""
+
+    sanitized: list[dict[str, Any]] = []
+    index = 0
+    total = len(messages)
+    while index < total:
+        message = messages[index]
+        role = message.get("role")
+        tool_calls = message.get("tool_calls")
+        if role == "assistant" and isinstance(tool_calls, list) and tool_calls:
+            expected_ids = {
+                str(call.get("id"))
+                for call in tool_calls
+                if isinstance(call, Mapping) and call.get("id")
+            }
+            following_tools: list[dict[str, Any]] = []
+            cursor = index + 1
+            while cursor < total and messages[cursor].get("role") == "tool":
+                following_tools.append(messages[cursor])
+                cursor += 1
+            matched_ids = {
+                str(item.get("tool_call_id"))
+                for item in following_tools
+                if item.get("tool_call_id")
+            }
+            if expected_ids and expected_ids.issubset(matched_ids):
+                sanitized.append(message)
+                sanitized.extend(following_tools)
+            else:
+                text_content = str(message.get("content") or "").strip()
+                if text_content:
+                    sanitized.append({"role": "assistant", "content": text_content})
+            index = cursor
+            continue
+        if role == "tool":
+            # 孤立的 tool 消息（没有前置配对的 assistant tool_calls）直接丢弃，避免协议 400。
+            index += 1
+            continue
+        sanitized.append(message)
+        index += 1
+    return sanitized
+
+
+def _compact_confirmation_summary(display_summary: Mapping[str, Any], action: str) -> str:
+    """从脱敏确认摘要中提取简短可读描述，供拒绝/过期后的上下文延续使用。"""
+
+    parts: list[str] = []
+    for key in ("title", "goal_type", "action", "course_name", "memory_key", "value"):
+        value = display_summary.get(key)
+        if isinstance(value, str) and value.strip():
+            parts.append(value.strip()[:60])
+        if len(parts) >= 2:
+            break
+    if parts:
+        return " / ".join(parts)
+    return action or "写操作"
+
+
+def _extract_interrupted_confirmation(
+    snapshot: Any,
+) -> tuple[str | None, list[dict[str, Any]] | None]:
+    """从父图或嵌套领域子图的暂停任务中提取未决确认单 ID 与消息历史。"""
+
+    if snapshot is None:
+        return None, None
+    tasks = getattr(snapshot, "tasks", None) or ()
+    for task in tasks:
+        task_state = getattr(task, "state", None)
+        if task_state is not None:
+            values = getattr(task_state, "values", None)
+            if isinstance(values, Mapping):
+                pending_id = values.get("pending_confirmation_id")
+                if isinstance(pending_id, str) and pending_id.strip():
+                    raw_messages = values.get("messages")
+                    messages = list(raw_messages) if isinstance(raw_messages, list) else None
+                    return pending_id, messages
+            nested_id, nested_messages = _extract_interrupted_confirmation(task_state)
+            if nested_id is not None:
+                return nested_id, nested_messages
+        interrupts = getattr(task, "interrupts", None) or ()
+        for item in interrupts:
+            payload = getattr(item, "value", None)
+            if isinstance(payload, Mapping) and payload.get("type") == "CONFIRMATION_REQUIRED":
+                cid = payload.get("confirmation_id")
+                if isinstance(cid, str) and cid.strip():
+                    return cid, None
+    return None, None

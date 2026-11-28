@@ -73,9 +73,9 @@ class MemoryCandidateService:
         thread_id: str,
         source_request_id: str | None,
     ) -> tuple[MemoryCandidate, ...]:
-        """提取候选并在单机构范围内加密持久化；返回值仍标记为未确认。"""
+        """通过受控提取器生成候选并在单机构范围内加密持久化；返回值仍标记为未确认。"""
 
-        candidates = await self.extractor.propose(user_message)
+        candidates = await self.extractor.propose_controlled(user_message)
         if not candidates or len(identity.organization_ids) != 1 or not source_request_id:
             # 多机构时不能擅自选择归属；候选仍可交给主模型询问用户，但不落库。
             return candidates

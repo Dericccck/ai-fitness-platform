@@ -32,11 +32,15 @@ class MemoryExtractionWorker:
         *,
         lease_seconds: int = 180,
         max_attempts: int = 5,
+        rejected_cooldown_days: int = 7,
     ) -> None:
         if lease_seconds < 10 or max_attempts < 1:
             raise ValueError("提取任务租约或重试次数无效")
+        if rejected_cooldown_days < 0:
+            raise ValueError("被拒绝候选冷却天数不能为负数")
         self.database, self.cipher, self.service = database, cipher, service
         self.lease_seconds, self.max_attempts = lease_seconds, max_attempts
+        self.rejected_cooldown_days = rejected_cooldown_days
 
     async def _claim(self) -> Any | None:
         token = secrets.token_hex(16)
@@ -271,7 +275,22 @@ class MemoryExtractionWorker:
                 and bool(profile["extraction_enabled"])
                 and int(profile["write_epoch"]) == int(job["write_epoch"])
             ):
+                cooldown_checker = getattr(self.service.repository, "has_recent_rejection", None)
                 for candidate in proposals:
+                    if (
+                        self.rejected_cooldown_days > 0
+                        and callable(cooldown_checker)
+                        and await cooldown_checker(
+                            connection=connection,
+                            subject_user_id=identity.subject,
+                            organization_id=str(job["organization_id"]),
+                            memory_type=candidate.memory_type,
+                            memory_key=candidate.memory_key,
+                            value=candidate.value,
+                            cooldown_days=self.rejected_cooldown_days,
+                        )
+                    ):
+                        continue
                     await self.service.repository.create_pending(
                         connection=connection,
                         identity=identity,

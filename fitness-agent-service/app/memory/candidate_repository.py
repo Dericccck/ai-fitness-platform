@@ -160,6 +160,56 @@ class MemoryCandidateRepository:
             raise MemoryCandidateStateError("候选幂等写入没有返回记录")
         return self._record_from_row(row)
 
+    async def has_recent_rejection(
+        self,
+        *,
+        subject_user_id: str,
+        organization_id: str,
+        memory_type: str,
+        memory_key: str,
+        value: str,
+        cooldown_days: int,
+        connection: Any | None = None,
+    ) -> bool:
+        """检查用户冷却期内是否已明确拒绝过同槽位同值候选，防止反复弹窗骚扰。"""
+
+        if cooldown_days <= 0:
+            return False
+        target = " ".join(value.split()).casefold()
+        if not target:
+            return False
+        statement = text(
+            """
+            SELECT * FROM agent_memory_candidates
+            WHERE subject_user_id = :subject_user_id
+              AND organization_id = :organization_id
+              AND memory_type = :memory_type
+              AND memory_key = :memory_key
+              AND status = 'REJECTED'
+              AND COALESCE(payload_redacted, FALSE) = FALSE
+              AND COALESCE(decided_at, updated_at) >= CURRENT_TIMESTAMP - (:cooldown_days * INTERVAL '1 day')
+            ORDER BY COALESCE(decided_at, updated_at) DESC
+            LIMIT 50
+            """
+        )
+        params = {
+            "subject_user_id": subject_user_id,
+            "organization_id": organization_id,
+            "memory_type": memory_type,
+            "memory_key": memory_key,
+            "cooldown_days": cooldown_days,
+        }
+        async with self._transaction_or_connection(connection) as db_connection:
+            rows = (await db_connection.execute(statement, params)).mappings().all()
+        for row in rows:
+            try:
+                record = self._record_from_row(row)
+            except (MemoryCandidateStateError, ConfirmationPayloadCipherError):
+                continue
+            if " ".join(record.candidate.value.split()).casefold() == target:
+                return True
+        return False
+
     @asynccontextmanager
     async def _transaction_or_connection(self, connection: Any | None) -> AsyncIterator[Any]:
         if connection is not None:

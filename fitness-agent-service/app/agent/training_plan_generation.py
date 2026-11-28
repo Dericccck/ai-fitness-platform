@@ -30,6 +30,10 @@ class TrainingPlanGenerationError(RuntimeError):
     """训练计划草案无法安全生成或校验。"""
 
 
+class TrainingPlanClarificationError(TrainingPlanGenerationError):
+    """因知识库缺少匹配资料或业务约束冲突，需引导用户调整条件而非返回 503。"""
+
+
 class TrainingPlanGenerationInput(BaseModel):
     """生成草案所需的目标和业务归属。
 
@@ -197,7 +201,9 @@ class TrainingPlanGenerationService:
         except RagSearchError as exc:
             raise TrainingPlanGenerationError("训练知识检索失败，未生成计划草案") from exc
         if not evidence.chunks:
-            raise TrainingPlanGenerationError("没有检索到已发布且有权限的健身知识，无法生成草案")
+            raise TrainingPlanClarificationError(
+                "没有检索到已发布且有权限的健身知识，无法生成草案；请调整目标、水平或器械条件后再试。"
+            )
 
         memories: list[Any] = []
         # 本人计划才读取本人 Memory；教练代学员生成必须使用受控上下文入口。
@@ -337,7 +343,7 @@ class TrainingPlanGenerationService:
                 if attempt >= self.max_repair_attempts:
                     break
         if last_semantic_error is not None:
-            raise TrainingPlanGenerationError(last_semantic_error)
+            raise TrainingPlanClarificationError(last_semantic_error)
         raise TrainingPlanGenerationError("模型生成的训练计划未通过结构化校验")
 
 
@@ -401,6 +407,10 @@ def _generation_prompt(
         )
         for memory in memories
     )
+    allowed_citations = "\n".join(
+        f"- [证据{index}] citation_id={citation.citation_id}（{citation.title}）"
+        for index, citation in enumerate(evidence.citations(), start=1)
+    )
     return (
         f"输入目标：{request.goal_type}；水平：{request.level}；每周训练日：{request.training_days}；"
         f"单次时长：{request.session_minutes} 分钟；器械：{'、'.join(request.equipment) or '无特殊器械'}；"
@@ -412,6 +422,8 @@ def _generation_prompt(
         "used_memory_refs 只填写本次注入、与计划有关的记忆及其原始版本；没有则填空数组。"
         "这些关联与知识证据分开，不能填写未列出的 ID 或版本。\n"
         f"{memory_context or '无'}\n\n"
+        "本次授权的 citation_id 白名单（evidence_ids 字段必须严格逐字从此列表选取，不得写 [证据1] 或编造 ID）：\n"
+        f"{allowed_citations}\n\n"
         f"已授权知识证据：\n{evidence.as_prompt_context()}"
     )
 

@@ -27,7 +27,7 @@ class FakeExtractor:
     def __init__(self, candidates: tuple[MemoryCandidate, ...]) -> None:
         self.candidates = candidates
 
-    async def propose(self, _: str) -> tuple[MemoryCandidate, ...]:
+    async def propose_controlled(self, _: str) -> tuple[MemoryCandidate, ...]:
         return self.candidates
 
 

@@ -23,21 +23,38 @@ def _canonical(value: str) -> str:
     return " ".join(unicodedata.normalize("NFKC", value).split()).casefold()
 
 
-def _clearly_distinct_add(candidate: MemoryCandidate, related: Sequence[FitnessMemory]) -> bool:
-    """Allow only explicitly additive, recognized disjoint objects; otherwise clarify.
+# 开放词集合槽位：健身动作、目标、训练环境无法穷举有限互斥词表；只要原话包含明确叠加信号、
+# 不含否定/替换词且未与已有条目重复，即可直接产出 ADD 候选交由用户确认卡审批。
+_OPEN_ADDITIVE_SET_SLOTS = frozenset({"exercise_preference", "goals", "training_environment"})
+_ADDITIVE_MARKERS = ("也", "还", "另外", "顺便")
+_CONFLICT_OR_REPLACE_MARKERS = ("不", "没", "无", "取消", "改", "换", "只", "排除", "不能", "不再")
 
-    A model's label or embedding distance alone cannot establish non-conflict.
-    """
+
+def _clearly_distinct_add(candidate: MemoryCandidate, related: Sequence[FitnessMemory]) -> bool:
+    """Allow explicitly additive entries on open SET slots or proven disjoint finite slots."""
     quote = candidate.evidence_quote or ""
-    negatives = ("不", "没", "无", "取消", "改", "只", "排除", "不能")
     texts = [quote, candidate.value, *(str(m.content.get("value", "")) for m in related)]
-    if "也" not in quote or any(term in text for term in negatives for text in texts):
+    if any(term in text for term in _CONFLICT_OR_REPLACE_MARKERS for text in texts):
+        return False
+    if candidate.slot_code in _OPEN_ADDITIVE_SET_SLOTS:
+        if not any(marker in quote for marker in _ADDITIVE_MARKERS):
+            return False
+        new_norm = _canonical(candidate.value)
+        return bool(new_norm) and all(
+            _canonical(str(m.content.get("value", ""))) != new_norm for m in related
+        )
+    if "也" not in quote:
         return False
     return _distinct_known_values(candidate.slot_code, texts[1:])
 
 
 def _distinct_known_values(slot: str | None, values: Sequence[str]) -> bool:
     """Prove different simple objects, never infer independence from free text alone."""
+    if slot in _OPEN_ADDITIVE_SET_SLOTS:
+        if any(term in value for term in _CONFLICT_OR_REPLACE_MARKERS for value in values):
+            return False
+        normalized = [_canonical(value) for value in values]
+        return all(bool(item) for item in normalized) and len(set(normalized)) == len(normalized)
     if slot in {"available_windows", "preferred_windows"}:
         # 早上 and 上午 overlap, so they share an identity. Do not assume that
         # vague 中午, cross-midnight or explicit boundaries are disjoint.

@@ -10,7 +10,7 @@ from .candidate import (
     MemoryCandidateExtractionError,
     MemoryCandidateExtractionService,
     MemoryCandidateRecord,
-    build_candidate_context,
+    should_attempt_controlled_extraction,
 )
 from .candidate_repository import (
     MemoryCandidateNotFound,
@@ -41,5 +41,5 @@ __all__ = [
     "MemoryService",
     "MemoryType",
     "MemoryValidationError",
-    "build_candidate_context",
+    "should_attempt_controlled_extraction",
 ]

@@ -124,6 +124,8 @@ INTENTS_BY_ROUTE: dict[str, frozenset[str]] = {
 # 意图级白名单进一步收窄领域白名单。未列出的兼容旧意图仍会退回领域白名单，
 # 但所有 v3 路由结果都必须通过 INTENTS_BY_ROUTE 校验，因此不会走该兼容分支。
 TOOLS_BY_INTENT: dict[str, frozenset[str]] = {
+    # 有 RAG 证据的纯知识问答在 fitness_agent._fitness_model_node 中显式传 tools=[]（零工具）；
+    # 此处保留只读查询白名单供无 RAG 兜底通用指导场景兼容使用。
     "FITNESS_KNOWLEDGE_QA": frozenset(
         {
             "fitness.user.get_current.v1",

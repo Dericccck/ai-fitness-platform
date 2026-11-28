@@ -168,20 +168,23 @@ class MemoryRepository:
     async def _bump_profile(
         connection: Any, subject: str, org: str, *, forget: bool = False
     ) -> None:
-        # 与 Memory 更新同一事务完成；调用方已持有主体 fence。
-        await connection.execute(
-            text("""
-            UPDATE agent_memory_subject_fences SET revision=revision+1
-            WHERE subject_user_id=:subject
-        """),
-            {"subject": subject},
-        )
-        await connection.execute(
-            text("""
-            DELETE FROM agent_session_summaries WHERE subject_user_id=:subject
-        """),
-            {"subject": subject},
-        )
+        # 始终递增 profile.revision 以保证异步 Worker 对账的乐观锁一致性；
+        # 仅在撤销/遗忘/禁用（forget=True）时递增主体上下文屏障并清除会话摘要，
+        # 避免用户日常批准/新增一条长期记忆就清空正在进行的聊天上下文。
+        if forget:
+            await connection.execute(
+                text("""
+                UPDATE agent_memory_subject_fences SET revision=revision+1
+                WHERE subject_user_id=:subject
+            """),
+                {"subject": subject},
+            )
+            await connection.execute(
+                text("""
+                DELETE FROM agent_session_summaries WHERE subject_user_id=:subject
+            """),
+                {"subject": subject},
+            )
         await connection.execute(
             text("""
             UPDATE agent_memory_profiles SET revision = revision + 1,

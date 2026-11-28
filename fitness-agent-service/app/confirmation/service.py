@@ -7,6 +7,8 @@
 
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
@@ -57,6 +59,7 @@ class ConfirmationService:
         *,
         ttl_seconds: int = 600,
         route_selector: Callable[[str], tuple[str, str]] | None = None,
+        encrypt_payload: bool = True,
     ) -> None:
         self.repository = repository
         self.tools = tools
@@ -65,6 +68,7 @@ class ConfirmationService:
         self.token_issuer = token_issuer
         self.ttl_seconds = ttl_seconds
         self.route_selector = route_selector
+        self.encrypt_payload = encrypt_payload
 
     async def prepare(
         self,
@@ -113,11 +117,16 @@ class ConfirmationService:
             resource=resource,
         )
         _validate_future_booking_start(tool_id, normalized.canonical_payload, datetime.now(UTC))
-        ciphertext = self.cipher.encrypt(
-            normalized.canonical_payload,
-            associated_data=normalized.payload_hash,
-        )
-        action = normalized.to_confirmation_action(ciphertext, self.cipher.key_version)
+        if self.encrypt_payload:
+            stored_payload = self.cipher.encrypt(
+                normalized.canonical_payload,
+                associated_data=normalized.payload_hash,
+            )
+            key_version = self.cipher.key_version
+        else:
+            stored_payload = normalized.canonical_payload
+            key_version = _plain_payload_key_version(stored_payload, normalized.payload_hash)
+        action = normalized.to_confirmation_action(stored_payload, key_version)
         transport, contract_version = self._execution_route(tool_id)
         action = replace(action, transport=transport, contract_version=contract_version)
         expires_at = datetime.now(UTC) + timedelta(seconds=self.ttl_seconds)
@@ -148,11 +157,19 @@ class ConfirmationService:
                 confirmation_id, jti, datetime.now(UTC), trace_id
             )
         try:
-            plaintext = self.cipher.decrypt(
-                record.payload_ciphertext,
-                associated_data=record.payload_hash,
-                key_version=record.payload_key_version,
-            )
+            if record.payload_key_version.startswith("plain-sha256:"):
+                expected = _plain_payload_key_version(
+                    record.payload_ciphertext, record.payload_hash
+                )
+                if not hmac.compare_digest(record.payload_key_version, expected):
+                    raise ConfirmationPayloadCipherError("明文确认单 Payload 完整性校验失败")
+                plaintext = record.payload_ciphertext
+            else:
+                plaintext = self.cipher.decrypt(
+                    record.payload_ciphertext,
+                    associated_data=record.payload_hash,
+                    key_version=record.payload_key_version,
+                )
             payload = json.loads(plaintext)
         except (ConfirmationPayloadCipherError, ValueError, TypeError) as exc:
             raise ConfirmationStateError("无法恢复确认单 Payload") from exc
@@ -496,6 +513,13 @@ def _token_resource(record: ConfirmationRecord, payload: Mapping[str, Any]) -> s
     if record.resource_type == "agent_memory" and isinstance(organization_id, str):
         return f"{organization_id}:{record.subject_user_id}"
     raise ConfirmationStateError("确认单资源范围不完整")
+
+
+def _plain_payload_key_version(payload_bytes: bytes, payload_hash: str) -> str:
+    """为关闭应用层 AES-GCM 时的明文 Payload 生成绑定 payload_hash 的防篡改指纹。"""
+
+    digest = hashlib.sha256(payload_bytes + b"|" + payload_hash.encode("ascii")).hexdigest()
+    return f"plain-sha256:{digest[:32]}"
 
 
 def _confirmation_resource_id(tool_id: str, raw_input: Mapping[str, Any], plan_id: str) -> str:

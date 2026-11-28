@@ -353,6 +353,9 @@ class Settings(BaseSettings):
     # 与 Java Gateway v1 兼容的服务端签发密钥；生产环境必须与 Gateway 使用 Secret Manager
     # 管理的同一密钥，不能通过浏览器或模型传入。
     confirmation_signing_secret: str = ""
+    # 确认单应用层 AES-GCM 密文开关：默认开启以兼容强合规存储；在已有落盘加密与内网隔离的
+    # 常规 SaaS/开发测试环境中可显式关闭为明文 JSON，但 payload_hash 防篡改校验始终强制生效。
+    confirmation_payload_encryption_enabled: bool = True
     confirmation_token_ttl_seconds: int = Field(default=120, ge=30, le=600)
     # 长时间 RUNNING 的确认单由独立对账进程扫描；UNKNOWN 只表示尚未确认结果，
     # 不会被当作业务失败，后续可通过管理接口继续核实或补写成功。
@@ -531,6 +534,9 @@ class Settings(BaseSettings):
     rag_candidate_limit: int = Field(default=20, ge=1, le=100)
     rag_keyword_candidate_limit: int = Field(default=20, ge=1, le=100)
     rag_top_k: int = Field(default=5, ge=1, le=20)
+    # Reranker 最低置信度分数门槛；>0 时低于阈值的低相关片段会被直接淘汰，若全部淘汰则触发
+    # 无证据短路兜底。默认值 0.0 保持兼容，生产环境建议结合离线评测设置为 0.2~0.35。
+    rag_rerank_min_score: float = Field(default=0.0, ge=0.0, le=1.0)
     # 保留 Top-K 召回结果，只限制最终注入 Prompt 的父文档长度。长章节围绕命中
     # chunk 截取，避免同一份无关章节在每个模型回合重复消耗大量 Token。
     rag_prompt_max_total_chars: int = Field(default=10_000, ge=2_000, le=100_000)
@@ -565,6 +571,8 @@ class Settings(BaseSettings):
     memory_extraction_worker_metrics_port: int = Field(default=8102, ge=1, le=65535)
     memory_extraction_source_retention_days: int = Field(default=30, ge=1, le=3650)
     memory_extraction_max_attempts: int = Field(default=5, ge=1, le=20)
+    # 同一槽位同一值被用户明确拒绝后的冷却期（天），避免异步 Worker 反复弹出相同候选骚扰用户。
+    memory_candidate_rejected_cooldown_days: int = Field(default=7, ge=0, le=90)
     # 正式 Memory 与候选进入终态后仍保留有限期限用于用户追踪和故障排查，期限到达后由
     # 独立 Worker 清除正文；不可变生命周期审计事件不随正文删除。
     memory_terminal_retention_days: int = Field(default=90, ge=1, le=3650)

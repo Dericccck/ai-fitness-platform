@@ -23,7 +23,6 @@ from app.agent.tool_registry import ToolContext, ToolDefinition, ToolRegistry
 from app.infrastructure.agent_context import AgentIdentity
 from app.infrastructure.gateway_client import GatewayRequestContext
 from app.infrastructure.model_gateway import ModelGateway, ModelToolCall, ModelTurn
-from app.memory.candidate import MemoryCandidate
 from app.memory.models import FitnessMemory
 from app.memory.service import MemoryService
 
@@ -60,17 +59,6 @@ def test_model_answer_sanitizer_removes_provider_tool_protocol() -> None:
     )
 
     assert answer == "没有查询到预约。"
-
-
-class FakeCandidateExtractor:
-    async def propose(self, _: str) -> tuple[MemoryCandidate, ...]:
-        return (
-            MemoryCandidate(
-                memory_type="EQUIPMENT_AVAILABILITY",
-                memory_key="available_equipment",
-                value="弹力带",
-            ),
-        )
 
 
 class FakeSessionSummaryService:
@@ -349,7 +337,7 @@ async def test_supervisor_uses_session_summary_after_checkpoint_compaction() -> 
     assert any(message.get("content") == "我想改善体能" for message in second_round_messages)
 
 
-async def test_supervisor_passes_unconfirmed_memory_candidate_to_model_context() -> None:
+async def test_supervisor_does_not_inject_legacy_sync_memory_candidates() -> None:
     models = FakeModels([ModelTurn(content="请确认是否保存这个偏好。", tool_calls=())])
     identity = AgentIdentity(
         subject="student-1",
@@ -361,7 +349,6 @@ async def test_supervisor_passes_unconfirmed_memory_candidate_to_model_context()
     supervisor = Supervisor(
         cast(ModelGateway, models),
         build_registry([]),
-        memory_candidate_extractor=FakeCandidateExtractor(),  # type: ignore[arg-type]
     )
 
     response = await supervisor.invoke(
@@ -374,8 +361,8 @@ async def test_supervisor_passes_unconfirmed_memory_candidate_to_model_context()
     )
 
     assert response.answer == "请确认是否保存这个偏好。"
-    assert any(
-        message["role"] == "system" and "不是已保存事实" in message["content"]
+    assert not any(
+        message["role"] == "system" and "当前消息产生了以下 Memory 候选" in message["content"]
         for message in models.messages_seen[0]
     )
 

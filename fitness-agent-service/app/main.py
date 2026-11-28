@@ -200,6 +200,7 @@ async def lifespan(app: FastAPI, *, role: str = "api") -> AsyncIterator[None]:
         vector_weight=settings.rag_vector_weight,
         keyword_weight=settings.rag_keyword_weight,
         rrf_k=settings.rag_rrf_k,
+        rerank_min_score=settings.rag_rerank_min_score,
         telemetry=app.state.trulens_telemetry,
         metrics=http_metrics,
     )
@@ -465,6 +466,7 @@ async def lifespan(app: FastAPI, *, role: str = "api") -> AsyncIterator[None]:
         app.state.confirmation_cipher,
         app.state.memory_candidate_service,
         max_attempts=settings.memory_extraction_max_attempts,
+        rejected_cooldown_days=settings.memory_candidate_rejected_cooldown_days,
     )
     app.state.memory_candidate_expiry_worker = MemoryCandidateExpiryWorker(
         app.state.memory_candidate_service,
@@ -486,6 +488,7 @@ async def lifespan(app: FastAPI, *, role: str = "api") -> AsyncIterator[None]:
         app.state.confirmation_token_issuer,
         ttl_seconds=settings.confirmation_ttl_seconds,
         route_selector=app.state.business_tools.route_for_tool,
+        encrypt_payload=settings.confirmation_payload_encryption_enabled,
     )
     app.state.confirmation_reconciliation_worker = ConfirmationReconciliationWorker(
         app.state.confirmation_service.repository,
@@ -552,7 +555,6 @@ async def lifespan(app: FastAPI, *, role: str = "api") -> AsyncIterator[None]:
             session_lock=app.state.session_lock,
             rag_service=app.state.rag_service,
             confirmation_service=app.state.confirmation_service,
-            memory_candidate_service=app.state.memory_candidate_service,
             memory_service=app.state.memory_service,
             session_summary_service=app.state.session_summary_service,
             telemetry=app.state.trulens_telemetry,

@@ -8,9 +8,13 @@
   （enter -> classify_mode -> plan_direct -> execute_queries -> summarize），
   经营诊断与归因走受控只读 ReAct 下钻循环（diagnose_step <-> execute_diagnosis_queries
   -> synthesize_diagnosis），全程无写操作确认节点；
-* 健身指导 Agent 使用专属的定制子图（enter -> prepare_memory -> model <-> tools ->
-  verify_citations / confirmation），将记忆候选提取、知识引用强校验与训练草案直转确认
-  显式收敛到领域图拓扑内；
+* 健身指导 Agent 使用专属的按意图分流异构子图：
+  - 健身知识问答（``FITNESS_KNOWLEDGE_QA``）在子图内独立完成查询改写、带置信度阈值的 RAG
+    检索，无有效证据时直接短路返回兜底文案（不调主模型），有证据时零工具生成回答并执行
+    ``[证据N]`` 引用强校验；
+  - 训练计划草案与健身业务操作跳过通用 RAG（草案生成仅在工具内执行唯一一次结构化检索），
+    并支持生成草案后直转写确认单；
+  - 长期记忆提取已完全下沉至后台异步 ``MemoryExtractionWorker``，热路径不再执行同步提取；
 * 预约与客服领域复用同一套受控 ReAct + HITL 安全内核（model/tools/confirmation），
   避免四份风控逻辑逐渐漂移；
 * 子图不创建自己的 Checkpointer，统一继承父图的 PostgreSQL Checkpoint，保证一次
@@ -79,7 +83,6 @@ DOMAIN_AGENT_SPECS: Mapping[SupervisorRoute, DomainAgentSpec] = {
             }
         ),
         uses_rag=True,
-        uses_memory_candidates=True,
         supports_generated_training_draft=True,
     ),
     "BOOKING": DomainAgentSpec(
@@ -267,7 +270,10 @@ def build_fitness_subgraph(
     *,
     state_schema: Any,
     context_schema: Any,
-    prepare_memory_node: Callable[..., Any],
+    after_enter: Callable[..., str],
+    retrieve_rag_node: Callable[..., Any],
+    after_retrieve_rag: Callable[..., str],
+    no_evidence_fallback_node: Callable[..., Any],
     model_node: Callable[..., Any],
     tool_node: Callable[..., Any],
     verify_citations_node: Callable[..., Any],
@@ -275,17 +281,16 @@ def build_fitness_subgraph(
     after_model: Callable[..., str],
     after_tools: Callable[..., str],
 ) -> Any:
-    """编译健身指导与训练计划领域专属的异构子图。
+    """编译健身指导与训练计划领域专属的按意图分流异构子图。
 
-    健身领域同时承载 Memory 候选提取、知识问答 ``[证据N]`` 引用强校验以及训练草案生成后
-    直转写确认单等专属逻辑。将这些步骤显式建模为子图节点，避免污染通用 ReAct 节点，同时
-    继续复用父图 Checkpointer 与统一 ``confirmation`` 安全内核：
-
-    ``START -> enter -> prepare_memory -> model``
-      - ``tools`` -> ``tools`` -> (``confirmation`` | ``model``)
-      - ``verify`` -> ``verify_citations`` -> ``END``
-      - ``confirmation`` -> ``confirmation`` -> ``END``
-      - ``finish`` -> ``END``
+    拓扑将知识问答 RAG 下沉到子图内部并消除旧同步记忆提取：
+    - ``FITNESS_KNOWLEDGE_QA``：
+      ``START -> enter -> retrieve_rag -> (no_evidence_fallback -> END | model -> verify_citations -> END)``
+      无有效证据时直接短路，不白调主模型、避免流式撤回闪烁；有证据时以零工具模式生成并强校验 ``[证据N]``。
+    - 训练计划生成 / 打卡 / 记忆管理等业务意图：
+      ``START -> enter -> model <-> tools -> (confirmation | END)``
+      完全跳过父图/通用 RAG（计划草案只在 ``generate_draft`` 工具内执行唯一一次结构化 RAG），
+      并在生成草案后直转写确认单。
     """
 
     graph = StateGraph(state_schema, context_schema=context_schema)
@@ -297,15 +302,25 @@ def build_fitness_subgraph(
         return {"active_domain": spec.node_name}
 
     graph.add_node("enter", enter_domain)
-    graph.add_node("prepare_memory", prepare_memory_node)
+    graph.add_node("retrieve_rag", retrieve_rag_node)
+    graph.add_node("no_evidence_fallback", no_evidence_fallback_node)
     graph.add_node("model", model_node)
     graph.add_node("tools", tool_node)
     graph.add_node("verify_citations", verify_citations_node)
     graph.add_node("confirmation", confirmation_node)
 
     graph.add_edge(START, "enter")
-    graph.add_edge("enter", "prepare_memory")
-    graph.add_edge("prepare_memory", "model")
+    graph.add_conditional_edges(
+        "enter",
+        after_enter,
+        {"knowledge_qa": "retrieve_rag", "model": "model"},
+    )
+    graph.add_conditional_edges(
+        "retrieve_rag",
+        after_retrieve_rag,
+        {"fallback": "no_evidence_fallback", "model": "model"},
+    )
+    graph.add_edge("no_evidence_fallback", END)
     graph.add_conditional_edges(
         "model",
         after_model,

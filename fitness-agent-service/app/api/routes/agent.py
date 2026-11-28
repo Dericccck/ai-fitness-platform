@@ -183,9 +183,6 @@ async def _chat_impl(
             thread_id=thread_id,
             locale=payload.locale,
             identity=identity,
-            # 自动提取只允许走受开关、身份和 epoch 保护的异步链路。
-            # 全局关闭时不能回退到旧同步提取，否则会绕过用户的提取开关。
-            defer_memory_extraction=True,
         )
         response = (
             await supervisor.stream(supervisor_request, emit)

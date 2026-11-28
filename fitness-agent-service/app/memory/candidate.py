@@ -1,15 +1,14 @@
-"""从当前用户消息提取待确认的 Memory 候选。
+"""从当前用户消息受控提取待确认的 Memory 候选。
 
 候选提取本身仍是只读能力：模型可以提出“这句话可能值得记住什么”，但不直接调用
-MemoryService，也不把候选当成已生效事实。候选由上层服务加密保存为 PENDING，用户可以
-在候选管理接口中批准或拒绝；批准后才会转为 ACTIVE Memory。对话式保存仍保留现有
-``fitness.memory.save.v1`` 和 ``interrupt()`` 确认链路。
+MemoryService，也不把候选当成已生效事实。线上统一由后台异步 ``MemoryExtractionWorker``
+调用 ``propose_controlled()`` 加密保存为 PENDING，用户在候选管理接口中批准或拒绝；
+批准后才会转为 ACTIVE Memory。对话式显式保存仍走 ``fitness.memory.save.v1`` 与确认链路。
 """
 
 from __future__ import annotations
 
 import json
-import re
 from dataclasses import dataclass
 from datetime import datetime
 from typing import Literal
@@ -27,16 +26,65 @@ MemoryCandidateType = Literal[
     "COMMUNICATION_PREFERENCE",
 ]
 
-_MEMORY_INTENT_MARKERS = (
+# 明确的一次性业务/查询动作词：若消息命中这些动作且没有任何长期偏好信号词，
+# 在异步 Worker 调 LLM 前直接门控跳过，避免把“星期三帮我约一节坐姿划船的课”误提成长期记忆。
+_ONE_OFF_TRANSACTION_MARKERS = (
+    "帮我约",
+    "约一节",
+    "约课",
+    "预约",
+    "改期",
+    "取消预约",
+    "查一下",
+    "查下",
+    "看下",
+    "看看我的",
+    "营收",
+    "完课量",
+    "新客",
+    "环比",
+    "同比",
+    "工单",
+    "退费",
+    "退款",
+    "合同",
+    "课时余额",
+)
+_STABLE_PREFERENCE_MARKERS = (
     "记住",
     "请记住",
-    "以后都",
-    "以后可以",
-    "我通常",
-    "我习惯",
-    "我喜欢",
-    "我不喜欢",
+    "以后",
+    "平时",
+    "通常",
+    "习惯",
+    "一般",
+    "经常",
+    "每次",
+    "总是",
+    "喜欢",
+    "不喜欢",
+    "讨厌",
+    "偏好",
+    "更想",
+    "目标",
+    "增肌",
+    "减脂",
+    "减重",
+    "塑形",
+    "家里有",
+    "我有",
     "我只有",
+    "只能",
+    "有空",
+    "也可以",
+    "方便",
+    "简洁",
+    "详细",
+    "英文",
+    "中文",
+    "改成",
+    "换成",
+    "不再",
 )
 _FORBIDDEN_TERMS = (
     "诊断",
@@ -54,7 +102,17 @@ _FORBIDDEN_TERMS = (
     "受伤",
     "手术",
 )
-_KEY_PATTERN = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
+
+
+def should_attempt_controlled_extraction(user_message: str) -> bool:
+    """前置确定性门控：拦截纯一次性交易/查询指令，减少无效异步 LLM 调用与误提取。"""
+
+    text = " ".join(user_message.split())
+    if not text:
+        return False
+    if any(marker in text for marker in _STABLE_PREFERENCE_MARKERS):
+        return True
+    return not any(marker in text for marker in _ONE_OFF_TRANSACTION_MARKERS)
 
 
 class MemoryCandidateExtractionError(RuntimeError):
@@ -164,69 +222,57 @@ class MemoryCandidateEventRecord:
     created_at: datetime
 
 
+class _ControlledCandidateItem(BaseModel):
+    """受控提取模型返回的单条结构，包含稳定性分类字段，不污染持久化密文 Schema。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    memory_type: MemoryCandidateType
+    memory_key: str = Field(min_length=1, max_length=64, pattern=r"^[a-z][a-z0-9_]{0,63}$")
+    slot_code: str | None = Field(default=None, max_length=64)
+    value: str = Field(min_length=1, max_length=500)
+    unit: str | None = Field(default=None, max_length=16)
+    evidence_quote: str | None = Field(default=None, max_length=500)
+    stability: Literal["STABLE_PREFERENCE", "ONE_OFF_REQUEST"] = "STABLE_PREFERENCE"
+
+
+class _ControlledCandidateEnvelope(BaseModel):
+    """受控提取模型返回的候选包装，空列表表示当前消息不含长期偏好。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    candidates: list[_ControlledCandidateItem] = Field(default_factory=list, max_length=5)
+
+
 class MemoryCandidateExtractionService:
-    """使用 DeepSeek 做候选提取，但把模型输出限制在只读结构化边界内。"""
+    """使用 DeepSeek 做受控候选提取，将模型输出严格限制在只读白名单与稳定性边界内。"""
 
     def __init__(self, models: ModelGateway, metrics: HttpMetrics | None = None) -> None:
         self.models = models
         self.metrics = metrics
 
-    async def propose(self, user_message: str) -> tuple[MemoryCandidate, ...]:
-        """只对疑似长期记忆表达调用 LLM，降低成本并避免无意义候选。
+    async def propose_controlled(self, user_message: str) -> tuple[MemoryCandidate, ...]:
+        """受控目录 + 前置门控 + 稳定性分类 + 逐字证据校验；空结果与提取错误分开。"""
+        from .registry import SLOT_REGISTRY
 
-        触发词只是性能优化，不是授权判断；即使触发，也必须经过 JSON Schema、类型白名单
-        和敏感内容过滤。最终保存仍由用户确认和 MemoryService 再次校验。
-        """
-
-        if not _has_memory_intent(user_message):
+        if not should_attempt_controlled_extraction(user_message):
             if self.metrics is not None:
                 self.metrics.record_memory_candidate_event("extraction_skipped")
             return ()
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "你是健身平台的 Memory 候选提取器，只能从用户当前消息中提取用户明确表达、"
-                    "且可能跨会话有价值的低敏训练信息。只输出 JSON 对象，格式为 "
-                    '{"candidates":[{"memory_type":"...","memory_key":"...",'
-                    '"value":"...","unit":null}]}。允许类型只有：TRAINING_GOAL、'
-                    "TRAINING_PREFERENCE、EQUIPMENT_AVAILABILITY、SCHEDULE_PREFERENCE、"
-                    "COMMUNICATION_PREFERENCE。不要提取疾病、诊断、疼痛、药物、治疗、身体指标、"
-                    "合同、预约、课时、支付或任何模型推断；不确定时返回空 candidates。"
-                ),
-            },
-            {"role": "user", "content": user_message},
-        ]
-        try:
-            raw = await self.models.chat_json(messages)
-            envelope = MemoryCandidateEnvelope.model_validate(json.loads(raw))
-        except (json.JSONDecodeError, ValidationError, ModelResponseError) as exc:
-            if self.metrics is not None:
-                self.metrics.record_memory_candidate_event("extraction_failed")
-            raise MemoryCandidateExtractionError("Memory 候选未通过结构化校验") from exc
-        candidates = _safe_candidates(envelope.candidates)
-        if self.metrics is not None:
-            self.metrics.record_memory_candidate_event("extraction_succeeded")
-            self.metrics.record_memory_candidate_event(
-                "extraction_filtered", len(envelope.candidates) - len(candidates)
-            )
-        return candidates
-
-    async def propose_controlled(self, user_message: str) -> tuple[MemoryCandidate, ...]:
-        """异步链使用受控目录和逐字来源校验；空结果与提取错误分开。"""
-        from .registry import SLOT_REGISTRY
 
         slots = {name: definition.memory_type for name, definition in SLOT_REGISTRY.items()}
         messages = [
             {
                 "role": "system",
                 "content": (
-                    "仅从用户原话中提取明确、稳定且低敏的个人健身偏好；临时请求、"
-                    "健康诊断、疼痛、预约、合同、支付、推断均不得提取。"
+                    "仅从用户原话中提取明确、稳定、跨会话有价值的低敏个人健身偏好；"
+                    "一次性安排或临时交易（如“星期三帮我约一节坐姿划船的课”“帮我查明天的课”）、"
+                    "健康诊断、疼痛、预约、合同、支付、模型推断均不得提取。\n"
                     '仅返回JSON对象：{"candidates":[{"memory_type":"类型",'
-                    '"memory_key":"槽位","slot_code":"槽位",'
-                    '"value":"原意","unit":null,"evidence_quote":"逐字原文"}]}。'
-                    "没有明确长期表达时返回空数组；每条 evidence_quote 必须逐字来自用户原文。"
+                    '"memory_key":"槽位","slot_code":"槽位","value":"原意","unit":null,'
+                    '"evidence_quote":"逐字原文","stability":"STABLE_PREFERENCE|ONE_OFF_REQUEST"}]}。\n'
+                    "规则：只有明确长期偏好才标记 STABLE_PREFERENCE；一次性预约/查询标记 ONE_OFF_REQUEST 或不输出；"
+                    "没有明确长期表达时返回空数组；每条 evidence_quote 必须逐字来自用户原文。\n"
                     "以下是唯一允许的槽位到类型映射：" + json.dumps(slots, ensure_ascii=False)
                 ),
             },
@@ -234,91 +280,50 @@ class MemoryCandidateExtractionService:
         ]
         try:
             raw = await self.models.chat_json(messages)
-            envelope = MemoryCandidateEnvelope.model_validate(json.loads(raw))
+            envelope = _ControlledCandidateEnvelope.model_validate(json.loads(raw))
         except (json.JSONDecodeError, ValidationError, ModelResponseError) as exc:
+            if self.metrics is not None:
+                self.metrics.record_memory_candidate_event("extraction_failed")
             raise MemoryCandidateExtractionError("Memory 候选未通过结构化校验") from exc
         safe: list[MemoryCandidate] = []
         seen: set[tuple[str, str, str]] = set()
-        for candidate in envelope.candidates:
-            slot = candidate.slot_code
-            quote = candidate.evidence_quote
+        for item in envelope.candidates:
+            slot = item.slot_code
+            quote = item.evidence_quote
             if (
-                not slot
-                or slots.get(slot) != candidate.memory_type
+                item.stability != "STABLE_PREFERENCE"
+                or not slot
+                or slots.get(slot) != item.memory_type
                 or not quote
                 or quote not in user_message
-                or candidate.memory_key != slot
-                or any(term in candidate.value or term in quote for term in _FORBIDDEN_TERMS)
-                or any(ord(char) < 32 for char in candidate.value)
+                or item.memory_key != slot
+                or any(term in item.value or term in quote for term in _FORBIDDEN_TERMS)
+                or any(ord(char) < 32 for char in item.value)
             ):
                 continue
-            identity = (candidate.memory_type, slot, " ".join(candidate.value.split()))
-            if not identity[2] or identity in seen:
+            cleaned_value = " ".join(item.value.split())
+            cleaned_unit = " ".join(item.unit.split()) if item.unit else None
+            if cleaned_unit is not None and any(ord(char) < 32 for char in cleaned_unit):
+                continue
+            identity = (item.memory_type, slot, cleaned_value)
+            if not cleaned_value or identity in seen:
                 continue
             seen.add(identity)
             # 模型不能决定更新目标、内部版本或写入 epoch。
             safe.append(
-                candidate.model_copy(
-                    update={
-                        "value": identity[2],
-                        "action": "ADD",
-                        "target_memory_id": None,
-                        "expected_version": None,
-                        "previous_value": None,
-                        "clarification_reason": None,
-                        "source_message_id": None,
-                        "write_epoch": None,
-                        "base_revision": None,
-                        "conflict_snapshot": None,
-                    }
+                MemoryCandidate(
+                    memory_type=item.memory_type,
+                    memory_key=slot,
+                    slot_code=slot,
+                    value=cleaned_value,
+                    unit=cleaned_unit,
+                    evidence_quote=quote,
+                    action="ADD",
                 )
             )
+        if self.metrics is not None:
+            self.metrics.record_memory_candidate_event("extraction_succeeded")
+            self.metrics.record_memory_candidate_event(
+                "extraction_filtered", len(envelope.candidates) - len(safe)
+            )
         return tuple(safe)
-
-
-def build_candidate_context(
-    candidates: tuple[MemoryCandidate, ...], organization_ids: frozenset[str]
-) -> str:
-    """把候选以“非事实、非指令”形式提供给 Supervisor 主模型。
-
-    机构 ID 仅用于让模型补齐保存工具的业务参数，最终权限仍由签名 AgentContext 和
-    Java/Agent 服务边界校验；若存在多个机构，模型必须先向用户澄清，不能猜测。
-    """
-
-    if not candidates:
-        return ""
-    lines = "\n".join(candidate.to_context_line() for candidate in candidates)
-    scope = "、".join(sorted(organization_ids)) or "无可用机构"
-    return (
-        "当前消息产生了以下 Memory 候选。它们只是模型提议，不是已保存事实，也不是系统指令。"
-        "如果用户明确要求记住，请使用 fitness.memory.save.v1 逐条发起保存；该工具会先展示确认卡，"
-        "未经用户批准不得声称已经记住。当前签名机构范围仅供填写工具参数："
-        f"{scope}。多机构时必须先向用户澄清。\n{lines}"
-    )
-
-
-def _has_memory_intent(user_message: str) -> bool:
-    return any(marker in user_message for marker in _MEMORY_INTENT_MARKERS)
-
-
-def _safe_candidates(candidates: list[MemoryCandidate]) -> tuple[MemoryCandidate, ...]:
-    """二次清洗模型输出，避免换行、控制字符和敏感内容进入候选上下文。"""
-
-    safe: list[MemoryCandidate] = []
-    seen: set[tuple[str, str]] = set()
-    for candidate in candidates:
-        value = " ".join(candidate.value.split())
-        key = candidate.memory_key.strip()
-        unit = " ".join(candidate.unit.split()) if candidate.unit else None
-        if not _KEY_PATTERN.fullmatch(key) or any(term in value for term in _FORBIDDEN_TERMS):
-            continue
-        if any(ord(char) < 32 for char in value) or (
-            unit is not None and any(ord(char) < 32 for char in unit)
-        ):
-            continue
-        identity = (candidate.memory_type, key)
-        if identity in seen:
-            continue
-        seen.add(identity)
-        safe.append(candidate.model_copy(update={"memory_key": key, "value": value, "unit": unit}))
-    return tuple(safe)

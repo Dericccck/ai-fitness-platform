@@ -108,6 +108,7 @@ class RagService:
         vector_weight: float = 0.6,
         keyword_weight: float = 0.4,
         rrf_k: int = 60,
+        rerank_min_score: float = 0.0,
         telemetry: TruLensTelemetry | None = None,
         metrics: HttpMetrics | None = None,
     ) -> None:
@@ -127,9 +128,12 @@ class RagService:
             raise ValueError("检索权重必须为非负数且不能同时为零")
         if rrf_k < 1:
             raise ValueError("rrf_k 必须为正数")
+        if rerank_min_score < 0 or rerank_min_score > 1:
+            raise ValueError("rerank_min_score 必须在 0 到 1 之间")
         self.vector_weight = vector_weight
         self.keyword_weight = keyword_weight
         self.rrf_k = rrf_k
+        self.rerank_min_score = rerank_min_score
         self.telemetry = telemetry or TruLensTelemetry.disabled()
         self.metrics = metrics
 
@@ -246,7 +250,9 @@ class RagService:
                 top_n=self.top_k,
             ),
         )
-        selected = _select_ranked_chunks(candidates, ranked, self.top_k)
+        selected = _select_ranked_chunks(
+            candidates, ranked, self.top_k, min_score=self.rerank_min_score
+        )
         return self._result(tuple(selected))
 
     def _result(self, chunks: tuple[KnowledgeChunk, ...]) -> RagSearchResult:
@@ -323,8 +329,10 @@ def _select_ranked_chunks(
     candidates: Sequence[KnowledgeChunk],
     ranked: Sequence[RerankResult],
     top_k: int,
+    *,
+    min_score: float = 0.0,
 ) -> list[KnowledgeChunk]:
-    """校验服务商返回的索引，再将结果映射回已授权内容块。"""
+    """校验服务商返回的索引，按置信度阈值过滤并映射回已授权内容块。"""
 
     selected: list[KnowledgeChunk] = []
     seen: set[int] = set()
@@ -332,6 +340,8 @@ def _select_ranked_chunks(
         if item.index < 0 or item.index >= len(candidates) or item.index in seen:
             raise RagSearchError("Reranker 返回了无效或重复的结果索引")
         seen.add(item.index)
+        if min_score > 0.0 and item.score < min_score:
+            continue
         selected.append(replace(candidates[item.index], similarity=item.score))
         if len(selected) >= top_k:
             break
