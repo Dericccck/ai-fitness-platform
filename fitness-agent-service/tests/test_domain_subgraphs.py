@@ -103,7 +103,25 @@ def test_supervisor_contains_four_real_domain_subgraphs() -> None:
     for route, graph in supervisor.domain_graphs.items():
         nodes = set(graph.get_graph().nodes)
         if route == "OPERATIONS":
-            assert {"enter", "query_metric", "summarize"}.issubset(nodes)
+            assert {
+                "enter",
+                "classify_mode",
+                "plan_direct",
+                "execute_queries",
+                "summarize",
+                "diagnose_step",
+                "execute_diagnosis_queries",
+                "synthesize_diagnosis",
+            }.issubset(nodes)
+            edges = {(edge.source, edge.target) for edge in graph.get_graph().edges}
+            assert ("enter", "classify_mode") in edges
+            assert ("classify_mode", "plan_direct") in edges
+            assert ("plan_direct", "execute_queries") in edges
+            assert ("execute_queries", "summarize") in edges
+            assert ("classify_mode", "diagnose_step") in edges
+            assert ("diagnose_step", "execute_diagnosis_queries") in edges
+            assert ("execute_diagnosis_queries", "diagnose_step") in edges
+            assert ("diagnose_step", "synthesize_diagnosis") in edges
             assert "tools" not in nodes
             assert "confirmation" not in nodes
         elif route == "FITNESS_COACHING":

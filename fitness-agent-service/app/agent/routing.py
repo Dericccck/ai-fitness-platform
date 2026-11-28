@@ -715,7 +715,7 @@ def deterministic_route_decision(user_message: str) -> RouteDecision | None:
         ("QUERY_REVENUE", ("营收", "营业收入", "店里进账", "门店进账")),
         ("QUERY_APPOINTMENT_COUNT", ("预约量", "预约数", "预约总量")),
         ("QUERY_APPOINTMENT_STATUS", ("预约状态分布", "预约状态统计")),
-        ("QUERY_COMPLETED_CLASS_COUNT", ("完课量", "完课数")),
+        ("QUERY_COMPLETED_CLASS_COUNT", ("完课量", "完课数", "消课量", "消课数")),
         ("QUERY_NEW_CUSTOMER_COUNT", ("新客量", "新客数", "新增客户")),
         ("QUERY_COURSE_APPOINTMENT_COUNT", ("课程预约量", "课程利用")),
         ("QUERY_COACH_APPOINTMENT_COUNT", ("教练预约量", "教练工作量", "教练表现")),
@@ -723,6 +723,14 @@ def deterministic_route_decision(user_message: str) -> RouteDecision | None:
     )
     for intent, markers in operations:
         _append_if(signals, text, "OPERATIONS", intent, markers)
+    if not any(signal.route == "OPERATIONS" for signal in signals):
+        _append_if(
+            signals,
+            text,
+            "OPERATIONS",
+            "QUERY_OPERATIONS_METRIC",
+            ("经营诊断", "经营归因", "经营异常排查", "营收波动排查", "消课下滑原因"),
+        )
 
     _append_if(
         signals,
@@ -779,6 +787,9 @@ def intent_display_name(intent: str) -> str:
         "RESCHEDULE_BOOKING": "修改预约",
         "CANCEL_BOOKING": "取消预约",
         "QUERY_REVENUE": "营收查询",
+        "QUERY_COMPLETED_CLASS_COUNT": "完课量查询",
+        "QUERY_NEW_CUSTOMER_COUNT": "新客量查询",
+        "QUERY_OPERATIONS_METRIC": "经营指标分析",
         "QUERY_CONTRACT": "合同与课时",
         "QUERY_APPOINTMENT": "预约信息",
         "QUERY_TICKET": "客服工单",
@@ -896,6 +907,20 @@ def _finalize_decision(
     output_tokens: int | None = None,
 ) -> RouteDecision:
     intents = tuple(_deduplicate(list(intents)))
+    # 无论来自规则还是 LLM 路由，同一轮内多个 OPERATIONS 意图统一合并为单次
+    # QUERY_OPERATIONS_METRIC，由 operations_agent 内部并发查数或受控诊断下钻，
+    # 避免误判 TOO_MANY_INTENTS 或重复执行两次经营子图。
+    if sum(1 for item in intents if item.route == "OPERATIONS") > 1:
+        collapsed: list[RoutedIntent] = []
+        added_operations = False
+        for item in intents:
+            if item.route == "OPERATIONS":
+                if not added_operations:
+                    collapsed.append(RoutedIntent("OPERATIONS", "QUERY_OPERATIONS_METRIC"))
+                    added_operations = True
+            else:
+                collapsed.append(item)
+        intents = tuple(collapsed)
     if len(intents) > 2:
         return _clarification_decision(
             "TOO_MANY_INTENTS",

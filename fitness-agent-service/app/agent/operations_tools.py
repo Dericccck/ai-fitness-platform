@@ -822,6 +822,11 @@ def build_operations_tool_definitions(
 
     async def query_metric(raw: BaseModel, context: ToolContext) -> object:
         data = cast(OperationsMetricToolInput, raw)
+        if (
+            context.identity is not None
+            and data.organization_id not in context.identity.organization_ids
+        ):
+            raise ValueError("经营查询策略拒绝了请求：ORGANIZATION_SCOPE_MISMATCH")
         if context.user_message is not None:
             decision = validate_operations_query_policy(
                 context.user_message,

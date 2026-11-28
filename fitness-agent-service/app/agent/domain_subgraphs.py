@@ -4,8 +4,10 @@
 
 * 顶层 Supervisor 只负责意图路由和子图调度；
 * 每个领域 Agent 都拥有独立的图节点命名空间和固定工具白名单；
-* 经营分析 Agent 使用专属的确定性单步子图（enter -> query_metric -> summarize），
-  省去无意义的“空参选工具”LLM 往返，且不挂载写操作确认节点；
+* 经营分析 Agent 使用双模式专属子图：常规看数走确定性/受控 Query DSL 单向流水线
+  （enter -> classify_mode -> plan_direct -> execute_queries -> summarize），
+  经营诊断与归因走受控只读 ReAct 下钻循环（diagnose_step <-> execute_diagnosis_queries
+  -> synthesize_diagnosis），全程无写操作确认节点；
 * 健身指导 Agent 使用专属的定制子图（enter -> prepare_memory -> model <-> tools ->
   verify_citations / confirmation），将记忆候选提取、知识引用强校验与训练草案直转确认
   显式收敛到领域图拓扑内；
@@ -197,15 +199,29 @@ def build_operations_subgraph(
     *,
     state_schema: Any,
     context_schema: Any,
-    query_node: Callable[..., Any],
-    summarize_node: Callable[..., Any],
+    classify_mode_node: Callable[..., Any],
+    after_classify_mode: Callable[..., str],
+    plan_direct_node: Callable[..., Any],
+    execute_direct_node: Callable[..., Any],
+    summarize_direct_node: Callable[..., Any],
+    diagnose_step_node: Callable[..., Any],
+    after_diagnose_step: Callable[..., str],
+    execute_diagnosis_node: Callable[..., Any],
+    synthesize_diagnosis_node: Callable[..., Any],
 ) -> Any:
-    """编译经营分析领域专属的确定性单步子图。
+    """编译经营分析领域专属的双模式异构子图（直接查数流水线 + 受控只读诊断 ReAct）。
 
-    经营查询全部收敛到固定指标目录且无写操作，因此不走通用 ReAct 工具循环，也不挂载
-    ``confirmation`` 节点：``START -> enter -> query_metric -> summarize -> END``。
-    服务端在 ``query_metric`` 中基于已验签身份与确定性解析器直接执行唯一只读指标工具
-    （歧义问题则跳过查询），随后在 ``summarize`` 中以 ``tools=[]`` 直接流式解读结果。
+    拓扑完全只读，不挂载写操作 ``confirmation`` 节点，也不向模型暴露任意 SQL 工具：
+
+    1. 常规看数分支（单向流水线，无循环）：
+       ``START -> enter -> classify_mode -> plan_direct -> execute_queries -> summarize -> END``
+       标准问法走规则快路径（0 次前置 LLM）；口语或复合多指标走一次受控 JSON Query DSL 填槽，
+       随后并发查询固定指标并流式总结。
+    2. 经营诊断与归因分支（受控只读 ReAct 有限循环）：
+       ``START -> enter -> classify_mode -> diagnose_step``
+       ``<-> execute_diagnosis_queries -> synthesize_diagnosis -> END``
+       结合指标拆解树与程序计算的贡献度占比，在硬步数与总查数上限内按需下钻，最终按三段式
+       防幻觉结构输出诊断报告。
     """
 
     graph = StateGraph(state_schema, context_schema=context_schema)
@@ -217,12 +233,32 @@ def build_operations_subgraph(
         return {"active_domain": spec.node_name}
 
     graph.add_node("enter", enter_domain)
-    graph.add_node("query_metric", query_node)
-    graph.add_node("summarize", summarize_node)
+    graph.add_node("classify_mode", classify_mode_node)
+    graph.add_node("plan_direct", plan_direct_node)
+    graph.add_node("execute_queries", execute_direct_node)
+    graph.add_node("summarize", summarize_direct_node)
+    graph.add_node("diagnose_step", diagnose_step_node)
+    graph.add_node("execute_diagnosis_queries", execute_diagnosis_node)
+    graph.add_node("synthesize_diagnosis", synthesize_diagnosis_node)
+
     graph.add_edge(START, "enter")
-    graph.add_edge("enter", "query_metric")
-    graph.add_edge("query_metric", "summarize")
+    graph.add_edge("enter", "classify_mode")
+    graph.add_conditional_edges(
+        "classify_mode",
+        after_classify_mode,
+        {"direct": "plan_direct", "diagnosis": "diagnose_step"},
+    )
+    graph.add_edge("plan_direct", "execute_queries")
+    graph.add_edge("execute_queries", "summarize")
     graph.add_edge("summarize", END)
+
+    graph.add_conditional_edges(
+        "diagnose_step",
+        after_diagnose_step,
+        {"query": "execute_diagnosis_queries", "synthesize": "synthesize_diagnosis"},
+    )
+    graph.add_edge("execute_diagnosis_queries", "diagnose_step")
+    graph.add_edge("synthesize_diagnosis", END)
     return graph.compile()
 
 
