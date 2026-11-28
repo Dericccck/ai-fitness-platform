@@ -15,7 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import Sequence
+import re
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any, Literal, cast
@@ -257,10 +258,11 @@ async def plan_direct_operations_queries(
     user_message: str,
     models: ModelGateway | Any,
     *,
+    recent_messages: Sequence[Mapping[str, Any]] = (),
     today: date | None = None,
     timeout_seconds: float = PLANNER_TIMEOUT_SECONDS,
 ) -> DirectQueryPlanResult:
-    """常规看数混合规划：规则快路径优先（0 LLM），口语或复合多指标才走受控 JSON 填槽。"""
+    """常规看数混合规划：规则快路径优先（0 LLM），口语、多轮省略或复合多指标才走受控 JSON 填槽。"""
 
     business_today = today or datetime.now(_BUSINESS_ZONE).date()
     hint = (
@@ -304,12 +306,26 @@ async def plan_direct_operations_queries(
         )
 
     prompt = _direct_query_dsl_system_prompt(business_today)
+    prior_history = _prior_operations_history(
+        recent_messages, current_message=user_message, limit=6
+    )
+    user_content = (
+        json.dumps(
+            {
+                "recent_messages": prior_history,
+                "current_message": user_message[:2000],
+            },
+            ensure_ascii=False,
+        )
+        if prior_history
+        else user_message[:2000]
+    )
     try:
         turn = await asyncio.wait_for(
             chat_json(
                 [
                     {"role": "system", "content": prompt},
-                    {"role": "user", "content": user_message[:2000]},
+                    {"role": "user", "content": user_content},
                 ],
                 max_output_tokens=420,
                 temperature=0,
@@ -358,14 +374,17 @@ async def plan_diagnosis_step(
     models: ModelGateway | Any,
     *,
     step_index: int,
+    recent_messages: Sequence[Mapping[str, Any]] = (),
+    failed_queries: Sequence[dict[str, Any]] = (),
     max_steps: int = MAX_DIAGNOSIS_STEPS,
     max_total_queries: int = MAX_DIAGNOSIS_TOTAL_QUERIES,
     today: date | None = None,
     timeout_seconds: float = PLANNER_TIMEOUT_SECONDS,
 ) -> DiagnosisStepPlanResult:
-    """经营诊断受控 ReAct 单步决策：结合已有观察结果与指标拆解树决定下一步下钻或收口。"""
+    """经营诊断受控 ReAct 单步决策：结合多轮上下文、已有观察与指标拆解树决定下钻或收口。"""
 
-    remaining_budget = max_total_queries - len(observations)
+    attempted_count = len(observations) + len(failed_queries)
+    remaining_budget = max_total_queries - attempted_count
     if step_index >= max_steps or remaining_budget <= 0:
         return DiagnosisStepPlanResult(
             action="SYNTHESIZE",
@@ -375,13 +394,16 @@ async def plan_diagnosis_step(
         )
 
     business_today = today or datetime.now(_BUSINESS_ZONE).date()
-    executed_keys = _executed_query_keys(observations)
+    executed_keys = _executed_query_keys(observations) | _executed_query_keys(failed_queries)
+    prior_history = _prior_operations_history(
+        recent_messages, current_message=user_message, limit=6
+    )
     step_limit = min(MAX_DIAGNOSIS_QUERIES_PER_STEP, remaining_budget)
     chat_json = getattr(models, "chat_json_with_usage", None)
 
     if chat_json is not None:
         system_prompt = _diagnosis_planner_system_prompt(business_today, step_limit)
-        payload = {
+        payload: dict[str, Any] = {
             "question": user_message[:2000],
             "step_index": step_index,
             "remaining_steps": max_steps - step_index,
@@ -389,6 +411,10 @@ async def plan_diagnosis_step(
             "executed_queries": [list(key) for key in sorted(executed_keys)],
             "observations": _compact_observations_for_planner(observations),
         }
+        if prior_history:
+            payload["recent_messages"] = prior_history
+        if failed_queries:
+            payload["failed_queries"] = list(failed_queries)
         try:
             turn = await asyncio.wait_for(
                 chat_json(
@@ -445,6 +471,7 @@ async def plan_diagnosis_step(
     return _deterministic_diagnosis_step(
         user_message,
         observations,
+        prior_history=prior_history,
         executed_keys=executed_keys,
         step_limit=step_limit,
         today=business_today,
@@ -519,17 +546,21 @@ def compute_operations_contribution_analysis(metric: str, result: Any) -> dict[s
     return analysis
 
 
-def build_direct_summary_prompt_payload(observations: Sequence[dict[str, Any]]) -> str:
-    """构造常规直接查数的总结输入块，单指标保持原始 JSON 视图，多指标打包为清晰清单。"""
+def build_direct_summary_prompt_payload(
+    observations: Sequence[dict[str, Any]],
+    *,
+    failed_queries: Sequence[dict[str, Any]] = (),
+) -> str:
+    """构造常规直接查数的总结输入块，单指标保持原始 JSON 视图，多指标或局部失败打包呈现。"""
 
-    if len(observations) == 1:
+    if len(observations) == 1 and not failed_queries:
         raw_result = observations[0].get("result")
         return (
             "以下是服务端已完成权限校验并从固定经营指标接口查询到的真实聚合结果（JSON），"
             "请严格基于其中的 data 与 report 生成简洁准确的中文解读，不得编造数据或因果结论：\n"
             + json.dumps(raw_result, ensure_ascii=False)
         )
-    bundle = {
+    bundle: dict[str, Any] = {
         "causality_status": "NOT_ESTABLISHED",
         "metrics_count": len(observations),
         "items": [
@@ -541,9 +572,18 @@ def build_direct_summary_prompt_payload(observations: Sequence[dict[str, Any]]) 
             for item in observations
         ],
     }
+    failure_note = ""
+    if failed_queries:
+        bundle["failed_queries"] = list(failed_queries)
+        failure_note = (
+            "注意：failed_queries 中的指标本次查询暂不可用，请在回答中明确告知用户这些项未查出且未纳入结论，"
+            "严禁猜测或补齐其数值。"
+        )
     return (
         "以下是服务端已完成权限校验并并发查询到的多指标真实聚合结果（JSON），"
-        "请逐项准确陈述数据并汇总关键变化；严格基于返回数据解读，不得编造未查询的数据或因果结论：\n"
+        "请逐项准确陈述数据并汇总关键变化；严格基于返回数据解读，不得编造未查询的数据或因果结论。"
+        + failure_note
+        + "\n"
         + json.dumps(bundle, ensure_ascii=False)
     )
 
@@ -552,10 +592,11 @@ def build_diagnosis_synthesis_prompt_payload(
     observations: Sequence[dict[str, Any]],
     *,
     rationales: Sequence[str] = (),
+    failed_queries: Sequence[dict[str, Any]] = (),
 ) -> str:
     """构造经营诊断与归因的三段式防幻觉综合输入包。"""
 
-    packet = {
+    packet: dict[str, Any] = {
         "causality_status": "NOT_ESTABLISHED",
         "diagnosis_steps": list(rationales),
         "observations": [
@@ -567,6 +608,13 @@ def build_diagnosis_synthesis_prompt_payload(
             for item in observations
         ],
     }
+    failure_note = ""
+    if failed_queries:
+        packet["failed_queries"] = list(failed_queries)
+        failure_note = (
+            "4. 若 failed_queries 非空，请在“已证实的数据事实”中明确说明哪些指标本次查询暂不可用、"
+            "未纳入归因拆解，绝不编造缺失维度的数值。\n"
+        )
     return (
         "以下是服务端通过受控只读多步下钻查到的真实经营聚合数据及程序计算的贡献度拆解（JSON）。"
         "请严格按以下三段结构输出清晰、克制的中文经营诊断报告：\n"
@@ -574,7 +622,9 @@ def build_diagnosis_synthesis_prompt_payload(
         "2. **维度拆解与波动贡献**：引用程序计算出的 dimension_contributions 或 status_breakdown，"
         "明确说明是哪些关联指标/维度贡献了主要波动，并注明这属于统计拆解而非最终业务因果；\n"
         "3. **待核实假设与建议动作**：基于数据异常提出 2~3 条具体的门店核查方向或跟进建议，"
-        "严禁把未经核实的外部猜测（如天气、竞品、服务质量）当作已证实原因。\n\n"
+        "严禁把未经核实的外部猜测（如天气、竞品、服务质量）当作已证实原因。\n"
+        + failure_note
+        + "\n"
         + json.dumps(packet, ensure_ascii=False)
     )
 
@@ -652,13 +702,19 @@ def _deterministic_diagnosis_step(
     user_message: str,
     observations: Sequence[dict[str, Any]],
     *,
+    prior_history: Sequence[dict[str, str]] = (),
     executed_keys: set[tuple[str, str, str, str, str]],
     step_limit: int,
     today: date,
 ) -> DiagnosisStepPlanResult:
-    """规划 LLM 不可用时的确定性指标拆解树兜底，保证诊断闭环仍可安全下钻。"""
+    """规划 LLM 不可用时的确定性指标拆解树兜底，支持结合上轮对话继承核心指标与时间范围。"""
 
     primary_metric = _infer_primary_metric(user_message)
+    if primary_metric is None:
+        for item in reversed(prior_history):
+            primary_metric = _infer_primary_metric(item.get("content", ""))
+            if primary_metric is not None:
+                break
     if primary_metric is None:
         if observations:
             return DiagnosisStepPlanResult(
@@ -674,7 +730,7 @@ def _deterministic_diagnosis_step(
             source="DETERMINISTIC_TREE",
         )
 
-    from_date, to_date = _infer_diagnosis_period(user_message, today)
+    from_date, to_date = _infer_diagnosis_period(user_message, today, prior_history=prior_history)
     if not observations:
         primary_query = _build_safe_diagnosis_query(
             primary_metric, from_date=from_date, to_date=to_date, prefer_comparison=True
@@ -727,8 +783,29 @@ def _infer_primary_metric(user_message: str) -> _METRICS | None:
     return None
 
 
-def _infer_diagnosis_period(user_message: str, today: date) -> tuple[date, date]:
-    text = user_message.lower()
+def _infer_diagnosis_period(
+    user_message: str,
+    today: date,
+    *,
+    prior_history: Sequence[dict[str, str]] = (),
+) -> tuple[date, date]:
+    for candidate in (user_message, *(item.get("content", "") for item in reversed(prior_history))):
+        parsed = _extract_explicit_period(candidate, today)
+        if parsed is not None:
+            return parsed
+    return today - timedelta(days=29), today
+
+
+def _extract_explicit_period(source_text: str, today: date) -> tuple[date, date] | None:
+    import calendar as _calendar
+
+    text = source_text.lower()
+    month_match = re.search(r"(20\d{2})(?:年(\d{1,2})月|[-/](\d{1,2})(?![-/\d]))", text)
+    if month_match:
+        year = int(month_match.group(1))
+        month = int(month_match.group(2) or month_match.group(3))
+        if 1 <= month <= 12:
+            return date(year, month, 1), date(year, month, _calendar.monthrange(year, month)[1])
     if "本月" in text or "这个月" in text:
         return today.replace(day=1), today
     if "上月" in text or "上个月" in text:
@@ -739,7 +816,32 @@ def _infer_diagnosis_period(user_message: str, today: date) -> tuple[date, date]
     if "上周" in text:
         last_sunday = today - timedelta(days=today.weekday() + 1)
         return last_sunday - timedelta(days=6), last_sunday
-    return today - timedelta(days=29), today
+    return None
+
+
+def _prior_operations_history(
+    messages: Sequence[Mapping[str, Any]],
+    *,
+    current_message: str,
+    limit: int = 6,
+) -> list[dict[str, str]]:
+    """裁剪脱敏后的多轮对话历史，剥离系统指令、工具大 JSON 与重复当前消息。"""
+
+    cleaned_current = re.sub(r"\s+", " ", current_message).strip()
+    safe: list[dict[str, str]] = []
+    for message in messages:
+        role = message.get("role")
+        content = message.get("content")
+        if not isinstance(content, str) or not content.strip():
+            continue
+        normalized = re.sub(r"\s+", " ", content).strip()
+        if role == "system" and "当前会话短期摘要" in normalized:
+            safe.append({"role": "summary", "content": normalized[:500]})
+        elif role in {"user", "assistant"}:
+            safe.append({"role": role, "content": normalized[:500]})
+    if safe and safe[-1]["role"] == "user" and safe[-1]["content"] == cleaned_current[:500]:
+        safe.pop()
+    return safe[-limit:]
 
 
 def _build_safe_diagnosis_query(
@@ -865,7 +967,9 @@ def _direct_query_dsl_system_prompt(today: date) -> str:
         "约束：\n"
         f"1. queries 最多 {MAX_DIRECT_QUERIES} 项，时间跨度不超过 92 天；不得包含 organization_id。\n"
         "2. 只能使用目录内支持的 bucket（NONE/DAY/WEEK）和 comparison（NONE/PREVIOUS_PERIOD/SAME_PERIOD_LAST_YEAR）。\n"
-        "3. 如果用户问题没有明确指标（如“看看经营情况”）、没有明确日期（如“指定月份”）、"
+        "3. 若输入含 recent_messages 且 current_message 存在省略/指代（如“那上个月呢”“按周拆一下”“同比呢”），"
+        "请结合近期对话继承上一轮讨论的经营指标或时间范围；严禁编造对话中未提及的指标。\n"
+        "4. 如果结合对话后仍无明确指标（如首次提问“看看经营情况”）、无明确日期（如“指定月份”）、"
         "或询问目录外指标（如到期合同数、续费合同数、客单价），必须设置 needs_clarification=true、queries=[]。\n"
         '输出格式：{"queries":[{"metric":"...","from":"YYYY-MM-DD","to":"YYYY-MM-DD",'
         '"bucket":"NONE","comparison":"NONE","limit":20}],'
@@ -888,8 +992,9 @@ def _diagnosis_planner_system_prompt(today: date, step_limit: int) -> str:
         f"1. 如果尚未查核心指标，action='QUERY' 先查核心指标（优先 comparison='PREVIOUS_PERIOD'）。\n"
         f"2. 如果已拿到核心指标变化，根据数据异常结合拆解树，每次最多提出 {step_limit} 个尚未查过的关联/维度指标下钻。\n"
         "3. 如果已有数据足以定位主要波动维度，或拆解树相关维度已查完，返回 action='SYNTHESIZE'、queries=[]。\n"
-        "4. 如果问题完全没有指明任何可排查的经营主题，返回 action='CLARIFY'、queries=[]。\n"
-        "5. 严禁重复 executed_queries 中已查过的完全相同条件；单次范围 <= 92 天；不得含 organization_id。\n"
+        "4. 若 question 存在省略/指代（如“为什么跌了”“排查一下原因”），结合 recent_messages 继承上一轮的核心指标与时间周期；"
+        "若结合上下文仍无任何可排查的经营主题，返回 action='CLARIFY'、queries=[]。\n"
+        "5. 严禁重复 executed_queries 或 failed_queries 中已尝试过的相同条件；单次范围 <= 92 天；不得含 organization_id。\n"
         '输出格式：{"action":"QUERY|SYNTHESIZE|CLARIFY","rationale":"简短中文排查思路",'
         '"queries":[{"metric":"...","from":"YYYY-MM-DD","to":"YYYY-MM-DD",'
         '"bucket":"NONE","comparison":"NONE","limit":20}]}'

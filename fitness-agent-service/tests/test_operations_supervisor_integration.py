@@ -647,3 +647,145 @@ async def test_multi_metric_operations_question_collapses_into_single_operations
         previous_route=None,
     )
     assert llm_decision.intents == (RoutedIntent("OPERATIONS", "QUERY_OPERATIONS_METRIC"),)
+
+
+async def test_concurrent_operations_partial_degradation_preserves_succeeded_metrics() -> None:
+    """并发查多指标时单项下游超时局部降级，其余成功指标照常返回并显式标注缺失项。"""
+
+    from app.agent.routing import RouteDecision, RoutedIntent
+    from app.infrastructure.gateway_client import GatewayUnavailableError
+
+    class StaticOpsRouter:
+        async def decide(self, *_: Any, **__: Any) -> RouteDecision:
+            return RouteDecision(
+                intents=(RoutedIntent("OPERATIONS", "QUERY_OPERATIONS_METRIC"),),
+                source="LLM",
+                confidence=0.95,
+                reason_code="MULTI_OPS",
+                classifier_version="test",
+            )
+
+    class PartialFlakyGateway(RichOperationsGateway):
+        async def query_operations_metric(
+            self,
+            ctx: GatewayRequestContext,
+            organization_id: str,
+            metric: str,
+            *,
+            from_date: date | None,
+            to_date: date | None,
+            limit: int,
+            bucket: str,
+        ) -> GatewayOperationsMetric:
+            if metric == "COMPLETED_CLASS_COUNT":
+                raise GatewayUnavailableError("upstream timeout")
+            return await super().query_operations_metric(
+                ctx,
+                organization_id,
+                metric,
+                from_date=from_date,
+                to_date=to_date,
+                limit=limit,
+                bucket=bucket,
+            )
+
+    dsl_json = (
+        '{"queries":['
+        '{"metric":"REVENUE_AMOUNT","from":"2026-08-01","to":"2026-08-14","bucket":"NONE","comparison":"NONE","limit":20},'
+        '{"metric":"COMPLETED_CLASS_COUNT","from":"2026-08-01","to":"2026-08-14","bucket":"NONE","comparison":"NONE","limit":20}'
+        '],"needs_clarification":false,"clarification_reason":"","confidence":0.95}'
+    )
+    models = ScriptedOperationsPlannerModel(
+        [dsl_json],
+        summary_answer="营收 42000；完课量本次查询暂不可用，未纳入结论。",
+    )
+    gateway = PartialFlakyGateway()
+    registry = ToolRegistry()
+    for definition in build_operations_tool_definitions(cast(Any, gateway)):
+        registry.register(definition)
+    supervisor = Supervisor(
+        cast(ModelGateway, models),
+        registry,
+        intent_router=StaticOpsRouter(),
+    )
+    identity = AgentIdentity(
+        subject="admin-1",
+        organization_ids=frozenset({"org-1"}),
+        roles=frozenset({"ORGANIZATION_ADMIN"}),
+        issued_at=1,
+        expires_at=2,
+    )
+
+    response = await supervisor.invoke(
+        SupervisorRequest(
+            user_message="近两周卖课回款和消课怎么样？",
+            gateway_context=GatewayRequestContext("signed", "req-partial-1", "trace-partial-1"),
+            conversation_id="ops-partial-conv",
+            identity=identity,
+        )
+    )
+
+    assert response.route == "OPERATIONS"
+    assert response.tool_steps == 1
+    assert response.answer == "营收 42000；完课量本次查询暂不可用，未纳入结论。"
+    summary_prompt = str(models.summary_messages_seen[0][-1]["content"])
+    assert '"failed_queries"' in summary_prompt
+    assert "COMPLETED_CLASS_COUNT" in summary_prompt
+    assert "42000" in summary_prompt
+
+
+async def test_diagnosis_stream_emits_granular_progress_events() -> None:
+    """经营诊断流式执行期间应推送脱敏步骤事件（DIAGNOSING / QUERYING_BUSINESS / GENERATING）。"""
+
+    step1 = (
+        '{"action":"QUERY","rationale":"先查本月完课量环比",'
+        '"queries":[{"metric":"COMPLETED_CLASS_COUNT","from":"2026-08-01","to":"2026-08-15",'
+        '"bucket":"NONE","comparison":"PREVIOUS_PERIOD","limit":20}]}'
+    )
+    step2 = '{"action":"SYNTHESIZE","rationale":"进入总结","queries":[]}'
+    models = ScriptedOperationsPlannerModel([step1, step2], summary_answer="诊断完成。")
+    gateway = RichOperationsGateway()
+    registry = ToolRegistry()
+    for definition in build_operations_tool_definitions(cast(Any, gateway)):
+        registry.register(definition)
+    supervisor = Supervisor(cast(ModelGateway, models), registry)
+    identity = AgentIdentity(
+        subject="admin-1",
+        organization_ids=frozenset({"org-1"}),
+        roles=frozenset({"ORGANIZATION_ADMIN"}),
+        issued_at=1,
+        expires_at=2,
+    )
+    events: list[tuple[str, dict[str, Any]]] = []
+
+    async def emit(event: str, data: dict[str, Any]) -> None:
+        events.append((event, data))
+
+    response = await supervisor.stream(
+        SupervisorRequest(
+            user_message="本月完课量为什么下降了？帮我排查原因",
+            gateway_context=GatewayRequestContext("signed", "req-sse-diag", "trace-sse-diag"),
+            conversation_id="ops-sse-diag",
+            identity=identity,
+        ),
+        emit,
+    )
+
+    assert response.answer == "诊断完成。"
+    stage_events = [data for event, data in events if event == "stage.changed"]
+    assert any(
+        e.get("stage") == "DIAGNOSING" and e.get("operations_mode") == "DIAGNOSIS" and e.get("step") == 1
+        for e in stage_events
+    )
+    assert any(
+        e.get("stage") == "QUERYING_BUSINESS"
+        and e.get("operations_mode") == "DIAGNOSIS"
+        and e.get("metrics") == ["COMPLETED_CLASS_COUNT"]
+        for e in stage_events
+    )
+    assert any(
+        e.get("stage") == "GENERATING"
+        and e.get("operations_mode") == "DIAGNOSIS"
+        and e.get("observations_count") == 1
+        for e in stage_events
+    )

@@ -398,8 +398,19 @@ def build_operations_comparison_report(
     delta = current_total - previous_total
     change_percent = round(delta / previous_total * 100, 2) if previous_total else None
     direction = "UP" if delta > 0 else "DOWN" if delta < 0 else "FLAT"
+    alignment = (
+        "SAME_PERIOD_LAST_YEAR"
+        if comparison_type == "SAME_PERIOD_LAST_YEAR"
+        else (
+            "CALENDAR_MONTH"
+            if _is_full_calendar_month(current.from_date, current.to_date)
+            and _is_full_calendar_month(previous.from_date, previous.to_date)
+            else "EQUAL_LENGTH_PERIOD"
+        )
+    )
     return {
         "type": comparison_type,
+        "alignment": alignment,
         "current_period": {
             "from": current.from_date.isoformat(),
             "to": current.to_date.isoformat(),
@@ -417,9 +428,24 @@ def build_operations_comparison_report(
     }
 
 
-def _previous_period_bounds(result: GatewayOperationsMetric) -> tuple[date, date]:
-    """按当前查询的自然日长度计算上一等长周期。"""
+def _is_full_calendar_month(from_date: date, to_date: date) -> bool:
+    """判断起止日期是否恰好构成一个完整自然月（1 日至月末）。"""
 
+    return (
+        from_date.day == 1
+        and from_date.year == to_date.year
+        and from_date.month == to_date.month
+        and to_date.day == calendar.monthrange(to_date.year, to_date.month)[1]
+    )
+
+
+def _previous_period_bounds(result: GatewayOperationsMetric) -> tuple[date, date]:
+    """完整自然月按上一完整自然月对齐，其余区间按自然日等长前推，避免月初 1 号漏算。"""
+
+    if _is_full_calendar_month(result.from_date, result.to_date):
+        previous_to = result.from_date - timedelta(days=1)
+        previous_from = previous_to.replace(day=1)
+        return previous_from, previous_to
     period_days = (result.to_date - result.from_date).days + 1
     previous_to = result.from_date - timedelta(days=1)
     previous_from = previous_to - timedelta(days=period_days - 1)

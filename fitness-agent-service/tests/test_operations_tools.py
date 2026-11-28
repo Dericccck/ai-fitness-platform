@@ -475,7 +475,51 @@ async def test_operations_tool_queries_current_and_previous_period() -> None:
         (date(2026, 8, 1), date(2026, 8, 15)),
         (date(2026, 7, 17), date(2026, 7, 31)),
     ]
+    assert result["comparison"]["alignment"] == "EQUAL_LENGTH_PERIOD"
     assert result["comparison"]["change_percent"] == 20.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("cur_from", "cur_to", "prev_from", "prev_to"),
+    [
+        ("2026-09-01", "2026-09-30", date(2026, 8, 1), date(2026, 8, 31)),
+        ("2026-03-01", "2026-03-31", date(2026, 2, 1), date(2026, 2, 28)),
+        ("2024-03-01", "2024-03-31", date(2024, 2, 1), date(2024, 2, 29)),
+        ("2026-01-01", "2026-01-31", date(2025, 12, 1), date(2025, 12, 31)),
+    ],
+)
+async def test_operations_tool_aligns_full_calendar_month_previous_period(
+    cur_from: str, cur_to: str, prev_from: date, prev_to: date
+) -> None:
+    """完整自然月环比必须对齐到上一完整自然月，避免 30 天月比 31 天月时漏掉上月 1 号。"""
+
+    gateway = FakeOperationsGateway()
+    registry = ToolRegistry()
+    for definition in build_operations_tool_definitions(gateway):  # type: ignore[arg-type]
+        registry.register(definition)
+
+    result = await registry.invoke(
+        "fitness.operations.metric.query.v1",
+        {
+            "organization_id": "org-1",
+            "metric": "COMPLETED_CLASS_COUNT",
+            "from": cur_from,
+            "to": cur_to,
+            "comparison": "PREVIOUS_PERIOD",
+        },
+        ToolContext(
+            gateway_context=GatewayRequestContext(
+                signed_context="signed-context", request_id="request-cal", trace_id="trace-cal"
+            )
+        ),
+    )
+
+    assert gateway.calls == [
+        (date.fromisoformat(cur_from), date.fromisoformat(cur_to)),
+        (prev_from, prev_to),
+    ]
+    assert result["comparison"]["alignment"] == "CALENDAR_MONTH"
 
 
 @pytest.mark.asyncio
@@ -650,6 +694,7 @@ async def test_operations_tool_queries_course_and_coach_comparison(
         (date(2026, 8, 1), date(2026, 8, 15)),
         (date(2026, 7, 17), date(2026, 7, 31)),
     ]
+    assert result["comparison"]["alignment"] == "EQUAL_LENGTH_PERIOD"
     assert result["comparison"]["change_percent"] == 20.0
 
 

@@ -103,6 +103,7 @@ from .routing import (
 from .tool_registry import (
     ToolConfirmationNormalizationError,
     ToolContext,
+    ToolContextBindingError,
     ToolDefinition,
     ToolInputValidationError,
     ToolRegistry,
@@ -234,6 +235,7 @@ class SupervisorState(TypedDict, total=False):
     operations_plan_source: str
     operations_pending_queries: list[dict[str, Any]]
     operations_observations: list[dict[str, Any]]
+    operations_failed_queries: list[dict[str, Any]]
     operations_diagnosis_steps: int
     operations_diagnosis_rationales: list[str]
     operations_diagnosis_done: bool
@@ -402,6 +404,7 @@ class Supervisor:
             "operations_plan_source": "",
             "operations_pending_queries": [],
             "operations_observations": [],
+            "operations_failed_queries": [],
             "operations_diagnosis_steps": 0,
             "operations_diagnosis_rationales": [],
             "operations_diagnosis_done": False,
@@ -1096,6 +1099,7 @@ class Supervisor:
             "operations_plan_source": "",
             "operations_pending_queries": [],
             "operations_observations": [],
+            "operations_failed_queries": [],
             "operations_diagnosis_steps": 0,
             "operations_diagnosis_rationales": [],
             "operations_diagnosis_done": False,
@@ -1141,6 +1145,7 @@ class Supervisor:
             "operations_plan_source": "",
             "operations_pending_queries": [],
             "operations_observations": [],
+            "operations_failed_queries": [],
             "operations_diagnosis_steps": 0,
             "operations_diagnosis_rationales": [],
             "operations_diagnosis_done": False,
@@ -1230,9 +1235,16 @@ class Supervisor:
         queries: list[OperationsQueryItem],
         *,
         enforce_single_query_policy: bool,
+        allow_partial_failure: bool = False,
+        stage_metadata: dict[str, Any] | None = None,
         rationale: str = "",
-    ) -> list[dict[str, Any]]:
-        """并发执行已通过 Schema 与能力校验的固定经营指标查询，并附加程序计算的贡献度分析。"""
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]], Exception | None]:
+        """并发执行已通过 Schema 与能力校验的固定经营指标查询。
+
+        * 安全/权限/取消异常始终 fail-closed 立即抛出，绝不吞掉；
+        * ``allow_partial_failure=True`` 时，单项指标的下游瞬时超时/5xx 会记录为脱敏失败条目，
+          保留其余已成功指标，避免多指标或诊断下钻“一损俱损”。
+        """
 
         if runtime.context is None or not runtime.context.user_message:
             raise SupervisorRuntimeError("经营查询需要原始用户消息")
@@ -1244,7 +1256,14 @@ class Supervisor:
         organization_id = next(iter(identity.organization_ids))
         gateway_context = runtime.context.gateway_context
         user_message = runtime.context.user_message
-        emit_event("stage.changed", {"stage": "QUERYING_BUSINESS", "route": "OPERATIONS"})
+        event_payload: dict[str, Any] = {
+            "stage": "QUERYING_BUSINESS",
+            "route": "OPERATIONS",
+            "metrics": [item.metric for item in queries],
+        }
+        if stage_metadata:
+            event_payload.update(stage_metadata)
+        emit_event("stage.changed", event_payload)
 
         async def execute_one(item: OperationsQueryItem) -> dict[str, Any]:
             if enforce_single_query_policy:
@@ -1276,9 +1295,51 @@ class Supervisor:
             result = await self.tools.invoke(definition.tool_id, bound_input, context)
             return build_operations_observation(item, result, rationale=rationale)
 
-        if len(queries) == 1:
-            return [await execute_one(queries[0])]
-        return list(await asyncio.gather(*(execute_one(item) for item in queries)))
+        if not allow_partial_failure:
+            if len(queries) == 1:
+                return [await execute_one(queries[0])], [], None
+            return list(await asyncio.gather(*(execute_one(item) for item in queries))), [], None
+
+        outcomes = await asyncio.gather(
+            *(execute_one(item) for item in queries),
+            return_exceptions=True,
+        )
+        succeeded: list[dict[str, Any]] = []
+        failed: list[dict[str, Any]] = []
+        first_error: Exception | None = None
+        for item, outcome in zip(queries, outcomes, strict=True):
+            if isinstance(outcome, BaseException):
+                if not isinstance(outcome, Exception) or isinstance(
+                    outcome,
+                    (
+                        asyncio.CancelledError,
+                        ToolRoleForbiddenError,
+                        ToolContextBindingError,
+                        SupervisorRuntimeError,
+                    ),
+                ):
+                    raise outcome
+                if first_error is None:
+                    first_error = outcome
+                failed.append(
+                    {
+                        "query": item.as_state_dict(),
+                        "status": "FAILED",
+                        "error_code": type(outcome).__name__,
+                    }
+                )
+            else:
+                succeeded.append(outcome)
+        if failed:
+            _logger.warning(
+                "operations_batch_partial_failure",
+                succeeded_count=len(succeeded),
+                failed_count=len(failed),
+                failed_metrics=[str(entry["query"].get("metric", "")) for entry in failed],
+                request_id=gateway_context.request_id,
+                trace_id=gateway_context.trace_id,
+            )
+        return succeeded, failed, first_error
 
     async def _operations_classify_mode_node(
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
@@ -1293,6 +1354,7 @@ class Supervisor:
             "operations_plan_source": "",
             "operations_pending_queries": [],
             "operations_observations": [],
+            "operations_failed_queries": [],
             "operations_diagnosis_steps": 0,
             "operations_diagnosis_rationales": [],
             "operations_diagnosis_done": False,
@@ -1305,7 +1367,7 @@ class Supervisor:
     async def _operations_plan_direct_node(
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
     ) -> dict[str, Any]:
-        """常规看数混合规划：规则快路径优先（0 LLM），口语或复合多指标才走受控 JSON 填槽。"""
+        """常规看数混合规划：规则快路径优先（0 LLM），口语、多轮省略或复合多指标才走受控 JSON 填槽。"""
 
         definition = self._resolve_operations_tool_access(state, runtime, require_single_org=False)
         if definition is None:
@@ -1316,7 +1378,19 @@ class Supervisor:
         )
         if remaining_budget <= 0:
             return {"operations_plan_source": "CLARIFICATION", "operations_pending_queries": []}
-        plan = await plan_direct_operations_queries(runtime.context.user_message, self.models)
+        emit_event(
+            "stage.changed",
+            {
+                "stage": "PLANNING_OPERATIONS",
+                "route": "OPERATIONS",
+                "operations_mode": "DIRECT_QUERY",
+            },
+        )
+        plan = await plan_direct_operations_queries(
+            runtime.context.user_message,
+            self.models,
+            recent_messages=state.get("messages", []),
+        )
         queries = [item.as_state_dict() for item in plan.queries[:remaining_budget]]
         return {
             "operations_plan_source": plan.source,
@@ -1328,26 +1402,39 @@ class Supervisor:
     async def _operations_execute_direct_node(
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
     ) -> dict[str, Any]:
-        """常规看数确定性执行节点：按规划批量并发查询受控经营指标，无循环。"""
+        """常规看数确定性执行节点：按规划批量并发查询受控经营指标，支持多指标局部降级。"""
 
         raw_queries = state.get("operations_pending_queries", [])
         if not raw_queries:
-            return {"operations_observations": [], "operations_pending_queries": []}
+            return {
+                "operations_observations": [],
+                "operations_failed_queries": [],
+                "operations_pending_queries": [],
+            }
         definition = self._resolve_operations_tool_access(state, runtime, require_single_org=True)
         if definition is None:
-            return {"operations_observations": [], "operations_pending_queries": []}
+            return {
+                "operations_observations": [],
+                "operations_failed_queries": [],
+                "operations_pending_queries": [],
+            }
         items = [OperationsQueryItem.model_validate(item) for item in raw_queries]
         enforce_single = (
             state.get("operations_plan_source") == "DETERMINISTIC_RULE" and len(items) == 1
         )
-        observations = await self._run_operations_query_batch(
+        observations, failed, first_error = await self._run_operations_query_batch(
             definition,
             runtime,
             items,
             enforce_single_query_policy=enforce_single,
+            allow_partial_failure=len(items) > 1,
+            stage_metadata={"operations_mode": "DIRECT_QUERY"},
         )
+        if not observations and first_error is not None:
+            raise first_error
         return {
             "operations_observations": observations,
+            "operations_failed_queries": failed,
             "operations_pending_queries": [],
             "tool_steps": state.get("tool_steps", 0) + len(observations),
             "current_tool_steps": state.get("current_tool_steps", state.get("tool_steps", 0))
@@ -1359,16 +1446,28 @@ class Supervisor:
     ) -> dict[str, Any]:
         """常规看数总结节点：不暴露任何工具 Schema，直接流式解读真实聚合结果或澄清。"""
 
-        emit_event("stage.changed", {"stage": "GENERATING", "route": "OPERATIONS"})
+        observations = state.get("operations_observations", [])
+        failed_queries = state.get("operations_failed_queries", [])
+        emit_event(
+            "stage.changed",
+            {
+                "stage": "GENERATING",
+                "route": "OPERATIONS",
+                "operations_mode": "DIRECT_QUERY",
+                "observations_count": len(observations),
+                "failed_count": len(failed_queries),
+            },
+        )
         messages = await self._messages_with_personalization(
             list(state["messages"]), runtime.context
         )
-        observations = state.get("operations_observations", [])
         if observations:
             messages.append(
                 {
                     "role": "user",
-                    "content": build_direct_summary_prompt_payload(observations),
+                    "content": build_direct_summary_prompt_payload(
+                        observations, failed_queries=failed_queries
+                    ),
                 }
             )
         elif runtime.context is not None and runtime.context.user_message:
@@ -1385,6 +1484,7 @@ class Supervisor:
             "model_tool_calls": [],
             "operations_pending_queries": [],
             "operations_observations": [],
+            "operations_failed_queries": [],
             "operations_diagnosis_rationales": [],
             "operations_diagnosis_done": False,
             "final_answer": _sanitize_model_answer(answer_content),
@@ -1395,7 +1495,7 @@ class Supervisor:
     async def _operations_diagnose_step_node(
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
     ) -> dict[str, Any]:
-        """经营诊断受控 ReAct 推理节点：结合指标拆解树与已有数据决定下一步下钻或收口。"""
+        """经营诊断受控 ReAct 推理节点：结合多轮上下文、拆解树与已有数据决定下钻或收口。"""
 
         definition = self._resolve_operations_tool_access(state, runtime, require_single_org=True)
         if definition is None:
@@ -1406,11 +1506,25 @@ class Supervisor:
         assert runtime.context is not None and runtime.context.user_message is not None
         step_index = state.get("operations_diagnosis_steps", 0)
         observations = state.get("operations_observations", [])
+        failed_queries = state.get("operations_failed_queries", [])
+        emit_event(
+            "stage.changed",
+            {
+                "stage": "DIAGNOSING",
+                "route": "OPERATIONS",
+                "operations_mode": "DIAGNOSIS",
+                "step": min(step_index + 1, MAX_DIAGNOSIS_STEPS),
+                "max_steps": MAX_DIAGNOSIS_STEPS,
+                "observations_count": len(observations),
+            },
+        )
         decision = await plan_diagnosis_step(
             runtime.context.user_message,
             observations,
             self.models,
             step_index=step_index,
+            recent_messages=state.get("messages", []),
+            failed_queries=failed_queries,
             max_steps=MAX_DIAGNOSIS_STEPS,
             max_total_queries=MAX_DIAGNOSIS_TOTAL_QUERIES,
         )
@@ -1444,7 +1558,7 @@ class Supervisor:
     async def _operations_execute_diagnosis_node(
         self, state: SupervisorState, runtime: Runtime[SupervisorRuntimeContext]
     ) -> dict[str, Any]:
-        """经营诊断受控只读查数节点：并发执行下钻指标并由 Python 确定性计算波动贡献度。"""
+        """经营诊断受控只读查数节点：并发下钻、局部降级并由 Python 确定性计算贡献度。"""
 
         raw_queries = state.get("operations_pending_queries", [])
         if not raw_queries:
@@ -1455,22 +1569,34 @@ class Supervisor:
         items = [OperationsQueryItem.model_validate(item) for item in raw_queries]
         rationales = state.get("operations_diagnosis_rationales", [])
         current_rationale = rationales[-1] if rationales else ""
-        new_observations = await self._run_operations_query_batch(
+        prev_observations = state.get("operations_observations", [])
+        prev_failed = state.get("operations_failed_queries", [])
+        current_step = state.get("operations_diagnosis_steps", 0) + 1
+        new_observations, new_failed, first_error = await self._run_operations_query_batch(
             definition,
             runtime,
             items,
             enforce_single_query_policy=False,
+            allow_partial_failure=(len(items) > 1 or bool(prev_observations)),
+            stage_metadata={
+                "operations_mode": "DIAGNOSIS",
+                "step": current_step,
+                "max_steps": MAX_DIAGNOSIS_STEPS,
+            },
             rationale=current_rationale,
         )
-        all_observations = [*state.get("operations_observations", []), *new_observations]
-        next_step = state.get("operations_diagnosis_steps", 0) + 1
+        all_observations = [*prev_observations, *new_observations]
+        all_failed = [*prev_failed, *new_failed]
+        if not all_observations and first_error is not None:
+            raise first_error
         return {
             "operations_observations": all_observations,
+            "operations_failed_queries": all_failed,
             "operations_pending_queries": [],
-            "operations_diagnosis_steps": next_step,
+            "operations_diagnosis_steps": current_step,
             "operations_diagnosis_done": (
-                next_step >= MAX_DIAGNOSIS_STEPS
-                or len(all_observations) >= MAX_DIAGNOSIS_TOTAL_QUERIES
+                current_step >= MAX_DIAGNOSIS_STEPS
+                or (len(all_observations) + len(all_failed)) >= MAX_DIAGNOSIS_TOTAL_QUERIES
             ),
             "tool_steps": state.get("tool_steps", 0) + len(new_observations),
             "current_tool_steps": state.get("current_tool_steps", state.get("tool_steps", 0))
@@ -1482,18 +1608,30 @@ class Supervisor:
     ) -> dict[str, Any]:
         """经营诊断综合节点：按“已证实事实 / 统计贡献拆解 / 待核实假设”三段式流式输出。"""
 
-        emit_event("stage.changed", {"stage": "GENERATING", "route": "OPERATIONS"})
+        observations = state.get("operations_observations", [])
+        failed_queries = state.get("operations_failed_queries", [])
+        rationales = state.get("operations_diagnosis_rationales", [])
+        emit_event(
+            "stage.changed",
+            {
+                "stage": "GENERATING",
+                "route": "OPERATIONS",
+                "operations_mode": "DIAGNOSIS",
+                "observations_count": len(observations),
+                "failed_count": len(failed_queries),
+            },
+        )
         messages = await self._messages_with_personalization(
             list(state["messages"]), runtime.context
         )
-        observations = state.get("operations_observations", [])
-        rationales = state.get("operations_diagnosis_rationales", [])
         if observations:
             messages.append(
                 {
                     "role": "user",
                     "content": build_diagnosis_synthesis_prompt_payload(
-                        observations, rationales=rationales
+                        observations,
+                        rationales=rationales,
+                        failed_queries=failed_queries,
                     ),
                 }
             )
@@ -1511,6 +1649,7 @@ class Supervisor:
             "model_tool_calls": [],
             "operations_pending_queries": [],
             "operations_observations": [],
+            "operations_failed_queries": [],
             "operations_diagnosis_rationales": [],
             "operations_diagnosis_done": False,
             "final_answer": _sanitize_model_answer(answer_content),

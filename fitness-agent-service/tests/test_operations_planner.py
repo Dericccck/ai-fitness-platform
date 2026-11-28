@@ -214,3 +214,64 @@ async def test_diagnosis_planner_dedupes_repeated_queries_and_enforces_step_limi
     )
     assert capped.action == "SYNTHESIZE"
     assert capped.queries == ()
+
+
+async def test_multi_turn_follow_up_passes_sanitized_history_to_dsl_and_diagnosis() -> None:
+    """多轮追问（如“那按周拆一下”“为什么跌了”）会把脱敏近期对话传给规划器，且不带工具大 JSON。"""
+
+    captured: list[list[dict[str, str]]] = []
+
+    class CapturingPlanner:
+        async def chat_json_with_usage(
+            self, messages: list[dict[str, str]], **_: Any
+        ) -> JsonModelTurn:
+            captured.append(messages)
+            return JsonModelTurn(
+                '{"queries":[{"metric":"REVENUE_AMOUNT","from":"2026-08-01","to":"2026-08-31",'
+                '"bucket":"WEEK","comparison":"NONE","limit":20}],'
+                '"needs_clarification":false,"confidence":0.94}',
+                input_tokens=20,
+                output_tokens=15,
+            )
+
+    history = [
+        {"role": "system", "content": "领域系统提示不应进入规划历史"},
+        {"role": "user", "content": "看看2026年8月营收金额"},
+        {"role": "tool", "tool_call_id": "t1", "content": '{"raw_secret":"should_be_stripped"}'},
+        {"role": "assistant", "content": "2026年8月净营收为 510,200 元。"},
+        {"role": "user", "content": "那按周拆一下看看"},
+    ]
+
+    result = await plan_direct_operations_queries(
+        "那按周拆一下看看",
+        CapturingPlanner(),
+        recent_messages=history,
+        today=date(2026, 11, 28),
+    )
+
+    assert result.source == "LLM_DSL"
+    assert result.queries[0].metric == "REVENUE_AMOUNT"
+    assert result.queries[0].bucket == "WEEK"
+    planner_user_text = captured[0][1]["content"]
+    assert "看看2026年8月营收金额" in planner_user_text
+    assert "510,200" in planner_user_text
+    assert "should_be_stripped" not in planner_user_text
+    assert "领域系统提示不应进入规划历史" not in planner_user_text
+
+    # 规划器降级到确定性拆解树时，也能从上轮历史继承指标与完整自然月。
+    fallback = await plan_diagnosis_step(
+        "为什么跌了？帮我排查原因",
+        [],
+        object(),
+        step_index=0,
+        recent_messages=[
+            {"role": "user", "content": "看看2026年9月营收"},
+            {"role": "assistant", "content": "2026年9月营收为 0。"},
+            {"role": "user", "content": "为什么跌了？帮我排查原因"},
+        ],
+        today=date(2026, 11, 28),
+    )
+    assert fallback.action == "QUERY"
+    assert fallback.queries[0].metric == "REVENUE_AMOUNT"
+    assert fallback.queries[0].from_date == date(2026, 9, 1)
+    assert fallback.queries[0].to_date == date(2026, 9, 30)

@@ -868,10 +868,19 @@ def _context_inheritance_decision(
     if previous_route not in _EXECUTABLE_ROUTES:
         return None
     text = _compact(user_message)
-    if len(text) > 40 or not any(
-        marker in text
-        for marker in ("那", "这个", "那个", "还有呢", "换一个", "改到", "继续", "怎么样")
-    ):
+    markers: tuple[str, ...] = (
+        "那",
+        "这个",
+        "那个",
+        "还有呢",
+        "换一个",
+        "改到",
+        "继续",
+        "怎么样",
+    )
+    if previous_route == "OPERATIONS":
+        markers = markers + ("按周", "按日", "环比", "同比", "上个月", "上月", "为什么", "排查", "原因")
+    if len(text) > 40 or not any(marker in text for marker in markers):
         return None
     default_intent = {
         "FITNESS_COACHING": "FITNESS_KNOWLEDGE_QA",
